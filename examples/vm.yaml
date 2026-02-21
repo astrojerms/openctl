@@ -1,0 +1,32 @@
+apiVersion: proxmox.openctl.io/v1
+kind: VirtualMachine
+metadata:
+  name: web-01
+  labels:
+    role: webserver
+    environment: production
+spec:
+  node: pve1
+  template:
+    name: ubuntu-22.04-cloudinit
+  cpu:
+    cores: 4
+    sockets: 1
+  memory:
+    size: 8192
+  disks:
+    - name: scsi0
+      storage: local-lvm
+      size: 50G
+  networks:
+    - name: net0
+      bridge: vmbr0
+      model: virtio
+  cloudInit:
+    user: ubuntu
+    sshKeys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample user@host
+    ipConfig:
+      net0:
+        ip: dhcp
+  startOnCreate: true

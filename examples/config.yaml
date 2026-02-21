@@ -1,0 +1,30 @@
+# OpenCtl Configuration Example
+# Place this file at ~/.openctl/config.yaml
+
+defaults:
+  output: table
+  timeout: 300
+
+providers:
+  proxmox:
+    default-context: homelab
+    contexts:
+      homelab:
+        endpoint: https://pve.home.local:8006
+        node: pve1
+        credentials: homelab-creds
+      work:
+        endpoint: https://proxmox.work.example.com:8006
+        node: node1
+        credentials: work-creds
+    credentials:
+      homelab-creds:
+        tokenId: root@pam!openctl
+        # Store the token secret in a separate file for security
+        tokenSecretFile: ~/.openctl/secrets/proxmox-homelab.token
+      work-creds:
+        tokenId: admin@pve!automation
+        tokenSecretFile: ~/.openctl/secrets/proxmox-work.token
+    defaults:
+      storage: local-lvm
+      network: vmbr0

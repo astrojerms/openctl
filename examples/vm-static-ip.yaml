@@ -1,0 +1,33 @@
+apiVersion: proxmox.openctl.io/v1
+kind: VirtualMachine
+metadata:
+  name: db-01
+  labels:
+    role: database
+    environment: production
+spec:
+  node: pve1
+  template:
+    name: ubuntu-22.04-cloudinit
+  cpu:
+    cores: 8
+    sockets: 1
+  memory:
+    size: 16384
+  disks:
+    - name: scsi0
+      storage: local-lvm
+      size: 100G
+  networks:
+    - name: net0
+      bridge: vmbr0
+      model: virtio
+  cloudInit:
+    user: ubuntu
+    sshKeys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample user@host
+    ipConfig:
+      net0:
+        ip: 192.168.1.100/24
+        gateway: 192.168.1.1
+  startOnCreate: true
