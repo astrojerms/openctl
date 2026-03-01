@@ -1,0 +1,194 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  GO_VERSION: "1.21"
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Download dependencies
+        run: make deps
+
+      - name: Build all
+        run: make build
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Download dependencies
+        run: make deps
+
+      - name: Run tests
+        run: make test
+
+      - name: Run tests with race detector
+        run: |
+          go test -race ./...
+          cd plugins/proxmox && go test -race ./...
+          cd ../k3s && go test -race ./...
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Run golangci-lint (root)
+        uses: golangci/golangci-lint-action@v4
+        with:
+          version: latest
+          working-directory: .
+
+      - name: Run golangci-lint (proxmox plugin)
+        uses: golangci/golangci-lint-action@v4
+        with:
+          version: latest
+          working-directory: plugins/proxmox
+          args: --config=../../.golangci.yml
+
+      - name: Run golangci-lint (k3s plugin)
+        uses: golangci/golangci-lint-action@v4
+        with:
+          version: latest
+          working-directory: plugins/k3s
+          args: --config=../../.golangci.yml
+
+  vet:
+    name: Vet & Staticcheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Download dependencies
+        run: make deps
+
+      - name: Run go vet (root)
+        run: go vet ./...
+
+      - name: Run go vet (proxmox plugin)
+        run: cd plugins/proxmox && go vet ./...
+
+      - name: Run go vet (k3s plugin)
+        run: cd plugins/k3s && go vet ./...
+
+      - name: Install staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@latest
+
+      - name: Run staticcheck (root)
+        run: staticcheck ./...
+
+      - name: Run staticcheck (proxmox plugin)
+        run: cd plugins/proxmox && staticcheck ./...
+
+      - name: Run staticcheck (k3s plugin)
+        run: cd plugins/k3s && staticcheck ./...
+
+  format:
+    name: Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Check formatting
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "The following files are not formatted:"
+            gofmt -l .
+            exit 1
+          fi
+
+  modernize:
+    name: Modernize Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Download dependencies
+        run: make deps
+
+      - name: Install modernize
+        run: go install golang.org/x/tools/go/analysis/passes/modernize/cmd/modernize@latest
+
+      - name: Run modernize (root)
+        run: |
+          OUTPUT=$(modernize ./... 2>&1) || true
+          if [ -n "$OUTPUT" ]; then
+            echo "Modernize suggestions found:"
+            echo "$OUTPUT"
+            echo ""
+            echo "Run 'make modernize' locally to apply fixes"
+            exit 1
+          fi
+
+      - name: Run modernize (proxmox plugin)
+        run: |
+          cd plugins/proxmox
+          OUTPUT=$(modernize ./... 2>&1) || true
+          if [ -n "$OUTPUT" ]; then
+            echo "Modernize suggestions found in proxmox plugin:"
+            echo "$OUTPUT"
+            echo ""
+            echo "Run 'make modernize' locally to apply fixes"
+            exit 1
+          fi
+
+      - name: Run modernize (k3s plugin)
+        run: |
+          cd plugins/k3s
+          OUTPUT=$(modernize ./... 2>&1) || true
+          if [ -n "$OUTPUT" ]; then
+            echo "Modernize suggestions found in k3s plugin:"
+            echo "$OUTPUT"
+            echo ""
+            echo "Run 'make modernize' locally to apply fixes"
+            exit 1
+          fi

@@ -1,0 +1,118 @@
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+linters:
+  enable:
+    # Default linters
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+    # Additional linters
+    - bodyclose        # Check HTTP response body is closed
+    - copyloopvar      # Detect loop variable capture issues (Go 1.22+)
+    - durationcheck    # Check for duration multiplication issues
+    - errname          # Check error naming conventions
+    - errorlint        # Find issues with error wrapping
+    - gofmt            # Check code is formatted
+    - goimports        # Check imports are organized
+    - gocritic         # Comprehensive Go linter
+    - gosec            # Security checks
+    - misspell         # Find misspellings
+    - nilerr           # Check for nil error returns
+    - noctx            # Check HTTP requests use context
+    - prealloc         # Suggest preallocating slices
+    - predeclared      # Find shadowed predeclared identifiers
+    - revive           # Replacement for golint
+    - unconvert        # Remove unnecessary type conversions
+    - unparam          # Find unused function parameters
+    - whitespace       # Check for unnecessary whitespace
+
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+    exclude-functions:
+      - (io.Closer).Close
+      - (net/http.ResponseWriter).Write
+
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - style
+      - performance
+    disabled-checks:
+      - hugeParam  # Can be noisy for structs passed by value intentionally
+
+  goimports:
+    local-prefixes: github.com/openctl/openctl
+
+  gosec:
+    excludes:
+      - G104  # Audit errors not checked (covered by errcheck)
+      - G304  # File path from variable (often intentional in CLI tools)
+
+  govet:
+    enable-all: true
+    disable:
+      - fieldalignment  # Can be noisy, micro-optimization
+
+  misspell:
+    locale: US
+
+  revive:
+    rules:
+      - name: blank-imports
+      - name: context-as-argument
+      - name: context-keys-type
+      - name: dot-imports
+      - name: error-return
+      - name: error-strings
+      - name: error-naming
+      - name: exported
+      - name: if-return
+      - name: increment-decrement
+      - name: var-naming
+      - name: var-declaration
+      - name: package-comments
+        disabled: true  # Not required for internal packages
+      - name: range
+      - name: receiver-naming
+      - name: time-naming
+      - name: unexported-return
+      - name: indent-error-flow
+      - name: errorf
+      - name: empty-block
+      - name: superfluous-else
+      - name: unused-parameter
+      - name: unreachable-code
+
+  staticcheck:
+    checks: ["all"]
+
+issues:
+  exclude-rules:
+    # Allow init functions
+    - linters:
+        - gochecknoinits
+      text: "init function"
+
+    # Test files can have longer functions and more complexity
+    - path: _test\.go
+      linters:
+        - gocritic
+        - gosec
+        - unparam
+
+    # Examples can be less strict
+    - path: example_
+      linters:
+        - gocritic
+        - unparam
+
+  max-issues-per-linter: 0
+  max-same-issues: 0

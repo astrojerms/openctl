@@ -31,3 +31,12 @@ secrets/
 *.token
 *.key
 *.pem
+
+# E2E test config (contains personal settings)
+.env.e2e
+.env.e2e.local
+**/test/e2e/.env.e2e
+**/test/e2e/.env.e2e.local
+
+# Generated test manifests
+**/test/e2e/*-test-manifest.yaml

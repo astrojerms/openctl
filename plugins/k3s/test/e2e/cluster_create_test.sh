@@ -15,14 +15,21 @@
 
 set -euo pipefail
 
-# Configuration - customize these for your environment
-CLUSTER_NAME="e2e-k3s-$(date +%s)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Source local config if exists (gitignored)
+if [[ -f "${SCRIPT_DIR}/.env.e2e" ]]; then
+    # shellcheck source=/dev/null
+    source "${SCRIPT_DIR}/.env.e2e"
+fi
+
+# Configuration - customize via .env.e2e or environment variables
+CLUSTER_NAME="e2e-k3s-$(date +%s)"
 MANIFEST_FILE="${SCRIPT_DIR}/cluster-test-manifest.yaml"
-CLEANUP_ON_EXIT=true
+CLEANUP_ON_EXIT="${CLEANUP_ON_EXIT:-true}"
 
 # Proxmox settings - should match your ~/.openctl/config.yaml
-PROXMOX_NODE="${PROXMOX_NODE:-pve1351}"
+PROXMOX_NODE="${PROXMOX_NODE:-pve1}"
 PROXMOX_STORAGE="${PROXMOX_STORAGE:-local}"
 PROXMOX_DISK_STORAGE="${PROXMOX_DISK_STORAGE:-local-lvm}"
 
