@@ -213,8 +213,8 @@ func (h *Handler) createCluster(req *protocol.Request) (*protocol.Response, erro
 	}
 
 	// Check if this is a continuation (VMs already created or getting IPs)
-	switch req.ContinuationToken {
-	case "vms-created", "get-ips":
+	// get-ips tokens can have a retry count suffix like "get-ips:5"
+	if req.ContinuationToken == "vms-created" || strings.HasPrefix(req.ContinuationToken, "get-ips") {
 		return h.handleVMsCreated(req, name, spec)
 	}
 
@@ -246,7 +246,15 @@ func (h *Handler) createCluster(req *protocol.Request) (*protocol.Response, erro
 	}, nil
 }
 
+const maxIPRetries = 12 // ~1 minute of retrying (5 second intervals)
+
 func (h *Handler) handleVMsCreated(req *protocol.Request, name string, spec *resources.ClusterSpec) (*protocol.Response, error) {
+	// Parse retry count from continuation token
+	retryCount := 0
+	if strings.HasPrefix(req.ContinuationToken, "get-ips:") {
+		fmt.Sscanf(req.ContinuationToken, "get-ips:%d", &retryCount)
+	}
+
 	// Collect node IPs from dispatch results
 	nodeIPs := make(map[string]string)
 	var children []protocol.ChildReference
@@ -305,6 +313,31 @@ func (h *Handler) handleVMsCreated(req *protocol.Request, name string, spec *res
 
 	// Check if we have IPs for all nodes
 	if len(nodeIPs) < len(allNodes) {
+		// Check if we've exceeded max retries
+		if retryCount >= maxIPRetries {
+			return &protocol.Response{
+				Status: protocol.StatusError,
+				Error: &protocol.Error{
+					Code:    protocol.ErrorCodeInternal,
+					Message: fmt.Sprintf("timed out waiting for VM IPs (got %d/%d after %d retries). Ensure QEMU guest agent is running in VMs.", len(nodeIPs), len(allNodes), retryCount),
+				},
+				StateUpdate: &protocol.StateUpdate{
+					Operation: "save",
+					Provider:  "k3s",
+					Name:      name,
+					State: &protocol.StateData{
+						APIVersion: "k3s.openctl.io/v1",
+						Kind:       "Cluster",
+						Status: &protocol.StateStatus{
+							Phase:   "Failed",
+							Message: fmt.Sprintf("timed out waiting for VM IPs after %d retries", retryCount),
+						},
+						Children: children,
+					},
+				},
+			}, nil
+		}
+
 		// Generate IP fetch dispatches
 		ipDispatches := make([]*protocol.DispatchRequest, 0, len(allNodes))
 		for _, nodeName := range allNodes {
@@ -317,13 +350,13 @@ func (h *Handler) handleVMsCreated(req *protocol.Request, name string, spec *res
 			})
 		}
 
-		// Need to wait for IPs - return continuation
+		// Need to wait for IPs - return continuation with incremented retry count
 		return &protocol.Response{
 			Status:           protocol.StatusSuccess,
-			Message:          "Waiting for VM IPs...",
+			Message:          fmt.Sprintf("Waiting for VM IPs (attempt %d/%d)...", retryCount+1, maxIPRetries),
 			DispatchRequests: ipDispatches,
 			Continuation: &protocol.Continuation{
-				Token: "get-ips",
+				Token: fmt.Sprintf("get-ips:%d", retryCount+1),
 			},
 			StateUpdate: &protocol.StateUpdate{
 				Operation: "save",
@@ -334,7 +367,7 @@ func (h *Handler) handleVMsCreated(req *protocol.Request, name string, spec *res
 					Kind:       "Cluster",
 					Status: &protocol.StateStatus{
 						Phase:   "Creating",
-						Message: "Waiting for VM IPs",
+						Message: fmt.Sprintf("Waiting for VM IPs (attempt %d)", retryCount+1),
 					},
 					Children: children,
 				},

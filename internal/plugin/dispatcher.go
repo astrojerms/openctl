@@ -153,7 +153,23 @@ func (d *Dispatcher) executeDispatch(ctx context.Context, req *protocol.Dispatch
 
 	// Handle wait condition if specified
 	if req.WaitFor != nil && result.Status == protocol.StatusSuccess {
-		err := d.waitForCondition(ctx, req.Provider, req.ResourceType, req.ResourceName, req.WaitFor)
+		// Get resource name: prefer ResourceName, fall back to manifest name
+		resourceName := req.ResourceName
+		if resourceName == "" && req.Manifest != nil {
+			resourceName = req.Manifest.Metadata.Name
+		}
+		if resourceName == "" {
+			return &protocol.DispatchResult{
+				ID:     req.ID,
+				Status: protocol.StatusError,
+				Error: &protocol.Error{
+					Code:    protocol.ErrorCodeInternal,
+					Message: "cannot wait for condition: no resource name",
+				},
+			}, nil
+		}
+
+		err := d.waitForCondition(ctx, req.Provider, req.ResourceType, resourceName, req.WaitFor)
 		if err != nil {
 			return &protocol.DispatchResult{
 				ID:     req.ID,
@@ -170,7 +186,7 @@ func (d *Dispatcher) executeDispatch(ctx context.Context, req *protocol.Dispatch
 			Version:      protocol.ProtocolVersion,
 			Action:       protocol.ActionGet,
 			ResourceType: req.ResourceType,
-			ResourceName: req.ResourceName,
+			ResourceName: resourceName,
 			Config:       *providerConfig,
 		}
 

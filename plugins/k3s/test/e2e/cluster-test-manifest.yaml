@@ -1,0 +1,39 @@
+apiVersion: k3s.openctl.io/v1
+kind: Cluster
+metadata:
+  name: e2e-k3s-1772382322
+spec:
+  # Compute provider configuration
+  compute:
+    provider: proxmox
+    # Cloud image to use for VMs
+    image:
+      url: https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img
+      storage: local
+      diskStorage: local-lvm
+    # Default VM size
+    default:
+      cpus: 2
+      memoryMB: 2048
+      diskGB: 20
+
+  # Node configuration
+  nodes:
+    controlPlane:
+      count: 1
+    # workers:
+    #   - name: default
+    #     count: 1
+
+  # SSH configuration for K3s installation
+  ssh:
+    user: ubuntu
+    privateKeyPath: /Users/jeremyharrington/.ssh/id_ed25519
+    publicKeys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmB1fT/8sw2/qJduyVpFE15h6Px6hiPNmh+MV9XFTXh jeremyharrington@Jeremys-MacBook-Air.local
+
+  # K3s configuration
+  k3s:
+    version: ""  # Use latest stable
+    # clusterCIDR: "10.42.0.0/16"
+    # serviceCIDR: "10.43.0.0/16"

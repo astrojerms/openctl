@@ -107,10 +107,23 @@ func (c *Creator) GenerateDispatchRequests() []*protocol.DispatchRequest {
 
 		// Add image source
 		if c.spec.Compute.Image.URL != "" {
-			manifest.Spec["cloudImage"] = map[string]any{
-				"url":     c.spec.Compute.Image.URL,
-				"storage": c.config.Defaults["storage"],
+			cloudImage := map[string]any{
+				"url": c.spec.Compute.Image.URL,
 			}
+			// Use storage from spec, fall back to config defaults
+			storage := c.spec.Compute.Image.Storage
+			if storage == "" {
+				storage = c.config.Defaults["storage"]
+			}
+			if storage != "" {
+				cloudImage["storage"] = storage
+			}
+			// Use diskStorage from spec if specified
+			diskStorage := c.spec.Compute.Image.DiskStorage
+			if diskStorage != "" {
+				cloudImage["diskStorage"] = diskStorage
+			}
+			manifest.Spec["cloudImage"] = cloudImage
 		} else if c.spec.Compute.Image.Template != "" {
 			manifest.Spec["template"] = map[string]any{
 				"name": c.spec.Compute.Image.Template,

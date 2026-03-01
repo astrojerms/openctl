@@ -24,8 +24,10 @@ type ComputeSpec struct {
 
 // ImageSpec defines the VM image to use
 type ImageSpec struct {
-	URL      string `json:"url,omitempty"`      // Cloud image URL
-	Template string `json:"template,omitempty"` // Template name
+	URL         string `json:"url,omitempty"`         // Cloud image URL
+	Template    string `json:"template,omitempty"`    // Template name
+	Storage     string `json:"storage,omitempty"`     // Storage for downloading image and creating template
+	DiskStorage string `json:"diskStorage,omitempty"` // Storage for VM disks (defaults to Storage)
 }
 
 // DefaultSizeSpec defines default VM sizing
@@ -91,6 +93,12 @@ func ParseClusterSpec(r *protocol.Resource) (*ClusterSpec, error) {
 			}
 			if template, ok := image["template"].(string); ok {
 				spec.Compute.Image.Template = template
+			}
+			if storage, ok := image["storage"].(string); ok {
+				spec.Compute.Image.Storage = storage
+			}
+			if diskStorage, ok := image["diskStorage"].(string); ok {
+				spec.Compute.Image.DiskStorage = diskStorage
 			}
 		}
 		if def, ok := compute["default"].(map[string]any); ok {
