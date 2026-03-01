@@ -246,7 +246,7 @@ func (h *Handler) createCluster(req *protocol.Request) (*protocol.Response, erro
 	}, nil
 }
 
-const maxIPRetries = 12 // ~1 minute of retrying (5 second intervals)
+const maxIPRetries = 60 // ~5 minutes of retrying (5 second intervals from dispatcher)
 
 func (h *Handler) handleVMsCreated(req *protocol.Request, name string, spec *resources.ClusterSpec) (*protocol.Response, error) {
 	// Parse retry count from continuation token
