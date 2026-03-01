@@ -7,9 +7,17 @@ OpenCtl is a CLI tool that provides a unified interface for managing infrastruct
 - **Kubectl-like UX**: Familiar commands like `get`, `create`, `delete`, and `apply`
 - **Plugin Architecture**: Extend functionality through exec-based plugins
 - **Multi-provider Support**: Manage resources across different infrastructure providers
-- **Declarative Manifests**: Define resources using YAML manifests
+- **Declarative Manifests**: Define resources using YAML manifests (Kubernetes-style)
 - **Multiple Output Formats**: Table, YAML, JSON, and wide output formats
 - **Context-based Configuration**: Switch between different environments easily
+- **Cross-plugin Dispatch**: Plugins can delegate to other plugins for complex orchestration
+
+## Included Plugins
+
+| Plugin | Description |
+|--------|-------------|
+| [Proxmox](plugins/proxmox/README.md) | Manage VMs and templates in Proxmox VE |
+| [K3s](plugins/k3s/README.md) | Deploy K3s Kubernetes clusters across compute providers |
 
 ## Installation
 
@@ -20,7 +28,7 @@ OpenCtl is a CLI tool that provides a unified interface for managing infrastruct
 git clone https://github.com/openctl/openctl.git
 cd openctl
 
-# Build both the CLI and plugins
+# Build CLI and all plugins
 make build
 
 # Install (copies CLI to PATH and plugins to ~/.openctl/plugins/)
@@ -30,17 +38,17 @@ make install
 ### Manual Installation
 
 ```bash
-# Build
+# Build CLI
 go build -o openctl ./cmd/openctl
 
-# Build the Proxmox plugin
-cd plugins/proxmox
-go build -o openctl-proxmox ./cmd/openctl-proxmox
+# Build plugins
+cd plugins/proxmox && go build -o openctl-proxmox ./cmd/openctl-proxmox
+cd plugins/k3s && go build -o openctl-k3s ./cmd/openctl-k3s
 
 # Install
 cp openctl /usr/local/bin/
 mkdir -p ~/.openctl/plugins
-cp openctl-proxmox ~/.openctl/plugins/
+cp plugins/*/openctl-* ~/.openctl/plugins/
 ```
 
 ## Quick Start
@@ -68,7 +76,7 @@ providers:
         tokenSecretFile: ~/.openctl/secrets/proxmox.token
 ```
 
-Store your API token in the secret file:
+Store your API token securely:
 
 ```bash
 mkdir -p ~/.openctl/secrets
@@ -84,9 +92,9 @@ openctl plugin list
 
 Output:
 ```
-NAME                 PATH
-proxmox              /home/user/.openctl/plugins/openctl-proxmox
-  Resources: [vms templates]
+NAME      PATH                                        RESOURCES
+proxmox   /home/user/.openctl/plugins/openctl-proxmox [vms templates]
+k3s       /home/user/.openctl/plugins/openctl-k3s     [clusters]
 ```
 
 ### 3. List Resources
@@ -101,10 +109,8 @@ openctl proxmox get vms -o wide
 # Get a specific VM
 openctl proxmox get vm web-01
 
-# Output as YAML
+# Output as YAML or JSON
 openctl proxmox get vm web-01 -o yaml
-
-# Output as JSON
 openctl proxmox get vms -o json
 ```
 
@@ -117,19 +123,18 @@ apiVersion: proxmox.openctl.io/v1
 kind: VirtualMachine
 metadata:
   name: web-01
-  labels:
-    role: webserver
 spec:
   node: pve1
-  template:
-    name: ubuntu-22.04-cloudinit
+  cloudImage:
+    url: https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img
+    storage: local
+    diskStorage: local-lvm
   cpu:
     cores: 4
   memory:
     size: 8192
   disks:
     - name: scsi0
-      storage: local-lvm
       size: 50G
   networks:
     - name: net0
@@ -148,26 +153,64 @@ Create the VM:
 
 ```bash
 openctl proxmox create vm -f vm.yaml
+# or
+openctl apply -f vm.yaml  # Auto-detects provider from apiVersion
 ```
 
-Or use the auto-detecting apply command:
+### 5. Create a K3s Cluster
 
-```bash
-openctl apply -f vm.yaml
+Create a cluster manifest `cluster.yaml`:
+
+```yaml
+apiVersion: k3s.openctl.io/v1
+kind: Cluster
+metadata:
+  name: dev-cluster
+spec:
+  compute:
+    provider: proxmox
+    image:
+      url: https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img
+      storage: local
+      diskStorage: local-lvm
+    default:
+      cpus: 2
+      memoryMB: 4096
+      diskGB: 32
+  nodes:
+    controlPlane:
+      count: 1
+  network:
+    dhcp: false
+    staticIPs:
+      startIP: "192.168.1.100"
+      gateway: "192.168.1.1"
+      netmask: "24"
+  ssh:
+    user: ubuntu
+    privateKeyPath: ~/.ssh/id_ed25519
+    publicKeys:
+      - ssh-ed25519 AAAA... user@host
 ```
 
-### 5. Update Resources
-
-Modify your manifest and apply changes:
+Create the cluster:
 
 ```bash
-openctl proxmox apply -f vm.yaml
+openctl k3s create cluster -f cluster.yaml
+```
+
+Use the cluster:
+
+```bash
+export KUBECONFIG=~/.openctl/k3s/dev-cluster/kubeconfig
+kubectl get nodes
 ```
 
 ### 6. Delete Resources
 
 ```bash
 openctl proxmox delete vm web-01
+openctl k3s delete cluster dev-cluster
 ```
 
 ## Command Reference
@@ -183,73 +226,16 @@ openctl proxmox delete vm web-01
 
 ### Commands
 
-#### `openctl <provider> get <resource-type> [name]`
-
-Get one or more resources.
-
-```bash
-# List all VMs
-openctl proxmox get vms
-
-# Get a specific VM
-openctl proxmox get vm web-01
-```
-
-#### `openctl <provider> create <resource-type> -f <manifest>`
-
-Create a resource from a manifest file.
-
-```bash
-openctl proxmox create vm -f vm.yaml
-```
-
-#### `openctl <provider> delete <resource-type> <name>`
-
-Delete a resource.
-
-```bash
-openctl proxmox delete vm web-01
-```
-
-#### `openctl <provider> apply -f <manifest>`
-
-Create or update a resource from a manifest.
-
-```bash
-openctl proxmox apply -f vm.yaml
-```
-
-#### `openctl apply -f <manifest>`
-
-Apply a manifest with automatic provider detection (based on `apiVersion`).
-
-```bash
-openctl apply -f vm.yaml
-```
-
-#### `openctl plugin list`
-
-List installed plugins and their supported resources.
-
-```bash
-openctl plugin list
-```
-
-#### `openctl config view`
-
-Display the current configuration.
-
-```bash
-openctl config view
-```
-
-#### `openctl version`
-
-Print version information.
-
-```bash
-openctl version
-```
+| Command | Description |
+|---------|-------------|
+| `openctl <provider> get <resource> [name]` | Get one or more resources |
+| `openctl <provider> create <resource> -f <file>` | Create a resource from manifest |
+| `openctl <provider> delete <resource> <name>` | Delete a resource |
+| `openctl <provider> apply -f <file>` | Create or update a resource |
+| `openctl apply -f <file>` | Apply with auto-detected provider |
+| `openctl plugin list` | List installed plugins |
+| `openctl config view` | Display current configuration |
+| `openctl version` | Print version information |
 
 ## Configuration
 
@@ -271,109 +257,91 @@ providers:
     credentials:
       <credentials-name>:
         tokenId: <token-id>
-        tokenSecret: <secret>        # Inline secret (not recommended)
-        tokenSecretFile: <path>      # File containing secret (recommended)
+        tokenSecret: <secret>        # Inline (not recommended)
+        tokenSecretFile: <path>      # File path (recommended)
     defaults:
       <key>: <value>
 ```
 
 ### Multiple Contexts
 
-Switch between different environments using contexts:
+Switch between environments using contexts:
 
 ```bash
 # Use a specific context
 openctl proxmox get vms --context work
 
-# Set default context in config
+# Default context from config
 providers:
   proxmox:
     default-context: work
 ```
 
-### Proxmox Configuration
-
-For Proxmox, you need to create an API token:
-
-1. Go to Datacenter → Permissions → API Tokens
-2. Create a new token for your user
-3. Copy the token ID and secret
-4. Add them to your config
-
-```yaml
-providers:
-  proxmox:
-    contexts:
-      homelab:
-        endpoint: https://192.168.1.100:8006
-        node: pve1
-        credentials: api-token
-    credentials:
-      api-token:
-        tokenId: root@pam!openctl
-        tokenSecretFile: ~/.openctl/secrets/proxmox.token
-```
-
 ## Resource Manifests
 
-### VirtualMachine
+Resources follow a Kubernetes-style format:
 
 ```yaml
-apiVersion: proxmox.openctl.io/v1
-kind: VirtualMachine
+apiVersion: <provider>.openctl.io/v1
+kind: <ResourceKind>
 metadata:
-  name: my-vm
+  name: <resource-name>
   labels:
-    environment: production
+    key: value
 spec:
-  node: pve1                    # Target Proxmox node
-  template:
-    name: ubuntu-22.04          # Template name to clone
-    # or vmid: 9000             # Template VMID
-  cpu:
-    cores: 4
-    sockets: 1
-  memory:
-    size: 8192                  # Memory in MB
-  disks:
-    - name: scsi0
-      storage: local-lvm
-      size: 50G
-  networks:
-    - name: net0
-      bridge: vmbr0
-      model: virtio
-  cloudInit:
-    user: ubuntu
-    password: secret            # Optional
-    sshKeys:
-      - ssh-ed25519 AAAA...
-    ipConfig:
-      net0:
-        ip: dhcp
-        # or ip: 192.168.1.100/24
-        # gateway: 192.168.1.1
-  startOnCreate: true
+  # Resource-specific configuration
+status:
+  # Read-only status (populated by provider)
 ```
 
-## Testing
-
-Run the test suite:
-
-```bash
-# Run all tests
-make test
-
-# Run tests with verbose output
-go test -v ./...
-
-# Run specific package tests
-go test ./internal/config/...
-```
+The `apiVersion` enables automatic provider detection with `openctl apply -f`.
 
 ## Development
 
+### Building
+
+```bash
+make build          # Build CLI and all plugins
+make build-cli      # Build CLI only
+make build-plugins  # Build all plugins
+```
+
+### Testing
+
+```bash
+make test           # Run all unit tests
+make test-e2e       # Run E2E tests
+make lint           # Run linters
+make fmt            # Format code
+```
+
+### Code Quality
+
+```bash
+make modernize       # Apply Go modernizer fixes
+make modernize-check # Check for modernize suggestions
+```
+
 See [DESIGN.md](DESIGN.md) for architecture details and plugin development guide.
+
+## Project Structure
+
+```
+openctl/
+├── cmd/openctl/           # CLI entry point
+├── internal/
+│   ├── cli/               # Cobra commands
+│   ├── config/            # Configuration loading
+│   ├── manifest/          # YAML manifest parsing
+│   ├── plugin/            # Plugin discovery & execution
+│   ├── output/            # Output formatting
+│   └── state/             # State management
+├── pkg/protocol/          # Shared types for plugins
+├── plugins/
+│   ├── proxmox/           # Proxmox VE plugin
+│   └── k3s/               # K3s cluster plugin
+└── test/e2e/              # End-to-end tests
+```
 
 ## License
 

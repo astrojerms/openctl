@@ -99,6 +99,14 @@ spec:
     extraArgs:                   # Extra K3s server arguments
       - --disable=traefik
 
+  network:                        # Optional: network configuration
+    bridge: <bridge-name>        # Network bridge (default: "vmbr0")
+    dhcp: <bool>                 # Use DHCP (default: true)
+    staticIPs:                   # Static IP configuration (recommended)
+      startIP: <ip>              # First IP to allocate (e.g., "192.168.1.100")
+      gateway: <gateway>         # Default gateway
+      netmask: <cidr>            # Netmask in CIDR notation (e.g., "24")
+
   ssh:
     user: <username>             # SSH user (default: "ubuntu")
     privateKeyPath: <path>       # Required: path to SSH private key
@@ -108,7 +116,7 @@ spec:
 
 ## Usage Examples
 
-### Create a Simple Cluster
+### Create a Simple Cluster (with Static IPs - Recommended)
 
 Create a manifest file `cluster.yaml`:
 
@@ -122,6 +130,8 @@ spec:
     provider: proxmox
     image:
       url: https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img
+      storage: local           # Storage for downloading image
+      diskStorage: local-lvm   # Storage for VM disks
     default:
       cpus: 2
       memoryMB: 4096
@@ -129,6 +139,13 @@ spec:
   nodes:
     controlPlane:
       count: 1
+  network:
+    bridge: vmbr0
+    dhcp: false
+    staticIPs:
+      startIP: "192.168.1.100"   # VMs get 192.168.1.100, 192.168.1.101, etc.
+      gateway: "192.168.1.1"
+      netmask: "24"
   ssh:
     user: ubuntu
     privateKeyPath: ~/.ssh/id_ed25519
@@ -139,6 +156,8 @@ spec:
 ```bash
 openctl k3s create cluster -f cluster.yaml
 ```
+
+**Why use static IPs?** Ubuntu cloud images don't enable the QEMU guest agent by default, which is needed for IP detection with DHCP. Static IPs avoid this dependency entirely.
 
 ### Create an HA Cluster with Workers
 
@@ -286,6 +305,18 @@ VMs are named based on the cluster name:
 | `workers[].count` | int | Yes | Workers in pool |
 | `workers[].size` | object | No | Override default sizing |
 
+### spec.network Options
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `bridge` | string | vmbr0 | Network bridge name |
+| `dhcp` | bool | true | Use DHCP for IP allocation |
+| `staticIPs.startIP` | string | - | First IP to allocate |
+| `staticIPs.gateway` | string | - | Default gateway |
+| `staticIPs.netmask` | string | - | Netmask in CIDR notation (e.g., "24") |
+
+**Recommendation:** Use static IPs (`dhcp: false` with `staticIPs`) for reliable cluster creation. DHCP mode requires QEMU guest agent which may not be enabled in cloud images.
+
 ### spec.k3s Options
 
 | Field | Type | Default | Description |
@@ -331,11 +362,25 @@ kubectl --kubeconfig ~/.openctl/k3s/dev-cluster/kubeconfig get nodes
 2. Check that the SSH user has sudo privileges
 3. Verify adequate disk space and memory
 
-### VMs not getting IPs
+### VMs not getting IPs / Timeout waiting for IPs
 
-1. Check DHCP server configuration on the network
-2. For static IPs, configure them in the cloud-init section of the compute provider
-3. Ensure the QEMU guest agent is installed in the VM image
+This is usually caused by QEMU guest agent not running in the VMs. Ubuntu cloud images don't enable qemu-guest-agent by default.
+
+**Solution (Recommended):** Use static IP configuration instead of DHCP:
+
+```yaml
+spec:
+  network:
+    dhcp: false
+    staticIPs:
+      startIP: "192.168.1.100"
+      gateway: "192.168.1.1"
+      netmask: "24"
+```
+
+**Alternative:** If you must use DHCP:
+1. Create a custom VM template with qemu-guest-agent enabled
+2. Or SSH into the VMs and run: `sudo systemctl enable --now qemu-guest-agent`
 
 ### Cluster state is inconsistent
 

@@ -5,23 +5,23 @@ This document describes the architecture of OpenCtl and provides guidance for de
 ## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        openctl CLI                          │
-│  ┌─────────┐  ┌─────────┐  ┌──────────┐  ┌───────────────┐ │
-│  │ Config  │  │ Manifest│  │  Output  │  │Plugin Registry│ │
-│  │ Loader  │  │ Parser  │  │Formatter │  │  & Discovery  │ │
-│  └─────────┘  └─────────┘  └──────────┘  └───────────────┘ │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                    stdin/stdout JSON
-                              │
-┌─────────────────────────────┴───────────────────────────────┐
-│                     Plugin (openctl-*)                       │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
-│  │  Handler    │  │ Provider    │  │ Resource Converters │  │
-│  │  Router     │  │   Client    │  │                     │  │
-│  └─────────────┘  └─────────────┘  └─────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                            openctl CLI                                   │
+│  ┌─────────┐  ┌─────────┐  ┌──────────┐  ┌───────────┐  ┌───────────┐   │
+│  │ Config  │  │ Manifest│  │  Output  │  │  Plugin   │  │   State   │   │
+│  │ Loader  │  │ Parser  │  │Formatter │  │ Discovery │  │  Manager  │   │
+│  └─────────┘  └─────────┘  └──────────┘  └───────────┘  └───────────┘   │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                          stdin/stdout JSON
+                                    │
+┌───────────────────────────────────┴─────────────────────────────────────┐
+│                        Plugin (openctl-*)                                │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌────────────────┐  │
+│  │   Handler   │  │  Provider   │  │  Resource   │  │    Dispatch    │  │
+│  │   Router    │  │   Client    │  │ Converters  │  │   Generator    │  │
+│  └─────────────┘  └─────────────┘  └─────────────┘  └────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Project Structure
@@ -42,23 +42,37 @@ openctl/
 │   ├── plugin/
 │   │   ├── discovery.go             # Find openctl-* binaries
 │   │   ├── executor.go              # Exec + stdin/stdout communication
-│   │   └── protocol.go              # Re-exported protocol types
+│   │   └── dispatcher.go            # Cross-plugin dispatch
 │   ├── output/
 │   │   └── formatter.go             # Table/YAML/JSON output
+│   ├── state/
+│   │   └── manager.go               # State persistence
 │   └── errors/
 │       └── errors.go                # Error types
 ├── pkg/protocol/                    # Shared types (for plugin authors)
 │   ├── request.go                   # Request structure
-│   ├── response.go                  # Response + Capabilities
-│   └── resource.go                  # Resource definition
-└── plugins/
-    └── proxmox/                     # Example plugin
-        ├── cmd/openctl-proxmox/
-        ├── internal/
-        │   ├── handler/             # Request handlers
-        │   ├── client/              # API client
-        │   └── resources/           # Resource converters
-        └── go.mod                   # Separate module
+│   ├── response.go                  # Response + Capabilities + State
+│   ├── resource.go                  # Resource definition
+│   └── dispatch.go                  # Dispatch protocol types
+├── plugins/
+│   ├── proxmox/                     # Proxmox VE plugin
+│   │   ├── cmd/openctl-proxmox/
+│   │   └── internal/
+│   │       ├── handler/             # Request handlers
+│   │       ├── client/              # Proxmox API client
+│   │       ├── resources/           # VM/Template converters
+│   │       └── compute/             # Compute interface impl
+│   └── k3s/                         # K3s cluster plugin
+│       ├── cmd/openctl-k3s/
+│       └── internal/
+│           ├── handler/             # Request handlers
+│           ├── cluster/             # Create/delete logic
+│           ├── resources/           # Cluster spec parsing
+│           └── ssh/                 # SSH client for K3s install
+└── test/
+    └── e2e/                         # End-to-end tests
+        ├── harness.go               # Test harness with mock plugins
+        └── cli_test.go              # CLI integration tests
 ```
 
 ## Plugin Protocol
@@ -96,7 +110,12 @@ Response:
       "plural": "templates",
       "actions": ["get", "list"]
     }
-  ]
+  ],
+  "computeProvider": {
+    "implements": "compute.openctl.io/v1",
+    "features": ["cloudImage", "cloudInit", "sshKeys"]
+  },
+  "supportsDispatch": false
 }
 ```
 
@@ -130,7 +149,9 @@ For operations, OpenCtl sends a JSON request via stdin and reads the response fr
     "tokenId": "root@pam!openctl",
     "tokenSecret": "secret-token",
     "defaults": {"storage": "local-lvm"}
-  }
+  },
+  "continuationToken": "",
+  "dispatchResults": []
 }
 ```
 
@@ -142,7 +163,7 @@ For operations, OpenCtl sends a JSON request via stdin and reads the response fr
     "apiVersion": "proxmox.openctl.io/v1",
     "kind": "VirtualMachine",
     "metadata": {"name": "web-01"},
-    "spec": {...},
+    "spec": {},
     "status": {"state": "running", "vmid": 100}
   },
   "message": "VM web-01 created successfully"
@@ -154,8 +175,8 @@ For operations, OpenCtl sends a JSON request via stdin and reads the response fr
 {
   "status": "success",
   "resources": [
-    {"apiVersion": "...", "kind": "...", "metadata": {...}},
-    {"apiVersion": "...", "kind": "...", "metadata": {...}}
+    {"apiVersion": "...", "kind": "...", "metadata": {}},
+    {"apiVersion": "...", "kind": "...", "metadata": {}}
   ]
 }
 ```
@@ -191,6 +212,193 @@ For operations, OpenCtl sends a JSON request via stdin and reads the response fr
 | `INVALID_REQUEST` | Invalid request format or parameters |
 | `UNAUTHORIZED` | Authentication failed |
 | `INTERNAL` | Internal plugin error |
+
+## Cross-Plugin Dispatch
+
+Plugins can delegate operations to other plugins using the dispatch protocol. This enables orchestration plugins (like K3s) that compose resources from multiple providers.
+
+### Dispatch Flow
+
+```
+┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
+│  User    │     │  CLI     │     │  K3s     │     │ Proxmox  │
+│          │     │          │     │ Plugin   │     │ Plugin   │
+└────┬─────┘     └────┬─────┘     └────┬─────┘     └────┬─────┘
+     │                │                │                │
+     │ create cluster │                │                │
+     │───────────────>│                │                │
+     │                │   request      │                │
+     │                │───────────────>│                │
+     │                │                │                │
+     │                │  dispatchReqs  │                │
+     │                │<───────────────│                │
+     │                │                │                │
+     │                │             create VM           │
+     │                │────────────────────────────────>│
+     │                │                │                │
+     │                │             result              │
+     │                │<────────────────────────────────│
+     │                │                │                │
+     │                │  request +     │                │
+     │                │  results       │                │
+     │                │───────────────>│                │
+     │                │                │                │
+     │                │   response     │                │
+     │                │<───────────────│                │
+     │  result        │                │                │
+     │<───────────────│                │                │
+```
+
+### Dispatch Request
+
+When a plugin needs to delegate work, it returns dispatch requests:
+
+```json
+{
+  "status": "success",
+  "message": "Creating 3 VMs for cluster dev...",
+  "dispatchRequests": [
+    {
+      "id": "vm-dev-cp-0",
+      "provider": "proxmox",
+      "action": "create",
+      "resourceType": "VirtualMachine",
+      "manifest": {
+        "apiVersion": "proxmox.openctl.io/v1",
+        "kind": "VirtualMachine",
+        "metadata": {"name": "dev-cp-0"},
+        "spec": {}
+      },
+      "waitFor": {
+        "field": "status.state",
+        "value": "running",
+        "timeout": "5m"
+      }
+    }
+  ],
+  "continuation": {
+    "token": "vms-created"
+  }
+}
+```
+
+### Dispatch Result
+
+The CLI executes dispatch requests and calls the plugin again with results:
+
+```json
+{
+  "version": "1.0",
+  "action": "create",
+  "resourceType": "Cluster",
+  "continuationToken": "vms-created",
+  "dispatchResults": [
+    {
+      "id": "vm-dev-cp-0",
+      "status": "success",
+      "resource": {
+        "apiVersion": "proxmox.openctl.io/v1",
+        "kind": "VirtualMachine",
+        "metadata": {"name": "dev-cp-0"},
+        "status": {"state": "running", "vmid": 100, "ip": "192.168.1.50"}
+      }
+    }
+  ]
+}
+```
+
+### Wait Conditions
+
+Dispatch requests can include wait conditions:
+
+```json
+{
+  "waitFor": {
+    "field": "status.state",
+    "value": "running",
+    "timeout": "5m"
+  }
+}
+```
+
+The CLI will poll the resource until the condition is met or timeout occurs.
+
+## State Management
+
+Plugins can request the CLI to persist state for tracking complex resources.
+
+### State Update
+
+Plugins return state updates to save resource state:
+
+```json
+{
+  "status": "success",
+  "stateUpdate": {
+    "operation": "save",
+    "provider": "k3s",
+    "name": "dev-cluster",
+    "state": {
+      "apiVersion": "k3s.openctl.io/v1",
+      "kind": "Cluster",
+      "spec": {},
+      "status": {
+        "phase": "Ready",
+        "message": "Cluster is ready",
+        "outputs": {
+          "kubeconfigPath": "/home/user/.openctl/k3s/dev-cluster/kubeconfig",
+          "serverIP": "192.168.1.50"
+        }
+      },
+      "children": [
+        {"provider": "proxmox", "kind": "VirtualMachine", "name": "dev-cp-0"},
+        {"provider": "proxmox", "kind": "VirtualMachine", "name": "dev-worker-0"}
+      ]
+    }
+  }
+}
+```
+
+### State Operations
+
+| Operation | Description |
+|-----------|-------------|
+| `save` | Create or update state |
+| `delete` | Remove state |
+
+### State Storage
+
+State is stored in `~/.openctl/state/<provider>/<name>.yaml`:
+
+```yaml
+apiVersion: k3s.openctl.io/v1
+kind: Cluster
+spec:
+  compute:
+    provider: proxmox
+status:
+  phase: Ready
+  message: Cluster is ready
+  outputs:
+    kubeconfigPath: /home/user/.openctl/k3s/dev-cluster/kubeconfig
+children:
+  - provider: proxmox
+    kind: VirtualMachine
+    name: dev-cp-0
+```
+
+### Child References
+
+State can track child resources for cascading operations (e.g., delete cluster → delete VMs):
+
+```json
+{
+  "children": [
+    {"provider": "proxmox", "kind": "VirtualMachine", "name": "dev-cp-0"},
+    {"provider": "proxmox", "kind": "VirtualMachine", "name": "dev-worker-0"}
+  ]
+}
+```
 
 ## Creating a New Plugin
 
@@ -256,7 +464,6 @@ func printCapabilities() {
             },
         },
     }
-
     json.NewEncoder(os.Stdout).Encode(caps)
 }
 
@@ -350,78 +557,22 @@ func (h *Handler) handleMyResource(req *protocol.Request) (*protocol.Response, e
         }, nil
     }
 }
-
-func (h *Handler) listResources() (*protocol.Response, error) {
-    // Call your API client to list resources
-    items, err := h.client.List()
-    if err != nil {
-        return nil, err
-    }
-
-    var resources []*protocol.Resource
-    for _, item := range items {
-        resources = append(resources, convertToResource(item))
-    }
-
-    return &protocol.Response{
-        Status:    protocol.StatusSuccess,
-        Resources: resources,
-    }, nil
-}
-
-// Implement other handlers...
 ```
 
-### Step 5: Implement API Client
-
-Create `plugins/myprovider/internal/client/client.go`:
-
-```go
-package client
-
-import (
-    "net/http"
-    "time"
-)
-
-type Client struct {
-    endpoint   string
-    token      string
-    httpClient *http.Client
-}
-
-func New(endpoint, tokenID, tokenSecret string) *Client {
-    return &Client{
-        endpoint: endpoint,
-        token:    tokenSecret,
-        httpClient: &http.Client{
-            Timeout: 60 * time.Second,
-        },
-    }
-}
-
-// Implement List, Get, Create, Delete methods...
-```
-
-### Step 6: Build and Install
+### Step 5: Build and Install
 
 Add to `Makefile`:
 
 ```makefile
-build-myprovider:
+build-plugin-myprovider:
     cd plugins/myprovider && go build -o ../../bin/openctl-myprovider ./cmd/openctl-myprovider
 
-install-myprovider: build-myprovider
+install-plugin-myprovider: build-plugin-myprovider
+    mkdir -p ~/.openctl/plugins
     cp bin/openctl-myprovider ~/.openctl/plugins/
 ```
 
-Build and install:
-
-```bash
-make build-myprovider install-myprovider
-```
-
-### Step 7: Test Your Plugin
+### Step 6: Test Your Plugin
 
 ```bash
 # Test capabilities
@@ -458,8 +609,8 @@ The `apiVersion` should follow the format: `<provider>.openctl.io/<version>`
 
 Examples:
 - `proxmox.openctl.io/v1`
-- `aws.openctl.io/v1`
-- `docker.openctl.io/v1beta1`
+- `k3s.openctl.io/v1`
+- `aws.openctl.io/v1beta1`
 
 This allows OpenCtl to auto-detect the provider when using `openctl apply -f manifest.yaml`.
 
@@ -500,22 +651,25 @@ providers:
         tokenSecretFile: ~/.openctl/secrets/prod.token
     defaults:
       region: us-east-1
-      storage-class: fast
 ```
 
 ## Testing Plugins
 
 ### Unit Tests
 
-Test your handlers without network calls:
+Test handlers without network calls using HTTP mocking:
 
 ```go
 func TestHandler_List(t *testing.T) {
-    // Mock client or use test fixtures
-    h := &Handler{
-        config: &protocol.ProviderConfig{},
-        client: mockClient,
-    }
+    // Create mock server
+    server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        json.NewEncoder(w).Encode(mockResponse)
+    }))
+    defer server.Close()
+
+    h := New(&protocol.ProviderConfig{
+        Endpoint: server.URL,
+    })
 
     req := &protocol.Request{
         Version:      protocol.ProtocolVersion,
@@ -528,33 +682,47 @@ func TestHandler_List(t *testing.T) {
 }
 ```
 
-### Integration Tests
+### E2E Tests
 
-Test the full plugin binary:
+Use the test harness to test full CLI flows:
 
 ```go
-func TestPlugin_Capabilities(t *testing.T) {
-    cmd := exec.Command("./openctl-myprovider", "--capabilities")
-    output, err := cmd.Output()
-    // Assert capabilities JSON...
-}
+func TestPlugin_ListResources(t *testing.T) {
+    h := NewHarness(t)
+    defer h.Cleanup()
 
-func TestPlugin_Request(t *testing.T) {
-    cmd := exec.Command("./openctl-myprovider")
-    cmd.Stdin = strings.NewReader(`{"version":"1.0","action":"list",...}`)
-    output, err := cmd.Output()
-    // Assert response...
+    h.InstallMockPlugin("mock", &MockPluginResponse{
+        Capabilities: &protocol.Capabilities{
+            ProviderName: "mock",
+            Resources: []protocol.ResourceDefinition{
+                {Kind: "MyResource", Plural: "myresources", Actions: []string{"list"}},
+            },
+        },
+        Responses: map[string]*protocol.Response{
+            "list:MyResource:": {
+                Status: protocol.StatusSuccess,
+                Resources: []*protocol.Resource{
+                    {Metadata: protocol.ResourceMetadata{Name: "test"}},
+                },
+            },
+        },
+    })
+
+    result := h.Run("mock", "get", "myresources")
+    result.AssertSuccess(t)
+    result.AssertOutputContains(t, "test")
 }
 ```
 
 ## Best Practices
 
 1. **Error Handling**: Return protocol errors for expected failures, Go errors for unexpected ones
-2. **Timeouts**: Respect the timeout passed in the request context
+2. **Timeouts**: Respect the timeout passed in the request config
 3. **Idempotency**: Make `create` and `apply` operations idempotent when possible
-4. **Status**: Populate the `status` field with runtime information (state, IDs, etc.)
+4. **Status**: Populate the `status` field with runtime information (state, IDs, IPs, etc.)
 5. **Logging**: Write debug logs to stderr (stdout is reserved for protocol)
 6. **Validation**: Validate manifests early and return clear error messages
+7. **Testing**: Write unit tests with HTTP mocking; avoid network calls in tests
 
 ## Future Enhancements
 
@@ -563,3 +731,7 @@ func TestPlugin_Request(t *testing.T) {
 - [ ] Plugin versioning and compatibility checking
 - [ ] Plugin marketplace/registry
 - [ ] gRPC transport option for performance
+- [x] Automatic retry with backoff for transient failures (implemented in dispatcher)
+- [ ] Additional compute providers (AWS, Azure, GCP)
+- [ ] K3s cluster upgrades
+- [ ] Certificate rotation for K3s clusters
