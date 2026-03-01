@@ -2,6 +2,7 @@ package handler
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -9,6 +10,14 @@ import (
 	"github.com/openctl/openctl-proxmox/internal/resources"
 	"github.com/openctl/openctl/pkg/protocol"
 )
+
+var debugEnabled = os.Getenv("OPENCTL_DEBUG") != ""
+
+func debugf(format string, args ...any) {
+	if debugEnabled {
+		fmt.Fprintf(os.Stderr, "[proxmox-handler] "+format+"\n", args...)
+	}
+}
 
 // Handler handles requests for the Proxmox plugin
 type Handler struct {
@@ -219,6 +228,26 @@ func (h *Handler) createVMFromTemplate(name, node string, spec *resources.VMSpec
 		}
 	}
 
+	// If cloud-init is configured, try to enable qemu-guest-agent via cicustom vendor data
+	if spec.CloudInit != nil {
+		// Use config storage if available, otherwise try "local"
+		snippetStorage := "local"
+		if h.config.Defaults != nil {
+			if s, ok := h.config.Defaults["storage"]; ok && s != "" {
+				snippetStorage = s
+			}
+		}
+		if err := h.client.EnsureQemuAgentSnippet(node, snippetStorage); err != nil {
+			debugf("createVMFromTemplate: failed to ensure snippet: %v", err)
+		} else {
+			cicustom := fmt.Sprintf("vendor=%s:snippets/%s", snippetStorage, client.QemuAgentSnippetName)
+			debugf("createVMFromTemplate: setting cicustom=%s", cicustom)
+			if err := h.client.ConfigureVM(node, vmid, map[string]any{"cicustom": cicustom}); err != nil {
+				debugf("createVMFromTemplate: failed to set cicustom: %v", err)
+			}
+		}
+	}
+
 	if spec.StartOnCreate {
 		if _, err := h.client.StartVM(node, vmid); err != nil {
 			return nil, fmt.Errorf("failed to start VM: %w", err)
@@ -311,6 +340,21 @@ func (h *Handler) createVMFromCloudImage(name, node string, spec *resources.VMSp
 			if err := h.client.ResizeVMDisk(node, vmid, disk.Name, disk.Size); err != nil {
 				return nil, fmt.Errorf("failed to resize disk %s: %w", disk.Name, err)
 			}
+		}
+	}
+
+	// Enable qemu-guest-agent via cicustom vendor data (for IP detection)
+	// Using vendor= instead of user= so it merges with cloud-init config instead of replacing it
+	snippetStorage := spec.CloudImage.Storage
+	if err := h.client.EnsureQemuAgentSnippet(node, snippetStorage); err != nil {
+		// Try to continue - storage might not support snippets
+		debugf("createVMFromCloudImage: failed to ensure snippet: %v", err)
+	} else {
+		// Add cicustom vendor data to VM config
+		cicustom := fmt.Sprintf("vendor=%s:snippets/%s", snippetStorage, client.QemuAgentSnippetName)
+		debugf("createVMFromCloudImage: setting cicustom=%s", cicustom)
+		if err := h.client.ConfigureVM(node, vmid, map[string]any{"cicustom": cicustom}); err != nil {
+			debugf("createVMFromCloudImage: failed to set cicustom: %v", err)
 		}
 	}
 

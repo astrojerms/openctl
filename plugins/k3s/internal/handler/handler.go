@@ -255,7 +255,10 @@ func (h *Handler) handleVMsCreated(req *protocol.Request, name string, spec *res
 		fmt.Sscanf(req.ContinuationToken, "get-ips:%d", &retryCount)
 	}
 
-	// Collect node IPs from dispatch results
+	// Check if we have pre-allocated static IPs
+	staticIPs, _ := resources.AllocateIPs(name, spec)
+
+	// Collect node IPs from dispatch results (or use static IPs)
 	nodeIPs := make(map[string]string)
 	var children []protocol.ChildReference
 
@@ -300,8 +303,10 @@ func (h *Handler) handleVMsCreated(req *protocol.Request, name string, spec *res
 			Name:     nodeName,
 		})
 
-		// Get IP from resource status
-		if result.Resource != nil && result.Resource.Status != nil {
+		// If we have static IPs, use them; otherwise try to get from resource status
+		if staticIP, ok := staticIPs[nodeName]; ok && staticIP != "" {
+			nodeIPs[nodeName] = staticIP
+		} else if result.Resource != nil && result.Resource.Status != nil {
 			if ip, ok := result.Resource.Status["ip"].(string); ok && ip != "" {
 				nodeIPs[nodeName] = ip
 			}
@@ -313,13 +318,28 @@ func (h *Handler) handleVMsCreated(req *protocol.Request, name string, spec *res
 
 	// Check if we have IPs for all nodes
 	if len(nodeIPs) < len(allNodes) {
+		// If using static IPs, we should have them all already
+		if staticIPs != nil && len(staticIPs) > 0 {
+			// Fill in any missing IPs from static allocation
+			for _, nodeName := range allNodes {
+				if _, ok := nodeIPs[nodeName]; !ok {
+					if staticIP, ok := staticIPs[nodeName]; ok {
+						nodeIPs[nodeName] = staticIP
+					}
+				}
+			}
+		}
+	}
+
+	// Re-check if we have IPs for all nodes after static IP fill
+	if len(nodeIPs) < len(allNodes) {
 		// Check if we've exceeded max retries
 		if retryCount >= maxIPRetries {
 			return &protocol.Response{
 				Status: protocol.StatusError,
 				Error: &protocol.Error{
 					Code:    protocol.ErrorCodeInternal,
-					Message: fmt.Sprintf("timed out waiting for VM IPs (got %d/%d after %d retries). Ensure QEMU guest agent is running in VMs.", len(nodeIPs), len(allNodes), retryCount),
+					Message: fmt.Sprintf("timed out waiting for VM IPs (got %d/%d after %d retries). Consider using static IPs via spec.network.staticIPs, or ensure QEMU guest agent is running in VMs.", len(nodeIPs), len(allNodes), retryCount),
 				},
 				StateUpdate: &protocol.StateUpdate{
 					Operation: "save",

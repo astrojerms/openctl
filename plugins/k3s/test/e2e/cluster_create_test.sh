@@ -26,6 +26,14 @@ PROXMOX_NODE="${PROXMOX_NODE:-pve1351}"
 PROXMOX_STORAGE="${PROXMOX_STORAGE:-local}"
 PROXMOX_DISK_STORAGE="${PROXMOX_DISK_STORAGE:-local-lvm}"
 
+# Network settings for static IPs (to avoid QEMU guest agent dependency)
+# Set USE_STATIC_IPS=false to use DHCP with QEMU agent
+USE_STATIC_IPS="${USE_STATIC_IPS:-true}"
+STATIC_IP_START="${STATIC_IP_START:-192.168.0.200}"
+STATIC_IP_GATEWAY="${STATIC_IP_GATEWAY:-192.168.0.1}"
+STATIC_IP_NETMASK="${STATIC_IP_NETMASK:-24}"
+NETWORK_BRIDGE="${NETWORK_BRIDGE:-vmbr0}"
+
 # SSH settings
 SSH_USER="${SSH_USER:-ubuntu}"
 SSH_KEY_PATH="${SSH_KEY_PATH:-$HOME/.ssh/id_ed25519}"
@@ -110,6 +118,28 @@ generate_manifest() {
     local ssh_pub_key
     ssh_pub_key=$(get_ssh_public_key)
 
+    # Build network section based on configuration
+    local network_section=""
+    if [[ "$USE_STATIC_IPS" == "true" ]]; then
+        network_section="
+  # Network configuration with static IPs
+  # This avoids the QEMU guest agent dependency for IP detection
+  network:
+    bridge: ${NETWORK_BRIDGE}
+    dhcp: false
+    staticIPs:
+      startIP: \"${STATIC_IP_START}\"
+      gateway: \"${STATIC_IP_GATEWAY}\"
+      netmask: \"${STATIC_IP_NETMASK}\""
+    else
+        network_section="
+  # Network configuration using DHCP
+  # Requires QEMU guest agent to be running in VMs for IP detection
+  network:
+    bridge: ${NETWORK_BRIDGE}
+    dhcp: true"
+    fi
+
     cat > "${MANIFEST_FILE}" << EOF
 apiVersion: k3s.openctl.io/v1
 kind: Cluster
@@ -137,6 +167,7 @@ spec:
     # workers:
     #   - name: default
     #     count: 1
+${network_section}
 
   # SSH configuration for K3s installation
   ssh:
@@ -152,6 +183,11 @@ spec:
     # serviceCIDR: "10.43.0.0/16"
 EOF
     log_info "Generated test manifest: ${MANIFEST_FILE}"
+    if [[ "$USE_STATIC_IPS" == "true" ]]; then
+        log_info "Using static IP allocation starting at ${STATIC_IP_START}"
+    else
+        log_info "Using DHCP (requires QEMU guest agent)"
+    fi
 }
 
 # Check prerequisites
@@ -474,13 +510,20 @@ while [[ $# -gt 0 ]]; do
             echo "  --help          Show this help message"
             echo ""
             echo "Environment variables:"
-            echo "  PROXMOX_NODE        Proxmox node name (default: pve1351)"
-            echo "  PROXMOX_STORAGE     Storage for images (default: local)"
+            echo "  PROXMOX_NODE         Proxmox node name (default: pve1351)"
+            echo "  PROXMOX_STORAGE      Storage for images (default: local)"
             echo "  PROXMOX_DISK_STORAGE Storage for VM disks (default: local-lvm)"
-            echo "  SSH_USER            SSH user for VMs (default: ubuntu)"
-            echo "  SSH_KEY_PATH        Path to SSH private key"
-            echo "  SSH_PUBLIC_KEY      SSH public key string (optional)"
-            echo "  CLOUD_IMAGE_URL     URL to cloud image"
+            echo "  SSH_USER             SSH user for VMs (default: ubuntu)"
+            echo "  SSH_KEY_PATH         Path to SSH private key"
+            echo "  SSH_PUBLIC_KEY       SSH public key string (optional)"
+            echo "  CLOUD_IMAGE_URL      URL to cloud image"
+            echo ""
+            echo "Network configuration (static IP mode avoids QEMU agent dependency):"
+            echo "  USE_STATIC_IPS       Use static IPs instead of DHCP (default: true)"
+            echo "  STATIC_IP_START      First IP to allocate (default: 192.168.0.200)"
+            echo "  STATIC_IP_GATEWAY    Default gateway (default: 192.168.0.1)"
+            echo "  STATIC_IP_NETMASK    Netmask in CIDR notation (default: 24)"
+            echo "  NETWORK_BRIDGE       Proxmox bridge name (default: vmbr0)"
             exit 0
             ;;
         *)

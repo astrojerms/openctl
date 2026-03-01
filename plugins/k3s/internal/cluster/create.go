@@ -14,19 +14,25 @@ import (
 
 // Creator handles cluster creation
 type Creator struct {
-	name   string
-	spec   *resources.ClusterSpec
-	config *protocol.ProviderConfig
+	name    string
+	spec    *resources.ClusterSpec
+	config  *protocol.ProviderConfig
 	nodeIPs map[string]string // node name -> IP address
 }
 
 // NewCreator creates a new cluster creator
 func NewCreator(name string, spec *resources.ClusterSpec, config *protocol.ProviderConfig) *Creator {
+	// Pre-allocate static IPs if configured
+	nodeIPs, _ := resources.AllocateIPs(name, spec)
+	if nodeIPs == nil {
+		nodeIPs = make(map[string]string)
+	}
+
 	return &Creator{
 		name:    name,
 		spec:    spec,
 		config:  config,
-		nodeIPs: make(map[string]string),
+		nodeIPs: nodeIPs,
 	}
 }
 
@@ -55,6 +61,25 @@ func (c *Creator) GenerateDispatchRequests() []*protocol.DispatchRequest {
 					break
 				}
 				workerIdx -= pool.Count
+			}
+		}
+
+		// Build IP configuration
+		var ipConfig map[string]any
+		if staticIP, ok := c.nodeIPs[nodeName]; ok && staticIP != "" {
+			// Static IP configuration
+			ipConfig = map[string]any{
+				"net0": map[string]any{
+					"ip":      fmt.Sprintf("%s/%s", staticIP, c.spec.Network.StaticIPs.Netmask),
+					"gateway": c.spec.Network.StaticIPs.Gateway,
+				},
+			}
+		} else {
+			// DHCP configuration
+			ipConfig = map[string]any{
+				"net0": map[string]any{
+					"ip": "dhcp",
+				},
 			}
 		}
 
@@ -89,18 +114,14 @@ func (c *Creator) GenerateDispatchRequests() []*protocol.DispatchRequest {
 				"networks": []map[string]any{
 					{
 						"name":   "net0",
-						"bridge": "vmbr0",
+						"bridge": c.spec.Network.Bridge,
 						"model":  "virtio",
 					},
 				},
 				"cloudInit": map[string]any{
-					"user":    c.spec.SSH.User,
-					"sshKeys": c.spec.SSH.PublicKeys,
-					"ipConfig": map[string]any{
-						"net0": map[string]any{
-							"ip": "dhcp",
-						},
-					},
+					"user":     c.spec.SSH.User,
+					"sshKeys":  c.spec.SSH.PublicKeys,
+					"ipConfig": ipConfig,
 				},
 			},
 		}

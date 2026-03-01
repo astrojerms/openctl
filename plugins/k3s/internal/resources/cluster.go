@@ -10,8 +10,29 @@ import (
 type ClusterSpec struct {
 	Compute ComputeSpec `json:"compute"`
 	Nodes   NodesSpec   `json:"nodes"`
+	Network NetworkSpec `json:"network"`
 	K3s     K3sSpec     `json:"k3s"`
 	SSH     SSHSpec     `json:"ssh"`
+}
+
+// NetworkSpec defines network configuration for the cluster
+type NetworkSpec struct {
+	// Bridge is the network bridge to use (e.g., "vmbr0")
+	Bridge string `json:"bridge,omitempty"`
+	// DHCP indicates whether to use DHCP for IP allocation (default: true)
+	DHCP bool `json:"dhcp"`
+	// StaticIPs provides static IP configuration
+	StaticIPs *StaticIPSpec `json:"staticIPs,omitempty"`
+}
+
+// StaticIPSpec defines static IP allocation
+type StaticIPSpec struct {
+	// StartIP is the first IP to allocate (e.g., "192.168.1.100")
+	StartIP string `json:"startIP"`
+	// Gateway is the default gateway
+	Gateway string `json:"gateway"`
+	// Netmask in CIDR notation (e.g., "24")
+	Netmask string `json:"netmask"`
 }
 
 // ComputeSpec defines the compute provider configuration
@@ -143,6 +164,37 @@ func ParseClusterSpec(r *protocol.Resource) (*ClusterSpec, error) {
 		}
 	}
 
+	// Parse network section
+	spec.Network.DHCP = true // Default to DHCP
+	spec.Network.Bridge = "vmbr0" // Default bridge
+	if network, ok := r.Spec["network"].(map[string]any); ok {
+		if bridge, ok := network["bridge"].(string); ok {
+			spec.Network.Bridge = bridge
+		}
+		// Handle dhcp field - might be bool or string depending on how YAML was parsed
+		if dhcp, ok := network["dhcp"].(bool); ok {
+			spec.Network.DHCP = dhcp
+		} else if dhcpStr, ok := network["dhcp"].(string); ok {
+			spec.Network.DHCP = dhcpStr != "false"
+		}
+		if staticIPs, ok := network["staticIPs"].(map[string]any); ok {
+			spec.Network.StaticIPs = &StaticIPSpec{}
+			if startIP, ok := staticIPs["startIP"].(string); ok {
+				spec.Network.StaticIPs.StartIP = startIP
+			}
+			if gateway, ok := staticIPs["gateway"].(string); ok {
+				spec.Network.StaticIPs.Gateway = gateway
+			}
+			if netmask, ok := staticIPs["netmask"].(string); ok {
+				spec.Network.StaticIPs.Netmask = netmask
+			}
+			// If staticIPs is provided and DHCP wasn't explicitly set, disable DHCP
+			if spec.Network.StaticIPs.StartIP != "" {
+				spec.Network.DHCP = false
+			}
+		}
+	}
+
 	// Parse k3s section
 	if k3s, ok := r.Spec["k3s"].(map[string]any); ok {
 		if version, ok := k3s["version"].(string); ok {
@@ -260,4 +312,50 @@ func NodeNames(clusterName string, spec *ClusterSpec) (controlPlanes []string, w
 	}
 
 	return
+}
+
+// AllocateIPs generates IP allocations for all nodes in the cluster
+// Returns a map of node name -> IP address
+func AllocateIPs(clusterName string, spec *ClusterSpec) (map[string]string, error) {
+	if spec.Network.DHCP || spec.Network.StaticIPs == nil {
+		return nil, nil // DHCP mode, no pre-allocated IPs
+	}
+
+	cpNodes, workerNodes := NodeNames(clusterName, spec)
+	allNodes := append(cpNodes, workerNodes...)
+
+	ips := make(map[string]string)
+	currentIP := spec.Network.StaticIPs.StartIP
+
+	for _, nodeName := range allNodes {
+		ips[nodeName] = currentIP
+		var err error
+		currentIP, err = incrementIP(currentIP)
+		if err != nil {
+			return nil, fmt.Errorf("failed to allocate IP for %s: %w", nodeName, err)
+		}
+	}
+
+	return ips, nil
+}
+
+// incrementIP returns the next IP address
+func incrementIP(ip string) (string, error) {
+	parts := make([]int, 4)
+	_, err := fmt.Sscanf(ip, "%d.%d.%d.%d", &parts[0], &parts[1], &parts[2], &parts[3])
+	if err != nil {
+		return "", fmt.Errorf("invalid IP address: %s", ip)
+	}
+
+	// Increment last octet
+	parts[3]++
+	if parts[3] > 254 {
+		parts[3] = 1
+		parts[2]++
+		if parts[2] > 255 {
+			return "", fmt.Errorf("IP range exhausted")
+		}
+	}
+
+	return fmt.Sprintf("%d.%d.%d.%d", parts[0], parts[1], parts[2], parts[3]), nil
 }
