@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/openctl/openctl-proxmox/internal/handler"
+	"github.com/openctl/openctl-k3s/internal/handler"
 	"github.com/openctl/openctl/pkg/protocol"
 )
 
@@ -23,25 +23,16 @@ func main() {
 
 func printCapabilities() {
 	caps := protocol.Capabilities{
-		ProviderName:    "proxmox",
-		ProtocolVersion: protocol.ProtocolVersion,
+		ProviderName:     "k3s",
+		ProtocolVersion:  protocol.ProtocolVersion,
+		SupportsDispatch: true,
 		Resources: []protocol.ResourceDefinition{
 			{
-				Kind:    "VirtualMachine",
-				Plural:  "vms",
-				Actions: []string{"get", "list", "create", "delete", "apply"},
-			},
-			{
-				Kind:    "Template",
-				Plural:  "templates",
-				Actions: []string{"get", "list"},
+				Kind:    "Cluster",
+				Plural:  "clusters",
+				Actions: []string{"get", "list", "create", "delete"},
 			},
 		},
-		ComputeProvider: &protocol.ComputeCapability{
-			Implements: "compute.openctl.io/v1",
-			Features:   []string{"cloudImage", "cloudInit", "sshKeys"},
-		},
-		SupportsDispatch: true,
 	}
 
 	encoder := json.NewEncoder(os.Stdout)

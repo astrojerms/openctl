@@ -11,6 +11,11 @@ import (
 
 // VMToResource converts a Proxmox VM to a protocol Resource
 func VMToResource(vm *client.VM, config *client.VMConfig) *protocol.Resource {
+	return VMToResourceWithIP(vm, config, "")
+}
+
+// VMToResourceWithIP converts a Proxmox VM to a protocol Resource with an optional IP address
+func VMToResourceWithIP(vm *client.VM, config *client.VMConfig, ip string) *protocol.Resource {
 	spec := map[string]any{
 		"node": vm.Node,
 	}
@@ -38,6 +43,10 @@ func VMToResource(vm *client.VM, config *client.VMConfig) *protocol.Resource {
 		"uptime":  vm.Uptime,
 		"cpuUsed": vm.CPU,
 		"memUsed": vm.Mem,
+	}
+
+	if ip != "" {
+		status["ip"] = ip
 	}
 
 	return &protocol.Resource{
@@ -71,20 +80,63 @@ func TemplateToResource(t *client.Template) *protocol.Resource {
 
 // VMSpec represents the spec for a VirtualMachine
 type VMSpec struct {
-	Node        string              `json:"node"`
-	Template    *TemplateRef        `json:"template"`
-	CPU         *CPUSpec            `json:"cpu"`
-	Memory      *MemorySpec         `json:"memory"`
-	Disks       []DiskSpec          `json:"disks"`
-	Networks    []NetworkSpec       `json:"networks"`
-	CloudInit   *CloudInitSpec      `json:"cloudInit"`
-	StartOnCreate bool              `json:"startOnCreate"`
+	Node          string          `json:"node"`
+	Template      *TemplateRef    `json:"template"`
+	Image         *ImageRef       `json:"image"`
+	CloudImage    *CloudImageRef  `json:"cloudImage"`
+	CPU           *CPUSpec        `json:"cpu"`
+	Memory        *MemorySpec     `json:"memory"`
+	Disks         []DiskSpec      `json:"disks"`
+	Networks      []NetworkSpec   `json:"networks"`
+	CloudInit     *CloudInitSpec  `json:"cloudInit"`
+	StartOnCreate bool            `json:"startOnCreate"`
+	OSType        string          `json:"osType"`
+	BIOS          string          `json:"bios"`
+	Machine       string          `json:"machine"`
+	Agent         *AgentSpec      `json:"agent"`
 }
 
 // TemplateRef references a template
 type TemplateRef struct {
 	Name string `json:"name"`
 	VMID int    `json:"vmid"`
+}
+
+// ImageRef references a disk image in storage (legacy - use CloudImageRef instead)
+type ImageRef struct {
+	// Storage is the Proxmox storage ID where the image is located (e.g., "local", "nfs-images")
+	Storage string `json:"storage"`
+	// File is the filename of the image (e.g., "ubuntu-22.04-cloudimg-amd64.img")
+	// Can also be a full volume ID (e.g., "local:import/image.img")
+	File string `json:"file"`
+	// ContentType is the storage content type where the image is located.
+	// Common values: "iso", "images", "import". Defaults to "images".
+	ContentType string `json:"contentType"`
+	// Format is the disk format (qcow2, raw, vmdk). If empty, auto-detected from extension.
+	Format string `json:"format"`
+	// TargetStorage is where to store the imported disk. If empty, uses Storage.
+	TargetStorage string `json:"targetStorage"`
+	// TargetFormat is the format for the imported disk. If empty, uses Format or defaults to raw for block storage.
+	TargetFormat string `json:"targetFormat"`
+}
+
+// CloudImageRef references a cloud image to download and use
+type CloudImageRef struct {
+	// URL is the download URL for the cloud image (e.g., https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img)
+	URL string `json:"url"`
+	// Storage is where to store the downloaded image and create the template
+	Storage string `json:"storage"`
+	// Checksum is the expected checksum of the image (optional, format: "sha256:abc123..." or "sha512:...")
+	Checksum string `json:"checksum"`
+	// TemplateName is the name for the template VM. If empty, auto-generated from URL.
+	TemplateName string `json:"templateName"`
+	// DiskStorage is where to store the VM disk. If empty, uses Storage.
+	DiskStorage string `json:"diskStorage"`
+}
+
+// AgentSpec configures the QEMU guest agent
+type AgentSpec struct {
+	Enabled bool `json:"enabled"`
 }
 
 // CPUSpec defines CPU configuration
@@ -149,6 +201,64 @@ func ParseVMSpec(r *protocol.Resource) (*VMSpec, error) {
 		}
 		if vmid, ok := tmpl["vmid"].(float64); ok {
 			spec.Template.VMID = int(vmid)
+		}
+	}
+
+	if img, ok := r.Spec["image"].(map[string]any); ok {
+		spec.Image = &ImageRef{}
+		if storage, ok := img["storage"].(string); ok {
+			spec.Image.Storage = storage
+		}
+		if file, ok := img["file"].(string); ok {
+			spec.Image.File = file
+		}
+		if contentType, ok := img["contentType"].(string); ok {
+			spec.Image.ContentType = contentType
+		}
+		if format, ok := img["format"].(string); ok {
+			spec.Image.Format = format
+		}
+		if targetStorage, ok := img["targetStorage"].(string); ok {
+			spec.Image.TargetStorage = targetStorage
+		}
+		if targetFormat, ok := img["targetFormat"].(string); ok {
+			spec.Image.TargetFormat = targetFormat
+		}
+	}
+
+	if ci, ok := r.Spec["cloudImage"].(map[string]any); ok {
+		spec.CloudImage = &CloudImageRef{}
+		if url, ok := ci["url"].(string); ok {
+			spec.CloudImage.URL = url
+		}
+		if storage, ok := ci["storage"].(string); ok {
+			spec.CloudImage.Storage = storage
+		}
+		if checksum, ok := ci["checksum"].(string); ok {
+			spec.CloudImage.Checksum = checksum
+		}
+		if templateName, ok := ci["templateName"].(string); ok {
+			spec.CloudImage.TemplateName = templateName
+		}
+		if diskStorage, ok := ci["diskStorage"].(string); ok {
+			spec.CloudImage.DiskStorage = diskStorage
+		}
+	}
+
+	if osType, ok := r.Spec["osType"].(string); ok {
+		spec.OSType = osType
+	}
+	if bios, ok := r.Spec["bios"].(string); ok {
+		spec.BIOS = bios
+	}
+	if machine, ok := r.Spec["machine"].(string); ok {
+		spec.Machine = machine
+	}
+
+	if agent, ok := r.Spec["agent"].(map[string]any); ok {
+		spec.Agent = &AgentSpec{}
+		if enabled, ok := agent["enabled"].(bool); ok {
+			spec.Agent.Enabled = enabled
 		}
 	}
 
@@ -258,6 +368,19 @@ func (s *VMSpec) ToProxmoxConfig() map[string]any {
 		params["memory"] = s.Memory.Size
 	}
 
+	if s.OSType != "" {
+		params["ostype"] = s.OSType
+	}
+	if s.BIOS != "" {
+		params["bios"] = s.BIOS
+	}
+	if s.Machine != "" {
+		params["machine"] = s.Machine
+	}
+	if s.Agent != nil && s.Agent.Enabled {
+		params["agent"] = "1"
+	}
+
 	for _, net := range s.Networks {
 		model := net.Model
 		if model == "" {
@@ -274,7 +397,12 @@ func (s *VMSpec) ToProxmoxConfig() map[string]any {
 			params["cipassword"] = s.CloudInit.Password
 		}
 		if len(s.CloudInit.SSHKeys) > 0 {
-			params["sshkeys"] = url.QueryEscape(strings.Join(s.CloudInit.SSHKeys, "\n"))
+			// Proxmox expects sshkeys to be URL-encoded with %20 for spaces (not +).
+			// QueryEscape encodes everything properly but uses + for spaces,
+			// so we replace + with %20 after encoding.
+			encoded := url.QueryEscape(strings.Join(s.CloudInit.SSHKeys, "\n"))
+			encoded = strings.ReplaceAll(encoded, "+", "%20")
+			params["sshkeys"] = encoded
 		}
 
 		for iface, cfg := range s.CloudInit.IPConfig {

@@ -196,6 +196,67 @@ func getColumnsForKind(kind string, wide bool) []Column {
 				}},
 			)
 		}
+	case "Cluster":
+		columns = append(columns,
+			Column{Header: "PHASE", Getter: func(r *protocol.Resource) string {
+				if r.Status == nil {
+					return "Unknown"
+				}
+				if phase, ok := r.Status["phase"].(string); ok {
+					return phase
+				}
+				return "Unknown"
+			}},
+			Column{Header: "NODES", Getter: func(r *protocol.Resource) string {
+				if r.Spec == nil {
+					return "-"
+				}
+				nodes, ok := r.Spec["nodes"].(map[string]any)
+				if !ok {
+					return "-"
+				}
+				count := 0
+				if cp, ok := nodes["controlPlane"].(map[string]any); ok {
+					if c, ok := cp["count"].(float64); ok {
+						count += int(c)
+					}
+				}
+				if workers, ok := nodes["workers"].([]any); ok {
+					for _, w := range workers {
+						if worker, ok := w.(map[string]any); ok {
+							if c, ok := worker["count"].(float64); ok {
+								count += int(c)
+							}
+						}
+					}
+				}
+				return fmt.Sprintf("%d", count)
+			}},
+		)
+		if wide {
+			columns = append(columns,
+				Column{Header: "PROVIDER", Getter: func(r *protocol.Resource) string {
+					if r.Spec == nil {
+						return "-"
+					}
+					if compute, ok := r.Spec["compute"].(map[string]any); ok {
+						if provider, ok := compute["provider"].(string); ok {
+							return provider
+						}
+					}
+					return "-"
+				}},
+				Column{Header: "KUBECONFIG", Getter: func(r *protocol.Resource) string {
+					if r.Status == nil {
+						return "-"
+					}
+					if path, ok := r.Status["kubeconfigPath"].(string); ok {
+						return path
+					}
+					return "-"
+				}},
+			)
+		}
 	default:
 		if wide {
 			columns = append(columns,

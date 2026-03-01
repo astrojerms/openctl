@@ -2,6 +2,7 @@ package handler
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/openctl/openctl-proxmox/internal/client"
@@ -115,9 +116,15 @@ func (h *Handler) getVM(name string) (*protocol.Response, error) {
 
 	config, _ := h.client.GetVMConfig(vm.Node, vm.VMID)
 
+	// Try to get IP if VM is running (non-blocking)
+	var ip string
+	if vm.Status == "running" {
+		ip, _ = h.client.GetVMIPAddress(vm.Node, vm.VMID)
+	}
+
 	return &protocol.Response{
 		Status:   protocol.StatusSuccess,
-		Resource: resources.VMToResource(vm, config),
+		Resource: resources.VMToResourceWithIP(vm, config, ip),
 	}, nil
 }
 
@@ -145,11 +152,19 @@ func (h *Handler) createVM(manifest *protocol.Resource) (*protocol.Response, err
 		return h.createVMFromTemplate(manifest.Metadata.Name, node, spec)
 	}
 
+	if spec.CloudImage != nil {
+		return h.createVMFromCloudImage(manifest.Metadata.Name, node, spec)
+	}
+
+	if spec.Image != nil {
+		return h.createVMFromImage(manifest.Metadata.Name, node, spec)
+	}
+
 	return &protocol.Response{
 		Status: protocol.StatusError,
 		Error: &protocol.Error{
 			Code:    protocol.ErrorCodeInvalidRequest,
-			Message: "creating VM without template is not yet supported",
+			Message: "one of spec.template, spec.cloudImage, or spec.image is required",
 		},
 	}, nil
 }
@@ -213,6 +228,309 @@ func (h *Handler) createVMFromTemplate(name, node string, spec *resources.VMSpec
 	return &protocol.Response{
 		Status:  protocol.StatusSuccess,
 		Message: fmt.Sprintf("VM %s created (vmid: %d)", name, vmid),
+	}, nil
+}
+
+func (h *Handler) createVMFromCloudImage(name, node string, spec *resources.VMSpec) (*protocol.Response, error) {
+	if spec.CloudImage.URL == "" {
+		return &protocol.Response{
+			Status: protocol.StatusError,
+			Error: &protocol.Error{
+				Code:    protocol.ErrorCodeInvalidRequest,
+				Message: "cloudImage.url is required",
+			},
+		}, nil
+	}
+	if spec.CloudImage.Storage == "" {
+		return &protocol.Response{
+			Status: protocol.StatusError,
+			Error: &protocol.Error{
+				Code:    protocol.ErrorCodeInvalidRequest,
+				Message: "cloudImage.storage is required",
+			},
+		}, nil
+	}
+
+	// Determine template name from URL or explicit setting
+	templateName := spec.CloudImage.TemplateName
+	if templateName == "" {
+		// Generate template name from URL (e.g., "ubuntu-jammy-cloudimg")
+		templateName = generateTemplateNameFromURL(spec.CloudImage.URL)
+	}
+
+	// Check if template already exists
+	existingTemplate, _ := h.client.GetTemplate(templateName)
+	var templateVMID int
+
+	if existingTemplate != nil {
+		// Template exists, use it
+		templateVMID = existingTemplate.VMID
+	} else {
+		// Template doesn't exist, create it
+		var err error
+		templateVMID, err = h.createCloudImageTemplate(node, templateName, spec)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create cloud image template: %w", err)
+		}
+	}
+
+	// Clone the template to create the new VM
+	diskStorage := spec.CloudImage.DiskStorage
+	if diskStorage == "" {
+		diskStorage = spec.CloudImage.Storage
+	}
+
+	cloneParams := map[string]any{
+		"full":    1,
+		"storage": diskStorage,
+	}
+
+	vmid, upid, err := h.client.CloneVM(node, templateVMID, name, cloneParams)
+	if err != nil {
+		return nil, fmt.Errorf("failed to clone template: %w", err)
+	}
+
+	// Wait for clone to complete
+	if upid != "" {
+		if err := h.client.WaitForTask(node, upid, 10*time.Minute); err != nil {
+			return nil, fmt.Errorf("clone task failed: %w", err)
+		}
+	}
+
+	// Apply VM configuration (CPU, memory, etc.)
+	configParams := spec.ToProxmoxConfig()
+	if len(configParams) > 0 {
+		if err := h.client.ConfigureVM(node, vmid, configParams); err != nil {
+			return nil, fmt.Errorf("failed to configure VM: %w", err)
+		}
+	}
+
+	// Resize disks if specified
+	for _, disk := range spec.Disks {
+		if disk.Size != "" && disk.Name != "" {
+			if err := h.client.ResizeVMDisk(node, vmid, disk.Name, disk.Size); err != nil {
+				return nil, fmt.Errorf("failed to resize disk %s: %w", disk.Name, err)
+			}
+		}
+	}
+
+	// Regenerate cloud-init with new settings
+	if spec.CloudInit != nil {
+		if err := h.client.RegenerateCloudInit(node, vmid); err != nil {
+			// Non-fatal, cloud-init might still work
+		}
+	}
+
+	// Start VM if requested
+	if spec.StartOnCreate {
+		if _, err := h.client.StartVM(node, vmid); err != nil {
+			return nil, fmt.Errorf("failed to start VM: %w", err)
+		}
+	}
+
+	return &protocol.Response{
+		Status:  protocol.StatusSuccess,
+		Message: fmt.Sprintf("VM %s created from cloud image (vmid: %d, template: %s)", name, vmid, templateName),
+	}, nil
+}
+
+// createCloudImageTemplate downloads a cloud image and creates a template from it
+func (h *Handler) createCloudImageTemplate(node, templateName string, spec *resources.VMSpec) (int, error) {
+	storage := spec.CloudImage.Storage
+
+	// Step 1: Download the cloud image to storage
+	// Use "import" content type so the image can be imported into VMs
+	// (import-from requires source to be "images" or "import" type)
+	filename := extractFilenameFromURL(spec.CloudImage.URL)
+	// Proxmox import content type only accepts .qcow2 or .raw extensions
+	// Cloud images often use .img extension but are qcow2 format internally
+	filename = normalizeImageExtension(filename)
+	upid, err := h.client.DownloadToStorage(node, storage, spec.CloudImage.URL, filename, "import")
+	if err != nil {
+		return 0, fmt.Errorf("failed to download cloud image: %w", err)
+	}
+
+	// Wait for download to complete
+	if upid != "" {
+		if err := h.client.WaitForTask(node, upid, 30*time.Minute); err != nil {
+			return 0, fmt.Errorf("download task failed: %w", err)
+		}
+	}
+
+	// Step 2: Create base VM
+	nextID, err := h.client.CreateVM(node, map[string]any{
+		"name":   templateName,
+		"ostype": "l26",
+		"scsihw": "virtio-scsi-pci",
+		"boot":   "order=scsi0",
+		"agent":  "1",
+	})
+	if err != nil {
+		return 0, fmt.Errorf("failed to create template VM: %w", err)
+	}
+
+	// Step 3: Import the disk to the VM
+	// The image was downloaded to the "import" content directory
+	importPath := fmt.Sprintf("%s:import/%s", storage, filename)
+	diskStorage := spec.CloudImage.DiskStorage
+	if diskStorage == "" {
+		diskStorage = storage
+	}
+
+	diskConfig := fmt.Sprintf("%s:0,import-from=%s", diskStorage, importPath)
+	if err := h.client.ConfigureVM(node, nextID, map[string]any{
+		"scsi0": diskConfig,
+	}); err != nil {
+		_ = h.client.DeleteVM(node, nextID)
+		return 0, fmt.Errorf("failed to import disk: %w", err)
+	}
+
+	// Wait a moment for disk import
+	time.Sleep(5 * time.Second)
+
+	// Step 4: Add cloud-init drive
+	if err := h.client.AddCloudInitDrive(node, nextID, diskStorage); err != nil {
+		_ = h.client.DeleteVM(node, nextID)
+		return 0, fmt.Errorf("failed to add cloud-init drive: %w", err)
+	}
+
+	// Step 5: Convert to template
+	if err := h.client.ConvertToTemplate(node, nextID); err != nil {
+		_ = h.client.DeleteVM(node, nextID)
+		return 0, fmt.Errorf("failed to convert to template: %w", err)
+	}
+
+	return nextID, nil
+}
+
+// generateTemplateNameFromURL creates a template name from a cloud image URL
+func generateTemplateNameFromURL(url string) string {
+	// Extract filename from URL
+	filename := extractFilenameFromURL(url)
+
+	// Remove extension
+	name := strings.TrimSuffix(filename, ".img")
+	name = strings.TrimSuffix(name, ".qcow2")
+	name = strings.TrimSuffix(name, ".raw")
+
+	// Clean up the name
+	name = strings.ReplaceAll(name, "_", "-")
+
+	// Add template prefix
+	return "tpl-" + name
+}
+
+// extractFilenameFromURL extracts the filename from a URL
+func extractFilenameFromURL(urlStr string) string {
+	// Parse the URL
+	parts := strings.Split(urlStr, "/")
+	if len(parts) > 0 {
+		return parts[len(parts)-1]
+	}
+	return "cloud-image.img"
+}
+
+// normalizeImageExtension ensures the filename has a valid extension for Proxmox import
+// The Proxmox import content type only accepts .qcow2 or .raw extensions
+// Cloud images often use .img extension but are qcow2 format internally
+func normalizeImageExtension(filename string) string {
+	// Already has a valid import extension
+	if strings.HasSuffix(filename, ".qcow2") || strings.HasSuffix(filename, ".raw") {
+		return filename
+	}
+	// Convert .img to .qcow2 (most cloud images with .img are qcow2 format)
+	if strings.HasSuffix(filename, ".img") {
+		return strings.TrimSuffix(filename, ".img") + ".qcow2"
+	}
+	// For other extensions, append .qcow2
+	return filename + ".qcow2"
+}
+
+func (h *Handler) createVMFromImage(name, node string, spec *resources.VMSpec) (*protocol.Response, error) {
+	if spec.Image.Storage == "" {
+		return &protocol.Response{
+			Status: protocol.StatusError,
+			Error: &protocol.Error{
+				Code:    protocol.ErrorCodeInvalidRequest,
+				Message: "image.storage is required",
+			},
+		}, nil
+	}
+	if spec.Image.File == "" {
+		return &protocol.Response{
+			Status: protocol.StatusError,
+			Error: &protocol.Error{
+				Code:    protocol.ErrorCodeInvalidRequest,
+				Message: "image.file is required",
+			},
+		}, nil
+	}
+
+	// Check if the source storage supports importing (unless using absolute path or full volume ID)
+	if !strings.HasPrefix(spec.Image.File, "/") && !strings.Contains(spec.Image.File, ":") {
+		storageInfo, err := h.client.GetStorageInfo(spec.Image.Storage)
+		if err == nil && storageInfo != nil {
+			// Check if storage supports images content type
+			if !strings.Contains(storageInfo.Content, "images") && !strings.Contains(storageInfo.Content, "import") {
+				return &protocol.Response{
+					Status: protocol.StatusError,
+					Error: &protocol.Error{
+						Code:    protocol.ErrorCodeInvalidRequest,
+						Message: fmt.Sprintf("storage '%s' does not support disk images (content types: %s). To import from this storage, add 'Disk image' content type in Proxmox UI: Datacenter > Storage > %s > Edit > Content", spec.Image.Storage, storageInfo.Content, spec.Image.Storage),
+					},
+				}, nil
+			}
+		}
+	}
+
+	// Build VM creation parameters from spec
+	configParams := spec.ToProxmoxConfig()
+
+	// Set sensible defaults for cloud images if not specified
+	if _, hasOSType := configParams["ostype"]; !hasOSType {
+		configParams["ostype"] = "l26" // Linux 2.6+ kernel
+	}
+
+	// Create VM from image
+	vmid, upid, err := h.client.CreateVMFromImage(
+		node,
+		name,
+		spec.Image.Storage,
+		spec.Image.File,
+		spec.Image.ContentType,
+		spec.Image.TargetStorage,
+		configParams,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create VM from image: %w", err)
+	}
+
+	// Wait for the import task to complete if there's a task ID
+	if upid != "" {
+		if err := h.client.WaitForTask(node, upid, 10*time.Minute); err != nil {
+			return nil, fmt.Errorf("import task failed: %w", err)
+		}
+	}
+
+	// Apply additional disk configuration (resize if specified)
+	for _, disk := range spec.Disks {
+		if disk.Size != "" && disk.Name != "" {
+			if err := h.client.ResizeVMDisk(node, vmid, disk.Name, disk.Size); err != nil {
+				return nil, fmt.Errorf("failed to resize disk %s: %w", disk.Name, err)
+			}
+		}
+	}
+
+	// Start VM if requested
+	if spec.StartOnCreate {
+		if _, err := h.client.StartVM(node, vmid); err != nil {
+			return nil, fmt.Errorf("failed to start VM: %w", err)
+		}
+	}
+
+	return &protocol.Response{
+		Status:  protocol.StatusSuccess,
+		Message: fmt.Sprintf("VM %s created from image %s (vmid: %d)", name, spec.Image.File, vmid),
 	}, nil
 }
 

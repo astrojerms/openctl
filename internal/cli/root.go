@@ -104,6 +104,7 @@ func init() {
 	rootCmd.AddCommand(newConfigCommand())
 	rootCmd.AddCommand(newApplyCommand())
 	rootCmd.AddCommand(newVersionCommand())
+	rootCmd.AddCommand(newStateCommand())
 
 	addProviderCommands()
 }

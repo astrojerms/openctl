@@ -26,10 +26,14 @@ type Client struct {
 	endpoint    string
 	tokenID     string
 	tokenSecret string
+	username    string
+	password    string
+	ticket      string
+	csrfToken   string
 	httpClient  *http.Client
 }
 
-// New creates a new Proxmox client
+// New creates a new Proxmox client with API token authentication
 func New(endpoint, tokenID, tokenSecret string) *Client {
 	return &Client{
 		endpoint:    strings.TrimSuffix(endpoint, "/"),
@@ -44,6 +48,79 @@ func New(endpoint, tokenID, tokenSecret string) *Client {
 			},
 		},
 	}
+}
+
+// NewWithPassword creates a new Proxmox client with username/password authentication
+// This allows using arbitrary filesystem paths (which API tokens cannot do)
+func NewWithPassword(endpoint, username, password string) *Client {
+	return &Client{
+		endpoint: strings.TrimSuffix(endpoint, "/"),
+		username: username,
+		password: password,
+		httpClient: &http.Client{
+			Timeout: 60 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true,
+				},
+			},
+		},
+	}
+}
+
+// authenticate gets a ticket for username/password auth
+func (c *Client) authenticate() error {
+	if c.username == "" || c.password == "" {
+		return nil // Using API token auth
+	}
+
+	if c.ticket != "" {
+		return nil // Already authenticated
+	}
+
+	debugf("Authenticating as user %s", c.username)
+
+	reqURL := c.endpoint + "/api2/json/access/ticket"
+	data := url.Values{}
+	data.Set("username", c.username)
+	data.Set("password", c.password)
+
+	req, err := http.NewRequest("POST", reqURL, bytes.NewBufferString(data.Encode()))
+	if err != nil {
+		return fmt.Errorf("failed to create auth request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("auth request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read auth response: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("authentication failed (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Data struct {
+			Ticket            string `json:"ticket"`
+			CSRFPreventionToken string `json:"CSRFPreventionToken"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("failed to parse auth response: %w", err)
+	}
+
+	c.ticket = result.Data.Ticket
+	c.csrfToken = result.Data.CSRFPreventionToken
+	debugf("Authentication successful, got ticket")
+
+	return nil
 }
 
 // VM represents a Proxmox VM
@@ -154,7 +231,7 @@ func (c *Client) GetVMConfig(node string, vmid int) (*VMConfig, error) {
 	return &result.Data, nil
 }
 
-// CreateVM creates a new VM by cloning a template
+// CreateVM creates a new VM with the given parameters
 func (c *Client) CreateVM(node string, params map[string]any) (int, error) {
 	nextID, err := c.getNextVMID()
 	if err != nil {
@@ -170,6 +247,105 @@ func (c *Client) CreateVM(node string, params map[string]any) (int, error) {
 	}
 
 	return nextID, nil
+}
+
+// CreateVMFromImage creates a new VM and imports a disk image using a two-step process.
+// Step 1: Create VM with basic config (no disk)
+// Step 2: Import the disk using the config endpoint (which properly handles paths)
+//
+// This approach allows using arbitrary filesystem paths for the source image.
+// Returns vmid and any task UPID for the import operation.
+func (c *Client) CreateVMFromImage(node string, name string, imageStorage string, imageFile string, contentType string, targetStorage string, params map[string]any) (int, string, error) {
+	nextID, err := c.getNextVMID()
+	if err != nil {
+		return 0, "", err
+	}
+
+	// Determine target storage for the disk
+	diskStorage := targetStorage
+	if diskStorage == "" {
+		diskStorage = imageStorage
+	}
+
+	// Step 1: Create VM with basic config but NO disk
+	createParams := map[string]any{
+		"vmid": nextID,
+		"name": name,
+	}
+	for k, v := range params {
+		// Copy all params except disk-related ones (we'll add disk in step 2)
+		if k != "scsi0" && k != "sata0" && k != "ide0" && k != "virtio0" {
+			createParams[k] = v
+		}
+	}
+
+	// Set scsihw if not specified (virtio-scsi-pci is recommended for cloud images)
+	if _, hasScsihw := createParams["scsihw"]; !hasScsihw {
+		createParams["scsihw"] = "virtio-scsi-pci"
+	}
+
+	debugf("CreateVMFromImage: Step 1 - creating VM %d with params: %v", nextID, createParams)
+
+	path := fmt.Sprintf("/api2/json/nodes/%s/qemu", node)
+	_, err = c.post(path, createParams)
+	if err != nil {
+		return 0, "", fmt.Errorf("failed to create VM: %w", err)
+	}
+
+	// Step 2: Import the disk using the config endpoint
+	// Build the import-from path
+	var importPath string
+	if strings.HasPrefix(imageFile, "/") {
+		// Absolute path provided - use as-is
+		// Note: This requires root privileges which API tokens don't have
+		importPath = imageFile
+	} else if strings.Contains(imageFile, ":") {
+		// Full volume ID provided (e.g., "local:iso/image.img") - use as-is
+		importPath = imageFile
+	} else {
+		// Build volume ID from storage + contentType + filename
+		// For import to work, we need to use a volume ID format
+		if contentType == "" {
+			contentType = "iso"
+		}
+		importPath = fmt.Sprintf("%s:%s/%s", imageStorage, contentType, imageFile)
+	}
+
+	// Configure the disk with import-from
+	// Format: <storage>:0,import-from=<path>
+	diskConfig := fmt.Sprintf("%s:0,import-from=%s", diskStorage, importPath)
+
+	configParams := map[string]any{
+		"scsi0": diskConfig,
+	}
+
+	debugf("CreateVMFromImage: Step 2 - importing disk with config: %v", configParams)
+
+	configPath := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/config", node, nextID)
+	resp, err := c.post(configPath, configParams)
+	if err != nil {
+		// If disk import fails, try to clean up the VM
+		debugf("CreateVMFromImage: disk import failed, cleaning up VM %d", nextID)
+		_ = c.DeleteVM(node, nextID)
+		return 0, "", fmt.Errorf("failed to import disk: %w", err)
+	}
+
+	// Set boot order after disk is attached
+	bootParams := map[string]any{
+		"boot": "order=scsi0",
+	}
+	_, _ = c.put(configPath, bootParams)
+
+	// Extract task UPID if present (for async import tracking)
+	var result struct {
+		Data string `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		// Not all operations return a task
+		return nextID, "", nil
+	}
+
+	return nextID, result.Data, nil
 }
 
 // CloneVM clones a template to create a new VM
@@ -301,6 +477,133 @@ func (c *Client) GetTemplate(name string) (*Template, error) {
 	}
 
 	return nil, fmt.Errorf("template %q not found", name)
+}
+
+// StorageContent represents a file in Proxmox storage
+type StorageContent struct {
+	Volid   string `json:"volid"`
+	Format  string `json:"format"`
+	Size    int64  `json:"size"`
+	Content string `json:"content"`
+}
+
+// ListStorageContent lists contents of a storage
+func (c *Client) ListStorageContent(node, storage, contentType string) ([]*StorageContent, error) {
+	path := fmt.Sprintf("/api2/json/nodes/%s/storage/%s/content", node, storage)
+	if contentType != "" {
+		path += "?content=" + contentType
+	}
+
+	resp, err := c.get(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Data []*StorageContent `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse storage content: %w", err)
+	}
+
+	return result.Data, nil
+}
+
+// StorageInfo represents Proxmox storage configuration
+type StorageInfo struct {
+	Storage string `json:"storage"`
+	Type    string `json:"type"`
+	Content string `json:"content"`
+	Path    string `json:"path"`
+}
+
+// GetStorageInfo gets information about a storage
+func (c *Client) GetStorageInfo(storage string) (*StorageInfo, error) {
+	path := fmt.Sprintf("/api2/json/storage/%s", storage)
+	resp, err := c.get(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Data StorageInfo `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse storage info: %w", err)
+	}
+
+	return &result.Data, nil
+}
+
+// DownloadToStorage downloads a file from URL to Proxmox storage
+// Returns the task UPID for tracking progress
+func (c *Client) DownloadToStorage(node, storage, url, filename, contentType string) (string, error) {
+	path := fmt.Sprintf("/api2/json/nodes/%s/storage/%s/download-url", node, storage)
+
+	params := map[string]any{
+		"url":      url,
+		"filename": filename,
+		"content":  contentType,
+	}
+
+	debugf("DownloadToStorage: downloading %s to %s:%s/%s", url, storage, contentType, filename)
+
+	resp, err := c.post(path, params)
+	if err != nil {
+		return "", fmt.Errorf("failed to start download: %w", err)
+	}
+
+	var result struct {
+		Data string `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return "", nil
+	}
+
+	return result.Data, nil
+}
+
+// ConvertToTemplate converts a VM to a template
+func (c *Client) ConvertToTemplate(node string, vmid int) error {
+	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/template", node, vmid)
+	debugf("ConvertToTemplate: converting VM %d to template", vmid)
+
+	_, err := c.post(path, nil)
+	return err
+}
+
+// AddCloudInitDrive adds a cloud-init drive to a VM
+func (c *Client) AddCloudInitDrive(node string, vmid int, storage string) error {
+	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/config", node, vmid)
+
+	params := map[string]any{
+		"ide2": fmt.Sprintf("%s:cloudinit", storage),
+	}
+
+	debugf("AddCloudInitDrive: adding cloud-init drive to VM %d on storage %s", vmid, storage)
+
+	_, err := c.put(path, params)
+	return err
+}
+
+// SetCloudInitConfig sets cloud-init configuration for a VM
+func (c *Client) SetCloudInitConfig(node string, vmid int, config map[string]any) error {
+	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/config", node, vmid)
+
+	debugf("SetCloudInitConfig: setting cloud-init config for VM %d: %v", vmid, config)
+
+	_, err := c.put(path, config)
+	return err
+}
+
+// RegenerateCloudInit regenerates the cloud-init image
+func (c *Client) RegenerateCloudInit(node string, vmid int) error {
+	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/cloudinit", node, vmid)
+
+	debugf("RegenerateCloudInit: regenerating cloud-init for VM %d", vmid)
+
+	_, err := c.put(path, nil)
+	return err
 }
 
 // WaitForTask waits for a task to complete
@@ -468,4 +771,70 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// AgentNetworkInterface represents a network interface from QEMU guest agent
+type AgentNetworkInterface struct {
+	Name        string             `json:"name"`
+	HWAddr      string             `json:"hardware-address"`
+	IPAddresses []AgentIPAddress   `json:"ip-addresses"`
+}
+
+// AgentIPAddress represents an IP address from QEMU guest agent
+type AgentIPAddress struct {
+	Type    string `json:"ip-address-type"` // ipv4 or ipv6
+	Address string `json:"ip-address"`
+	Prefix  int    `json:"prefix"`
+}
+
+// GetVMIPAddress gets the IP address of a VM using the QEMU guest agent
+func (c *Client) GetVMIPAddress(node string, vmid int) (string, error) {
+	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/agent/network-get-interfaces", node, vmid)
+	resp, err := c.get(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to get network interfaces from agent: %w", err)
+	}
+
+	var result struct {
+		Data struct {
+			Result []AgentNetworkInterface `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return "", fmt.Errorf("failed to parse agent response: %w", err)
+	}
+
+	// Find the first non-loopback IPv4 address
+	for _, iface := range result.Data.Result {
+		if iface.Name == "lo" {
+			continue
+		}
+		for _, addr := range iface.IPAddresses {
+			if addr.Type == "ipv4" && !strings.HasPrefix(addr.Address, "127.") {
+				return addr.Address, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("no IPv4 address found")
+}
+
+// WaitForVMIP waits for a VM to get an IP address
+func (c *Client) WaitForVMIP(node string, vmid int, timeout time.Duration) (string, error) {
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("timeout waiting for VM IP")
+		}
+
+		ip, err := c.GetVMIPAddress(node, vmid)
+		if err == nil && ip != "" {
+			return ip, nil
+		}
+
+		<-ticker.C
+	}
 }

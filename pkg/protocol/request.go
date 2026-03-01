@@ -8,6 +8,12 @@ type Request struct {
 	ResourceName string         `json:"resourceName,omitempty"`
 	Manifest     *Resource      `json:"manifest,omitempty"`
 	Config       ProviderConfig `json:"config"`
+
+	// DispatchResults contains results from previous dispatch operations
+	DispatchResults []*DispatchResult `json:"dispatchResults,omitempty"`
+
+	// ContinuationToken is provided when resuming after dispatch
+	ContinuationToken string `json:"continuationToken,omitempty"`
 }
 
 // ProviderConfig contains the configuration passed to a plugin
