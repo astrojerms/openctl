@@ -144,19 +144,6 @@ issues:
       linters:
         - gosec
 
-    # Unused fields kept for future API compatibility
-    - text: "field `ticket` is unused"
-      linters:
-        - unused
-
-    - text: "field `csrfToken` is unused"
-      linters:
-        - unused
-
-    - text: "func `.*authenticate` is unused"
-      linters:
-        - unused
-
     # Shadow on url package is acceptable in these cases
     - text: "importShadow: shadow of imported package 'url'"
       linters:

@@ -27,10 +27,6 @@ type Client struct {
 	endpoint    string
 	tokenID     string
 	tokenSecret string
-	username    string
-	password    string
-	ticket      string
-	csrfToken   string
 	httpClient  *http.Client
 }
 
@@ -49,79 +45,6 @@ func New(endpoint, tokenID, tokenSecret string) *Client {
 			},
 		},
 	}
-}
-
-// NewWithPassword creates a new Proxmox client with username/password authentication
-// This allows using arbitrary filesystem paths (which API tokens cannot do)
-func NewWithPassword(endpoint, username, password string) *Client {
-	return &Client{
-		endpoint: strings.TrimSuffix(endpoint, "/"),
-		username: username,
-		password: password,
-		httpClient: &http.Client{
-			Timeout: 60 * time.Second,
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: true,
-				},
-			},
-		},
-	}
-}
-
-// authenticate gets a ticket for username/password auth
-func (c *Client) authenticate() error {
-	if c.username == "" || c.password == "" {
-		return nil // Using API token auth
-	}
-
-	if c.ticket != "" {
-		return nil // Already authenticated
-	}
-
-	debugf("Authenticating as user %s", c.username)
-
-	reqURL := c.endpoint + "/api2/json/access/ticket"
-	data := url.Values{}
-	data.Set("username", c.username)
-	data.Set("password", c.password)
-
-	req, err := http.NewRequest("POST", reqURL, bytes.NewBufferString(data.Encode()))
-	if err != nil {
-		return fmt.Errorf("failed to create auth request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("auth request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read auth response: %w", err)
-	}
-
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("authentication failed (status %d): %s", resp.StatusCode, string(body))
-	}
-
-	var result struct {
-		Data struct {
-			Ticket              string `json:"ticket"`
-			CSRFPreventionToken string `json:"CSRFPreventionToken"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return fmt.Errorf("failed to parse auth response: %w", err)
-	}
-
-	c.ticket = result.Data.Ticket
-	c.csrfToken = result.Data.CSRFPreventionToken
-	debugf("Authentication successful, got ticket")
-
-	return nil
 }
 
 // VM represents a Proxmox VM
@@ -700,7 +623,9 @@ func (c *Client) getNextVMID() (int, error) {
 	}
 
 	var vmid int
-	fmt.Sscanf(result.Data, "%d", &vmid)
+	if _, err := fmt.Sscanf(result.Data, "%d", &vmid); err != nil {
+		return 0, fmt.Errorf("failed to parse VMID %q: %w", result.Data, err)
+	}
 
 	return vmid, nil
 }
