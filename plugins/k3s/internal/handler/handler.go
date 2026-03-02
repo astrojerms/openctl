@@ -249,10 +249,10 @@ func (h *Handler) createCluster(req *protocol.Request) (*protocol.Response, erro
 const maxIPRetries = 60 // ~5 minutes of retrying (5 second intervals from dispatcher)
 
 func (h *Handler) handleVMsCreated(req *protocol.Request, name string, spec *resources.ClusterSpec) (*protocol.Response, error) {
-	// Parse retry count from continuation token
+	// Parse retry count from continuation token (ignore parse errors, default to 0)
 	retryCount := 0
 	if strings.HasPrefix(req.ContinuationToken, "get-ips:") {
-		fmt.Sscanf(req.ContinuationToken, "get-ips:%d", &retryCount)
+		_, _ = fmt.Sscanf(req.ContinuationToken, "get-ips:%d", &retryCount)
 	}
 
 	// Check if we have pre-allocated static IPs
