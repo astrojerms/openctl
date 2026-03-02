@@ -3,6 +3,7 @@ package compute
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -167,8 +168,8 @@ func (p *ProxmoxProvider) createFromCloudImage(node, name string, spec *resource
 		}
 
 		if upid != "" {
-			if err := p.client.WaitForTask(node, upid, 30*time.Minute); err != nil {
-				return 0, fmt.Errorf("download task failed: %w", err)
+			if waitErr := p.client.WaitForTask(node, upid, 30*time.Minute); waitErr != nil {
+				return 0, fmt.Errorf("download task failed: %w", waitErr)
 			}
 		}
 
@@ -459,19 +460,9 @@ func extractFilenameFromURL(urlStr string) string {
 }
 
 func contains(slice []string, s string) bool {
-	for _, item := range slice {
-		if item == s {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(slice, s)
 }
 
 func containsState(slice []compute.InstanceState, s compute.InstanceState) bool {
-	for _, item := range slice {
-		if item == s {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(slice, s)
 }

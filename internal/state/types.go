@@ -6,23 +6,23 @@ import "time"
 type State struct {
 	APIVersion string           `yaml:"apiVersion" json:"apiVersion"`
 	Kind       string           `yaml:"kind" json:"kind"`
-	Metadata   StateMetadata    `yaml:"metadata" json:"metadata"`
+	Metadata   Metadata         `yaml:"metadata" json:"metadata"`
 	Spec       map[string]any   `yaml:"spec,omitempty" json:"spec,omitempty"`
-	Status     StateStatus      `yaml:"status" json:"status"`
+	Status     Status           `yaml:"status" json:"status"`
 	Children   []ChildReference `yaml:"children,omitempty" json:"children,omitempty"`
 }
 
-// StateMetadata contains metadata about the state
-type StateMetadata struct {
+// Metadata contains metadata about the state
+type Metadata struct {
 	Name      string    `yaml:"name" json:"name"`
 	Provider  string    `yaml:"provider" json:"provider"`
 	CreatedAt time.Time `yaml:"createdAt" json:"createdAt"`
 	UpdatedAt time.Time `yaml:"updatedAt" json:"updatedAt"`
 }
 
-// StateStatus represents the current status of a resource
-type StateStatus struct {
-	Phase   string         `yaml:"phase" json:"phase"`                     // Pending, Creating, Ready, Failed, Deleting
+// Status represents the current status of a resource
+type Status struct {
+	Phase   string         `yaml:"phase" json:"phase"` // Pending, Creating, Ready, Failed, Deleting
 	Message string         `yaml:"message,omitempty" json:"message,omitempty"`
 	Outputs map[string]any `yaml:"outputs,omitempty" json:"outputs,omitempty"` // e.g., kubeconfig path
 }

@@ -319,7 +319,7 @@ func (h *Handler) handleVMsCreated(req *protocol.Request, name string, spec *res
 	// Check if we have IPs for all nodes
 	if len(nodeIPs) < len(allNodes) {
 		// If using static IPs, we should have them all already
-		if staticIPs != nil && len(staticIPs) > 0 {
+		if len(staticIPs) > 0 {
 			// Fill in any missing IPs from static allocation
 			for _, nodeName := range allNodes {
 				if _, ok := nodeIPs[nodeName]; !ok {

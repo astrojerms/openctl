@@ -50,7 +50,7 @@ func (d *Dispatcher) ExecuteWithDispatch(ctx context.Context, pluginName string,
 	}
 
 	// Process dispatch loop
-	for resp.DispatchRequests != nil && len(resp.DispatchRequests) > 0 && resp.Continuation != nil {
+	for len(resp.DispatchRequests) > 0 && resp.Continuation != nil {
 		log.Debug("Processing %d dispatch requests", len(resp.DispatchRequests))
 
 		// Execute each dispatch request
@@ -81,6 +81,8 @@ func (d *Dispatcher) ExecuteWithDispatch(ctx context.Context, pluginName string,
 }
 
 // executeDispatches executes a list of dispatch requests
+//
+//nolint:unparam // error return kept for future use and API consistency
 func (d *Dispatcher) executeDispatches(ctx context.Context, requests []*protocol.DispatchRequest) ([]*protocol.DispatchResult, error) {
 	results := make([]*protocol.DispatchResult, len(requests))
 
@@ -143,11 +145,12 @@ func (d *Dispatcher) executeDispatch(ctx context.Context, req *protocol.Dispatch
 		Status: resp.Status,
 	}
 
-	if resp.Status == protocol.StatusError {
+	switch {
+	case resp.Status == protocol.StatusError:
 		result.Error = resp.Error
-	} else if resp.Resource != nil {
+	case resp.Resource != nil:
 		result.Resource = resp.Resource
-	} else if len(resp.Resources) > 0 {
+	case len(resp.Resources) > 0:
 		result.Resource = resp.Resources[0]
 	}
 
@@ -314,7 +317,7 @@ func (d *Dispatcher) handleStateUpdate(update *protocol.StateUpdate) error {
 		st := &state.State{
 			APIVersion: update.State.APIVersion,
 			Kind:       update.State.Kind,
-			Metadata: state.StateMetadata{
+			Metadata: state.Metadata{
 				Name:     update.Name,
 				Provider: update.Provider,
 			},
@@ -322,7 +325,7 @@ func (d *Dispatcher) handleStateUpdate(update *protocol.StateUpdate) error {
 		}
 
 		if update.State.Status != nil {
-			st.Status = state.StateStatus{
+			st.Status = state.Status{
 				Phase:   update.State.Status.Phase,
 				Message: update.State.Status.Message,
 				Outputs: update.State.Status.Outputs,

@@ -2,7 +2,6 @@ package plugin
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -472,22 +471,5 @@ func TestExecuteRequest_PluginNotFound(t *testing.T) {
 	_, err := ExecuteRequest(context.Background(), "nonexistent-plugin-xyz", req, 10*time.Second)
 	if err == nil {
 		t.Error("expected error for nonexistent plugin")
-	}
-}
-
-// Helper to verify request JSON structure
-func verifyRequestJSON(t *testing.T, data []byte) {
-	t.Helper()
-
-	var req map[string]any
-	if err := json.Unmarshal(data, &req); err != nil {
-		t.Fatalf("invalid request JSON: %v", err)
-	}
-
-	required := []string{"version", "action", "config"}
-	for _, field := range required {
-		if _, ok := req[field]; !ok {
-			t.Errorf("request missing required field: %s", field)
-		}
 	}
 }

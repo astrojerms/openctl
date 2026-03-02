@@ -77,7 +77,7 @@ func discoverInDir(dir string) ([]*Plugin, error) {
 		return nil, err
 	}
 
-	var plugins []*Plugin
+	plugins := make([]*Plugin, 0, len(entries))
 
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -95,7 +95,7 @@ func discoverInDir(dir string) ([]*Plugin, error) {
 			continue
 		}
 
-		if info.Mode()&0111 == 0 {
+		if info.Mode()&0o111 == 0 {
 			continue
 		}
 

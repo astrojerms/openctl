@@ -146,13 +146,13 @@ func newCreateCommand(p *plugin.Plugin, caps *protocol.Capabilities) *cobra.Comm
 
 			// Use dispatcher for plugins that support dispatch
 			if caps.SupportsDispatch {
-				dispatcher, err := plugin.NewDispatcher(globalConfig, globalTimeout)
-				if err != nil {
-					return err
+				dispatcher, dispatcherErr := plugin.NewDispatcher(globalConfig, globalTimeout)
+				if dispatcherErr != nil {
+					return dispatcherErr
 				}
-				resp, err := dispatcher.ExecuteWithDispatch(getContext(), p.Name, req)
-				if err != nil {
-					return err
+				resp, execErr := dispatcher.ExecuteWithDispatch(getContext(), p.Name, req)
+				if execErr != nil {
+					return execErr
 				}
 				if resp.Status == protocol.StatusError && resp.Error != nil {
 					return fmt.Errorf("%s: %s", resp.Error.Code, resp.Error.Message)
@@ -162,9 +162,9 @@ func newCreateCommand(p *plugin.Plugin, caps *protocol.Capabilities) *cobra.Comm
 			}
 
 			executor := plugin.NewExecutor(p, globalTimeout)
-			resp, err := executor.Execute(getContext(), req)
-			if err != nil {
-				return err
+			resp, execErr := executor.Execute(getContext(), req)
+			if execErr != nil {
+				return execErr
 			}
 
 			if resp.Status == protocol.StatusError && resp.Error != nil {
@@ -210,13 +210,13 @@ func newDeleteCommand(p *plugin.Plugin, caps *protocol.Capabilities) *cobra.Comm
 
 			// Use dispatcher for plugins that support dispatch
 			if caps.SupportsDispatch {
-				dispatcher, err := plugin.NewDispatcher(globalConfig, globalTimeout)
-				if err != nil {
-					return err
+				dispatcher, dispatcherErr := plugin.NewDispatcher(globalConfig, globalTimeout)
+				if dispatcherErr != nil {
+					return dispatcherErr
 				}
-				resp, err := dispatcher.ExecuteWithDispatch(getContext(), p.Name, req)
-				if err != nil {
-					return err
+				resp, execErr := dispatcher.ExecuteWithDispatch(getContext(), p.Name, req)
+				if execErr != nil {
+					return execErr
 				}
 				if resp.Status == protocol.StatusError && resp.Error != nil {
 					return fmt.Errorf("%s: %s", resp.Error.Code, resp.Error.Message)
@@ -226,9 +226,9 @@ func newDeleteCommand(p *plugin.Plugin, caps *protocol.Capabilities) *cobra.Comm
 			}
 
 			executor := plugin.NewExecutor(p, globalTimeout)
-			resp, err := executor.Execute(getContext(), req)
-			if err != nil {
-				return err
+			resp, execErr := executor.Execute(getContext(), req)
+			if execErr != nil {
+				return execErr
 			}
 
 			if resp.Status == protocol.StatusError && resp.Error != nil {

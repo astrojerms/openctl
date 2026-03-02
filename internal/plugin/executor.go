@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -31,7 +32,7 @@ func NewExecutor(plugin *Plugin, timeout time.Duration) *Executor {
 func (e *Executor) GetCapabilities(ctx context.Context) (*protocol.Capabilities, error) {
 	log.Debug("Getting capabilities from plugin: %s", e.plugin.Path)
 
-	cmd := exec.CommandContext(ctx, e.plugin.Path, "--capabilities")
+	cmd := exec.CommandContext(ctx, e.plugin.Path, "--capabilities") //nolint:gosec // G204: plugin path is from trusted discovery
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -63,7 +64,7 @@ func (e *Executor) Execute(ctx context.Context, req *protocol.Request) (*protoco
 		defer cancel()
 	}
 
-	cmd := exec.CommandContext(ctx, e.plugin.Path)
+	cmd := exec.CommandContext(ctx, e.plugin.Path) //nolint:gosec // G204: plugin path is from trusted discovery
 
 	// Pass debug environment to plugin
 	cmd.Env = os.Environ()
@@ -87,7 +88,7 @@ func (e *Executor) Execute(ctx context.Context, req *protocol.Request) (*protoco
 
 	log.Debug("Executing: %s", e.plugin.Path)
 	if err := cmd.Run(); err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			log.Debug("Plugin timed out")
 			return nil, fmt.Errorf("plugin execution timed out")
 		}

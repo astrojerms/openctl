@@ -80,20 +80,20 @@ func TemplateToResource(t *client.Template) *protocol.Resource {
 
 // VMSpec represents the spec for a VirtualMachine
 type VMSpec struct {
-	Node          string          `json:"node"`
-	Template      *TemplateRef    `json:"template"`
-	Image         *ImageRef       `json:"image"`
-	CloudImage    *CloudImageRef  `json:"cloudImage"`
-	CPU           *CPUSpec        `json:"cpu"`
-	Memory        *MemorySpec     `json:"memory"`
-	Disks         []DiskSpec      `json:"disks"`
-	Networks      []NetworkSpec   `json:"networks"`
-	CloudInit     *CloudInitSpec  `json:"cloudInit"`
-	StartOnCreate bool            `json:"startOnCreate"`
-	OSType        string          `json:"osType"`
-	BIOS          string          `json:"bios"`
-	Machine       string          `json:"machine"`
-	Agent         *AgentSpec      `json:"agent"`
+	Node          string         `json:"node"`
+	Template      *TemplateRef   `json:"template"`
+	Image         *ImageRef      `json:"image"`
+	CloudImage    *CloudImageRef `json:"cloudImage"`
+	CPU           *CPUSpec       `json:"cpu"`
+	Memory        *MemorySpec    `json:"memory"`
+	Disks         []DiskSpec     `json:"disks"`
+	Networks      []NetworkSpec  `json:"networks"`
+	CloudInit     *CloudInitSpec `json:"cloudInit"`
+	StartOnCreate bool           `json:"startOnCreate"`
+	OSType        string         `json:"osType"`
+	BIOS          string         `json:"bios"`
+	Machine       string         `json:"machine"`
+	Agent         *AgentSpec     `json:"agent"`
 }
 
 // TemplateRef references a template
@@ -166,9 +166,9 @@ type NetworkSpec struct {
 
 // CloudInitSpec defines cloud-init configuration
 type CloudInitSpec struct {
-	User     string            `json:"user"`
-	Password string            `json:"password"`
-	SSHKeys  []string          `json:"sshKeys"`
+	User     string              `json:"user"`
+	Password string              `json:"password"`
+	SSHKeys  []string            `json:"sshKeys"`
 	IPConfig map[string]IPConfig `json:"ipConfig"`
 }
 

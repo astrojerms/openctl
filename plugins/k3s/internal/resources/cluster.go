@@ -2,6 +2,7 @@ package resources
 
 import (
 	"fmt"
+	"maps"
 
 	"github.com/openctl/openctl/pkg/protocol"
 )
@@ -37,10 +38,10 @@ type StaticIPSpec struct {
 
 // ComputeSpec defines the compute provider configuration
 type ComputeSpec struct {
-	Provider string            `json:"provider"` // e.g., "proxmox"
-	Context  string            `json:"context,omitempty"`
-	Image    ImageSpec         `json:"image"`
-	Default  DefaultSizeSpec   `json:"default"`
+	Provider string          `json:"provider"` // e.g., "proxmox"
+	Context  string          `json:"context,omitempty"`
+	Image    ImageSpec       `json:"image"`
+	Default  DefaultSizeSpec `json:"default"`
 }
 
 // ImageSpec defines the VM image to use
@@ -66,7 +67,7 @@ type NodesSpec struct {
 
 // ControlPlaneSpec defines control plane nodes
 type ControlPlaneSpec struct {
-	Count int          `json:"count"`
+	Count int              `json:"count"`
 	Size  *DefaultSizeSpec `json:"size,omitempty"`
 }
 
@@ -165,7 +166,7 @@ func ParseClusterSpec(r *protocol.Resource) (*ClusterSpec, error) {
 	}
 
 	// Parse network section
-	spec.Network.DHCP = true // Default to DHCP
+	spec.Network.DHCP = true      // Default to DHCP
 	spec.Network.Bridge = "vmbr0" // Default bridge
 	if network, ok := r.Spec["network"].(map[string]any); ok {
 		if bridge, ok := network["bridge"].(string); ok {
@@ -280,9 +281,7 @@ func ClusterToResource(name string, spec *ClusterSpec, phase string, outputs map
 	status := map[string]any{
 		"phase": phase,
 	}
-	for k, v := range outputs {
-		status[k] = v
-	}
+	maps.Copy(status, outputs)
 
 	return &protocol.Resource{
 		APIVersion: "k3s.openctl.io/v1",

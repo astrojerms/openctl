@@ -7,11 +7,11 @@ import (
 
 // Common error types
 var (
-	ErrPluginNotFound    = errors.New("plugin not found")
-	ErrResourceNotFound  = errors.New("resource not found")
-	ErrInvalidManifest   = errors.New("invalid manifest")
-	ErrConfigNotFound    = errors.New("configuration not found")
-	ErrAuthenticationErr = errors.New("authentication failed")
+	ErrPluginNotFound   = errors.New("plugin not found")
+	ErrResourceNotFound = errors.New("resource not found")
+	ErrInvalidManifest  = errors.New("invalid manifest")
+	ErrConfigNotFound   = errors.New("configuration not found")
+	ErrAuthentication   = errors.New("authentication failed")
 )
 
 // PluginError represents an error from a plugin

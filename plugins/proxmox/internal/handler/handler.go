@@ -358,11 +358,9 @@ func (h *Handler) createVMFromCloudImage(name, node string, spec *resources.VMSp
 		}
 	}
 
-	// Regenerate cloud-init with new settings
+	// Regenerate cloud-init with new settings (error ignored - non-fatal)
 	if spec.CloudInit != nil {
-		if err := h.client.RegenerateCloudInit(node, vmid); err != nil {
-			// Non-fatal, cloud-init might still work
-		}
+		_ = h.client.RegenerateCloudInit(node, vmid)
 	}
 
 	// Start VM if requested
@@ -396,8 +394,8 @@ func (h *Handler) createCloudImageTemplate(node, templateName string, spec *reso
 
 	// Wait for download to complete
 	if upid != "" {
-		if err := h.client.WaitForTask(node, upid, 30*time.Minute); err != nil {
-			return 0, fmt.Errorf("download task failed: %w", err)
+		if waitErr := h.client.WaitForTask(node, upid, 30*time.Minute); waitErr != nil {
+			return 0, fmt.Errorf("download task failed: %w", waitErr)
 		}
 	}
 
@@ -483,8 +481,8 @@ func normalizeImageExtension(filename string) string {
 		return filename
 	}
 	// Convert .img to .qcow2 (most cloud images with .img are qcow2 format)
-	if strings.HasSuffix(filename, ".img") {
-		return strings.TrimSuffix(filename, ".img") + ".qcow2"
+	if before, ok := strings.CutSuffix(filename, ".img"); ok {
+		return before + ".qcow2"
 	}
 	// For other extensions, append .qcow2
 	return filename + ".qcow2"

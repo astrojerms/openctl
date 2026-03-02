@@ -109,7 +109,7 @@ func (c *Client) authenticate() error {
 
 	var result struct {
 		Data struct {
-			Ticket            string `json:"ticket"`
+			Ticket              string `json:"ticket"`
 			CSRFPreventionToken string `json:"CSRFPreventionToken"`
 		} `json:"data"`
 	}
@@ -776,9 +776,9 @@ func truncate(s string, maxLen int) string {
 
 // AgentNetworkInterface represents a network interface from QEMU guest agent
 type AgentNetworkInterface struct {
-	Name        string             `json:"name"`
-	HWAddr      string             `json:"hardware-address"`
-	IPAddresses []AgentIPAddress   `json:"ip-addresses"`
+	Name        string           `json:"name"`
+	HWAddr      string           `json:"hardware-address"`
+	IPAddresses []AgentIPAddress `json:"ip-addresses"`
 }
 
 // AgentIPAddress represents an IP address from QEMU guest agent
@@ -879,12 +879,12 @@ func (c *Client) UploadSnippet(node, storage, filename, content string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create form file: %w", err)
 	}
-	if _, err := part.Write([]byte(content)); err != nil {
-		return fmt.Errorf("failed to write file content: %w", err)
+	if _, writeErr := part.Write([]byte(content)); writeErr != nil {
+		return fmt.Errorf("failed to write file content: %w", writeErr)
 	}
 
-	if err := writer.Close(); err != nil {
-		return fmt.Errorf("failed to close multipart writer: %w", err)
+	if closeErr := writer.Close(); closeErr != nil {
+		return fmt.Errorf("failed to close multipart writer: %w", closeErr)
 	}
 
 	// Create request

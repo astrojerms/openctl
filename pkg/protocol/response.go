@@ -20,19 +20,19 @@ type Response struct {
 
 // StateUpdate represents a state change to persist
 type StateUpdate struct {
-	Operation string                 `json:"operation"` // save, delete
-	Provider  string                 `json:"provider"`
-	Name      string                 `json:"name"`
-	State     *StateData             `json:"state,omitempty"`
+	Operation string     `json:"operation"` // save, delete
+	Provider  string     `json:"provider"`
+	Name      string     `json:"name"`
+	State     *StateData `json:"state,omitempty"`
 }
 
 // StateData represents the state data to persist
 type StateData struct {
-	APIVersion string                 `json:"apiVersion"`
-	Kind       string                 `json:"kind"`
-	Spec       map[string]any         `json:"spec,omitempty"`
-	Status     *StateStatus           `json:"status"`
-	Children   []ChildReference       `json:"children,omitempty"`
+	APIVersion string           `json:"apiVersion"`
+	Kind       string           `json:"kind"`
+	Spec       map[string]any   `json:"spec,omitempty"`
+	Status     *StateStatus     `json:"status"`
+	Children   []ChildReference `json:"children,omitempty"`
 }
 
 // StateStatus represents the status portion of state
@@ -63,11 +63,11 @@ type Error struct {
 
 // Capabilities represents the capabilities response from a plugin
 type Capabilities struct {
-	ProviderName      string               `json:"providerName"`
-	ProtocolVersion   string               `json:"protocolVersion"`
-	Resources         []ResourceDefinition `json:"resources"`
-	ComputeProvider   *ComputeCapability   `json:"computeProvider,omitempty"`
-	SupportsDispatch  bool                 `json:"supportsDispatch,omitempty"`
+	ProviderName     string               `json:"providerName"`
+	ProtocolVersion  string               `json:"protocolVersion"`
+	Resources        []ResourceDefinition `json:"resources"`
+	ComputeProvider  *ComputeCapability   `json:"computeProvider,omitempty"`
+	SupportsDispatch bool                 `json:"supportsDispatch,omitempty"`
 }
 
 // ComputeCapability describes compute provider capabilities

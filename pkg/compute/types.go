@@ -26,10 +26,10 @@ type SizeSpec struct {
 
 // NetworkSpec specifies network configuration
 type NetworkSpec struct {
-	Bridge string `json:"bridge,omitempty"`
-	VLAN   int    `json:"vlan,omitempty"`
-	DHCP   bool   `json:"dhcp"`
-	IP     string `json:"ip,omitempty"`
+	Bridge  string `json:"bridge,omitempty"`
+	VLAN    int    `json:"vlan,omitempty"`
+	DHCP    bool   `json:"dhcp"`
+	IP      string `json:"ip,omitempty"`
 	Gateway string `json:"gateway,omitempty"`
 }
 

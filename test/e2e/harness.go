@@ -4,6 +4,7 @@ package e2e
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -36,10 +37,10 @@ func NewHarness(t *testing.T) *TestHarness {
 	pluginsDir := filepath.Join(tempDir, "plugins")
 	configDir := filepath.Join(tempDir, "config")
 
-	if err := os.MkdirAll(pluginsDir, 0755); err != nil {
+	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
 		t.Fatalf("failed to create plugins dir: %v", err)
 	}
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatalf("failed to create config dir: %v", err)
 	}
 
@@ -76,8 +77,10 @@ func findBinary(t *testing.T) string {
 
 	for _, loc := range locations {
 		if _, err := os.Stat(loc); err == nil {
-			absPath, _ := filepath.Abs(loc)
-			return absPath
+			absPath, err := filepath.Abs(loc)
+			if err == nil {
+				return absPath
+			}
 		}
 	}
 
@@ -104,7 +107,7 @@ func (h *TestHarness) WriteConfig(content string) {
   timeout: 30
 `
 	}
-	if err := os.WriteFile(h.configFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(h.configFile, []byte(content), 0o600); err != nil {
 		h.t.Fatalf("failed to write config: %v", err)
 	}
 }
@@ -122,8 +125,14 @@ func (h *TestHarness) InstallMockPlugin(name string, mock *MockPluginResponse) s
 	// Create a simple shell script that acts as a mock plugin
 	pluginPath := filepath.Join(h.pluginsDir, "openctl-"+name)
 
-	capsJSON, _ := json.Marshal(mock.Capabilities)
-	responsesJSON, _ := json.Marshal(mock.Responses)
+	capsJSON, err := json.Marshal(mock.Capabilities)
+	if err != nil {
+		h.t.Fatalf("failed to marshal capabilities: %v", err)
+	}
+	responsesJSON, err := json.Marshal(mock.Responses)
+	if err != nil {
+		h.t.Fatalf("failed to marshal responses: %v", err)
+	}
 
 	// Create a Go program that will be compiled as the mock plugin
 	mockCode := fmt.Sprintf(`package main
@@ -179,16 +188,16 @@ func main() {
 
 	// Write and compile the mock plugin
 	mockDir := filepath.Join(h.tempDir, "mock-"+name)
-	if err := os.MkdirAll(mockDir, 0755); err != nil {
+	if err := os.MkdirAll(mockDir, 0o755); err != nil {
 		h.t.Fatalf("failed to create mock dir: %v", err)
 	}
 
 	mockFile := filepath.Join(mockDir, "main.go")
-	if err := os.WriteFile(mockFile, []byte(mockCode), 0644); err != nil {
+	if err := os.WriteFile(mockFile, []byte(mockCode), 0o600); err != nil {
 		h.t.Fatalf("failed to write mock code: %v", err)
 	}
 
-	cmd := exec.Command("go", "build", "-o", pluginPath, mockFile)
+	cmd := exec.Command("go", "build", "-o", pluginPath, mockFile) //nolint:gosec // G204: intentional for test
 	if output, err := cmd.CombinedOutput(); err != nil {
 		h.t.Fatalf("failed to build mock plugin: %v\n%s", err, output)
 	}
@@ -210,13 +219,15 @@ func (h *TestHarness) Run(args ...string) *RunResult {
 
 	// Set up environment to use our test directories
 	env := os.Environ()
-	env = append(env, fmt.Sprintf("HOME=%s", h.configDir))
-	env = append(env, fmt.Sprintf("XDG_CONFIG_HOME=%s", h.configDir))
+	env = append(env,
+		fmt.Sprintf("HOME=%s", h.configDir),
+		fmt.Sprintf("XDG_CONFIG_HOME=%s", h.configDir),
+	)
 
 	// Prepend plugins dir to PATH so our mock plugins are found
 	for i, e := range env {
-		if strings.HasPrefix(e, "PATH=") {
-			env[i] = fmt.Sprintf("PATH=%s:%s", h.pluginsDir, strings.TrimPrefix(e, "PATH="))
+		if after, ok := strings.CutPrefix(e, "PATH="); ok {
+			env[i] = fmt.Sprintf("PATH=%s:%s", h.pluginsDir, after)
 			break
 		}
 	}
@@ -224,7 +235,7 @@ func (h *TestHarness) Run(args ...string) *RunResult {
 	// Add config flag
 	fullArgs := append([]string{"--config", h.configFile}, args...)
 
-	cmd := exec.Command(h.binPath, fullArgs...)
+	cmd := exec.Command(h.binPath, fullArgs...) //nolint:gosec // G204: intentional for E2E test
 	cmd.Env = env
 
 	var stdout, stderr bytes.Buffer
@@ -235,7 +246,8 @@ func (h *TestHarness) Run(args ...string) *RunResult {
 
 	exitCode := 0
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
 			exitCode = exitErr.ExitCode()
 		}
 	}

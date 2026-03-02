@@ -158,7 +158,7 @@ func WaitForSSH(host string, port int, user string, privateKeyPath string, timeo
 	var lastErr error
 	for {
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("timeout waiting for SSH: %v", lastErr)
+			return nil, fmt.Errorf("timeout waiting for SSH: %w", lastErr)
 		}
 
 		// First check if port is open

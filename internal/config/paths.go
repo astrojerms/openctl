@@ -45,7 +45,7 @@ func GetPaths() (*Paths, error) {
 func (p *Paths) EnsureDirectories() error {
 	dirs := []string{p.ConfigDir, p.PluginsDir, p.SecretsDir}
 	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0700); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return err
 		}
 	}
@@ -54,7 +54,7 @@ func (p *Paths) EnsureDirectories() error {
 
 // ExpandPath expands ~ to the user's home directory
 func ExpandPath(path string) (string, error) {
-	if len(path) == 0 {
+	if path == "" {
 		return path, nil
 	}
 

@@ -12,8 +12,8 @@ func TestVMToResource(t *testing.T) {
 		VMID:     100,
 		Name:     "test-vm",
 		Status:   "running",
-		Mem:      4294967296,  // 4GB used
-		MaxMem:   8589934592,  // 8GB total
+		Mem:      4294967296, // 4GB used
+		MaxMem:   8589934592, // 8GB total
 		CPU:      0.25,
 		CPUs:     4,
 		Uptime:   3600,

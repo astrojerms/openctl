@@ -198,7 +198,10 @@ providers:
 }
 
 func TestExpandPath(t *testing.T) {
-	homeDir, _ := os.UserHomeDir()
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("failed to get home dir: %v", err)
+	}
 
 	tests := []struct {
 		input    string

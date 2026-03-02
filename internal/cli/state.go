@@ -161,7 +161,7 @@ func summarizeChildren(children []state.ChildReference) string {
 		counts[key]++
 	}
 
-	var parts []string
+	parts := make([]string, 0, len(counts))
 	for key, count := range counts {
 		parts = append(parts, fmt.Sprintf("%d %s", count, key))
 	}

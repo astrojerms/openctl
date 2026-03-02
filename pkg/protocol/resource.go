@@ -2,11 +2,11 @@ package protocol
 
 // Resource represents a Kubernetes-style resource with apiVersion, kind, metadata, spec, and status
 type Resource struct {
-	APIVersion string            `json:"apiVersion" yaml:"apiVersion"`
-	Kind       string            `json:"kind" yaml:"kind"`
-	Metadata   ResourceMetadata  `json:"metadata" yaml:"metadata"`
-	Spec       map[string]any    `json:"spec,omitempty" yaml:"spec,omitempty"`
-	Status     map[string]any    `json:"status,omitempty" yaml:"status,omitempty"`
+	APIVersion string           `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string           `json:"kind" yaml:"kind"`
+	Metadata   ResourceMetadata `json:"metadata" yaml:"metadata"`
+	Spec       map[string]any   `json:"spec,omitempty" yaml:"spec,omitempty"`
+	Status     map[string]any   `json:"status,omitempty" yaml:"status,omitempty"`
 }
 
 // ResourceMetadata contains metadata about a resource

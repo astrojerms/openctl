@@ -320,7 +320,7 @@ func TestHandle_RoutesToCorrectAction(t *testing.T) {
 		shouldError bool
 	}{
 		{protocol.ActionList, false},
-		{protocol.ActionGet, false},   // Will error with NOT_FOUND, but routes correctly
+		{protocol.ActionGet, false},    // Will error with NOT_FOUND, but routes correctly
 		{protocol.ActionCreate, false}, // Will need manifest
 		{protocol.ActionDelete, false}, // Will error with NOT_FOUND, but routes correctly
 		{protocol.ActionApply, true},   // Not supported

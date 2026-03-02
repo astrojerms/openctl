@@ -48,8 +48,8 @@ with a Terraform-like plugin system.`,
 			configPath = cfgFile
 			globalConfig, err = config.LoadFromFile(cfgFile)
 		} else {
-			paths, _ := config.GetPaths()
-			if paths != nil {
+			paths, pathErr := config.GetPaths()
+			if pathErr == nil && paths != nil {
 				configPath = paths.ConfigFile
 			}
 			globalConfig, err = config.Load()

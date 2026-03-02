@@ -54,7 +54,7 @@ func LoadMultiple(path string) ([]*protocol.Resource, error) {
 func ParseMultiple(data []byte) ([]*protocol.Resource, error) {
 	docs := strings.Split(string(data), "\n---")
 
-	var resources []*protocol.Resource
+	resources := make([]*protocol.Resource, 0, len(docs))
 	for _, doc := range docs {
 		doc = strings.TrimSpace(doc)
 		if doc == "" {

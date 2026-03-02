@@ -1,6 +1,6 @@
 module github.com/openctl/openctl-k3s
 
-go 1.23.0
+go 1.21
 
 require (
 	github.com/openctl/openctl v0.0.0

@@ -22,7 +22,7 @@ func NewStore() (*Store, error) {
 	}
 
 	basePath := filepath.Join(homeDir, ".openctl", "state")
-	if err := os.MkdirAll(basePath, 0700); err != nil {
+	if err := os.MkdirAll(basePath, 0o700); err != nil {
 		return nil, fmt.Errorf("failed to create state directory: %w", err)
 	}
 
@@ -31,7 +31,7 @@ func NewStore() (*Store, error) {
 
 // NewStoreWithPath creates a new state store with a custom base path
 func NewStoreWithPath(basePath string) (*Store, error) {
-	if err := os.MkdirAll(basePath, 0700); err != nil {
+	if err := os.MkdirAll(basePath, 0o700); err != nil {
 		return nil, fmt.Errorf("failed to create state directory: %w", err)
 	}
 	return &Store{basePath: basePath}, nil
@@ -70,7 +70,7 @@ func (s *Store) List(provider string) ([]*State, error) {
 		return nil, fmt.Errorf("failed to read state directory: %w", err)
 	}
 
-	var states []*State
+	states := make([]*State, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".yaml" {
 			continue
@@ -132,7 +132,7 @@ func (s *Store) Save(state *State) error {
 
 	// Ensure provider directory exists
 	providerPath := filepath.Join(s.basePath, state.Metadata.Provider)
-	if err := os.MkdirAll(providerPath, 0700); err != nil {
+	if err := os.MkdirAll(providerPath, 0o700); err != nil {
 		return fmt.Errorf("failed to create provider directory: %w", err)
 	}
 
@@ -143,7 +143,7 @@ func (s *Store) Save(state *State) error {
 	}
 
 	path := s.statePath(state.Metadata.Provider, state.Metadata.Name)
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("failed to write state: %w", err)
 	}
 

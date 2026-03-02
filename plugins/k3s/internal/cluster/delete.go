@@ -11,8 +11,8 @@ import (
 
 // Deleter handles cluster deletion
 type Deleter struct {
-	name   string
-	spec   *resources.ClusterSpec
+	name string
+	spec *resources.ClusterSpec
 }
 
 // NewDeleter creates a new cluster deleter

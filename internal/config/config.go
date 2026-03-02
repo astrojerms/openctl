@@ -83,7 +83,7 @@ func LoadFromFile(path string) (*Config, error) {
 }
 
 // GetProviderConfig returns the configuration for a specific provider
-func (c *Config) GetProviderConfig(providerName string, contextName string) (*protocol.ProviderConfig, error) {
+func (c *Config) GetProviderConfig(providerName, contextName string) (*protocol.ProviderConfig, error) {
 	provider, ok := c.Providers[providerName]
 	if !ok {
 		return &protocol.ProviderConfig{}, nil
