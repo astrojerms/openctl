@@ -39,6 +39,7 @@ linters-settings:
     exclude-functions:
       - (io.Closer).Close
       - (net/http.ResponseWriter).Write
+      - fmt.Sscanf  # Intentional ignore for best-effort parsing
 
   gocritic:
     enabled-tags:
