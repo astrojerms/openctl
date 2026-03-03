@@ -399,3 +399,136 @@ func TestCLI_EmptyList(t *testing.T) {
 	result.AssertSuccess(t)
 	// Should show empty table or "No resources found"
 }
+
+func TestCLI_Validate_ValidVM(t *testing.T) {
+	h := NewHarness(t)
+	defer h.Cleanup()
+
+	cueContent := `
+import "openctl.io/schemas/proxmox"
+
+proxmox.#VirtualMachine & {
+	metadata: name: "test-vm"
+	spec: {
+		node: "pve1"
+		cpu: cores: 4
+		memory: size: 8192
+	}
+}
+`
+	cueFile := h.WriteCUEFile("vm.cue", cueContent)
+
+	result := h.Run("validate", "-f", cueFile)
+	result.AssertSuccess(t)
+	result.AssertOutputContains(t, "Valid: 1 resource(s)")
+	result.AssertOutputContains(t, "VirtualMachine")
+	result.AssertOutputContains(t, "test-vm")
+}
+
+func TestCLI_Validate_ValidCluster(t *testing.T) {
+	h := NewHarness(t)
+	defer h.Cleanup()
+
+	cueContent := `
+import "openctl.io/schemas/k3s"
+
+k3s.#Cluster & {
+	metadata: name: "my-cluster"
+	spec: {
+		compute: {
+			provider: "proxmox"
+			image: url: "https://example.com/image.img"
+		}
+		nodes: {
+			controlPlane: count: 1
+		}
+		ssh: {
+			privateKeyPath: "~/.ssh/id_ed25519"
+		}
+	}
+}
+`
+	cueFile := h.WriteCUEFile("cluster.cue", cueContent)
+
+	result := h.Run("validate", "-f", cueFile)
+	result.AssertSuccess(t)
+	result.AssertOutputContains(t, "Valid: 1 resource(s)")
+	result.AssertOutputContains(t, "Cluster")
+	result.AssertOutputContains(t, "my-cluster")
+}
+
+func TestCLI_Validate_MultipleResources(t *testing.T) {
+	h := NewHarness(t)
+	defer h.Cleanup()
+
+	cueContent := `
+import "openctl.io/schemas/proxmox"
+
+vm1: proxmox.#VirtualMachine & {
+	metadata: name: "vm-1"
+	spec: node: "pve1"
+}
+
+vm2: proxmox.#VirtualMachine & {
+	metadata: name: "vm-2"
+	spec: node: "pve2"
+}
+`
+	cueFile := h.WriteCUEFile("multi.cue", cueContent)
+
+	result := h.Run("validate", "-f", cueFile)
+	result.AssertSuccess(t)
+	result.AssertOutputContains(t, "Valid: 2 resource(s)")
+	result.AssertOutputContains(t, "vm-1")
+	result.AssertOutputContains(t, "vm-2")
+}
+
+func TestCLI_Validate_InvalidSchema(t *testing.T) {
+	h := NewHarness(t)
+	defer h.Cleanup()
+
+	// Missing required 'node' field in spec
+	cueContent := `
+import "openctl.io/schemas/proxmox"
+
+proxmox.#VirtualMachine & {
+	metadata: name: "invalid-vm"
+	spec: {
+		cpu: cores: 4
+	}
+}
+`
+	cueFile := h.WriteCUEFile("invalid.cue", cueContent)
+
+	result := h.Run("validate", "-f", cueFile)
+	result.AssertFailure(t)
+	result.AssertErrorContains(t, "validation failed")
+}
+
+func TestCLI_Validate_InvalidSyntax(t *testing.T) {
+	h := NewHarness(t)
+	defer h.Cleanup()
+
+	cueContent := `this is not valid CUE syntax {{{`
+	cueFile := h.WriteCUEFile("syntax-error.cue", cueContent)
+
+	result := h.Run("validate", "-f", cueFile)
+	result.AssertFailure(t)
+}
+
+func TestCLI_Validate_NonexistentFile(t *testing.T) {
+	h := NewHarness(t)
+	defer h.Cleanup()
+
+	result := h.Run("validate", "-f", "/nonexistent/path/file.cue")
+	result.AssertFailure(t)
+}
+
+func TestCLI_Validate_MissingFileFlag(t *testing.T) {
+	h := NewHarness(t)
+	defer h.Cleanup()
+
+	result := h.Run("validate")
+	result.AssertFailure(t)
+	// Should complain about missing required flag
+}

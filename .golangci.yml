@@ -1,25 +1,18 @@
+version: "2"
+
 run:
   timeout: 5m
   modules-download-mode: readonly
 
 linters:
+  # Default linters (errcheck, govet, ineffassign, staticcheck, unused) are enabled automatically
   enable:
-    # Default linters
-    - errcheck
-    - gosimple
-    - govet
-    - ineffassign
-    - staticcheck
-    - unused
-
     # Additional linters
     - bodyclose        # Check HTTP response body is closed
-    # - copyloopvar      # Detect loop variable capture issues (Go 1.22+) - disabled, requires Go 1.22+
+    - copyloopvar      # Detect loop variable capture issues (Go 1.22+)
     - durationcheck    # Check for duration multiplication issues
     - errname          # Check error naming conventions
     - errorlint        # Find issues with error wrapping
-    - gofmt            # Check code is formatted
-    - goimports        # Check imports are organized
     - gocritic         # Comprehensive Go linter
     - gosec            # Security checks
     - misspell         # Find misspellings
@@ -30,7 +23,11 @@ linters:
     # - revive           # Replacement for golint - disabled, too many false positives with empty blocks
     - unconvert        # Remove unnecessary type conversions
     - unparam          # Find unused function parameters
-    - whitespace       # Check for unnecessary whitespace
+
+formatters:
+  enable:
+    - gofmt            # Check code is formatted
+    - goimports        # Check imports are organized
 
 linters-settings:
   errcheck:

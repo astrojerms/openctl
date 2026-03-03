@@ -335,3 +335,13 @@ func (r *RunResult) AssertTableOutput(t *testing.T, expectedHeaders ...string) {
 		}
 	}
 }
+
+// WriteCUEFile writes a CUE file to the temp directory and returns its path
+func (h *TestHarness) WriteCUEFile(name, content string) string {
+	h.t.Helper()
+	path := filepath.Join(h.tempDir, name)
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		h.t.Fatalf("failed to write CUE file: %v", err)
+	}
+	return path
+}

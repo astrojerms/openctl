@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -174,5 +175,17 @@ func newVersionCommand() *cobra.Command {
 }
 
 func loadManifest(path string) (*protocol.Resource, error) {
+	ext := filepath.Ext(path)
+	if ext == ".cue" {
+		resources, err := manifest.LoadCUE(path)
+		if err != nil {
+			return nil, err
+		}
+		if len(resources) != 1 {
+			return nil, fmt.Errorf("expected 1 resource, got %d", len(resources))
+		}
+		return resources[0], nil
+	}
+	// Fall back to YAML for other extensions
 	return manifest.Load(path)
 }

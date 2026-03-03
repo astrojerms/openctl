@@ -103,6 +103,7 @@ func init() {
 	rootCmd.AddCommand(newPluginCommand())
 	rootCmd.AddCommand(newConfigCommand())
 	rootCmd.AddCommand(newApplyCommand())
+	rootCmd.AddCommand(newValidateCommand())
 	rootCmd.AddCommand(newVersionCommand())
 	rootCmd.AddCommand(newStateCommand())
 
