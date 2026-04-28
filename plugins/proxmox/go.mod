@@ -1,6 +1,6 @@
 module github.com/openctl/openctl-proxmox
 
-go 1.21
+go 1.25.0
 
 require github.com/openctl/openctl v0.0.0
 
