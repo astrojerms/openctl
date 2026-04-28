@@ -40,3 +40,7 @@ secrets/
 
 # Generated test manifests
 **/test/e2e/*-test-manifest.yaml
+
+# Local cluster manifests (contain personal env: IPs, SSH keys, template names)
+.cluster.yaml
+.cluster*.yaml
