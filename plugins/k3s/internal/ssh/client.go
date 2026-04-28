@@ -140,6 +140,29 @@ func (c *Client) Upload(data []byte, remotePath string, mode os.FileMode) error 
 	return nil
 }
 
+// UploadSudo writes data to a remote file owned by root via `sudo tee`. The
+// parent directory must already exist; create it via RunSudo if needed.
+func (c *Client) UploadSudo(data []byte, remotePath string, mode os.FileMode) error {
+	session, err := c.sshClient.NewSession()
+	if err != nil {
+		return fmt.Errorf("failed to create session: %w", err)
+	}
+	defer session.Close()
+
+	command := fmt.Sprintf("sudo tee %s > /dev/null && sudo chmod %o %s && sudo chown root:root %s",
+		remotePath, mode, remotePath, remotePath)
+	session.Stdin = bytes.NewReader(data)
+
+	var stderr bytes.Buffer
+	session.Stderr = &stderr
+
+	if err := session.Run(command); err != nil {
+		return fmt.Errorf("sudo upload failed: %w: %s", err, stderr.String())
+	}
+
+	return nil
+}
+
 // Download downloads a file from remote
 func (c *Client) Download(remotePath string) ([]byte, error) {
 	output, err := c.Run(fmt.Sprintf("cat %s", remotePath))

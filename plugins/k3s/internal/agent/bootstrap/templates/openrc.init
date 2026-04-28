@@ -1,0 +1,15 @@
+#!/sbin/openrc-run
+
+name="openctl-k3s-agent"
+description="openctl k3s node agent"
+command="/usr/local/bin/openctl-k3s-agent"
+command_args="--listen :9443 --cert /etc/openctl-k3s-agent/server.pem --key /etc/openctl-k3s-agent/server.key --ca /etc/openctl-k3s-agent/ca.pem"
+command_background="yes"
+pidfile="/run/openctl-k3s-agent.pid"
+output_log="/var/log/openctl-k3s-agent.log"
+error_log="/var/log/openctl-k3s-agent.log"
+
+depend() {
+    need net
+    after net
+}

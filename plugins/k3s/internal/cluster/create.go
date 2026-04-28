@@ -1,12 +1,19 @@
 package cluster
 
 import (
+	"context"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/openctl/openctl-k3s/internal/agent/bootstrap"
+	"github.com/openctl/openctl-k3s/internal/agent/certs"
+	agentclient "github.com/openctl/openctl-k3s/internal/agent/client"
 	"github.com/openctl/openctl-k3s/internal/resources"
 	"github.com/openctl/openctl-k3s/internal/ssh"
 	"github.com/openctl/openctl/pkg/protocol"
@@ -186,7 +193,9 @@ func (c *Creator) SetNodeIPs(results []*protocol.DispatchResult) error {
 	return nil
 }
 
-// InstallK3s installs K3s on all cluster nodes
+// InstallK3s installs K3s on all cluster nodes and the openctl-k3s-agent
+// alongside it. The agent install uses a per-cluster CA + per-node server
+// certs minted up-front, so all nodes share one trust chain.
 func (c *Creator) InstallK3s(nodeIPs map[string]string) (*InstallResult, error) {
 	c.nodeIPs = nodeIPs
 	cpNodes, workerNodes := resources.NodeNames(c.name, c.spec)
@@ -194,6 +203,12 @@ func (c *Creator) InstallK3s(nodeIPs map[string]string) (*InstallResult, error) 
 	if len(cpNodes) == 0 {
 		return nil, fmt.Errorf("at least one control plane node is required")
 	}
+
+	bundle, bundleDir, err := c.generateAndSaveCerts(nodeIPs)
+	if err != nil {
+		return nil, err
+	}
+	installer := &bootstrap.Installer{}
 
 	// Install K3s server on first control plane
 	firstCP := cpNodes[0]
@@ -236,6 +251,10 @@ func (c *Creator) InstallK3s(nodeIPs map[string]string) (*InstallResult, error) 
 	kubeconfig = strings.ReplaceAll(kubeconfig, "127.0.0.1", firstCPIP)
 	kubeconfig = strings.ReplaceAll(kubeconfig, "localhost", firstCPIP)
 
+	if err := installAgentOn(client, installer, bundle, firstCP); err != nil {
+		return nil, err
+	}
+
 	// Install on additional control plane nodes (if any)
 	for i := 1; i < len(cpNodes); i++ {
 		cpNode := cpNodes[i]
@@ -255,6 +274,10 @@ func (c *Creator) InstallK3s(nodeIPs map[string]string) (*InstallResult, error) 
 		if _, err := cpClient.RunSudo(joinCmd); err != nil {
 			cpClient.Close()
 			return nil, fmt.Errorf("failed to install K3s server on %s: %w", cpNode, err)
+		}
+		if err := installAgentOn(cpClient, installer, bundle, cpNode); err != nil {
+			cpClient.Close()
+			return nil, err
 		}
 		cpClient.Close()
 	}
@@ -278,6 +301,10 @@ func (c *Creator) InstallK3s(nodeIPs map[string]string) (*InstallResult, error) 
 			workerClient.Close()
 			return nil, fmt.Errorf("failed to install K3s agent on %s: %w", workerNode, err)
 		}
+		if err := installAgentOn(workerClient, installer, bundle, workerNode); err != nil {
+			workerClient.Close()
+			return nil, err
+		}
 		workerClient.Close()
 	}
 
@@ -287,18 +314,118 @@ func (c *Creator) InstallK3s(nodeIPs map[string]string) (*InstallResult, error) 
 		return nil, fmt.Errorf("failed to save kubeconfig: %w", err)
 	}
 
+	if err := verifyAgentsReachable(bundle, nodeIPs, bootstrap.Port); err != nil {
+		return nil, fmt.Errorf("agent reachability check failed: %w", err)
+	}
+
 	return &InstallResult{
 		KubeconfigPath: kubeconfigPath,
 		ServerIP:       firstCPIP,
 		Token:          token,
+		AgentBundleDir: bundleDir,
+		AgentEndpoints: copyMap(nodeIPs),
+		AgentPort:      bootstrap.Port,
 	}, nil
 }
 
-// InstallResult contains the result of K3s installation
+// InstallResult contains the result of K3s + agent installation.
 type InstallResult struct {
 	KubeconfigPath string
 	ServerIP       string
 	Token          string
+	AgentBundleDir string            // ~/.openctl/state/k3s/<cluster>/
+	AgentEndpoints map[string]string // node name -> IP
+	AgentPort      int
+}
+
+// generateAndSaveCerts mints the per-cluster CA + leaf certs and persists them
+// to ~/.openctl/state/k3s/<cluster>/. Returns the in-memory bundle and the
+// directory it was written to.
+func (c *Creator) generateAndSaveCerts(nodeIPs map[string]string) (*certs.Bundle, string, error) {
+	ids := make([]certs.NodeIdentity, 0, len(nodeIPs))
+	for name, ip := range nodeIPs {
+		ids = append(ids, certs.NodeIdentity{Name: name, IP: ip})
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i].Name < ids[j].Name })
+
+	bundle, err := certs.GenerateBundle(c.name, ids)
+	if err != nil {
+		return nil, "", fmt.Errorf("generate cert bundle: %w", err)
+	}
+	bundleDir, err := c.bundleDir()
+	if err != nil {
+		return nil, "", err
+	}
+	if err := bundle.WriteTo(bundleDir); err != nil {
+		return nil, "", fmt.Errorf("write cert bundle: %w", err)
+	}
+	return bundle, bundleDir, nil
+}
+
+func (c *Creator) bundleDir() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(homeDir, ".openctl", "state", "k3s", c.name), nil
+}
+
+func installAgentOn(client *ssh.Client, installer *bootstrap.Installer, bundle *certs.Bundle, nodeName string) error {
+	server, ok := bundle.ServerCerts[nodeName]
+	if !ok {
+		return fmt.Errorf("no server cert in bundle for %s", nodeName)
+	}
+	fmt.Fprintf(os.Stderr, "Installing openctl-k3s-agent on %s...\n", nodeName)
+	host, err := installer.Install(client, server, bundle.CACertPEM)
+	if err != nil {
+		return fmt.Errorf("install agent on %s: %w", nodeName, err)
+	}
+	fmt.Fprintf(os.Stderr, "  agent installed (arch=%s, init=%s)\n", host.Arch, host.Init)
+	return nil
+}
+
+func verifyAgentsReachable(bundle *certs.Bundle, nodeIPs map[string]string, port int) error {
+	const overall = 30 * time.Second
+	for name, ip := range nodeIPs {
+		c, err := agentclient.New(agentclient.Options{
+			Endpoint:      net.JoinHostPort(ip, strconv.Itoa(port)),
+			CACertPEM:     bundle.CACertPEM,
+			ClientCertPEM: bundle.ClientCertPEM,
+			ClientKeyPEM:  bundle.ClientKeyPEM,
+			Timeout:       5 * time.Second,
+		})
+		if err != nil {
+			return fmt.Errorf("agent client for %s: %w", name, err)
+		}
+		if err := pollAgentInfo(c, name, ip, overall); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func pollAgentInfo(c *agentclient.Client, name, ip string, overall time.Duration) error {
+	deadline := time.Now().Add(overall)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, err := c.Info(ctx)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		time.Sleep(2 * time.Second)
+	}
+	return fmt.Errorf("agent on %s (%s) unreachable after %s: %w", name, ip, overall, lastErr)
+}
+
+func copyMap(m map[string]string) map[string]string {
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 func (c *Creator) buildServerInstallCommand() string {

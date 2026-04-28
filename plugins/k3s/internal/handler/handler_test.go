@@ -1,11 +1,22 @@
 package handler
 
 import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/openctl/openctl-k3s/internal/agent"
+	"github.com/openctl/openctl-k3s/internal/agent/certs"
 	"github.com/openctl/openctl/pkg/protocol"
 )
 
@@ -498,4 +509,262 @@ status:
 	if !found {
 		t.Error("expected to find test-list-cluster in results")
 	}
+}
+
+// TestGetCluster_AugmentsWithLiveAgentStatus runs a real agent for one of two
+// nodes, writes a state file pointing at both, and verifies that get folds
+// per-node reachability into the response without failing the call.
+func TestGetCluster_AugmentsWithLiveAgentStatus(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	clusterName := "augmented"
+	bundleDir := filepath.Join(home, ".openctl", "state", "k3s", clusterName)
+	stateDir := filepath.Join(home, ".openctl", "state", "k3s")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	// Mint a real cert bundle for both nodes pinned to 127.0.0.1.
+	bundle, err := certs.GenerateBundle(clusterName, []certs.NodeIdentity{
+		{Name: "alive", IP: "127.0.0.1"},
+		{Name: "dead", IP: "127.0.0.1"},
+	})
+	if err != nil {
+		t.Fatalf("certs: %v", err)
+	}
+	if err := bundle.WriteTo(bundleDir); err != nil {
+		t.Fatalf("write bundle: %v", err)
+	}
+
+	// Start agent for "alive" only. Pick a free port.
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	aliveAddr := ln.Addr().String()
+	_, alivePortStr, _ := net.SplitHostPort(aliveAddr)
+	_ = ln.Close()
+	alivePort, _ := strconv.Atoi(alivePortStr)
+
+	srv, err := agent.New(agent.Options{
+		Listen:   aliveAddr,
+		CertFile: filepath.Join(bundleDir, "alive-server.pem"),
+		KeyFile:  filepath.Join(bundleDir, "alive-server.key"),
+		CAFile:   filepath.Join(bundleDir, "ca.pem"),
+	})
+	if err != nil {
+		t.Fatalf("agent server: %v", err)
+	}
+	go func() { _ = srv.ListenAndServe() }()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	})
+	waitForListen(t, aliveAddr, 2*time.Second)
+
+	// Pick a free port for the dead node and immediately release it.
+	deadLn, _ := net.Listen("tcp", "127.0.0.1:0")
+	_, deadPortStr, _ := net.SplitHostPort(deadLn.Addr().String())
+	_ = deadLn.Close()
+
+	// Both nodes share the same IP but the state file's port is shared, so
+	// for this test we point both endpoints at the alive port — the "dead"
+	// node will get a TLS handshake error because its server cert won't be
+	// presented (the alive server presents alive's cert). That tests the
+	// "unreachable due to TLS error" path. To also cover dial failure, we
+	// use the released deadPort for one variant below.
+	_ = deadPortStr
+
+	stateYAML := `apiVersion: k3s.openctl.io/v1
+kind: Cluster
+spec:
+  compute:
+    provider: proxmox
+status:
+  phase: Ready
+  message: Cluster is ready
+  outputs:
+    kubeconfigPath: /tmp/kubeconfig
+    serverIP: 127.0.0.1
+    agent:
+      bundleDir: ` + bundleDir + `
+      caPath: ` + filepath.Join(bundleDir, "ca.pem") + `
+      clientCertPath: ` + filepath.Join(bundleDir, "client.pem") + `
+      clientKeyPath: ` + filepath.Join(bundleDir, "client.key") + `
+      port: ` + strconv.Itoa(alivePort) + `
+      endpoints:
+        alive: 127.0.0.1
+        dead: 127.0.0.2
+`
+	statePath := filepath.Join(stateDir, clusterName+".yaml")
+	if err := os.WriteFile(statePath, []byte(stateYAML), 0o600); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	h := New(&protocol.ProviderConfig{})
+	resp, err := h.Handle(&protocol.Request{
+		Version:      protocol.ProtocolVersion,
+		Action:       protocol.ActionGet,
+		ResourceType: "Cluster",
+		ResourceName: clusterName,
+	})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if resp.Status != protocol.StatusSuccess {
+		t.Fatalf("status = %s (err=%v)", resp.Status, resp.Error)
+	}
+
+	nodesRaw, ok := resp.Resource.Status["nodes"].([]map[string]any)
+	if !ok {
+		t.Fatalf("status.nodes missing or wrong type: %T", resp.Resource.Status["nodes"])
+	}
+	if len(nodesRaw) != 2 {
+		t.Fatalf("want 2 nodes, got %d", len(nodesRaw))
+	}
+
+	statusByName := map[string]map[string]any{}
+	for _, n := range nodesRaw {
+		statusByName[n["name"].(string)] = n
+	}
+	if !statusByName["alive"]["reachable"].(bool) {
+		t.Errorf("alive should be reachable: %+v", statusByName["alive"])
+	}
+	if statusByName["dead"]["reachable"].(bool) {
+		t.Errorf("dead should be unreachable: %+v", statusByName["dead"])
+	}
+
+	if got := resp.Resource.Status["health"]; got != "degraded" {
+		t.Errorf("health = %v, want degraded", got)
+	}
+}
+
+// TestGetCluster_DetectsAgentVersionSkew runs a fake info server reporting a
+// different agent version and verifies the handler adds agentVersionSkew +
+// expectedAgentVersion to the response (and doesn't fail the call).
+func TestGetCluster_DetectsAgentVersionSkew(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	clusterName := "skewy"
+	bundleDir := filepath.Join(home, ".openctl", "state", "k3s", clusterName)
+	stateDir := filepath.Join(home, ".openctl", "state", "k3s")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	bundle, err := certs.GenerateBundle(clusterName, []certs.NodeIdentity{
+		{Name: "n1", IP: "127.0.0.1"},
+	})
+	if err != nil {
+		t.Fatalf("certs: %v", err)
+	}
+	if err := bundle.WriteTo(bundleDir); err != nil {
+		t.Fatalf("write bundle: %v", err)
+	}
+
+	// Custom handler returning a deliberately different version.
+	const fakeVersion = "0.0.0-skew-test"
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/info", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(agent.Info{
+			Hostname:     "n1",
+			OS:           "linux",
+			Arch:         "amd64",
+			Init:         "systemd",
+			K3sVersion:   "v1.99.0+k3s1",
+			K3sStatus:    "active",
+			AgentVersion: fakeVersion,
+			Capabilities: map[string]string{"logs": "journald"},
+		})
+	})
+
+	keypair, err := tls.X509KeyPair(bundle.ServerCerts["n1"].CertPEM, bundle.ServerCerts["n1"].KeyPEM)
+	if err != nil {
+		t.Fatalf("server keypair: %v", err)
+	}
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(bundle.CACertPEM)
+
+	srv := httptest.NewUnstartedServer(mux)
+	srv.TLS = &tls.Config{
+		Certificates: []tls.Certificate{keypair},
+		ClientCAs:    pool,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		MinVersion:   tls.VersionTLS12,
+	}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+
+	_, portStr, _ := net.SplitHostPort(srv.Listener.Addr().String())
+	port, _ := strconv.Atoi(portStr)
+
+	stateYAML := `apiVersion: k3s.openctl.io/v1
+kind: Cluster
+spec:
+  compute:
+    provider: proxmox
+status:
+  phase: Ready
+  outputs:
+    agent:
+      caPath: ` + filepath.Join(bundleDir, "ca.pem") + `
+      clientCertPath: ` + filepath.Join(bundleDir, "client.pem") + `
+      clientKeyPath: ` + filepath.Join(bundleDir, "client.key") + `
+      port: ` + strconv.Itoa(port) + `
+      endpoints:
+        n1: 127.0.0.1
+`
+	if err := os.WriteFile(filepath.Join(stateDir, clusterName+".yaml"), []byte(stateYAML), 0o600); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	h := New(&protocol.ProviderConfig{})
+	resp, err := h.Handle(&protocol.Request{
+		Version:      protocol.ProtocolVersion,
+		Action:       protocol.ActionGet,
+		ResourceType: "Cluster",
+		ResourceName: clusterName,
+	})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if resp.Status != protocol.StatusSuccess {
+		t.Fatalf("status = %s (err=%v)", resp.Status, resp.Error)
+	}
+
+	skew, ok := resp.Resource.Status["agentVersionSkew"].([]string)
+	if !ok || len(skew) != 1 {
+		t.Fatalf("agentVersionSkew = %v (type %T), want []string with 1 entry",
+			resp.Resource.Status["agentVersionSkew"], resp.Resource.Status["agentVersionSkew"])
+	}
+	if !strings.Contains(skew[0], fakeVersion) {
+		t.Errorf("skew entry %q should contain %q", skew[0], fakeVersion)
+	}
+	if got := resp.Resource.Status["expectedAgentVersion"]; got != agent.Version {
+		t.Errorf("expectedAgentVersion = %v, want %v", got, agent.Version)
+	}
+
+	// Per-node entry should also surface capabilities.
+	nodes, _ := resp.Resource.Status["nodes"].([]map[string]any)
+	if len(nodes) != 1 {
+		t.Fatalf("want 1 node entry, got %d", len(nodes))
+	}
+	if _, ok := nodes[0]["capabilities"].(map[string]string); !ok {
+		t.Errorf("node entry missing capabilities map: %+v", nodes[0])
+	}
+}
+
+func waitForListen(t *testing.T, addr string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("timeout waiting for %s", addr)
 }

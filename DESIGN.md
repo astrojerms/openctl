@@ -724,6 +724,98 @@ func TestPlugin_ListResources(t *testing.T) {
 6. **Validation**: Validate manifests early and return clear error messages
 7. **Testing**: Write unit tests with HTTP mocking; avoid network calls in tests
 
+## K3s Plugin Agent
+
+The K3s plugin ships a per-node agent (`openctl-k3s-agent`) installed on every cluster node at `create` time. It exists so post-create operations can do host-level things the Kubernetes API can't see (systemd state, journald, k3s binary lifecycle) without paying SSH-handshake cost on every command and without depending on a healthy API server.
+
+### Design principles
+
+1. **The agent only does what kubectl can't.** If a healthy kubectl from the user's laptop could do it, the plugin calls the Kubernetes API directly — the agent does not expose passthrough endpoints (no `GET /pods`, no exec, no kubeconfig proxy).
+2. **Stateless.** No caching of cluster state. Every request live-reads from systemd/proc/the local k3s API.
+3. **Per-node, not in-cluster.** A pod-based service is unreachable exactly when out-of-band tooling is most needed. Per-node systemd/OpenRC units survive a broken k3s.
+4. **mTLS, per-cluster CA.** A CA is generated at `create` time. Each node gets its own server certificate; the controller (the laptop running `openctl`) holds a single client certificate for the cluster. Cert material lives under `~/.openctl/state/k3s/<cluster>/`.
+5. **Bootstrap stays SSH.** SSH installs k3s and drops the agent. Everything post-install goes through the agent.
+
+### Architecture
+
+```
+┌──────────────────┐                 ┌─────────────────────────────────────┐
+│  openctl k3s     │                 │  k3s node                           │
+│  (plugin)        │                 │  ┌───────────────────────────────┐  │
+│                  │   mTLS HTTPS    │  │ openctl-k3s-agent (systemd or │  │
+│  • client cert   │ ───────────────>│  │  OpenRC service, :9443)       │  │
+│  • per-cluster   │                 │  │                               │  │
+│    CA            │                 │  │  /v1/info                     │  │
+│  • node endpoint │                 │  │  /v1/logs/k3s                 │  │
+│    map (state)   │                 │  │  /v1/service/k3s/{start,...}  │  │
+│                  │                 │  └───────────────────────────────┘  │
+│                  │                 │                                     │
+│                  │  k8s API (in-   │  ┌───────────────────────────────┐  │
+│  • kubeconfig    │ ───────────────>│  │ k3s (server or agent)         │  │
+│                  │  band; agent    │  │                               │  │
+│                  │  not involved)  │  └───────────────────────────────┘  │
+└──────────────────┘                 └─────────────────────────────────────┘
+```
+
+### OS heterogeneity
+
+Nodes may run different distros, init systems, and architectures. The agent absorbs these differences so the plugin doesn't have to:
+
+| Concern | Strategy |
+|---|---|
+| CPU architecture | Static Go binary, multi-arch builds (linux/amd64, linux/arm64, linux/arm). SSH bootstrap picks the right artifact via `uname -m`. |
+| Init system | Detected at SSH bootstrap: probe `systemctl --version`, fall back to `rc-service --version` (OpenRC). Fail clearly if neither. Two unit-file templates. |
+| Logs | Agent's `/v1/logs/k3s` chooses `journalctl -u k3s` or tails `/var/log/k3s.log` based on its own startup detection. Plugin doesn't know or care. |
+| Service control | Agent's `/v1/service/k3s/*` runs `systemctl ...` or `rc-service ...` based on detected init. |
+| k3s file paths | `/var/lib/rancher/k3s/` and `/etc/rancher/k3s/` are k3s-managed and consistent across distros — assumed by the agent. |
+
+The agent reports its detected environment in `/v1/info` (`os`, `arch`, `init`, capability flags). The plugin uses these for operator-facing diagnostics, not for routing — routing is the agent's responsibility.
+
+### Bootstrap flow
+
+`create` runs SSH-based steps in this order:
+
+1. Existing: install k3s on the first control plane, then additional CPs and workers.
+2. New: generate the per-cluster CA (if not already cached), generate per-node server cert + key, generate the controller's client cert + key (once per cluster).
+3. New: for each node, detect init system, upload `openctl-k3s-agent`, server cert, server key, and CA cert to `/etc/openctl-k3s-agent/`. Drop the unit file. Enable and start.
+4. New: poll each node's `/v1/info` until reachable (with a bounded timeout). Mark cluster `Ready` only after every agent responds.
+
+Cert material on the node lives at `/etc/openctl-k3s-agent/{ca.pem,server.pem,server.key}` (mode `0600`, owned by root).
+
+### State file additions
+
+```yaml
+status:
+  agent:
+    caPath: ~/.openctl/state/k3s/dev/ca.pem
+    clientCertPath: ~/.openctl/state/k3s/dev/client.pem
+    clientKeyPath: ~/.openctl/state/k3s/dev/client.key
+    port: 9443
+    endpoints:
+      dev-cp-0: 192.168.1.50
+      dev-worker-0: 192.168.1.51
+```
+
+### RPC surface (initial)
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /v1/info` | Host facts, agent version, init system, k3s service status, supported capabilities |
+| `GET /v1/logs/k3s?lines=N` | Recent k3s logs (abstracted over journald/files) |
+| `POST /v1/service/k3s/{start,stop,restart}` | Init-system-agnostic service control |
+
+Explicitly out of scope until proven needed: pod listing, exec, file uploads, binary upgrades, cert rotation. These can be added later as the agent only grows where the kubectl-equivalent path can't reach.
+
+### Version skew
+
+The agent reports its version in `/v1/info`. If it differs from what the plugin was built against, the plugin prints a warning to stderr and proceeds with the call. There is no hard refusal — operators upgrading a fleet often have nodes at mixed versions for short windows.
+
+### What the agent must not become
+
+- A kubectl substitute. If a feature request can be satisfied by `kubectl <verb>` from the user's laptop, the plugin should do that, not add an endpoint.
+- A stateful daemon. No background polling, no caching, no reconciliation loops. Each request is a fresh read.
+- A general-purpose remote shell. Endpoints are narrow, named, and audit-friendly — not `POST /v1/exec`.
+
 ## Future Enhancements
 
 - [ ] Progress streaming for long-running operations
@@ -733,5 +825,76 @@ func TestPlugin_ListResources(t *testing.T) {
 - [ ] gRPC transport option for performance
 - [x] Automatic retry with backoff for transient failures (implemented in dispatcher)
 - [ ] Additional compute providers (AWS, Azure, GCP)
-- [ ] K3s cluster upgrades
-- [ ] Certificate rotation for K3s clusters
+- [ ] K3s cluster upgrades (will use the agent's service control + future binary-swap endpoint)
+- [ ] Certificate rotation for K3s clusters (agent + new endpoint)
+- [ ] **Plugin-defined CLI subcommands** (see TODO below)
+
+## TODO: Plugin-defined CLI subcommands
+
+**Status:** deferred during the k3s agent rollout. The k3s plugin now has agent-backed operations (`Logs`, future `Restart`/`Upgrade`) that have no CLI surface — they're only reachable from Go code via `internal/agent/client.Client`. The core CLI in `internal/cli/` only knows the fixed set of actions (`get`/`create`/`delete`/`apply`). We deferred designing the extension surface until we have at least two agent-driven commands to design against, so the API is shaped by real use, not a single example.
+
+**Goal:** make agent-backed plugin operations callable as first-class CLI commands, e.g.:
+- `openctl k3s logs <cluster> [--node <name>] [--lines N]`
+- `openctl k3s restart <cluster> --node <name>`
+- `openctl k3s upgrade <cluster> --to <version>` (future)
+
+**Recommended approach (option 3 from the rollout discussion):** extend `protocol.Capabilities` with a list of plugin-defined subcommands, and have `internal/cli/provider.go` register them as cobra commands alongside `get`/`create`/`delete`/`apply`.
+
+```go
+// pkg/protocol/response.go
+type Capabilities struct {
+    // ... existing fields ...
+    Subcommands []SubcommandDefinition `json:"subcommands,omitempty"`
+}
+
+type SubcommandDefinition struct {
+    Name        string         `json:"name"`        // e.g. "logs"
+    Short       string         `json:"short"`       // one-line help
+    Long        string         `json:"long,omitempty"`
+    Action      string         `json:"action"`      // value sent in Request.Action
+    PositionalArgs []ArgSpec   `json:"positionalArgs,omitempty"` // e.g. [{Name:"cluster", Required:true}]
+    Flags       []FlagSpec     `json:"flags,omitempty"`
+}
+
+type FlagSpec struct {
+    Name      string `json:"name"`              // long form, e.g. "node"
+    Short     string `json:"short,omitempty"`   // single-char, e.g. "n"
+    Type      string `json:"type"`              // "string" | "int" | "bool"
+    Default   string `json:"default,omitempty"`
+    Required  bool   `json:"required,omitempty"`
+    Help      string `json:"help,omitempty"`
+}
+```
+
+**CLI side:** in `internal/cli/provider.go`, after registering the standard commands, iterate `caps.Subcommands` and register a cobra command per entry. The command's `RunE` builds a `protocol.Request` with `Action: subcmd.Action`, packs positional args + flag values into a new `Request.Args map[string]any` field (or into `Request.Manifest.Spec` — pick one), and dispatches via the existing executor. Output formatting: text/plain bodies print as-is; structured responses go through the existing `formatter`.
+
+**Plugin side:** the k3s plugin's `handler.Handle` already dispatches on `req.Action`. Add cases for the new action names (`"logs"`, `"restart"`, etc.) that:
+1. Load the cluster's saved state file (existing helper).
+2. Pull the agent block from `status.outputs.agent` (existing helper `extractAgentProbeConfig` is close — extract into a shared helper).
+3. Build an `agentclient.Client` for the right node.
+4. Call the typed method (`c.Logs(ctx, lines)`) and return the result.
+
+**Files that will change:**
+- `pkg/protocol/response.go` — add `Subcommands` to `Capabilities`, add `SubcommandDefinition`/`ArgSpec`/`FlagSpec`.
+- `pkg/protocol/request.go` — add `Args map[string]any` (or repurpose Manifest).
+- `internal/cli/provider.go` — register subcommands from caps.
+- `plugins/k3s/cmd/openctl-k3s/main.go` — declare subcommands in `printCapabilities()`.
+- `plugins/k3s/internal/handler/handler.go` — dispatch new actions to agent client.
+- `DESIGN.md` — document the new `Subcommands` capability under Plugin Protocol.
+
+**Until this lands, the manual workaround** for inspecting agent endpoints is to invoke the typed client directly from a tiny Go program, or to `curl` the agent with the cluster's mTLS material:
+
+```sh
+CLUSTER=mycluster
+DIR=~/.openctl/state/k3s/$CLUSTER
+NODE_IP=$(yq '.status.outputs.agent.endpoints | to_entries | .[0].value' \
+  ~/.openctl/state/k3s/$CLUSTER.yaml)
+curl --cacert $DIR/ca.pem --cert $DIR/client.pem --key $DIR/client.key \
+  https://$NODE_IP:9443/v1/logs/k3s?lines=200
+```
+
+**Design considerations to revisit before implementing:**
+- Streaming vs buffered responses (logs could be large — do we want chunked transfer + line-by-line print?).
+- Authentication carryover (subcommands inherit `--context` etc. — should be free if we use the same dispatch path).
+- How to expose sub-resource help in `openctl k3s --help` (cobra handles this if we register cleanly).
+- Error response format consistency (the structured `protocol.Error` vs text/plain bodies from `/v1/logs/k3s`).

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/openctl/openctl-k3s/internal/agent"
+	agentclient "github.com/openctl/openctl-k3s/internal/agent/client"
 	"github.com/openctl/openctl-k3s/internal/cluster"
 	"github.com/openctl/openctl-k3s/internal/resources"
 	"github.com/openctl/openctl/pkg/protocol"
@@ -103,14 +106,16 @@ func (h *Handler) listClusters() (*protocol.Response, error) {
 			status = s
 		}
 
-		clusters = append(clusters, &protocol.Resource{
+		resource := &protocol.Resource{
 			APIVersion: "k3s.openctl.io/v1",
 			Kind:       "Cluster",
 			Metadata: protocol.ResourceMetadata{
 				Name: name,
 			},
 			Status: status,
-		})
+		}
+		augmentLiveStatus(resource, status)
+		clusters = append(clusters, resource)
 	}
 
 	return &protocol.Response{
@@ -159,11 +164,146 @@ func (h *Handler) getCluster(name string) (*protocol.Response, error) {
 	if status, ok := state["status"].(map[string]any); ok {
 		resource.Status = status
 	}
+	augmentLiveStatus(resource, resource.Status)
 
 	return &protocol.Response{
 		Status:   protocol.StatusSuccess,
 		Resource: resource,
 	}, nil
+}
+
+// augmentLiveStatus probes each node's agent and folds per-node health into
+// the resource's Status. Side-effect-free with respect to disk: never mutates
+// the saved state file. If the saved state has no agent block (e.g. older
+// cluster created before the agent shipped), it's a no-op.
+func augmentLiveStatus(resource *protocol.Resource, status map[string]any) {
+	endpoints, opts, ok := extractAgentProbeConfig(status)
+	if !ok {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	results, err := agentclient.ProbeNodes(ctx, opts, endpoints)
+	if err != nil {
+		// Couldn't load cert material — surface as a single warning, no node detail.
+		setStatusField(resource, "health", "unknown")
+		setStatusField(resource, "healthMessage", "agent probe failed: "+err.Error())
+		return
+	}
+
+	nodes := make([]map[string]any, 0, len(results))
+	healthy := 0
+	var skews []string
+	for _, r := range results {
+		entry := map[string]any{
+			"name":      r.Name,
+			"ip":        r.IP,
+			"reachable": r.Reachable,
+		}
+		if r.Reachable {
+			healthy++
+			entry["k3sStatus"] = r.Info.K3sStatus
+			entry["agentVersion"] = r.Info.AgentVersion
+			entry["arch"] = r.Info.Arch
+			entry["init"] = r.Info.Init
+			entry["distro"] = r.Info.Distro
+			entry["kernel"] = r.Info.Kernel
+			entry["capabilities"] = r.Info.Capabilities
+			if r.Info.AgentVersion != agent.Version {
+				skews = append(skews, fmt.Sprintf("%s (%s)", r.Name, r.Info.AgentVersion))
+			}
+		} else {
+			entry["error"] = r.Error
+		}
+		nodes = append(nodes, entry)
+	}
+
+	health := "healthy"
+	switch {
+	case healthy == 0:
+		health = "down"
+	case healthy < len(results):
+		health = "degraded"
+	}
+
+	setStatusField(resource, "nodes", nodes)
+	setStatusField(resource, "health", health)
+	setStatusField(resource, "healthMessage", fmt.Sprintf("%d/%d nodes reachable", healthy, len(results)))
+
+	if len(skews) > 0 {
+		setStatusField(resource, "agentVersionSkew", skews)
+		setStatusField(resource, "expectedAgentVersion", agent.Version)
+		fmt.Fprintf(os.Stderr,
+			"warning: agent version skew on %d node(s) (plugin expects %q): %s\n",
+			len(skews), agent.Version, strings.Join(skews, ", "))
+	}
+}
+
+// extractAgentProbeConfig pulls the agent block out of a saved status map and
+// returns the inputs ProbeNodes needs. Returns ok=false if the cluster
+// doesn't have an agent block (pre-agent clusters, or partial create).
+func extractAgentProbeConfig(status map[string]any) (map[string]string, agentclient.ProbeOptions, bool) {
+	outputs, ok := status["outputs"].(map[string]any)
+	if !ok {
+		return nil, agentclient.ProbeOptions{}, false
+	}
+	agentBlock, ok := outputs["agent"].(map[string]any)
+	if !ok {
+		return nil, agentclient.ProbeOptions{}, false
+	}
+
+	opts := agentclient.ProbeOptions{
+		CAPath:         stringField(agentBlock, "caPath"),
+		ClientCertPath: stringField(agentBlock, "clientCertPath"),
+		ClientKeyPath:  stringField(agentBlock, "clientKeyPath"),
+		Port:           intField(agentBlock, "port"),
+	}
+	if opts.CAPath == "" || opts.ClientCertPath == "" || opts.ClientKeyPath == "" {
+		return nil, agentclient.ProbeOptions{}, false
+	}
+
+	endpointsRaw, ok := agentBlock["endpoints"].(map[string]any)
+	if !ok {
+		return nil, agentclient.ProbeOptions{}, false
+	}
+	endpoints := make(map[string]string, len(endpointsRaw))
+	for name, ip := range endpointsRaw {
+		if s, ok := ip.(string); ok {
+			endpoints[name] = s
+		}
+	}
+	if len(endpoints) == 0 {
+		return nil, agentclient.ProbeOptions{}, false
+	}
+
+	return endpoints, opts, true
+}
+
+func stringField(m map[string]any, key string) string {
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+func intField(m map[string]any, key string) int {
+	switch v := m[key].(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	}
+	return 0
+}
+
+func setStatusField(resource *protocol.Resource, key string, value any) {
+	if resource.Status == nil {
+		resource.Status = map[string]any{}
+	}
+	resource.Status[key] = value
 }
 
 func (h *Handler) createCluster(req *protocol.Request) (*protocol.Response, error) {
@@ -456,6 +596,16 @@ func (h *Handler) installK3sOnCluster(name string, spec *resources.ClusterSpec, 
 	outputs := map[string]any{
 		"kubeconfigPath": result.KubeconfigPath,
 		"serverIP":       result.ServerIP,
+	}
+	if result.AgentBundleDir != "" {
+		outputs["agent"] = map[string]any{
+			"bundleDir":      result.AgentBundleDir,
+			"caPath":         filepath.Join(result.AgentBundleDir, "ca.pem"),
+			"clientCertPath": filepath.Join(result.AgentBundleDir, "client.pem"),
+			"clientKeyPath":  filepath.Join(result.AgentBundleDir, "client.key"),
+			"port":           result.AgentPort,
+			"endpoints":      result.AgentEndpoints,
+		}
 	}
 
 	return &protocol.Response{

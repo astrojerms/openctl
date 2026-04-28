@@ -1,0 +1,14 @@
+[Unit]
+Description=openctl k3s node agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/openctl-k3s-agent --listen :9443 --cert /etc/openctl-k3s-agent/server.pem --key /etc/openctl-k3s-agent/server.key --ca /etc/openctl-k3s-agent/ca.pem
+Restart=on-failure
+RestartSec=5s
+User=root
+
+[Install]
+WantedBy=multi-user.target

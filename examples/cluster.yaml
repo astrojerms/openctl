@@ -1,0 +1,39 @@
+apiVersion: k3s.openctl.io/v1
+kind: Cluster
+metadata:
+  name: dev
+  labels:
+    environment: homelab
+spec:
+  compute:
+    provider: proxmox
+    image:
+      template: ubuntu-22.04-cloudinit
+      storage: local-lvm
+    default:
+      cpus: 2
+      memoryMB: 4096
+      diskGB: 30
+  nodes:
+    controlPlane:
+      count: 1
+    workers:
+      - name: worker
+        count: 1
+  network:
+    bridge: vmbr0
+    # Static IPs are recommended over DHCP because the proxmox plugin reads
+    # IPs via the QEMU guest agent, which isn't installed in stock cloud
+    # images. The k3s plugin allocates IPs sequentially starting at startIP.
+    staticIPs:
+      startIP: 192.168.1.100
+      gateway: 192.168.1.1
+      netmask: "24"
+  k3s:
+    extraArgs:
+      - --disable=traefik
+  ssh:
+    user: ubuntu
+    privateKeyPath: ~/.ssh/id_ed25519
+    publicKeys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample user@host

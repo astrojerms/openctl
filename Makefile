@@ -1,9 +1,10 @@
-.PHONY: all build build-cli build-plugins build-plugin-proxmox build-plugin-k3s install clean test test-e2e fmt lint modernize modernize-check
+.PHONY: all build build-cli build-plugins build-plugin-proxmox build-plugin-k3s build-plugin-k3s-agent build-plugin-k3s-agent-linux install clean test test-e2e fmt lint modernize modernize-check
 
 # Binary names
 CLI_BINARY=openctl
 PLUGIN_PROXMOX_BINARY=openctl-proxmox
 PLUGIN_K3S_BINARY=openctl-k3s
+PLUGIN_K3S_AGENT_BINARY=openctl-k3s-agent
 
 # Build directories
 BUILD_DIR=bin
@@ -35,28 +36,52 @@ build-plugin-k3s:
 	@mkdir -p $(BUILD_DIR)
 	cd $(K3S_PLUGIN_DIR) && go build $(GOFLAGS) -o ../../$(BUILD_DIR)/$(PLUGIN_K3S_BINARY) ./cmd/openctl-k3s
 
-install: build
+# Build the k3s agent for the host platform (for local dev/testing).
+build-plugin-k3s-agent:
+	@echo "Building openctl-k3s-agent (native)..."
+	@mkdir -p $(BUILD_DIR)
+	cd $(K3S_PLUGIN_DIR) && go build $(GOFLAGS) -o ../../$(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY) ./cmd/openctl-k3s-agent
+
+# Cross-compile the k3s agent for all Linux architectures we deploy to.
+# These artifacts get uploaded to k3s nodes during cluster create.
+build-plugin-k3s-agent-linux:
+	@echo "Building openctl-k3s-agent for linux/amd64, linux/arm64, linux/arm..."
+	@mkdir -p $(BUILD_DIR)
+	cd $(K3S_PLUGIN_DIR) && GOOS=linux GOARCH=amd64 go build $(GOFLAGS) -o ../../$(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-amd64 ./cmd/openctl-k3s-agent
+	cd $(K3S_PLUGIN_DIR) && GOOS=linux GOARCH=arm64 go build $(GOFLAGS) -o ../../$(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-arm64 ./cmd/openctl-k3s-agent
+	cd $(K3S_PLUGIN_DIR) && GOOS=linux GOARCH=arm GOARM=7 go build $(GOFLAGS) -o ../../$(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-armv7 ./cmd/openctl-k3s-agent
+
+install: build build-plugin-k3s-agent-linux
 	@echo "Installing binaries..."
-	@mkdir -p $(HOME)/.openctl/plugins
+	@mkdir -p $(HOME)/.openctl/plugins/k3s-agents
 	cp $(BUILD_DIR)/$(CLI_BINARY) $(GOBIN)/ 2>/dev/null || cp $(BUILD_DIR)/$(CLI_BINARY) /usr/local/bin/
 	cp $(BUILD_DIR)/$(PLUGIN_PROXMOX_BINARY) $(HOME)/.openctl/plugins/
 	cp $(BUILD_DIR)/$(PLUGIN_K3S_BINARY) $(HOME)/.openctl/plugins/
+	cp $(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-amd64 $(HOME)/.openctl/plugins/k3s-agents/
+	cp $(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-arm64 $(HOME)/.openctl/plugins/k3s-agents/
+	cp $(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-armv7 $(HOME)/.openctl/plugins/k3s-agents/
 
 install-cli: build-cli
 	cp $(BUILD_DIR)/$(CLI_BINARY) $(GOBIN)/ 2>/dev/null || cp $(BUILD_DIR)/$(CLI_BINARY) /usr/local/bin/
 
-install-plugins: build-plugins
-	@mkdir -p $(HOME)/.openctl/plugins
+install-plugins: build-plugins build-plugin-k3s-agent-linux
+	@mkdir -p $(HOME)/.openctl/plugins/k3s-agents
 	cp $(BUILD_DIR)/$(PLUGIN_PROXMOX_BINARY) $(HOME)/.openctl/plugins/
 	cp $(BUILD_DIR)/$(PLUGIN_K3S_BINARY) $(HOME)/.openctl/plugins/
+	cp $(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-amd64 $(HOME)/.openctl/plugins/k3s-agents/
+	cp $(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-arm64 $(HOME)/.openctl/plugins/k3s-agents/
+	cp $(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-armv7 $(HOME)/.openctl/plugins/k3s-agents/
 
 install-plugin-proxmox: build-plugin-proxmox
 	@mkdir -p $(HOME)/.openctl/plugins
 	cp $(BUILD_DIR)/$(PLUGIN_PROXMOX_BINARY) $(HOME)/.openctl/plugins/
 
-install-plugin-k3s: build-plugin-k3s
-	@mkdir -p $(HOME)/.openctl/plugins
+install-plugin-k3s: build-plugin-k3s build-plugin-k3s-agent-linux
+	@mkdir -p $(HOME)/.openctl/plugins/k3s-agents
 	cp $(BUILD_DIR)/$(PLUGIN_K3S_BINARY) $(HOME)/.openctl/plugins/
+	cp $(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-amd64 $(HOME)/.openctl/plugins/k3s-agents/
+	cp $(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-arm64 $(HOME)/.openctl/plugins/k3s-agents/
+	cp $(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-armv7 $(HOME)/.openctl/plugins/k3s-agents/
 
 clean:
 	@echo "Cleaning..."
