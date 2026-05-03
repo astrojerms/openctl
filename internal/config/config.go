@@ -12,8 +12,24 @@ import (
 
 // Config represents the openctl configuration file
 type Config struct {
-	Defaults  Defaults             `yaml:"defaults"`
-	Providers map[string]*Provider `yaml:"providers"`
+	Defaults   Defaults             `yaml:"defaults"`
+	Providers  map[string]*Provider `yaml:"providers"`
+	Controller *Controller          `yaml:"controller,omitempty"`
+}
+
+// Controller is how the CLI talks to the controller daemon. Empty fields
+// fall back to the local-Mac defaults (~/.openctl/controller/...) so a
+// freshly-installed local controller works with no config tweaks.
+type Controller struct {
+	// URL is the controller's gRPC endpoint, optionally with https:// prefix
+	// (which is stripped). Defaults to 127.0.0.1:9444.
+	URL string `yaml:"url"`
+	// TokenFile is the path to the API token file (mode 0600). Defaults to
+	// ~/.openctl/controller/token.
+	TokenFile string `yaml:"tokenFile"`
+	// CAFile is the path to the controller's CA cert in PEM. Defaults to
+	// ~/.openctl/controller/tls/ca.crt.
+	CAFile string `yaml:"caFile"`
 }
 
 // Defaults contains global default settings

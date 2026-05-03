@@ -1,7 +1,8 @@
-.PHONY: all build build-cli build-plugins build-plugin-proxmox build-plugin-k3s build-plugin-k3s-agent build-plugin-k3s-agent-linux install clean test test-e2e fmt lint modernize modernize-check
+.PHONY: all build build-cli build-controller build-plugins build-plugin-proxmox build-plugin-k3s build-plugin-k3s-agent build-plugin-k3s-agent-linux install clean test test-e2e fmt lint modernize modernize-check generate
 
 # Binary names
 CLI_BINARY=openctl
+CONTROLLER_BINARY=openctl-controller
 PLUGIN_PROXMOX_BINARY=openctl-proxmox
 PLUGIN_K3S_BINARY=openctl-k3s
 PLUGIN_K3S_AGENT_BINARY=openctl-k3s-agent
@@ -17,12 +18,17 @@ export GOWORK=off
 
 all: build
 
-build: build-cli build-plugins
+build: build-cli build-controller build-plugins
 
 build-cli:
 	@echo "Building openctl CLI..."
 	@mkdir -p $(BUILD_DIR)
 	go build $(GOFLAGS) -o $(BUILD_DIR)/$(CLI_BINARY) ./cmd/openctl
+
+build-controller:
+	@echo "Building openctl-controller..."
+	@mkdir -p $(BUILD_DIR)
+	go build $(GOFLAGS) -o $(BUILD_DIR)/$(CONTROLLER_BINARY) ./cmd/openctl-controller
 
 build-plugins: build-plugin-proxmox build-plugin-k3s
 
@@ -55,6 +61,7 @@ install: build build-plugin-k3s-agent-linux
 	@echo "Installing binaries..."
 	@mkdir -p $(HOME)/.openctl/plugins/k3s-agents
 	cp $(BUILD_DIR)/$(CLI_BINARY) $(GOBIN)/ 2>/dev/null || cp $(BUILD_DIR)/$(CLI_BINARY) /usr/local/bin/
+	cp $(BUILD_DIR)/$(CONTROLLER_BINARY) $(GOBIN)/ 2>/dev/null || cp $(BUILD_DIR)/$(CONTROLLER_BINARY) /usr/local/bin/
 	cp $(BUILD_DIR)/$(PLUGIN_PROXMOX_BINARY) $(HOME)/.openctl/plugins/
 	cp $(BUILD_DIR)/$(PLUGIN_K3S_BINARY) $(HOME)/.openctl/plugins/
 	cp $(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-amd64 $(HOME)/.openctl/plugins/k3s-agents/
@@ -111,6 +118,16 @@ deps:
 	go mod tidy
 	cd $(PROXMOX_PLUGIN_DIR) && go mod download && go mod tidy
 	cd $(K3S_PLUGIN_DIR) && go mod download && go mod tidy
+
+# Regenerate gRPC bindings from .proto files. Requires protoc + the Go
+# plugins (see DEVELOPMENT.md for install instructions). The generated
+# files are committed so building the project doesn't require protoc.
+generate:
+	@echo "Regenerating gRPC bindings..."
+	protoc --proto_path=pkg/api/v1 \
+		--go_out=pkg/api/v1 --go_opt=paths=source_relative \
+		--go-grpc_out=pkg/api/v1 --go-grpc_opt=paths=source_relative \
+		pkg/api/v1/api.proto
 
 # Modernize code using latest Go idioms
 modernize:

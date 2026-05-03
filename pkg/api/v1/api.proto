@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package openctl.v1;
+
+option go_package = "github.com/openctl/openctl/pkg/api/v1;apiv1";
+
+// PingService is the trivial smoke-test surface for the controller. It
+// exists from Phase 1 onwards as a way to verify TLS, auth, and the gRPC
+// pipeline end-to-end without depending on any provider code. ResourceService
+// and OperationService will land in later phases.
+service PingService {
+  // Ping echoes the caller's message and returns the server's version. Used
+  // for health checks and `openctl ping`.
+  rpc Ping(PingRequest) returns (PingResponse);
+}
+
+message PingRequest {
+  // Optional caller-supplied string echoed back in the response. Useful for
+  // verifying request/response correlation in scripted checks.
+  string message = 1;
+}
+
+message PingResponse {
+  // The caller's `message`, echoed verbatim.
+  string echo = 1;
+  // Semver-ish version string of the controller binary.
+  string server_version = 2;
+}
