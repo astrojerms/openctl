@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/openctl/openctl-proxmox/internal/handler"
+	"github.com/openctl/openctl/pkg/proxmox/handler"
 	"github.com/openctl/openctl/pkg/protocol"
 )
 

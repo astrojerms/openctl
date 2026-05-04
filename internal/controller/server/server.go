@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/reflection"
 
 	"github.com/openctl/openctl/internal/controller/auth"
+	"github.com/openctl/openctl/internal/controller/providers"
 	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 )
 
@@ -21,12 +22,15 @@ import (
 const ServerVersion = "0.1.0-controller"
 
 // Options configures a Server. Token may be empty to disable auth (used for
-// `--no-auth` localhost-only setups).
+// `--no-auth` localhost-only setups). Registry may be nil; the resource
+// service still registers but every call will error with "no provider
+// registered" until at least one provider is attached.
 type Options struct {
 	Listen   string
 	CertFile string
 	KeyFile  string
 	Token    string
+	Registry *providers.Registry
 }
 
 // Server is the controller's gRPC server.
@@ -57,6 +61,13 @@ func New(opts Options) (*Server, error) {
 
 	g := grpc.NewServer(srvOpts...)
 	apiv1.RegisterPingServiceServer(g, &pingHandler{})
+
+	registry := opts.Registry
+	if registry == nil {
+		registry = providers.NewRegistry()
+	}
+	apiv1.RegisterResourceServiceServer(g, newResourceHandler(registry))
+
 	reflection.Register(g)
 
 	return &Server{opts: opts, grpc: g}, nil

@@ -107,6 +107,7 @@ func init() {
 	rootCmd.AddCommand(newVersionCommand())
 	rootCmd.AddCommand(newStateCommand())
 	rootCmd.AddCommand(newPingCommand())
+	rootCmd.AddCommand(newCtlCommand())
 
 	addProviderCommands()
 }

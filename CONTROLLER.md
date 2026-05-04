@@ -137,29 +137,47 @@ No providers, no operations, no persistence beyond auth material.
 
 ### Phase 2: First provider compiled in (proxmox VirtualMachine)
 
-**Status:** pending
+**Status:** complete
 
 **Goals:** prove the provider-as-Go-interface model works. Synchronous
 apply for atomic VMs; CUE schema validation on both ends.
 
 **Deliverables:**
 
-- [ ] Define `Provider` Go interface (Apply, Get, List, Delete).
-- [ ] `internal/controller/providers/proxmox` — proxmox provider as a
-      Go package, reusing existing client from `plugins/proxmox/internal/client`.
-- [ ] `pkg/api/v1` — `ResourceService` proto with Apply/Get/List/Delete RPCs.
-- [ ] CUE schema for VirtualMachine, embedded in both controller and CLI;
-      both validate.
-- [ ] Controller routes RPCs to the right provider based on
-      `apiVersion`/`kind`.
-- [ ] CLI: `openctl proxmox apply -f vm.yaml`, `openctl proxmox get vms`,
-      `openctl proxmox delete vms <name>`.
-- [ ] Tests: mock proxmox API; verify apply round-trips; CUE validation
-      catches a bad manifest before submission.
+- [x] Define `Provider` Go interface (Apply, Get, List, Delete) +
+      `Registry` for apiVersion → Provider routing.
+- [x] Refactor: `plugins/proxmox/internal/{client,resources,handler}` →
+      `pkg/proxmox/{client,resources,handler}` so both the legacy
+      exec'd plugin and the controller's in-process provider use the
+      same code (deduped before Phase 6 rather than after).
+- [x] `internal/controller/providers/proxmox` — proxmox provider as a
+      Go package implementing the Provider interface, adapting to
+      `pkg/proxmox/handler`.
+- [x] `pkg/api/v1` — `ResourceService` proto with Apply/Get/List/Delete
+      RPCs using `google.protobuf.Struct` for spec/status.
+- [x] CUE schema for VirtualMachine — already embedded under
+      `internal/schema/schemas/proxmox/vm.cue`. Added
+      `schema.Validate(*protocol.Resource)` shared by CLI and controller.
+- [x] Controller routes RPCs to the right provider based on
+      `apiVersion`/`kind` via the registry.
+- [x] CLI: `openctl ctl apply -f`, `openctl ctl get <kind>`,
+      `openctl ctl delete <kind> <name>` — all routed through the
+      controller. Coexists with the legacy exec-plugin commands until
+      Phase 6 cleanup.
+- [x] Controller startup loads `~/.openctl/config.yaml` and
+      auto-registers the proxmox provider from the default context.
+- [x] Tests: provider unit tests (mock proxmox API for List/Get/Delete);
+      registry routing tests; resource-service integration tests
+      (in-process server with fake provider over real gRPC + TLS); CUE
+      validation positive + negative tests.
 
-**Verifiable:** `openctl proxmox apply -f preflight-vm.yaml` creates a real
-VM via the controller; `openctl proxmox get vms` lists it from SQLite-backed
-state.
+**Verifiable:** `openctl ctl apply --file vm.yaml` against a running
+controller submits a VirtualMachine. The controller validates against the
+embedded CUE schema, routes to the proxmox provider, calls Proxmox via the
+shared `pkg/proxmox/handler`, and returns the created resource.
+`openctl ctl get VirtualMachine --api-version proxmox.openctl.io/v1` lists
+VMs through the same path. End-to-end smoke against real Proxmox is left
+for the user since it creates real infrastructure.
 
 ---
 

@@ -3,7 +3,7 @@ package resources
 import (
 	"testing"
 
-	"github.com/openctl/openctl-proxmox/internal/client"
+	"github.com/openctl/openctl/pkg/proxmox/client"
 	"github.com/openctl/openctl/pkg/protocol"
 )
 

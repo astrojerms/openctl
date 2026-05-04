@@ -26,13 +26,11 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// PingService is the trivial smoke-test surface for the controller. It
-// exists from Phase 1 onwards as a way to verify TLS, auth, and the gRPC
-// pipeline end-to-end without depending on any provider code. ResourceService
-// and OperationService will land in later phases.
+// PingService is the trivial smoke-test surface for the controller. Used by
+// `openctl ping` to verify TLS + auth + the gRPC pipeline end-to-end without
+// depending on any provider code.
 type PingServiceClient interface {
-	// Ping echoes the caller's message and returns the server's version. Used
-	// for health checks and `openctl ping`.
+	// Ping echoes the caller's message and returns the server's version.
 	Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PingResponse, error)
 }
 
@@ -58,13 +56,11 @@ func (c *pingServiceClient) Ping(ctx context.Context, in *PingRequest, opts ...g
 // All implementations must embed UnimplementedPingServiceServer
 // for forward compatibility.
 //
-// PingService is the trivial smoke-test surface for the controller. It
-// exists from Phase 1 onwards as a way to verify TLS, auth, and the gRPC
-// pipeline end-to-end without depending on any provider code. ResourceService
-// and OperationService will land in later phases.
+// PingService is the trivial smoke-test surface for the controller. Used by
+// `openctl ping` to verify TLS + auth + the gRPC pipeline end-to-end without
+// depending on any provider code.
 type PingServiceServer interface {
-	// Ping echoes the caller's message and returns the server's version. Used
-	// for health checks and `openctl ping`.
+	// Ping echoes the caller's message and returns the server's version.
 	Ping(context.Context, *PingRequest) (*PingResponse, error)
 	mustEmbedUnimplementedPingServiceServer()
 }
@@ -128,6 +124,252 @@ var PingService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Ping",
 			Handler:    _PingService_Ping_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "api.proto",
+}
+
+const (
+	ResourceService_Apply_FullMethodName  = "/openctl.v1.ResourceService/Apply"
+	ResourceService_Get_FullMethodName    = "/openctl.v1.ResourceService/Get"
+	ResourceService_List_FullMethodName   = "/openctl.v1.ResourceService/List"
+	ResourceService_Delete_FullMethodName = "/openctl.v1.ResourceService/Delete"
+)
+
+// ResourceServiceClient is the client API for ResourceService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// ResourceService is the controller's primary surface for managing resources
+// declaratively. From Phase 2 it operates synchronously per the
+// no-op-on-existing semantics; Phase 3 adds async dispatch via OperationService
+// for long-running applies (Cluster create, etc).
+//
+// Phase 2 supports atomic resources (VirtualMachine). Phase 4 adds composite
+// resources (Cluster) which spawn child operations.
+type ResourceServiceClient interface {
+	// Apply creates a resource. Phase 2 is no-op-on-existing: if a resource
+	// with the manifest's name already exists, the response carries its
+	// observed state without mutating it.
+	Apply(ctx context.Context, in *ApplyRequest, opts ...grpc.CallOption) (*ApplyResponse, error)
+	// Get returns the observed state of a single resource.
+	Get(ctx context.Context, in *GetRequest, opts ...grpc.CallOption) (*GetResponse, error)
+	// List returns all resources of a kind.
+	List(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error)
+	// Delete removes a resource. Idempotent: delete on a missing resource
+	// returns success, not NotFound.
+	Delete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (*DeleteResponse, error)
+}
+
+type resourceServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewResourceServiceClient(cc grpc.ClientConnInterface) ResourceServiceClient {
+	return &resourceServiceClient{cc}
+}
+
+func (c *resourceServiceClient) Apply(ctx context.Context, in *ApplyRequest, opts ...grpc.CallOption) (*ApplyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ApplyResponse)
+	err := c.cc.Invoke(ctx, ResourceService_Apply_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *resourceServiceClient) Get(ctx context.Context, in *GetRequest, opts ...grpc.CallOption) (*GetResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetResponse)
+	err := c.cc.Invoke(ctx, ResourceService_Get_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *resourceServiceClient) List(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListResponse)
+	err := c.cc.Invoke(ctx, ResourceService_List_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *resourceServiceClient) Delete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (*DeleteResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteResponse)
+	err := c.cc.Invoke(ctx, ResourceService_Delete_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ResourceServiceServer is the server API for ResourceService service.
+// All implementations must embed UnimplementedResourceServiceServer
+// for forward compatibility.
+//
+// ResourceService is the controller's primary surface for managing resources
+// declaratively. From Phase 2 it operates synchronously per the
+// no-op-on-existing semantics; Phase 3 adds async dispatch via OperationService
+// for long-running applies (Cluster create, etc).
+//
+// Phase 2 supports atomic resources (VirtualMachine). Phase 4 adds composite
+// resources (Cluster) which spawn child operations.
+type ResourceServiceServer interface {
+	// Apply creates a resource. Phase 2 is no-op-on-existing: if a resource
+	// with the manifest's name already exists, the response carries its
+	// observed state without mutating it.
+	Apply(context.Context, *ApplyRequest) (*ApplyResponse, error)
+	// Get returns the observed state of a single resource.
+	Get(context.Context, *GetRequest) (*GetResponse, error)
+	// List returns all resources of a kind.
+	List(context.Context, *ListRequest) (*ListResponse, error)
+	// Delete removes a resource. Idempotent: delete on a missing resource
+	// returns success, not NotFound.
+	Delete(context.Context, *DeleteRequest) (*DeleteResponse, error)
+	mustEmbedUnimplementedResourceServiceServer()
+}
+
+// UnimplementedResourceServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedResourceServiceServer struct{}
+
+func (UnimplementedResourceServiceServer) Apply(context.Context, *ApplyRequest) (*ApplyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Apply not implemented")
+}
+func (UnimplementedResourceServiceServer) Get(context.Context, *GetRequest) (*GetResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Get not implemented")
+}
+func (UnimplementedResourceServiceServer) List(context.Context, *ListRequest) (*ListResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method List not implemented")
+}
+func (UnimplementedResourceServiceServer) Delete(context.Context, *DeleteRequest) (*DeleteResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Delete not implemented")
+}
+func (UnimplementedResourceServiceServer) mustEmbedUnimplementedResourceServiceServer() {}
+func (UnimplementedResourceServiceServer) testEmbeddedByValue()                         {}
+
+// UnsafeResourceServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to ResourceServiceServer will
+// result in compilation errors.
+type UnsafeResourceServiceServer interface {
+	mustEmbedUnimplementedResourceServiceServer()
+}
+
+func RegisterResourceServiceServer(s grpc.ServiceRegistrar, srv ResourceServiceServer) {
+	// If the following call panics, it indicates UnimplementedResourceServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&ResourceService_ServiceDesc, srv)
+}
+
+func _ResourceService_Apply_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ApplyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ResourceServiceServer).Apply(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ResourceService_Apply_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ResourceServiceServer).Apply(ctx, req.(*ApplyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ResourceService_Get_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ResourceServiceServer).Get(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ResourceService_Get_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ResourceServiceServer).Get(ctx, req.(*GetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ResourceService_List_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ResourceServiceServer).List(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ResourceService_List_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ResourceServiceServer).List(ctx, req.(*ListRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ResourceService_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ResourceServiceServer).Delete(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ResourceService_Delete_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ResourceServiceServer).Delete(ctx, req.(*DeleteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// ResourceService_ServiceDesc is the grpc.ServiceDesc for ResourceService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var ResourceService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "openctl.v1.ResourceService",
+	HandlerType: (*ResourceServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Apply",
+			Handler:    _ResourceService_Apply_Handler,
+		},
+		{
+			MethodName: "Get",
+			Handler:    _ResourceService_Get_Handler,
+		},
+		{
+			MethodName: "List",
+			Handler:    _ResourceService_List_Handler,
+		},
+		{
+			MethodName: "Delete",
+			Handler:    _ResourceService_Delete_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

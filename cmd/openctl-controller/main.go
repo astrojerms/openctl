@@ -14,7 +14,10 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/openctl/openctl/internal/config"
 	"github.com/openctl/openctl/internal/controller/auth"
+	"github.com/openctl/openctl/internal/controller/providers"
+	pmprovider "github.com/openctl/openctl/internal/controller/providers/proxmox"
 	"github.com/openctl/openctl/internal/controller/server"
 	"github.com/openctl/openctl/internal/controller/storage"
 	tlspkg "github.com/openctl/openctl/internal/controller/tls"
@@ -97,10 +100,16 @@ func runServe(args []string) error {
 	}
 	defer func() { _ = db.Close() }()
 
+	registry, registered, err := buildRegistry()
+	if err != nil {
+		return err
+	}
+
 	opts := server.Options{
 		Listen:   *listen,
 		CertFile: mat.ServerCertPath,
 		KeyFile:  mat.ServerKeyPath,
+		Registry: registry,
 	}
 	if !*noAuth {
 		opts.Token = token
@@ -112,12 +121,19 @@ func runServe(args []string) error {
 	}
 
 	log.Printf("openctl-controller %s listening on %s", server.ServerVersion, *listen)
-	log.Printf("  state dir: %s", *dir)
-	log.Printf("  ca cert:   %s", mat.CACertPath)
+	log.Printf("  state dir:   %s", *dir)
+	log.Printf("  ca cert:     %s", mat.CACertPath)
 	if *noAuth {
-		log.Printf("  auth:      DISABLED (--no-auth)")
+		log.Printf("  auth:        DISABLED (--no-auth)")
 	} else {
-		log.Printf("  token:     %s", tokenPath)
+		log.Printf("  token:       %s", tokenPath)
+	}
+	if len(registered) == 0 {
+		log.Printf("  providers:   (none — add a `proxmox:` section to ~/.openctl/config.yaml to enable)")
+	} else {
+		for _, name := range registered {
+			log.Printf("  provider:    %s", name)
+		}
 	}
 
 	errCh := make(chan error, 1)
@@ -141,4 +157,36 @@ func defaultDir() string {
 		return "./openctl-controller"
 	}
 	return filepath.Join(home, ".openctl", "controller")
+}
+
+// buildRegistry constructs the Provider registry from ~/.openctl/config.yaml.
+// Currently registers only the proxmox provider, using the default context's
+// credentials. Returns the registry plus a list of registered provider names
+// for logging.
+//
+// If the config file or proxmox section is missing, the registry is left
+// empty — the controller still starts; resource RPCs will return errors
+// pointing the user at the missing config.
+func buildRegistry() (*providers.Registry, []string, error) {
+	registry := providers.NewRegistry()
+	var names []string
+
+	cfg, err := config.Load()
+	if err != nil {
+		// Missing config file is acceptable — controller starts empty.
+		return registry, nil, nil
+	}
+
+	if _, ok := cfg.Providers["proxmox"]; ok {
+		pcfg, err := cfg.GetProviderConfig("proxmox", "")
+		if err != nil {
+			return nil, nil, fmt.Errorf("load proxmox config: %w", err)
+		}
+		if pcfg.Endpoint != "" {
+			registry.Register(pmprovider.New(pcfg))
+			names = append(names, "proxmox")
+		}
+	}
+
+	return registry, names, nil
 }

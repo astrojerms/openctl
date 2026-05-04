@@ -52,9 +52,14 @@ func runPing(ctx context.Context) error {
 	return nil
 }
 
-// dialController returns a gRPC client connection to the controller plus the
+// DialController returns a gRPC client connection to the controller plus the
 // API token to send on each request. Defaults match the local-Mac install
-// layout so a fresh controller works without any config edits.
+// layout so a fresh controller works without any config edits. Exported so
+// other CLI commands (apply/get/delete) reuse the same connection setup.
+func DialController() (*grpc.ClientConn, string, error) {
+	return dialController()
+}
+
 func dialController() (*grpc.ClientConn, string, error) {
 	cc := globalConfig.Controller
 	if cc == nil {

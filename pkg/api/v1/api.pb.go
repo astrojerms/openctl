@@ -9,6 +9,7 @@ package apiv1
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	structpb "google.golang.org/protobuf/types/known/structpb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -23,8 +24,8 @@ const (
 
 type PingRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Optional caller-supplied string echoed back in the response. Useful for
-	// verifying request/response correlation in scripted checks.
+	// Optional caller-supplied string echoed back. Useful for correlating
+	// requests/responses in scripted checks.
 	Message       string `protobuf:"bytes,1,opt,name=message,proto3" json:"message,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -121,19 +122,607 @@ func (x *PingResponse) GetServerVersion() string {
 	return ""
 }
 
+// Resource is the k8s-style envelope for any resource kind. spec/status are
+// generic structured values to keep the proto kind-agnostic.
+type Resource struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ApiVersion    string                 `protobuf:"bytes,1,opt,name=api_version,json=apiVersion,proto3" json:"api_version,omitempty"` // e.g. "proxmox.openctl.io/v1"
+	Kind          string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`                               // e.g. "VirtualMachine"
+	Metadata      *Metadata              `protobuf:"bytes,3,opt,name=metadata,proto3" json:"metadata,omitempty"`
+	Spec          *structpb.Struct       `protobuf:"bytes,4,opt,name=spec,proto3" json:"spec,omitempty"`
+	Status        *structpb.Struct       `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Resource) Reset() {
+	*x = Resource{}
+	mi := &file_api_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Resource) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Resource) ProtoMessage() {}
+
+func (x *Resource) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Resource.ProtoReflect.Descriptor instead.
+func (*Resource) Descriptor() ([]byte, []int) {
+	return file_api_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *Resource) GetApiVersion() string {
+	if x != nil {
+		return x.ApiVersion
+	}
+	return ""
+}
+
+func (x *Resource) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *Resource) GetMetadata() *Metadata {
+	if x != nil {
+		return x.Metadata
+	}
+	return nil
+}
+
+func (x *Resource) GetSpec() *structpb.Struct {
+	if x != nil {
+		return x.Spec
+	}
+	return nil
+}
+
+func (x *Resource) GetStatus() *structpb.Struct {
+	if x != nil {
+		return x.Status
+	}
+	return nil
+}
+
+type Metadata struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Labels        map[string]string      `protobuf:"bytes,2,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Annotations   map[string]string      `protobuf:"bytes,3,rep,name=annotations,proto3" json:"annotations,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Metadata) Reset() {
+	*x = Metadata{}
+	mi := &file_api_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Metadata) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Metadata) ProtoMessage() {}
+
+func (x *Metadata) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Metadata.ProtoReflect.Descriptor instead.
+func (*Metadata) Descriptor() ([]byte, []int) {
+	return file_api_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *Metadata) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *Metadata) GetLabels() map[string]string {
+	if x != nil {
+		return x.Labels
+	}
+	return nil
+}
+
+func (x *Metadata) GetAnnotations() map[string]string {
+	if x != nil {
+		return x.Annotations
+	}
+	return nil
+}
+
+type ApplyRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Resource      *Resource              `protobuf:"bytes,1,opt,name=resource,proto3" json:"resource,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ApplyRequest) Reset() {
+	*x = ApplyRequest{}
+	mi := &file_api_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApplyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApplyRequest) ProtoMessage() {}
+
+func (x *ApplyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApplyRequest.ProtoReflect.Descriptor instead.
+func (*ApplyRequest) Descriptor() ([]byte, []int) {
+	return file_api_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *ApplyRequest) GetResource() *Resource {
+	if x != nil {
+		return x.Resource
+	}
+	return nil
+}
+
+type ApplyResponse struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Resource *Resource              `protobuf:"bytes,1,opt,name=resource,proto3" json:"resource,omitempty"`
+	// Human-friendly message describing what happened (e.g. "VM web-01 created"
+	// or "VM web-01 already exists; spec drift surfaced").
+	Message       string `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ApplyResponse) Reset() {
+	*x = ApplyResponse{}
+	mi := &file_api_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApplyResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApplyResponse) ProtoMessage() {}
+
+func (x *ApplyResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApplyResponse.ProtoReflect.Descriptor instead.
+func (*ApplyResponse) Descriptor() ([]byte, []int) {
+	return file_api_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *ApplyResponse) GetResource() *Resource {
+	if x != nil {
+		return x.Resource
+	}
+	return nil
+}
+
+func (x *ApplyResponse) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+type GetRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ApiVersion    string                 `protobuf:"bytes,1,opt,name=api_version,json=apiVersion,proto3" json:"api_version,omitempty"`
+	Kind          string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`
+	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetRequest) Reset() {
+	*x = GetRequest{}
+	mi := &file_api_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetRequest) ProtoMessage() {}
+
+func (x *GetRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetRequest.ProtoReflect.Descriptor instead.
+func (*GetRequest) Descriptor() ([]byte, []int) {
+	return file_api_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *GetRequest) GetApiVersion() string {
+	if x != nil {
+		return x.ApiVersion
+	}
+	return ""
+}
+
+func (x *GetRequest) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *GetRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type GetResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Resource      *Resource              `protobuf:"bytes,1,opt,name=resource,proto3" json:"resource,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetResponse) Reset() {
+	*x = GetResponse{}
+	mi := &file_api_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetResponse) ProtoMessage() {}
+
+func (x *GetResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetResponse.ProtoReflect.Descriptor instead.
+func (*GetResponse) Descriptor() ([]byte, []int) {
+	return file_api_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *GetResponse) GetResource() *Resource {
+	if x != nil {
+		return x.Resource
+	}
+	return nil
+}
+
+type ListRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ApiVersion    string                 `protobuf:"bytes,1,opt,name=api_version,json=apiVersion,proto3" json:"api_version,omitempty"`
+	Kind          string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListRequest) Reset() {
+	*x = ListRequest{}
+	mi := &file_api_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListRequest) ProtoMessage() {}
+
+func (x *ListRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListRequest.ProtoReflect.Descriptor instead.
+func (*ListRequest) Descriptor() ([]byte, []int) {
+	return file_api_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ListRequest) GetApiVersion() string {
+	if x != nil {
+		return x.ApiVersion
+	}
+	return ""
+}
+
+func (x *ListRequest) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+type ListResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Resources     []*Resource            `protobuf:"bytes,1,rep,name=resources,proto3" json:"resources,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListResponse) Reset() {
+	*x = ListResponse{}
+	mi := &file_api_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListResponse) ProtoMessage() {}
+
+func (x *ListResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListResponse.ProtoReflect.Descriptor instead.
+func (*ListResponse) Descriptor() ([]byte, []int) {
+	return file_api_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ListResponse) GetResources() []*Resource {
+	if x != nil {
+		return x.Resources
+	}
+	return nil
+}
+
+type DeleteRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ApiVersion    string                 `protobuf:"bytes,1,opt,name=api_version,json=apiVersion,proto3" json:"api_version,omitempty"`
+	Kind          string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`
+	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteRequest) Reset() {
+	*x = DeleteRequest{}
+	mi := &file_api_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteRequest) ProtoMessage() {}
+
+func (x *DeleteRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteRequest.ProtoReflect.Descriptor instead.
+func (*DeleteRequest) Descriptor() ([]byte, []int) {
+	return file_api_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *DeleteRequest) GetApiVersion() string {
+	if x != nil {
+		return x.ApiVersion
+	}
+	return ""
+}
+
+func (x *DeleteRequest) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *DeleteRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type DeleteResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Message       string                 `protobuf:"bytes,1,opt,name=message,proto3" json:"message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteResponse) Reset() {
+	*x = DeleteResponse{}
+	mi := &file_api_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteResponse) ProtoMessage() {}
+
+func (x *DeleteResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteResponse.ProtoReflect.Descriptor instead.
+func (*DeleteResponse) Descriptor() ([]byte, []int) {
+	return file_api_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *DeleteResponse) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
 var File_api_proto protoreflect.FileDescriptor
 
 const file_api_proto_rawDesc = "" +
 	"\n" +
 	"\tapi.proto\x12\n" +
-	"openctl.v1\"'\n" +
+	"openctl.v1\x1a\x1cgoogle/protobuf/struct.proto\"'\n" +
 	"\vPingRequest\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\"I\n" +
 	"\fPingResponse\x12\x12\n" +
 	"\x04echo\x18\x01 \x01(\tR\x04echo\x12%\n" +
-	"\x0eserver_version\x18\x02 \x01(\tR\rserverVersion2H\n" +
+	"\x0eserver_version\x18\x02 \x01(\tR\rserverVersion\"\xcf\x01\n" +
+	"\bResource\x12\x1f\n" +
+	"\vapi_version\x18\x01 \x01(\tR\n" +
+	"apiVersion\x12\x12\n" +
+	"\x04kind\x18\x02 \x01(\tR\x04kind\x120\n" +
+	"\bmetadata\x18\x03 \x01(\v2\x14.openctl.v1.MetadataR\bmetadata\x12+\n" +
+	"\x04spec\x18\x04 \x01(\v2\x17.google.protobuf.StructR\x04spec\x12/\n" +
+	"\x06status\x18\x05 \x01(\v2\x17.google.protobuf.StructR\x06status\"\x9c\x02\n" +
+	"\bMetadata\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x128\n" +
+	"\x06labels\x18\x02 \x03(\v2 .openctl.v1.Metadata.LabelsEntryR\x06labels\x12G\n" +
+	"\vannotations\x18\x03 \x03(\v2%.openctl.v1.Metadata.AnnotationsEntryR\vannotations\x1a9\n" +
+	"\vLabelsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a>\n" +
+	"\x10AnnotationsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"@\n" +
+	"\fApplyRequest\x120\n" +
+	"\bresource\x18\x01 \x01(\v2\x14.openctl.v1.ResourceR\bresource\"[\n" +
+	"\rApplyResponse\x120\n" +
+	"\bresource\x18\x01 \x01(\v2\x14.openctl.v1.ResourceR\bresource\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"U\n" +
+	"\n" +
+	"GetRequest\x12\x1f\n" +
+	"\vapi_version\x18\x01 \x01(\tR\n" +
+	"apiVersion\x12\x12\n" +
+	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x12\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\"?\n" +
+	"\vGetResponse\x120\n" +
+	"\bresource\x18\x01 \x01(\v2\x14.openctl.v1.ResourceR\bresource\"B\n" +
+	"\vListRequest\x12\x1f\n" +
+	"\vapi_version\x18\x01 \x01(\tR\n" +
+	"apiVersion\x12\x12\n" +
+	"\x04kind\x18\x02 \x01(\tR\x04kind\"B\n" +
+	"\fListResponse\x122\n" +
+	"\tresources\x18\x01 \x03(\v2\x14.openctl.v1.ResourceR\tresources\"X\n" +
+	"\rDeleteRequest\x12\x1f\n" +
+	"\vapi_version\x18\x01 \x01(\tR\n" +
+	"apiVersion\x12\x12\n" +
+	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x12\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\"*\n" +
+	"\x0eDeleteResponse\x12\x18\n" +
+	"\amessage\x18\x01 \x01(\tR\amessage2H\n" +
 	"\vPingService\x129\n" +
-	"\x04Ping\x12\x17.openctl.v1.PingRequest\x1a\x18.openctl.v1.PingResponseB-Z+github.com/openctl/openctl/pkg/api/v1;apiv1b\x06proto3"
+	"\x04Ping\x12\x17.openctl.v1.PingRequest\x1a\x18.openctl.v1.PingResponse2\x83\x02\n" +
+	"\x0fResourceService\x12<\n" +
+	"\x05Apply\x12\x18.openctl.v1.ApplyRequest\x1a\x19.openctl.v1.ApplyResponse\x126\n" +
+	"\x03Get\x12\x16.openctl.v1.GetRequest\x1a\x17.openctl.v1.GetResponse\x129\n" +
+	"\x04List\x12\x17.openctl.v1.ListRequest\x1a\x18.openctl.v1.ListResponse\x12?\n" +
+	"\x06Delete\x12\x19.openctl.v1.DeleteRequest\x1a\x1a.openctl.v1.DeleteResponseB-Z+github.com/openctl/openctl/pkg/api/v1;apiv1b\x06proto3"
 
 var (
 	file_api_proto_rawDescOnce sync.Once
@@ -147,19 +736,49 @@ func file_api_proto_rawDescGZIP() []byte {
 	return file_api_proto_rawDescData
 }
 
-var file_api_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_api_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_api_proto_goTypes = []any{
-	(*PingRequest)(nil),  // 0: openctl.v1.PingRequest
-	(*PingResponse)(nil), // 1: openctl.v1.PingResponse
+	(*PingRequest)(nil),     // 0: openctl.v1.PingRequest
+	(*PingResponse)(nil),    // 1: openctl.v1.PingResponse
+	(*Resource)(nil),        // 2: openctl.v1.Resource
+	(*Metadata)(nil),        // 3: openctl.v1.Metadata
+	(*ApplyRequest)(nil),    // 4: openctl.v1.ApplyRequest
+	(*ApplyResponse)(nil),   // 5: openctl.v1.ApplyResponse
+	(*GetRequest)(nil),      // 6: openctl.v1.GetRequest
+	(*GetResponse)(nil),     // 7: openctl.v1.GetResponse
+	(*ListRequest)(nil),     // 8: openctl.v1.ListRequest
+	(*ListResponse)(nil),    // 9: openctl.v1.ListResponse
+	(*DeleteRequest)(nil),   // 10: openctl.v1.DeleteRequest
+	(*DeleteResponse)(nil),  // 11: openctl.v1.DeleteResponse
+	nil,                     // 12: openctl.v1.Metadata.LabelsEntry
+	nil,                     // 13: openctl.v1.Metadata.AnnotationsEntry
+	(*structpb.Struct)(nil), // 14: google.protobuf.Struct
 }
 var file_api_proto_depIdxs = []int32{
-	0, // 0: openctl.v1.PingService.Ping:input_type -> openctl.v1.PingRequest
-	1, // 1: openctl.v1.PingService.Ping:output_type -> openctl.v1.PingResponse
-	1, // [1:2] is the sub-list for method output_type
-	0, // [0:1] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	3,  // 0: openctl.v1.Resource.metadata:type_name -> openctl.v1.Metadata
+	14, // 1: openctl.v1.Resource.spec:type_name -> google.protobuf.Struct
+	14, // 2: openctl.v1.Resource.status:type_name -> google.protobuf.Struct
+	12, // 3: openctl.v1.Metadata.labels:type_name -> openctl.v1.Metadata.LabelsEntry
+	13, // 4: openctl.v1.Metadata.annotations:type_name -> openctl.v1.Metadata.AnnotationsEntry
+	2,  // 5: openctl.v1.ApplyRequest.resource:type_name -> openctl.v1.Resource
+	2,  // 6: openctl.v1.ApplyResponse.resource:type_name -> openctl.v1.Resource
+	2,  // 7: openctl.v1.GetResponse.resource:type_name -> openctl.v1.Resource
+	2,  // 8: openctl.v1.ListResponse.resources:type_name -> openctl.v1.Resource
+	0,  // 9: openctl.v1.PingService.Ping:input_type -> openctl.v1.PingRequest
+	4,  // 10: openctl.v1.ResourceService.Apply:input_type -> openctl.v1.ApplyRequest
+	6,  // 11: openctl.v1.ResourceService.Get:input_type -> openctl.v1.GetRequest
+	8,  // 12: openctl.v1.ResourceService.List:input_type -> openctl.v1.ListRequest
+	10, // 13: openctl.v1.ResourceService.Delete:input_type -> openctl.v1.DeleteRequest
+	1,  // 14: openctl.v1.PingService.Ping:output_type -> openctl.v1.PingResponse
+	5,  // 15: openctl.v1.ResourceService.Apply:output_type -> openctl.v1.ApplyResponse
+	7,  // 16: openctl.v1.ResourceService.Get:output_type -> openctl.v1.GetResponse
+	9,  // 17: openctl.v1.ResourceService.List:output_type -> openctl.v1.ListResponse
+	11, // 18: openctl.v1.ResourceService.Delete:output_type -> openctl.v1.DeleteResponse
+	14, // [14:19] is the sub-list for method output_type
+	9,  // [9:14] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_api_proto_init() }
@@ -173,9 +792,9 @@ func file_api_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_proto_rawDesc), len(file_api_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   14,
 			NumExtensions: 0,
-			NumServices:   1,
+			NumServices:   2,
 		},
 		GoTypes:           file_api_proto_goTypes,
 		DependencyIndexes: file_api_proto_depIdxs,
