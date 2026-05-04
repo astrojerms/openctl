@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/openctl/openctl-k3s/internal/agent"
+	"github.com/openctl/openctl/pkg/k3s/agent"
 )
 
 // NodeStatus is the result of probing one node's agent. Reachable is false if

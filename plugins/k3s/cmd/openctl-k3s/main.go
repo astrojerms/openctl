@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/openctl/openctl-k3s/internal/handler"
+	"github.com/openctl/openctl/pkg/k3s/handler"
 	"github.com/openctl/openctl/pkg/protocol"
 )
 

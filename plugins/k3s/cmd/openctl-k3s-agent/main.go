@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/openctl/openctl-k3s/internal/agent"
+	"github.com/openctl/openctl/pkg/k3s/agent"
 )
 
 func main() {

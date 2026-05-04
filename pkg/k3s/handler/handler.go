@@ -10,10 +10,10 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/openctl/openctl-k3s/internal/agent"
-	agentclient "github.com/openctl/openctl-k3s/internal/agent/client"
-	"github.com/openctl/openctl-k3s/internal/cluster"
-	"github.com/openctl/openctl-k3s/internal/resources"
+	"github.com/openctl/openctl/pkg/k3s/agent"
+	agentclient "github.com/openctl/openctl/pkg/k3s/agent/client"
+	"github.com/openctl/openctl/pkg/k3s/cluster"
+	"github.com/openctl/openctl/pkg/k3s/resources"
 	"github.com/openctl/openctl/pkg/protocol"
 )
 

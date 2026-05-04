@@ -13,6 +13,20 @@ import (
 	"github.com/openctl/openctl/pkg/protocol"
 )
 
+// OwnershipChecker is implemented by providers that own resources managed
+// by other providers — e.g. the k3s provider owns proxmox VMs that belong
+// to a Cluster. Before deleting any resource, the resource handler asks
+// every registered provider whether it owns the target; if any does, the
+// delete is rejected with FailedPrecondition.
+//
+// This is an optional interface — providers without children don't need
+// to implement it.
+type OwnershipChecker interface {
+	// OwnerOf reports whether this provider owns the given (kind, name).
+	// Returns the owner's (kind, name) when owned=true.
+	OwnerOf(kind, name string) (ownerKind, ownerName string, owned bool)
+}
+
 // Provider implements operations for resources of a particular vendor
 // (proxmox, k3s, etc). Phase 2 semantics are synchronous; Phase 3 layers
 // async operations + persisted state on top.
@@ -84,6 +98,19 @@ func (r *Registry) knownNames() []string {
 		out = append(out, name)
 	}
 	return out
+}
+
+// OwnerOf asks every registered OwnershipChecker whether it owns the given
+// resource. The first hit wins; returns owned=false if no provider claims it.
+func (r *Registry) OwnerOf(kind, name string) (ownerKind, ownerName string, owned bool) {
+	for _, p := range r.providers {
+		if checker, ok := p.(OwnershipChecker); ok {
+			if k, n, owns := checker.OwnerOf(kind, name); owns {
+				return k, n, true
+			}
+		}
+	}
+	return "", "", false
 }
 
 // providerNameFromAPIVersion extracts "proxmox" from `proxmox.openctl.io/v1`.

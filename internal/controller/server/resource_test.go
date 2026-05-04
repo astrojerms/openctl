@@ -335,6 +335,61 @@ func TestResourceServiceDeleteEnqueuesAndDispatches(t *testing.T) {
 	}
 }
 
+// ownerProvider is a minimal Provider that also implements OwnershipChecker.
+// Used to verify the resource handler's block-on-references logic.
+type ownerProvider struct {
+	owned map[string]bool // "kind:name" keys
+}
+
+func (o *ownerProvider) Name() string    { return "owner" }
+func (o *ownerProvider) Kinds() []string { return []string{"OwnedThing"} }
+func (o *ownerProvider) Apply(context.Context, *protocol.Resource) (*protocol.Resource, error) {
+	return nil, nil
+}
+func (o *ownerProvider) Get(context.Context, string, string) (*protocol.Resource, error) {
+	return nil, nil
+}
+func (o *ownerProvider) List(context.Context, string) ([]*protocol.Resource, error) {
+	return nil, nil
+}
+func (o *ownerProvider) Delete(context.Context, string, string) error { return nil }
+
+func (o *ownerProvider) OwnerOf(kind, name string) (string, string, bool) {
+	if o.owned[kind+":"+name] {
+		return "OwnedThing", "demo", true
+	}
+	return "", "", false
+}
+
+func TestResourceServiceDeleteBlockedWhenOwned(t *testing.T) {
+	target := &fakeProvider{}
+	owner := &ownerProvider{owned: map[string]bool{"FakeKind:locked": true}}
+
+	reg := providers.NewRegistry()
+	reg.Register(target) // name "fake"
+	reg.Register(owner)  // name "owner"
+
+	addr, mat := startTestServer(t, reg)
+	conn := dialTestServer(t, addr, mat.CACertPath)
+	defer func() { _ = conn.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := apiv1.NewResourceServiceClient(conn).Delete(ctx, &apiv1.DeleteRequest{
+		ApiVersion: "fake.openctl.io/v1",
+		Kind:       "FakeKind",
+		Name:       "locked",
+	})
+	if err == nil {
+		t.Fatal("want FailedPrecondition, got nil")
+	}
+	st, _ := status.FromError(err)
+	if st.Code() != codes.FailedPrecondition {
+		t.Errorf("code = %v, want FailedPrecondition (%v)", st.Code(), err)
+	}
+}
+
 func TestResourceServiceUnknownProviderRejected(t *testing.T) {
 	reg := providers.NewRegistry()
 	addr, mat := startTestServer(t, reg)

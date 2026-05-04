@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openctl/openctl-k3s/internal/agent"
-	"github.com/openctl/openctl-k3s/internal/agent/certs"
+	"github.com/openctl/openctl/pkg/k3s/agent"
+	"github.com/openctl/openctl/pkg/k3s/agent/certs"
 )
 
 // TestClientInfoAgainstRealServer wires the typed client against a real

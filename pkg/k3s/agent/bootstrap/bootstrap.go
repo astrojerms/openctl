@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/openctl/openctl-k3s/internal/agent/certs"
-	"github.com/openctl/openctl-k3s/internal/ssh"
+	"github.com/openctl/openctl/pkg/k3s/agent/certs"
+	"github.com/openctl/openctl/pkg/k3s/ssh"
 )
 
 const (

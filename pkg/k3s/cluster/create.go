@@ -11,11 +11,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openctl/openctl-k3s/internal/agent/bootstrap"
-	"github.com/openctl/openctl-k3s/internal/agent/certs"
-	agentclient "github.com/openctl/openctl-k3s/internal/agent/client"
-	"github.com/openctl/openctl-k3s/internal/resources"
-	"github.com/openctl/openctl-k3s/internal/ssh"
+	"github.com/openctl/openctl/pkg/k3s/agent/bootstrap"
+	"github.com/openctl/openctl/pkg/k3s/agent/certs"
+	agentclient "github.com/openctl/openctl/pkg/k3s/agent/client"
+	"github.com/openctl/openctl/pkg/k3s/resources"
+	"github.com/openctl/openctl/pkg/k3s/ssh"
 	"github.com/openctl/openctl/pkg/protocol"
 )
 

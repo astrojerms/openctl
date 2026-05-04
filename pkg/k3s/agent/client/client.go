@@ -15,7 +15,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/openctl/openctl-k3s/internal/agent"
+	"github.com/openctl/openctl/pkg/k3s/agent"
 )
 
 // Options configures a Client.

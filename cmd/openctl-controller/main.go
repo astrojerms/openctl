@@ -18,10 +18,12 @@ import (
 	"github.com/openctl/openctl/internal/controller/auth"
 	"github.com/openctl/openctl/internal/controller/operations"
 	"github.com/openctl/openctl/internal/controller/providers"
+	k3sprovider "github.com/openctl/openctl/internal/controller/providers/k3s"
 	pmprovider "github.com/openctl/openctl/internal/controller/providers/proxmox"
 	"github.com/openctl/openctl/internal/controller/server"
 	"github.com/openctl/openctl/internal/controller/storage"
 	tlspkg "github.com/openctl/openctl/internal/controller/tls"
+	"github.com/openctl/openctl/pkg/protocol"
 )
 
 // retainPerResource controls how many completed ops per resource the GC
@@ -198,15 +200,24 @@ func buildRegistry() (*providers.Registry, []string, error) {
 		return registry, nil, nil
 	}
 
+	var pmp *pmprovider.Provider
 	if _, ok := cfg.Providers["proxmox"]; ok {
 		pcfg, err := cfg.GetProviderConfig("proxmox", "")
 		if err != nil {
 			return nil, nil, fmt.Errorf("load proxmox config: %w", err)
 		}
 		if pcfg.Endpoint != "" {
-			registry.Register(pmprovider.New(pcfg))
+			pmp = pmprovider.New(pcfg)
+			registry.Register(pmp)
 			names = append(names, "proxmox")
 		}
+	}
+
+	// k3s provider needs a VM provider to drive child VM ops; today that's
+	// always proxmox. If proxmox isn't configured, k3s isn't usable.
+	if pmp != nil {
+		registry.Register(k3sprovider.New(&protocol.ProviderConfig{}, pmp))
+		names = append(names, "k3s")
 	}
 
 	return registry, names, nil

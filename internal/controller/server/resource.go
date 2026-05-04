@@ -144,6 +144,15 @@ func (h *resourceHandler) Delete(ctx context.Context, req *apiv1.DeleteRequest) 
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
+	// Block-on-references: refuse to delete a resource owned by another
+	// resource. Caller must delete the owner instead. (Architectural
+	// decision from CONTROLLER.md "Resource semantics: Delete".)
+	if ownerKind, ownerName, owned := h.registry.OwnerOf(req.GetKind(), req.GetName()); owned {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"%s %q is owned by %s %q; delete the owner instead",
+			req.GetKind(), req.GetName(), ownerKind, ownerName)
+	}
+
 	if h.ops == nil || h.dispatcher == nil {
 		// Phase 2 sync fallback — used by tests.
 		p, err := h.registry.For(req.GetApiVersion())
