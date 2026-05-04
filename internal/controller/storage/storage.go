@@ -22,8 +22,18 @@ var migrationsFS embed.FS
 // Open opens (or creates) the SQLite database at the given path and applies
 // any pending schema migrations. The returned *sql.DB is the caller's to
 // close.
+//
+// Connection pragmas:
+//   - busy_timeout=5000: writes wait up to 5s for a contended lock instead
+//     of returning SQLITE_BUSY immediately. Important because the dispatcher
+//     and the gRPC handlers compete for write locks on the same file.
+//   - journal_mode=WAL: enables write-ahead logging for better concurrent
+//     read+write throughput.
+//   - foreign_keys=on: SQLite defaults to off for backward compatibility;
+//     we want enforcement.
 func Open(ctx context.Context, path string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", path)
+	dsn := path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}

@@ -54,12 +54,22 @@ func TestOpenIsIdempotent(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	var count int
-	if err := db.QueryRow("SELECT COUNT(*) FROM schema_meta").Scan(&count); err != nil {
-		t.Fatalf("count schema_meta: %v", err)
+	// schema_meta should have one row per applied migration, and the count
+	// should be stable across re-Opens (the migration runner skips already-
+	// applied versions). We don't pin a specific number because new
+	// migrations land in subsequent phases.
+	var initial, after int
+	db1, _ := Open(context.Background(), path)
+	_ = db1.QueryRow("SELECT COUNT(*) FROM schema_meta").Scan(&initial)
+	_ = db1.Close()
+	db2, _ := Open(context.Background(), path)
+	_ = db2.QueryRow("SELECT COUNT(*) FROM schema_meta").Scan(&after)
+	_ = db2.Close()
+	if initial == 0 {
+		t.Error("schema_meta empty after Open")
 	}
-	if count != 1 {
-		t.Errorf("schema_meta row count = %d after multiple Opens, want 1 (migration should not re-apply)", count)
+	if initial != after {
+		t.Errorf("schema_meta row count grew from %d to %d across Opens (migration re-applied?)", initial, after)
 	}
 }
 

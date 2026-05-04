@@ -72,9 +72,11 @@ message ApplyRequest {
 }
 
 message ApplyResponse {
-  Resource resource = 1;
-  // Human-friendly message describing what happened (e.g. "VM web-01 created"
-  // or "VM web-01 already exists; spec drift surfaced").
+  // operation_id identifies the async operation that will (eventually)
+  // converge the resource. Use OperationService.GetOperation to poll for
+  // completion, or pass --no-wait to the CLI to fire-and-forget.
+  string operation_id = 1;
+  // Human-friendly message describing what was submitted.
   string message = 2;
 }
 
@@ -104,5 +106,48 @@ message DeleteRequest {
 }
 
 message DeleteResponse {
-  string message = 1;
+  // operation_id identifies the async operation; poll via OperationService.
+  string operation_id = 1;
+  string message = 2;
+}
+
+// OperationService exposes the persisted operation log. Apply/Delete RPCs
+// return an operation_id immediately; clients call GetOperation to poll
+// until terminal status (succeeded, failed, interrupted).
+service OperationService {
+  rpc GetOperation(GetOperationRequest) returns (Operation);
+  rpc ListOperations(ListOperationsRequest) returns (ListOperationsResponse);
+}
+
+message Operation {
+  string id = 1;
+  string parent_id = 2;          // empty for top-level ops; populated in Phase 4
+  string type = 3;               // "apply" | "delete"
+  string api_version = 4;
+  string kind = 5;
+  string resource_name = 6;
+  string status = 7;             // pending | running | succeeded | failed | interrupted
+  string error = 8;              // populated on failed/interrupted
+  string submitted_at = 9;       // RFC3339
+  string started_at = 10;        // empty until claimed
+  string completed_at = 11;      // empty until terminal
+  Resource result = 12;          // populated on succeeded apply
+}
+
+message GetOperationRequest {
+  string id = 1;
+}
+
+message ListOperationsRequest {
+  // All filters optional — empty means match-all.
+  string status = 1;
+  string api_version = 2;
+  string kind = 3;
+  string resource_name = 4;
+  // Cap on results returned, newest-first. 0 = no cap.
+  int32 limit = 5;
+}
+
+message ListOperationsResponse {
+  repeated Operation operations = 1;
 }

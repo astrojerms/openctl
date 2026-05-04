@@ -375,3 +375,151 @@ var ResourceService_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "api.proto",
 }
+
+const (
+	OperationService_GetOperation_FullMethodName   = "/openctl.v1.OperationService/GetOperation"
+	OperationService_ListOperations_FullMethodName = "/openctl.v1.OperationService/ListOperations"
+)
+
+// OperationServiceClient is the client API for OperationService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// OperationService exposes the persisted operation log. Apply/Delete RPCs
+// return an operation_id immediately; clients call GetOperation to poll
+// until terminal status (succeeded, failed, interrupted).
+type OperationServiceClient interface {
+	GetOperation(ctx context.Context, in *GetOperationRequest, opts ...grpc.CallOption) (*Operation, error)
+	ListOperations(ctx context.Context, in *ListOperationsRequest, opts ...grpc.CallOption) (*ListOperationsResponse, error)
+}
+
+type operationServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewOperationServiceClient(cc grpc.ClientConnInterface) OperationServiceClient {
+	return &operationServiceClient{cc}
+}
+
+func (c *operationServiceClient) GetOperation(ctx context.Context, in *GetOperationRequest, opts ...grpc.CallOption) (*Operation, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Operation)
+	err := c.cc.Invoke(ctx, OperationService_GetOperation_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *operationServiceClient) ListOperations(ctx context.Context, in *ListOperationsRequest, opts ...grpc.CallOption) (*ListOperationsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListOperationsResponse)
+	err := c.cc.Invoke(ctx, OperationService_ListOperations_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// OperationServiceServer is the server API for OperationService service.
+// All implementations must embed UnimplementedOperationServiceServer
+// for forward compatibility.
+//
+// OperationService exposes the persisted operation log. Apply/Delete RPCs
+// return an operation_id immediately; clients call GetOperation to poll
+// until terminal status (succeeded, failed, interrupted).
+type OperationServiceServer interface {
+	GetOperation(context.Context, *GetOperationRequest) (*Operation, error)
+	ListOperations(context.Context, *ListOperationsRequest) (*ListOperationsResponse, error)
+	mustEmbedUnimplementedOperationServiceServer()
+}
+
+// UnimplementedOperationServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedOperationServiceServer struct{}
+
+func (UnimplementedOperationServiceServer) GetOperation(context.Context, *GetOperationRequest) (*Operation, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetOperation not implemented")
+}
+func (UnimplementedOperationServiceServer) ListOperations(context.Context, *ListOperationsRequest) (*ListOperationsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListOperations not implemented")
+}
+func (UnimplementedOperationServiceServer) mustEmbedUnimplementedOperationServiceServer() {}
+func (UnimplementedOperationServiceServer) testEmbeddedByValue()                          {}
+
+// UnsafeOperationServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to OperationServiceServer will
+// result in compilation errors.
+type UnsafeOperationServiceServer interface {
+	mustEmbedUnimplementedOperationServiceServer()
+}
+
+func RegisterOperationServiceServer(s grpc.ServiceRegistrar, srv OperationServiceServer) {
+	// If the following call panics, it indicates UnimplementedOperationServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&OperationService_ServiceDesc, srv)
+}
+
+func _OperationService_GetOperation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetOperationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OperationServiceServer).GetOperation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OperationService_GetOperation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OperationServiceServer).GetOperation(ctx, req.(*GetOperationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _OperationService_ListOperations_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListOperationsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OperationServiceServer).ListOperations(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OperationService_ListOperations_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OperationServiceServer).ListOperations(ctx, req.(*ListOperationsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// OperationService_ServiceDesc is the grpc.ServiceDesc for OperationService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var OperationService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "openctl.v1.OperationService",
+	HandlerType: (*OperationServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetOperation",
+			Handler:    _OperationService_GetOperation_Handler,
+		},
+		{
+			MethodName: "ListOperations",
+			Handler:    _OperationService_ListOperations_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "api.proto",
+}

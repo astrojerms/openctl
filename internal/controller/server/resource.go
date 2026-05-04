@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -9,51 +10,92 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	"github.com/openctl/openctl/internal/controller/operations"
 	"github.com/openctl/openctl/internal/controller/providers"
 	"github.com/openctl/openctl/internal/schema"
 	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 	"github.com/openctl/openctl/pkg/protocol"
 )
 
-// resourceHandler implements apiv1.ResourceServiceServer by routing each RPC
-// to the appropriate Provider based on the resource's apiVersion.
+// resourceHandler implements apiv1.ResourceServiceServer. Apply/Delete
+// insert ops into the operations Store and notify the Dispatcher; Get/List
+// remain synchronous (read-only).
+//
+// If ops or dispatcher are nil (test mode), Apply/Delete fall back to
+// calling the Provider synchronously and return a synthetic operation_id.
 type resourceHandler struct {
 	apiv1.UnimplementedResourceServiceServer
-	registry *providers.Registry
+	registry   *providers.Registry
+	ops        *operations.Store
+	dispatcher *operations.Dispatcher
 }
 
-func newResourceHandler(reg *providers.Registry) *resourceHandler {
-	return &resourceHandler{registry: reg}
+func newResourceHandler(reg *providers.Registry, ops *operations.Store, d *operations.Dispatcher) *resourceHandler {
+	return &resourceHandler{registry: reg, ops: ops, dispatcher: d}
 }
 
 func (h *resourceHandler) Apply(ctx context.Context, req *apiv1.ApplyRequest) (*apiv1.ApplyResponse, error) {
 	if req.GetResource() == nil {
 		return nil, status.Error(codes.InvalidArgument, "resource is required")
 	}
-	p, err := h.registry.For(req.GetResource().GetApiVersion())
-	if err != nil {
+	if _, err := h.registry.For(req.GetResource().GetApiVersion()); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-
 	manifest := protoToResource(req.GetResource())
-	// Re-validate against the embedded CUE schema, even though the CLI
-	// already validated. The controller never trusts the wire blindly —
-	// a misbehaving or out-of-date client should not get past schema checks.
+	// Re-validate server-side; the CLI already validated, but the controller
+	// never trusts the wire blindly.
 	if err := schema.Validate(manifest); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "schema validation: %v", err)
 	}
-	result, err := p.Apply(ctx, manifest)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "apply: %v", err)
+	if manifest.Metadata.Name == "" {
+		return nil, status.Error(codes.InvalidArgument, "metadata.name is required")
 	}
 
-	out, err := resourceToProto(result)
+	// Phase 3: enqueue an op and return immediately. Phase 2 sync fallback
+	// kicks in only if ops/dispatcher weren't wired (test mode).
+	if h.ops == nil || h.dispatcher == nil {
+		return h.applySync(ctx, manifest)
+	}
+
+	manifestJSON, err := json.Marshal(manifest)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "encode result: %v", err)
+		return nil, status.Errorf(codes.Internal, "encode manifest: %v", err)
+	}
+	op, err := h.ops.Submit(ctx, &operations.Operation{
+		Type:         operations.TypeApply,
+		APIVersion:   manifest.APIVersion,
+		Kind:         manifest.Kind,
+		ResourceName: manifest.Metadata.Name,
+		ManifestJSON: string(manifestJSON),
+	})
+	if err != nil {
+		var conflict *operations.ConflictError
+		if errors.As(err, &conflict) {
+			return nil, status.Errorf(codes.AlreadyExists,
+				"operation %s already in flight for %s/%s", conflict.InflightID, manifest.Kind, manifest.Metadata.Name)
+		}
+		return nil, status.Errorf(codes.Internal, "submit op: %v", err)
+	}
+	h.dispatcher.Notify()
+
+	return &apiv1.ApplyResponse{
+		OperationId: op.ID,
+		Message:     fmt.Sprintf("%s %q apply submitted as %s", manifest.Kind, manifest.Metadata.Name, op.ID),
+	}, nil
+}
+
+// applySync is the Phase 2 synchronous fallback used by tests that don't
+// wire up the Operations store/Dispatcher.
+func (h *resourceHandler) applySync(ctx context.Context, manifest *protocol.Resource) (*apiv1.ApplyResponse, error) {
+	p, err := h.registry.For(manifest.APIVersion)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	if _, err := p.Apply(ctx, manifest); err != nil {
+		return nil, status.Errorf(codes.Internal, "apply: %v", err)
 	}
 	return &apiv1.ApplyResponse{
-		Resource: out,
-		Message:  fmt.Sprintf("%s %q applied", manifest.Kind, manifest.Metadata.Name),
+		Message: fmt.Sprintf("%s %q applied (sync mode)", manifest.Kind, manifest.Metadata.Name),
 	}, nil
 }
 
@@ -98,15 +140,43 @@ func (h *resourceHandler) List(ctx context.Context, req *apiv1.ListRequest) (*ap
 }
 
 func (h *resourceHandler) Delete(ctx context.Context, req *apiv1.DeleteRequest) (*apiv1.DeleteResponse, error) {
-	p, err := h.registry.For(req.GetApiVersion())
-	if err != nil {
+	if _, err := h.registry.For(req.GetApiVersion()); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	if err := p.Delete(ctx, req.GetKind(), req.GetName()); err != nil {
-		return nil, status.Errorf(codes.Internal, "delete: %v", err)
+
+	if h.ops == nil || h.dispatcher == nil {
+		// Phase 2 sync fallback — used by tests.
+		p, err := h.registry.For(req.GetApiVersion())
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		if err := p.Delete(ctx, req.GetKind(), req.GetName()); err != nil {
+			return nil, status.Errorf(codes.Internal, "delete: %v", err)
+		}
+		return &apiv1.DeleteResponse{
+			Message: fmt.Sprintf("%s %q deleted (sync mode)", req.GetKind(), req.GetName()),
+		}, nil
 	}
+
+	op, err := h.ops.Submit(ctx, &operations.Operation{
+		Type:         operations.TypeDelete,
+		APIVersion:   req.GetApiVersion(),
+		Kind:         req.GetKind(),
+		ResourceName: req.GetName(),
+	})
+	if err != nil {
+		var conflict *operations.ConflictError
+		if errors.As(err, &conflict) {
+			return nil, status.Errorf(codes.AlreadyExists,
+				"operation %s already in flight for %s/%s", conflict.InflightID, req.GetKind(), req.GetName())
+		}
+		return nil, status.Errorf(codes.Internal, "submit op: %v", err)
+	}
+	h.dispatcher.Notify()
+
 	return &apiv1.DeleteResponse{
-		Message: fmt.Sprintf("%s %q deleted", req.GetKind(), req.GetName()),
+		OperationId: op.ID,
+		Message:     fmt.Sprintf("%s %q delete submitted as %s", req.GetKind(), req.GetName(), op.ID),
 	}, nil
 }
 

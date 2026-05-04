@@ -16,12 +16,17 @@ import (
 
 	"github.com/openctl/openctl/internal/config"
 	"github.com/openctl/openctl/internal/controller/auth"
+	"github.com/openctl/openctl/internal/controller/operations"
 	"github.com/openctl/openctl/internal/controller/providers"
 	pmprovider "github.com/openctl/openctl/internal/controller/providers/proxmox"
 	"github.com/openctl/openctl/internal/controller/server"
 	"github.com/openctl/openctl/internal/controller/storage"
 	tlspkg "github.com/openctl/openctl/internal/controller/tls"
 )
+
+// retainPerResource controls how many completed ops per resource the GC
+// keeps around. Reasonable for a homelab; configurable later if needed.
+const retainPerResource = 50
 
 func main() {
 	if err := run(); err != nil {
@@ -94,7 +99,8 @@ func runServe(args []string) error {
 	}
 
 	dbPath := filepath.Join(*dir, "state.db")
-	db, err := storage.Open(context.Background(), dbPath)
+	ctx := context.Background()
+	db, err := storage.Open(ctx, dbPath)
 	if err != nil {
 		return err
 	}
@@ -105,11 +111,26 @@ func runServe(args []string) error {
 		return err
 	}
 
+	// Operations store + dispatcher. On startup, mark any ops that were
+	// running when the previous controller died as `interrupted` — this is
+	// the "no auto-resume" half of the operation-model decision.
+	opStore := operations.New(db, retainPerResource)
+	if n, err := opStore.MarkRunningInterrupted(ctx); err != nil {
+		return fmt.Errorf("mark interrupted ops: %w", err)
+	} else if n > 0 {
+		log.Printf("marked %d previously-running operation(s) as interrupted", n)
+	}
+	dispatcher := operations.NewDispatcher(opStore, registry, 0)
+	dispatcher.Start(ctx)
+	defer dispatcher.Stop()
+
 	opts := server.Options{
-		Listen:   *listen,
-		CertFile: mat.ServerCertPath,
-		KeyFile:  mat.ServerKeyPath,
-		Registry: registry,
+		Listen:     *listen,
+		CertFile:   mat.ServerCertPath,
+		KeyFile:    mat.ServerKeyPath,
+		Registry:   registry,
+		Operations: opStore,
+		Dispatcher: dispatcher,
 	}
 	if !*noAuth {
 		opts.Token = token

@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/reflection"
 
 	"github.com/openctl/openctl/internal/controller/auth"
+	"github.com/openctl/openctl/internal/controller/operations"
 	"github.com/openctl/openctl/internal/controller/providers"
 	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 )
@@ -25,12 +26,20 @@ const ServerVersion = "0.1.0-controller"
 // `--no-auth` localhost-only setups). Registry may be nil; the resource
 // service still registers but every call will error with "no provider
 // registered" until at least one provider is attached.
+//
+// Operations and Dispatcher together drive Phase 3's async lifecycle: the
+// resource service inserts ops into Operations and Notifies the Dispatcher;
+// the OperationService exposes the Operations store directly. If both are
+// nil, Apply/Delete fall back to the Phase 2 synchronous behavior — useful
+// for tests that don't want to spin up the full dispatcher loop.
 type Options struct {
-	Listen   string
-	CertFile string
-	KeyFile  string
-	Token    string
-	Registry *providers.Registry
+	Listen     string
+	CertFile   string
+	KeyFile    string
+	Token      string
+	Registry   *providers.Registry
+	Operations *operations.Store
+	Dispatcher *operations.Dispatcher
 }
 
 // Server is the controller's gRPC server.
@@ -66,7 +75,10 @@ func New(opts Options) (*Server, error) {
 	if registry == nil {
 		registry = providers.NewRegistry()
 	}
-	apiv1.RegisterResourceServiceServer(g, newResourceHandler(registry))
+	apiv1.RegisterResourceServiceServer(g, newResourceHandler(registry, opts.Operations, opts.Dispatcher))
+	if opts.Operations != nil {
+		apiv1.RegisterOperationServiceServer(g, newOperationHandler(opts.Operations))
+	}
 
 	reflection.Register(g)
 

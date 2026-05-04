@@ -183,28 +183,52 @@ for the user since it creates real infrastructure.
 
 ### Phase 3: Async operations + persistence
 
-**Status:** pending
+**Status:** complete
 
 **Goals:** the operation model goes live. Apply returns an operation ID;
 reconciler dispatches in the background; ops survive restart.
 
 **Deliverables:**
 
-- [ ] SQLite schema for `operations` and `operation_steps` tables.
-- [ ] `OperationService` proto: `GetOperation`, `ListOperations`.
-- [ ] Reconciler dispatcher: pulls pending ops from DB, runs them, updates
-      status.
-- [ ] Apply returns operation ID immediately (no longer blocks).
-- [ ] Concurrency lock: fail-fast on same-resource in-flight op.
-- [ ] GC on apply: prune ops older than N or beyond per-resource limit.
-- [ ] Restart handler: marks `running` ops as `interrupted`.
-- [ ] Tests: long-running op doesn't block client; concurrent apply on
-      same resource fails fast; restart mid-op marks as interrupted; GC
-      removes old ops.
+- [x] SQLite schema for `operations` table (parent_id reserved for Phase 4
+      child ops). Indexes for the per-resource lock query and the
+      dispatcher's pending-poll query.
+- [x] `OperationService` proto: `GetOperation`, `ListOperations`.
+      `ApplyResponse`/`DeleteResponse` extended with `operation_id`.
+- [x] `internal/controller/operations` package: Store data layer (Submit,
+      Get, List, ClaimNextPending, Complete, MarkRunningInterrupted, GC)
+      and Dispatcher goroutine (poll + drain + execute via Provider).
+- [x] Apply/Delete RPCs enqueue an op and return `operation_id` immediately
+      instead of blocking on the provider call.
+- [x] Concurrency lock: Submit fails fast with `ConflictError` if another
+      op for the same (apiVersion, kind, name) is pending or running. The
+      gRPC layer maps this to `codes.AlreadyExists` with the in-flight
+      op ID in the message.
+- [x] GC on apply (and on Complete) — keeps the most recent N completed
+      ops per resource. Default retention 50; configurable later.
+- [x] Restart handler: on controller startup, all `running` ops are
+      rewritten as `interrupted` with a marker error message. No
+      auto-resume — user re-applies and the declarative model converges.
+- [x] CLI: `openctl ctl apply` polls for op completion by default
+      (`--no-wait` to fire-and-forget; `--wait-timeout` configurable).
+      New `openctl ctl op get <id>` and `openctl ctl op list` commands
+      with status/apiVersion/kind/name filters.
+- [x] SQLite tuning: pure-Go modernc.org/sqlite opened with
+      `busy_timeout=5000`, `journal_mode=WAL`, `foreign_keys=on` so the
+      dispatcher and the gRPC handlers can share writes without contention.
+- [x] Tests: data-layer (insert + lookup, fail-fast conflict, no-conflict
+      across different resources, claim marks running, complete writes
+      terminal status, MarkRunningInterrupted rewrites all running, GC
+      keeps last N, list filters); dispatcher (apply + delete process,
+      provider error → failed op, missing provider → failed op, Stop
+      blocks until done); gRPC integration (apply enqueues + dispatches
+      to terminal status, conflict returns AlreadyExists, delete enqueues
+      + dispatches).
 
-**Verifiable:** submit an apply, get back an op ID; poll `openctl get
-operation <id>` until done; kill the controller mid-op, restart, see the
-op marked `interrupted`.
+**Verifiable:** confirmed via integration tests — submit an apply, get back
+an op ID; OperationService returns the op; concurrent submission for the
+same resource gets `AlreadyExists` with the in-flight op ID; provider
+errors propagate to op.error.
 
 ---
 

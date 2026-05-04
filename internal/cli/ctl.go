@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/structpb"
 
@@ -31,14 +33,22 @@ and the exec-plugin paths are removed.`,
 	cmd.AddCommand(newCtlApplyCommand())
 	cmd.AddCommand(newCtlGetCommand())
 	cmd.AddCommand(newCtlDeleteCommand())
+	cmd.AddCommand(newCtlOpCommand())
 	return cmd
 }
 
 func newCtlApplyCommand() *cobra.Command {
-	var file string
+	var (
+		file        string
+		noWait      bool
+		waitTimeout time.Duration
+	)
 	cmd := &cobra.Command{
 		Use:   "apply -f <manifest>",
 		Short: "Submit a manifest to the controller",
+		Long: `Submits the manifest to the controller as an async operation. By default
+waits for the operation to reach a terminal status (succeeded/failed/
+interrupted) before returning. Use --no-wait to fire-and-forget.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if file == "" {
 				return fmt.Errorf("--file is required")
@@ -47,16 +57,15 @@ func newCtlApplyCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// Client-side validation against the embedded CUE schema. The
-			// controller re-validates server-side; we do it here too so
-			// schema errors surface before round-tripping.
 			if err := schema.Validate(r); err != nil {
 				return fmt.Errorf("validation: %w", err)
 			}
-			return ctlApply(cmd.Context(), r)
+			return ctlApply(cmd.Context(), r, !noWait, waitTimeout)
 		},
 	}
 	cmd.Flags().StringVarP(&file, "file", "f", "", "manifest file (.yaml or .cue)")
+	cmd.Flags().BoolVar(&noWait, "no-wait", false, "return immediately after submission instead of polling for completion")
+	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 5*time.Minute, "max time to wait for completion when not --no-wait")
 	return cmd
 }
 
@@ -82,7 +91,11 @@ func newCtlGetCommand() *cobra.Command {
 }
 
 func newCtlDeleteCommand() *cobra.Command {
-	var apiVersion string
+	var (
+		apiVersion  string
+		noWait      bool
+		waitTimeout time.Duration
+	)
 	cmd := &cobra.Command{
 		Use:   "delete <kind> <name>",
 		Short: "Delete a resource via the controller (idempotent)",
@@ -91,14 +104,100 @@ func newCtlDeleteCommand() *cobra.Command {
 			if apiVersion == "" {
 				return fmt.Errorf("--api-version is required (e.g. proxmox.openctl.io/v1)")
 			}
-			return ctlDelete(cmd.Context(), apiVersion, args[0], args[1])
+			return ctlDelete(cmd.Context(), apiVersion, args[0], args[1], !noWait, waitTimeout)
 		},
 	}
 	cmd.Flags().StringVar(&apiVersion, "api-version", "", "resource apiVersion (e.g. proxmox.openctl.io/v1)")
+	cmd.Flags().BoolVar(&noWait, "no-wait", false, "return immediately after submission instead of polling for completion")
+	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 5*time.Minute, "max time to wait for completion when not --no-wait")
 	return cmd
 }
 
-func ctlApply(ctx context.Context, r *protocol.Resource) error {
+func newCtlOpCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "op",
+		Short: "Inspect operations",
+	}
+	cmd.AddCommand(newCtlOpGetCommand())
+	cmd.AddCommand(newCtlOpListCommand())
+	return cmd
+}
+
+func newCtlOpGetCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "get <op-id>",
+		Short: "Get an operation by ID",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			conn, token, err := dialController()
+			if err != nil {
+				return err
+			}
+			defer func() { _ = conn.Close() }()
+			ctx := metadata.AppendToOutgoingContext(cmd.Context(), "authorization", "Bearer "+token)
+			op, err := apiv1.NewOperationServiceClient(conn).GetOperation(ctx, &apiv1.GetOperationRequest{Id: args[0]})
+			if err != nil {
+				return err
+			}
+			return printOp(op)
+		},
+	}
+}
+
+func newCtlOpListCommand() *cobra.Command {
+	var (
+		statusFlag string
+		apiVersion string
+		kind       string
+		name       string
+		limit      int32
+	)
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List operations (newest first)",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			conn, token, err := dialController()
+			if err != nil {
+				return err
+			}
+			defer func() { _ = conn.Close() }()
+			ctx := metadata.AppendToOutgoingContext(cmd.Context(), "authorization", "Bearer "+token)
+			resp, err := apiv1.NewOperationServiceClient(conn).ListOperations(ctx, &apiv1.ListOperationsRequest{
+				Status:       statusFlag,
+				ApiVersion:   apiVersion,
+				Kind:         kind,
+				ResourceName: name,
+				Limit:        limit,
+			})
+			if err != nil {
+				return err
+			}
+			for _, op := range resp.GetOperations() {
+				if err := printOp(op); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&statusFlag, "status", "", "filter by status (pending|running|succeeded|failed|interrupted)")
+	cmd.Flags().StringVar(&apiVersion, "api-version", "", "filter by apiVersion")
+	cmd.Flags().StringVar(&kind, "kind", "", "filter by kind")
+	cmd.Flags().StringVar(&name, "name", "", "filter by resource name")
+	cmd.Flags().Int32Var(&limit, "limit", 0, "max results returned (0 = no cap)")
+	return cmd
+}
+
+func printOp(op *apiv1.Operation) error {
+	js, err := json.MarshalIndent(op, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(js))
+	return nil
+}
+
+func ctlApply(ctx context.Context, r *protocol.Resource, wait bool, waitTimeout time.Duration) error {
 	conn, token, err := dialController()
 	if err != nil {
 		return err
@@ -115,7 +214,11 @@ func ctlApply(ctx context.Context, r *protocol.Resource) error {
 		return fmt.Errorf("apply: %w", err)
 	}
 	fmt.Fprintln(os.Stderr, resp.GetMessage())
-	return printResource(resp.GetResource())
+	if !wait {
+		fmt.Println(resp.GetOperationId())
+		return nil
+	}
+	return waitForOp(ctx, conn, resp.GetOperationId(), waitTimeout)
 }
 
 func ctlGet(ctx context.Context, apiVersion, kind, name string) error {
@@ -158,7 +261,7 @@ func ctlList(ctx context.Context, apiVersion, kind string) error {
 	return nil
 }
 
-func ctlDelete(ctx context.Context, apiVersion, kind, name string) error {
+func ctlDelete(ctx context.Context, apiVersion, kind, name string, wait bool, waitTimeout time.Duration) error {
 	conn, token, err := dialController()
 	if err != nil {
 		return err
@@ -173,8 +276,43 @@ func ctlDelete(ctx context.Context, apiVersion, kind, name string) error {
 	if err != nil {
 		return fmt.Errorf("delete: %w", err)
 	}
-	fmt.Println(resp.GetMessage())
-	return nil
+	fmt.Fprintln(os.Stderr, resp.GetMessage())
+	if !wait {
+		fmt.Println(resp.GetOperationId())
+		return nil
+	}
+	return waitForOp(ctx, conn, resp.GetOperationId(), waitTimeout)
+}
+
+// waitForOp polls the controller for op completion. Prints the final op
+// state on stdout. Errors out if the timeout fires or the op terminates
+// with a non-success status.
+func waitForOp(ctx context.Context, conn *grpc.ClientConn, opID string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	client := apiv1.NewOperationServiceClient(conn)
+	for {
+		op, err := client.GetOperation(ctx, &apiv1.GetOperationRequest{Id: opID})
+		if err != nil {
+			return fmt.Errorf("get op %s: %w", opID, err)
+		}
+		switch op.GetStatus() {
+		case "succeeded":
+			fmt.Fprintf(os.Stderr, "operation %s succeeded\n", opID)
+			if op.GetResult() != nil {
+				return printResource(op.GetResult())
+			}
+			return nil
+		case "failed":
+			return fmt.Errorf("operation %s failed: %s", opID, op.GetError())
+		case "interrupted":
+			return fmt.Errorf("operation %s interrupted: %s", opID, op.GetError())
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("operation %s did not finish within %s (still %s — poll with `openctl ctl op get %s`)",
+				opID, timeout, op.GetStatus(), opID)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 // resourceToProto mirrors the controller-side conversion so the wire shape

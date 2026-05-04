@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -17,7 +18,9 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	"github.com/openctl/openctl/internal/controller/operations"
 	"github.com/openctl/openctl/internal/controller/providers"
+	"github.com/openctl/openctl/internal/controller/storage"
 	tlspkg "github.com/openctl/openctl/internal/controller/tls"
 	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 	"github.com/openctl/openctl/pkg/protocol"
@@ -33,12 +36,16 @@ type fakeProvider struct {
 	deletes   [][]string
 	getReturn *protocol.Resource
 	getErr    error
+	applyHook func() // optional: called inside Apply for blocking-test scenarios
 }
 
 func (f *fakeProvider) Name() string    { return "fake" }
 func (f *fakeProvider) Kinds() []string { return []string{"FakeKind"} }
 
 func (f *fakeProvider) Apply(_ context.Context, m *protocol.Resource) (*protocol.Resource, error) {
+	if f.applyHook != nil {
+		f.applyHook()
+	}
 	f.applied = append(f.applied, m)
 	out := *m
 	if out.Status == nil {
@@ -69,6 +76,8 @@ func (f *fakeProvider) Delete(_ context.Context, kind, name string) error {
 	return nil
 }
 
+// startTestServer spins up a controller server with real async operations
+// wiring (Store + Dispatcher) so the tests exercise the production path.
 func startTestServer(t *testing.T, registry *providers.Registry) (string, *tlspkg.Material) {
 	t.Helper()
 	dir := t.TempDir()
@@ -76,11 +85,24 @@ func startTestServer(t *testing.T, registry *providers.Registry) (string, *tlspk
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	db, err := storage.Open(context.Background(), filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := operations.New(db, 50)
+	dispatcher := operations.NewDispatcher(store, registry, 50*time.Millisecond)
+	dispatcher.Start(context.Background())
+	t.Cleanup(dispatcher.Stop)
+
 	srv, err := New(Options{
-		CertFile: mat.ServerCertPath,
-		KeyFile:  mat.ServerKeyPath,
-		Token:    "",
-		Registry: registry,
+		CertFile:   mat.ServerCertPath,
+		KeyFile:    mat.ServerKeyPath,
+		Token:      "",
+		Registry:   registry,
+		Operations: store,
+		Dispatcher: dispatcher,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -92,6 +114,28 @@ func startTestServer(t *testing.T, registry *providers.Registry) (string, *tlspk
 	go func() { _ = srv.ServeListener(ln) }()
 	t.Cleanup(srv.Stop)
 	return ln.Addr().String(), mat
+}
+
+// awaitOp polls OperationService.GetOperation until terminal or timeout.
+func awaitOp(t *testing.T, conn *grpc.ClientConn, opID string, timeout time.Duration) *apiv1.Operation {
+	t.Helper()
+	client := apiv1.NewOperationServiceClient(conn)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		op, err := client.GetOperation(ctx, &apiv1.GetOperationRequest{Id: opID})
+		cancel()
+		if err != nil {
+			t.Fatalf("GetOperation: %v", err)
+		}
+		switch op.GetStatus() {
+		case "succeeded", "failed", "interrupted":
+			return op
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("op %s did not reach terminal status within %s", opID, timeout)
+	return nil
 }
 
 func dialTestServer(t *testing.T, addr, caPath string) *grpc.ClientConn {
@@ -110,7 +154,7 @@ func dialTestServer(t *testing.T, addr, caPath string) *grpc.ClientConn {
 	return conn
 }
 
-func TestResourceServiceApplyRoutesToProvider(t *testing.T) {
+func TestResourceServiceApplyEnqueuesOpAndDispatches(t *testing.T) {
 	fake := &fakeProvider{}
 	reg := providers.NewRegistry()
 	reg.Register(fake)
@@ -124,7 +168,6 @@ func TestResourceServiceApplyRoutesToProvider(t *testing.T) {
 	defer cancel()
 	_ = metadata.AppendToOutgoingContext // keep import alive
 
-	// FakeKind has no embedded CUE schema → Validate is a no-op pass.
 	resp, err := apiv1.NewResourceServiceClient(conn).Apply(ctx, &apiv1.ApplyRequest{
 		Resource: &apiv1.Resource{
 			ApiVersion: "fake.openctl.io/v1",
@@ -136,17 +179,73 @@ func TestResourceServiceApplyRoutesToProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if resp.GetMessage() == "" {
-		t.Error("response message is empty")
+	if resp.GetOperationId() == "" {
+		t.Fatal("Apply did not return an operation_id")
+	}
+
+	final := awaitOp(t, conn, resp.GetOperationId(), 3*time.Second)
+	if final.GetStatus() != "succeeded" {
+		t.Fatalf("op status = %q, want succeeded (error=%q)", final.GetStatus(), final.GetError())
 	}
 	if len(fake.applied) != 1 {
-		t.Fatalf("provider Apply not called: %d", len(fake.applied))
+		t.Errorf("provider Apply called %d times, want 1", len(fake.applied))
 	}
-	if fake.applied[0].Metadata.Name != "x" {
-		t.Errorf("applied name = %q, want x", fake.applied[0].Metadata.Name)
+	if got := final.GetResult().GetStatus().AsMap()["applied"]; got != true {
+		t.Errorf("op.result.status.applied = %v, want true", got)
 	}
-	if got := resp.GetResource().GetStatus().AsMap()["applied"]; got != true {
-		t.Errorf("response status.applied = %v, want true", got)
+}
+
+// TestResourceServiceApplyConflictOnSameResource verifies the fail-fast
+// concurrency rule: a second Apply for the same resource while one is
+// in flight returns AlreadyExists.
+func TestResourceServiceApplyConflictOnSameResource(t *testing.T) {
+	released := make(chan struct{})
+	// Defer the release in the test body — this runs BEFORE the dispatcher's
+	// Stop in t.Cleanup, so the in-flight op completes first and Stop
+	// doesn't deadlock waiting for it.
+	defer close(released)
+
+	fake := &fakeProvider{}
+	fake.applyHook = func() { <-released }
+	reg := providers.NewRegistry()
+	reg.Register(fake)
+
+	addr, mat := startTestServer(t, reg)
+	conn := dialTestServer(t, addr, mat.CACertPath)
+	defer func() { _ = conn.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client := apiv1.NewResourceServiceClient(conn)
+
+	resource := &apiv1.Resource{
+		ApiVersion: "fake.openctl.io/v1",
+		Kind:       "FakeKind",
+		Metadata:   &apiv1.Metadata{Name: "blocker"},
+	}
+	first, err := client.Apply(ctx, &apiv1.ApplyRequest{Resource: resource})
+	if err != nil {
+		t.Fatalf("first Apply: %v", err)
+	}
+
+	// Wait until the dispatcher has picked it up (status=running).
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		op, err := apiv1.NewOperationServiceClient(conn).GetOperation(ctx, &apiv1.GetOperationRequest{Id: first.GetOperationId()})
+		if err == nil && op.GetStatus() == "running" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Second submission should fail-fast.
+	_, err = client.Apply(ctx, &apiv1.ApplyRequest{Resource: resource})
+	if err == nil {
+		t.Fatal("want AlreadyExists error, got nil")
+	}
+	st, _ := status.FromError(err)
+	if st.Code() != codes.AlreadyExists {
+		t.Errorf("code = %v, want AlreadyExists", st.Code())
 	}
 }
 
@@ -203,7 +302,7 @@ func TestResourceServiceListReturnsAll(t *testing.T) {
 	}
 }
 
-func TestResourceServiceDeletePassesThrough(t *testing.T) {
+func TestResourceServiceDeleteEnqueuesAndDispatches(t *testing.T) {
 	fake := &fakeProvider{}
 	reg := providers.NewRegistry()
 	reg.Register(fake)
@@ -215,13 +314,21 @@ func TestResourceServiceDeletePassesThrough(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := apiv1.NewResourceServiceClient(conn).Delete(ctx, &apiv1.DeleteRequest{
+	resp, err := apiv1.NewResourceServiceClient(conn).Delete(ctx, &apiv1.DeleteRequest{
 		ApiVersion: "fake.openctl.io/v1",
 		Kind:       "FakeKind",
 		Name:       "x",
 	})
 	if err != nil {
 		t.Fatalf("Delete: %v", err)
+	}
+	if resp.GetOperationId() == "" {
+		t.Fatal("Delete did not return an operation_id")
+	}
+
+	final := awaitOp(t, conn, resp.GetOperationId(), 3*time.Second)
+	if final.GetStatus() != "succeeded" {
+		t.Fatalf("op status = %q, want succeeded (error=%q)", final.GetStatus(), final.GetError())
 	}
 	if len(fake.deletes) != 1 || fake.deletes[0][1] != "x" {
 		t.Errorf("delete not recorded correctly: %v", fake.deletes)
