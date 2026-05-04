@@ -88,10 +88,21 @@ func (p *Provider) OwnerOf(kind, name string) (string, string, bool) {
 	return "", "", false
 }
 
-// Apply: no-op if a state file for the cluster already exists; otherwise
-// creates child VMs via the VM provider, installs k3s + agent, persists
-// state. Static IPs are required in Phase 4 (no QGA polling in the
-// in-process path yet).
+// Annotation keys for the destructive-flag plumbing. The CLI sets these on
+// the manifest's metadata.annotations before submitting; the apply path
+// reads them to decide whether to honor structural changes.
+const (
+	annotAllowDestructive = "openctl.io/allow-destructive"
+	annotIKnowThisBreaks  = "openctl.io/i-know-this-breaks-the-cluster"
+)
+
+// Apply creates a fresh cluster, or — if the cluster already exists —
+// converges its child set toward the new manifest. Phase 5 supports
+// removals (with --allow-destructive) and detects catastrophic ops (with
+// --i-know-this-breaks-the-cluster). Adding nodes to a live cluster is
+// deferred to Phase 5.x (needs join machinery in pkg/k3s/cluster).
+//
+// Static IPs are required (no QGA polling in the in-process path yet).
 func (p *Provider) Apply(ctx context.Context, manifest *protocol.Resource) (*protocol.Resource, error) {
 	if err := requireKindCluster(manifest.Kind); err != nil {
 		return nil, err
@@ -108,9 +119,11 @@ func (p *Provider) Apply(ctx context.Context, manifest *protocol.Resource) (*pro
 		return nil, fmt.Errorf("static IPs required (set spec.network.staticIPs.{startIP,gateway,netmask}); QGA-based IP discovery in the controller path is a Phase 4.5 followup")
 	}
 
-	// No-op-on-existing per the architecture decision.
-	if existing, err := p.loadState(name); err == nil && existing != nil {
-		return existing, nil
+	// If the cluster already exists, plan the structural diff against the
+	// new manifest and either no-op, converge, or refuse depending on the
+	// destructive flags.
+	if existing, _ := p.loadState(name); existing != nil {
+		return p.applyExisting(ctx, manifest, name, spec)
 	}
 
 	// Pre-allocate static IPs deterministically per node name.
@@ -147,6 +160,85 @@ func (p *Provider) Apply(ctx context.Context, manifest *protocol.Resource) (*pro
 	return state, nil
 }
 
+// applyExisting handles re-apply of a Cluster that already has state. It
+// computes the structural diff vs. the new manifest, enforces the
+// destructive/catastrophic guardrails, and converges the child set. Adding
+// nodes to a live cluster is the Phase 5.x followup; today applyExisting
+// errors out if the manifest implies any add.
+func (p *Provider) applyExisting(ctx context.Context, manifest *protocol.Resource, name string, spec *k3sresources.ClusterSpec) (*protocol.Resource, error) {
+	current, _ := readChildren(name)
+	plan := computeChangePlan(name, spec, current)
+
+	if !plan.hasChanges() {
+		// No structural diff — just return existing state. (Spec-only
+		// changes to children, e.g. cpu/memory, are out of scope for
+		// Phase 5 — see the deferred 5.6 followup in CONTROLLER.md.)
+		return p.loadState(name)
+	}
+
+	// Adds against a live cluster need join machinery we haven't built yet.
+	// Reject with a clear "tear down + re-apply" pointer.
+	if len(plan.addCPs)+len(plan.addWorkers) > 0 {
+		return nil, fmt.Errorf("scaling up an existing cluster is not yet supported in this controller (would add %v); tear down and re-apply, or wait for the Phase 5.x followup that adds live-cluster join", append(plan.addCPs, plan.addWorkers...))
+	}
+
+	allowDestructive := manifest.Metadata.Annotations[annotAllowDestructive] == "true"
+	iKnowThisBreaks := manifest.Metadata.Annotations[annotIKnowThisBreaks] == "true"
+
+	if plan.removesAny() && !allowDestructive {
+		return nil, fmt.Errorf("would remove %d node(s) (CPs %v, workers %v); pass --allow-destructive to confirm", len(plan.removeCPs)+len(plan.removeWorkers), plan.removeCPs, plan.removeWorkers)
+	}
+
+	// Catastrophic-op detection: count current CPs/workers before applying
+	// removals.
+	var haveCPs, haveWorkers int
+	cpPrefix := name + "-cp-"
+	for _, c := range current {
+		if c.Kind != "VirtualMachine" {
+			continue
+		}
+		if strings.HasPrefix(c.Name, cpPrefix) {
+			haveCPs++
+		} else {
+			haveWorkers++
+		}
+	}
+	if reason := catastrophicReason(plan, haveCPs, haveWorkers); reason != "" && !iKnowThisBreaks {
+		return nil, fmt.Errorf("catastrophic: %s; pass --i-know-this-breaks-the-cluster to override", reason)
+	}
+
+	// Execute removals. Note: no kubectl drain (homelab assumption — workloads
+	// tolerate node loss). Workers go first, then CPs, so we drop schedulable
+	// capacity before touching apiserver replicas.
+	for _, w := range plan.removeWorkers {
+		if err := p.vms.Delete(ctx, "VirtualMachine", w); err != nil &&
+			!strings.Contains(err.Error(), "not found") {
+			return nil, fmt.Errorf("delete worker %s: %w", w, err)
+		}
+	}
+	for _, cp := range plan.removeCPs {
+		if err := p.vms.Delete(ctx, "VirtualMachine", cp); err != nil &&
+			!strings.Contains(err.Error(), "not found") {
+			return nil, fmt.Errorf("delete control-plane %s: %w", cp, err)
+		}
+	}
+
+	// Update state: rewrite the children list to reflect what's left, and
+	// replace the saved spec with the new manifest's spec so future Gets
+	// compare against current intent.
+	keep := make([]childRef, 0, len(current))
+	removed := toSet(append(plan.removeCPs, plan.removeWorkers...))
+	for _, c := range current {
+		if !removed[c.Name] {
+			keep = append(keep, c)
+		}
+	}
+	if err := p.rewriteState(name, manifest, keep); err != nil {
+		return nil, fmt.Errorf("rewrite state: %w", err)
+	}
+	return p.loadState(name)
+}
+
 func (p *Provider) Get(_ context.Context, kind, name string) (*protocol.Resource, error) {
 	if err := requireKindCluster(kind); err != nil {
 		return nil, err
@@ -158,7 +250,64 @@ func (p *Provider) Get(_ context.Context, kind, name string) (*protocol.Resource
 	if r == nil {
 		return nil, providers.NotFound(kind, name)
 	}
+	// Phase 5: synthesize the observed node counts from the children list so
+	// structural drift surfaces against the manifest. The saved spec
+	// otherwise echoes back the manifest verbatim and would always read
+	// drift-free even after an out-of-band VM deletion.
+	if children, err := readChildren(name); err == nil {
+		applyObservedCounts(r, name, children)
+	}
 	return r, nil
+}
+
+// applyObservedCounts overwrites spec.nodes.controlPlane.count and each
+// spec.nodes.workers[*].count with the *actual* number of children matching
+// that role, derived from the names in `children`. Names follow the
+// `<cluster>-cp-<i>` / `<cluster>-<pool>-<i>` pattern set by NodeNames.
+func applyObservedCounts(r *protocol.Resource, clusterName string, children []childRef) {
+	if r.Spec == nil {
+		return
+	}
+	nodes, ok := r.Spec["nodes"].(map[string]any)
+	if !ok {
+		return
+	}
+	cpCount := 0
+	workerCounts := map[string]int{} // pool name → count
+	cpPrefix := clusterName + "-cp-"
+	for _, c := range children {
+		if c.Kind != "VirtualMachine" {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(c.Name, cpPrefix):
+			cpCount++
+		case strings.HasPrefix(c.Name, clusterName+"-"):
+			// Strip "<cluster>-" prefix and "-<index>" suffix to recover the
+			// pool name.
+			rest := strings.TrimPrefix(c.Name, clusterName+"-")
+			if dash := strings.LastIndex(rest, "-"); dash > 0 {
+				pool := rest[:dash]
+				workerCounts[pool]++
+			}
+		}
+	}
+	if cp, ok := nodes["controlPlane"].(map[string]any); ok {
+		cp["count"] = cpCount
+	}
+	if workers, ok := nodes["workers"].([]any); ok {
+		for _, w := range workers {
+			pool, ok := w.(map[string]any)
+			if !ok {
+				continue
+			}
+			poolName, _ := pool["name"].(string)
+			if poolName == "" {
+				poolName = "worker"
+			}
+			pool["count"] = workerCounts[poolName]
+		}
+	}
 }
 
 func (p *Provider) List(_ context.Context, kind string) ([]*protocol.Resource, error) {
@@ -269,6 +418,45 @@ func (p *Provider) loadState(name string) (*protocol.Resource, error) {
 		r.Status = status
 	}
 	return r, nil
+}
+
+// rewriteState updates the saved state file to reflect a converged child
+// set. It preserves the existing status/outputs (the cluster is still up,
+// just smaller) and replaces the spec with the new manifest's spec so
+// future Gets diff against the user's current intent.
+func (p *Provider) rewriteState(name string, manifest *protocol.Resource, keep []childRef) error {
+	dir, err := stateDir()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dir, name+".yaml")
+	data, err := os.ReadFile(path) // #nosec G304 -- name comes from typed RPC
+	if err != nil {
+		return err
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return err
+	}
+	doc["spec"] = manifest.Spec
+	// Children rewritten in the legacy YAML's tag style.
+	rendered := make([]map[string]any, 0, len(keep))
+	for _, c := range keep {
+		rendered = append(rendered, map[string]any{
+			"provider": c.Provider,
+			"kind":     c.Kind,
+			"name":     c.Name,
+		})
+	}
+	doc["children"] = rendered
+	if md, ok := doc["metadata"].(map[string]any); ok {
+		md["updatedAt"] = time.Now().UTC().Format(time.RFC3339)
+	}
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, out, 0o600)
 }
 
 // childRef matches the YAML shape used by the legacy state files.

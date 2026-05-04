@@ -149,6 +149,56 @@ status:
 	}
 }
 
+func TestGetSynthesizesObservedCountsFromChildren(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Manifest claims 2 CPs and 3 workers, but the children list has only
+	// 1 CP and 1 worker — simulating an out-of-band deletion. Get should
+	// report the *actual* counts so the resource handler can surface drift.
+	writeClusterState(t, home, "dev", `apiVersion: k3s.openctl.io/v1
+kind: Cluster
+metadata:
+  name: dev
+spec:
+  nodes:
+    controlPlane:
+      count: 2
+    workers:
+      - name: worker
+        count: 3
+children:
+  - provider: proxmox
+    kind: VirtualMachine
+    name: dev-cp-0
+  - provider: proxmox
+    kind: VirtualMachine
+    name: dev-worker-0
+`)
+
+	p := New(&protocol.ProviderConfig{}, &fakeVMs{})
+	r, err := p.Get(context.Background(), "Cluster", "dev")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	nodes, ok := r.Spec["nodes"].(map[string]any)
+	if !ok {
+		t.Fatalf("spec.nodes missing or wrong type: %T", r.Spec["nodes"])
+	}
+	cp, _ := nodes["controlPlane"].(map[string]any)
+	if cp == nil || cp["count"] != 1 {
+		t.Errorf("controlPlane.count = %v, want 1", cp["count"])
+	}
+	workers, _ := nodes["workers"].([]any)
+	if len(workers) != 1 {
+		t.Fatalf("workers = %v, want one pool", workers)
+	}
+	pool, _ := workers[0].(map[string]any)
+	if pool["count"] != 1 {
+		t.Errorf("workers[0].count = %v, want 1 (one VM, not the manifest's 3)", pool["count"])
+	}
+}
+
 func TestDeleteCascadesToChildVMs(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -185,5 +235,202 @@ func TestDeleteOnMissingClusterIsIdempotent(t *testing.T) {
 	p := New(&protocol.ProviderConfig{}, &fakeVMs{})
 	if err := p.Delete(context.Background(), "Cluster", "missing"); err != nil {
 		t.Errorf("delete on missing should be idempotent, got %v", err)
+	}
+}
+
+// scaleDownManifest is a Cluster manifest with the given worker count, used
+// across the apply-existing tests below. Numeric values are float64 to
+// match how the gRPC path delivers them (structpb encodes all JSON numbers
+// as float64).
+func scaleDownManifest(workerCount int) *protocol.Resource {
+	return &protocol.Resource{
+		APIVersion: "k3s.openctl.io/v1",
+		Kind:       "Cluster",
+		Metadata:   protocol.ResourceMetadata{Name: "dev"},
+		Spec: map[string]any{
+			"compute": map[string]any{
+				"provider": "proxmox",
+				"image":    map[string]any{"template": "tpl", "storage": "s"},
+				"default":  map[string]any{"cpus": float64(2), "memoryMB": float64(4096), "diskGB": float64(30)},
+			},
+			"nodes": map[string]any{
+				"controlPlane": map[string]any{"count": float64(1)},
+				"workers":      []any{map[string]any{"name": "worker", "count": float64(workerCount)}},
+			},
+			"network": map[string]any{
+				"bridge": "vmbr0",
+				"staticIPs": map[string]any{
+					"startIP": "192.168.1.100",
+					"gateway": "192.168.1.1",
+					"netmask": "24",
+				},
+			},
+			"ssh": map[string]any{"user": "ubuntu", "privateKeyPath": "~/.ssh/id_ed25519"},
+		},
+	}
+}
+
+func TestApplyExistingNoChangesIsNoOp(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeClusterState(t, home, "dev", `apiVersion: k3s.openctl.io/v1
+kind: Cluster
+metadata:
+  name: dev
+spec:
+  nodes:
+    controlPlane:
+      count: 1
+    workers:
+      - name: worker
+        count: 1
+children:
+  - provider: proxmox
+    kind: VirtualMachine
+    name: dev-cp-0
+  - provider: proxmox
+    kind: VirtualMachine
+    name: dev-worker-0
+`)
+	vms := &fakeVMs{}
+	p := New(&protocol.ProviderConfig{}, vms)
+	if _, err := p.Apply(context.Background(), scaleDownManifest(1)); err != nil {
+		t.Fatalf("Apply same-shape: %v", err)
+	}
+	if len(vms.deleted) != 0 {
+		t.Errorf("no-op apply should not delete any VMs, got %v", vms.deleted)
+	}
+}
+
+func TestApplyExistingScaleDownRequiresFlag(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeClusterState(t, home, "dev", `apiVersion: k3s.openctl.io/v1
+kind: Cluster
+metadata:
+  name: dev
+spec: {}
+children:
+  - provider: proxmox
+    kind: VirtualMachine
+    name: dev-cp-0
+  - provider: proxmox
+    kind: VirtualMachine
+    name: dev-worker-0
+  - provider: proxmox
+    kind: VirtualMachine
+    name: dev-worker-1
+`)
+	vms := &fakeVMs{}
+	p := New(&protocol.ProviderConfig{}, vms)
+	// Manifest asks for 1 worker; state has 2. Without --allow-destructive,
+	// apply must refuse.
+	_, err := p.Apply(context.Background(), scaleDownManifest(1))
+	if err == nil {
+		t.Fatal("scale-down without --allow-destructive should error")
+	}
+	if len(vms.deleted) != 0 {
+		t.Errorf("refused apply must not delete any VMs, got %v", vms.deleted)
+	}
+}
+
+func TestApplyExistingScaleDownWithFlag(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeClusterState(t, home, "dev", `apiVersion: k3s.openctl.io/v1
+kind: Cluster
+metadata:
+  name: dev
+spec: {}
+children:
+  - provider: proxmox
+    kind: VirtualMachine
+    name: dev-cp-0
+  - provider: proxmox
+    kind: VirtualMachine
+    name: dev-worker-0
+  - provider: proxmox
+    kind: VirtualMachine
+    name: dev-worker-1
+`)
+	vms := &fakeVMs{}
+	p := New(&protocol.ProviderConfig{}, vms)
+	manifest := scaleDownManifest(1)
+	manifest.Metadata.Annotations = map[string]string{
+		"openctl.io/allow-destructive": "true",
+	}
+	if _, err := p.Apply(context.Background(), manifest); err != nil {
+		t.Fatalf("scale-down with flag: %v", err)
+	}
+	if len(vms.deleted) != 1 || vms.deleted[0][1] != "dev-worker-1" {
+		t.Errorf("expected delete of dev-worker-1, got %v", vms.deleted)
+	}
+}
+
+func TestApplyExistingCatastrophicRequiresIKnowFlag(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeClusterState(t, home, "dev", `apiVersion: k3s.openctl.io/v1
+kind: Cluster
+metadata:
+  name: dev
+spec: {}
+children:
+  - provider: proxmox
+    kind: VirtualMachine
+    name: dev-cp-0
+  - provider: proxmox
+    kind: VirtualMachine
+    name: dev-worker-0
+`)
+	vms := &fakeVMs{}
+	p := New(&protocol.ProviderConfig{}, vms)
+	// Manifest with 0 workers + 1 CP. Removing the only worker is
+	// catastrophic; even --allow-destructive isn't enough.
+	manifest := scaleDownManifest(0)
+	manifest.Metadata.Annotations = map[string]string{
+		"openctl.io/allow-destructive": "true",
+	}
+	_, err := p.Apply(context.Background(), manifest)
+	if err == nil {
+		t.Fatal("removing last worker should be blocked even with --allow-destructive")
+	}
+	if len(vms.deleted) != 0 {
+		t.Errorf("blocked catastrophic op must not delete VMs, got %v", vms.deleted)
+	}
+
+	// Now with the catastrophic-override flag, it goes through.
+	manifest.Metadata.Annotations["openctl.io/i-know-this-breaks-the-cluster"] = "true"
+	if _, err := p.Apply(context.Background(), manifest); err != nil {
+		t.Fatalf("catastrophic op with both flags: %v", err)
+	}
+	if len(vms.deleted) != 1 || vms.deleted[0][1] != "dev-worker-0" {
+		t.Errorf("expected delete of dev-worker-0, got %v", vms.deleted)
+	}
+}
+
+func TestApplyExistingScaleUpNotYetSupported(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeClusterState(t, home, "dev", `apiVersion: k3s.openctl.io/v1
+kind: Cluster
+metadata:
+  name: dev
+spec: {}
+children:
+  - provider: proxmox
+    kind: VirtualMachine
+    name: dev-cp-0
+  - provider: proxmox
+    kind: VirtualMachine
+    name: dev-worker-0
+`)
+	vms := &fakeVMs{}
+	p := New(&protocol.ProviderConfig{}, vms)
+	// Manifest asks for 2 workers; state has 1. Phase 5 doesn't yet
+	// support adding nodes to a live cluster.
+	_, err := p.Apply(context.Background(), scaleDownManifest(2))
+	if err == nil {
+		t.Fatal("scale-up should error until Phase 5.x followup ships")
 	}
 }

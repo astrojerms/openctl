@@ -288,7 +288,7 @@ real Proxmox is left for the user since it creates real infrastructure.
 
 ### Phase 5: Declarative reconciliation + drift surfacing
 
-**Status:** pending
+**Status:** complete (count-up + child-spec changes deferred to Phase 5.x)
 
 **Goals:** the reconciler graduates from "create the missing things" to
 "converge to spec." Drift detection on read; structural changes honored;
@@ -296,22 +296,58 @@ destructive guardrails enforced.
 
 **Deliverables:**
 
-- [ ] Loose comparison + drift detection on `Get` for VirtualMachine.
-- [ ] Drift detection on `Get` for Cluster (structural — children diff
-      against manifest).
-- [ ] Cluster apply: add new children on count-up.
-- [ ] Cluster apply: remove children on count-down with
-      `--allow-destructive`.
-- [ ] Cluster apply: spec changes to existing children with
-      `--allow-destructive`.
-- [ ] Catastrophic-op detection (single-CP recreate, quorum loss, last
+- [x] `applied_manifests` SQLite table + `internal/controller/manifests`
+      store: persisted "desired state", written by the dispatcher on
+      apply success and removed on delete success. Stable source of truth
+      for drift comparison (the operations table can't serve this — its
+      rows get GC'd).
+- [x] `Resource.drift` field on the proto, populated on Get/List by the
+      resource handler. Loose comparison helper in
+      `internal/controller/server/drift.go` walks the desired spec and
+      surfaces only the keys where desired ≠ observed; provider-set
+      defaults are unmanaged.
+- [x] VirtualMachine drift on Get: works generically via the loose
+      comparison (proxmox `VMToResource` returns spec keys that overlap
+      with the manifest, e.g. `cpu.cores`, `memory.size`).
+- [x] Cluster structural drift on Get: the k3s provider synthesizes
+      `spec.nodes.controlPlane.count` and each `spec.nodes.workers[*]
+      .count` from the *actual* children list, so post-apply Gets reveal
+      out-of-band VM deletion as drift.
+- [x] Cluster apply: remove children on count-down with
+      `--allow-destructive`. Workers go first, then CPs, so we drop
+      schedulable capacity before touching apiserver replicas.
+      State file is rewritten to reflect the surviving child set.
+- [x] Catastrophic-op detection (single-CP recreate, quorum loss, last
       worker removal) requires `--i-know-this-breaks-the-cluster`.
-- [ ] Tests: apply with new manifest detects drift; flagged apply
-      converges; catastrophic op blocked without flag.
+      Quorum threshold is the standard Raft majority `ceil((n+1)/2)`.
+- [x] CLI: `--allow-destructive` and `--i-know-this-breaks-the-cluster`
+      flags on `openctl ctl apply`. Plumbed through `ApplyRequest` proto
+      fields → manifest annotations the k3s provider reads at apply time.
+      `openctl ctl get` now renders the `drift` block when present.
+- [x] Tests: drift helper unit tests (identical specs, scalar mismatch,
+      unmanaged-field tolerance, nested maps, slice length, missing
+      observed key, stable ordering); applied-manifests store
+      round-trip/overwrite/delete; Cluster Get count synthesis;
+      apply-existing tests for no-op, scale-down-needs-flag, scale-down-
+      with-flag, catastrophic-needs-i-know-flag, scale-up-not-supported.
+- [ ] Phase 5.x followup: Cluster apply count-up (adding nodes to a live
+      cluster). Needs join machinery in `pkg/k3s/cluster` (read existing
+      token from first CP via SSH, run install on new nodes, install the
+      agent against the existing per-cluster CA bundle). Apply currently
+      errors with a "tear down + re-apply" pointer when a count-up is
+      requested.
+- [ ] Phase 5.x followup: spec changes to existing children with
+      `--allow-destructive` (destroy + recreate of a node whose
+      cpu/memory/disk changed). Deferred during Phase 5 scoping because
+      it adds significant complexity for limited homelab value.
 
-**Verifiable:** change `workers.count` and re-apply: get-cluster shows
-drift; apply with `--allow-destructive` removes the extra worker. Try to
-recreate the only CP without `--i-know-this-breaks-the-cluster`: blocked.
+**Verifiable:** confirmed via tests in
+`internal/controller/providers/k3s/provider_test.go` —
+`TestApplyExistingScaleDownWithFlag` removes a worker when
+`--allow-destructive` is set, `TestApplyExistingCatastrophicRequiresIKnowFlag`
+blocks a last-worker removal until both flags are passed,
+`TestGetSynthesizesObservedCountsFromChildren` proves out-of-band VM
+deletion shows up as count drift on Get.
 
 ---
 

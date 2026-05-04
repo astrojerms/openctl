@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/reflection"
 
 	"github.com/openctl/openctl/internal/controller/auth"
+	"github.com/openctl/openctl/internal/controller/manifests"
 	"github.com/openctl/openctl/internal/controller/operations"
 	"github.com/openctl/openctl/internal/controller/providers"
 	apiv1 "github.com/openctl/openctl/pkg/api/v1"
@@ -40,6 +41,10 @@ type Options struct {
 	Registry   *providers.Registry
 	Operations *operations.Store
 	Dispatcher *operations.Dispatcher
+	// Manifests powers Phase 5 drift detection. Get/List compare observed
+	// state against the stored desired manifest. May be nil — drift just
+	// won't be populated.
+	Manifests *manifests.Store
 }
 
 // Server is the controller's gRPC server.
@@ -75,7 +80,7 @@ func New(opts Options) (*Server, error) {
 	if registry == nil {
 		registry = providers.NewRegistry()
 	}
-	apiv1.RegisterResourceServiceServer(g, newResourceHandler(registry, opts.Operations, opts.Dispatcher))
+	apiv1.RegisterResourceServiceServer(g, newResourceHandler(registry, opts.Operations, opts.Dispatcher, opts.Manifests))
 	if opts.Operations != nil {
 		apiv1.RegisterOperationServiceServer(g, newOperationHandler(opts.Operations))
 	}

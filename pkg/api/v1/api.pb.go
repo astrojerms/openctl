@@ -125,12 +125,18 @@ func (x *PingResponse) GetServerVersion() string {
 // Resource is the k8s-style envelope for any resource kind. spec/status are
 // generic structured values to keep the proto kind-agnostic.
 type Resource struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ApiVersion    string                 `protobuf:"bytes,1,opt,name=api_version,json=apiVersion,proto3" json:"api_version,omitempty"` // e.g. "proxmox.openctl.io/v1"
-	Kind          string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`                               // e.g. "VirtualMachine"
-	Metadata      *Metadata              `protobuf:"bytes,3,opt,name=metadata,proto3" json:"metadata,omitempty"`
-	Spec          *structpb.Struct       `protobuf:"bytes,4,opt,name=spec,proto3" json:"spec,omitempty"`
-	Status        *structpb.Struct       `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	ApiVersion string                 `protobuf:"bytes,1,opt,name=api_version,json=apiVersion,proto3" json:"api_version,omitempty"` // e.g. "proxmox.openctl.io/v1"
+	Kind       string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`                               // e.g. "VirtualMachine"
+	Metadata   *Metadata              `protobuf:"bytes,3,opt,name=metadata,proto3" json:"metadata,omitempty"`
+	Spec       *structpb.Struct       `protobuf:"bytes,4,opt,name=spec,proto3" json:"spec,omitempty"`
+	Status     *structpb.Struct       `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"`
+	// Phase 5: drift surfaces "the resource set/spec differs from the manifest".
+	// Populated only on Get/List responses, after the controller compares the
+	// observed state against the persisted desired state. Empty entries means
+	// either the resource matches its manifest or no manifest is on file
+	// (e.g. resource was created out-of-band).
+	Drift         []*DriftEntry `protobuf:"bytes,6,rep,name=drift,proto3" json:"drift,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -200,6 +206,77 @@ func (x *Resource) GetStatus() *structpb.Struct {
 	return nil
 }
 
+func (x *Resource) GetDrift() []*DriftEntry {
+	if x != nil {
+		return x.Drift
+	}
+	return nil
+}
+
+// DriftEntry describes a single field where the observed state differs from
+// the desired state. path is a dot-separated walk into the spec
+// (e.g. "spec.cpus" or "spec.nodes.workers[0].count"); desired and observed
+// are the values rendered as strings for human display.
+type DriftEntry struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	Desired       string                 `protobuf:"bytes,2,opt,name=desired,proto3" json:"desired,omitempty"`
+	Observed      string                 `protobuf:"bytes,3,opt,name=observed,proto3" json:"observed,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DriftEntry) Reset() {
+	*x = DriftEntry{}
+	mi := &file_api_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DriftEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DriftEntry) ProtoMessage() {}
+
+func (x *DriftEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DriftEntry.ProtoReflect.Descriptor instead.
+func (*DriftEntry) Descriptor() ([]byte, []int) {
+	return file_api_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *DriftEntry) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *DriftEntry) GetDesired() string {
+	if x != nil {
+		return x.Desired
+	}
+	return ""
+}
+
+func (x *DriftEntry) GetObserved() string {
+	if x != nil {
+		return x.Observed
+	}
+	return ""
+}
+
 type Metadata struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -211,7 +288,7 @@ type Metadata struct {
 
 func (x *Metadata) Reset() {
 	*x = Metadata{}
-	mi := &file_api_proto_msgTypes[3]
+	mi := &file_api_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -223,7 +300,7 @@ func (x *Metadata) String() string {
 func (*Metadata) ProtoMessage() {}
 
 func (x *Metadata) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_msgTypes[3]
+	mi := &file_api_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -236,7 +313,7 @@ func (x *Metadata) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Metadata.ProtoReflect.Descriptor instead.
 func (*Metadata) Descriptor() ([]byte, []int) {
-	return file_api_proto_rawDescGZIP(), []int{3}
+	return file_api_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *Metadata) GetName() string {
@@ -261,15 +338,22 @@ func (x *Metadata) GetAnnotations() map[string]string {
 }
 
 type ApplyRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Resource      *Resource              `protobuf:"bytes,1,opt,name=resource,proto3" json:"resource,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Resource *Resource              `protobuf:"bytes,1,opt,name=resource,proto3" json:"resource,omitempty"`
+	// Phase 5 destructive guardrails. allow_destructive permits removing
+	// declared children (e.g. scaling a Cluster down). i_know_this_breaks_the_cluster
+	// overrides the catastrophic-op block (single-CP recreate, quorum loss,
+	// last-worker removal). Both default false; the CLI exposes them as
+	// --allow-destructive and --i-know-this-breaks-the-cluster.
+	AllowDestructive          bool `protobuf:"varint,2,opt,name=allow_destructive,json=allowDestructive,proto3" json:"allow_destructive,omitempty"`
+	IKnowThisBreaksTheCluster bool `protobuf:"varint,3,opt,name=i_know_this_breaks_the_cluster,json=iKnowThisBreaksTheCluster,proto3" json:"i_know_this_breaks_the_cluster,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
 }
 
 func (x *ApplyRequest) Reset() {
 	*x = ApplyRequest{}
-	mi := &file_api_proto_msgTypes[4]
+	mi := &file_api_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -281,7 +365,7 @@ func (x *ApplyRequest) String() string {
 func (*ApplyRequest) ProtoMessage() {}
 
 func (x *ApplyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_msgTypes[4]
+	mi := &file_api_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -294,7 +378,7 @@ func (x *ApplyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyRequest.ProtoReflect.Descriptor instead.
 func (*ApplyRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_rawDescGZIP(), []int{4}
+	return file_api_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ApplyRequest) GetResource() *Resource {
@@ -302,6 +386,20 @@ func (x *ApplyRequest) GetResource() *Resource {
 		return x.Resource
 	}
 	return nil
+}
+
+func (x *ApplyRequest) GetAllowDestructive() bool {
+	if x != nil {
+		return x.AllowDestructive
+	}
+	return false
+}
+
+func (x *ApplyRequest) GetIKnowThisBreaksTheCluster() bool {
+	if x != nil {
+		return x.IKnowThisBreaksTheCluster
+	}
+	return false
 }
 
 type ApplyResponse struct {
@@ -318,7 +416,7 @@ type ApplyResponse struct {
 
 func (x *ApplyResponse) Reset() {
 	*x = ApplyResponse{}
-	mi := &file_api_proto_msgTypes[5]
+	mi := &file_api_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -330,7 +428,7 @@ func (x *ApplyResponse) String() string {
 func (*ApplyResponse) ProtoMessage() {}
 
 func (x *ApplyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_msgTypes[5]
+	mi := &file_api_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -343,7 +441,7 @@ func (x *ApplyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyResponse.ProtoReflect.Descriptor instead.
 func (*ApplyResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_rawDescGZIP(), []int{5}
+	return file_api_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ApplyResponse) GetOperationId() string {
@@ -371,7 +469,7 @@ type GetRequest struct {
 
 func (x *GetRequest) Reset() {
 	*x = GetRequest{}
-	mi := &file_api_proto_msgTypes[6]
+	mi := &file_api_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -383,7 +481,7 @@ func (x *GetRequest) String() string {
 func (*GetRequest) ProtoMessage() {}
 
 func (x *GetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_msgTypes[6]
+	mi := &file_api_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -396,7 +494,7 @@ func (x *GetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRequest.ProtoReflect.Descriptor instead.
 func (*GetRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_rawDescGZIP(), []int{6}
+	return file_api_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *GetRequest) GetApiVersion() string {
@@ -429,7 +527,7 @@ type GetResponse struct {
 
 func (x *GetResponse) Reset() {
 	*x = GetResponse{}
-	mi := &file_api_proto_msgTypes[7]
+	mi := &file_api_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -441,7 +539,7 @@ func (x *GetResponse) String() string {
 func (*GetResponse) ProtoMessage() {}
 
 func (x *GetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_msgTypes[7]
+	mi := &file_api_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -454,7 +552,7 @@ func (x *GetResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetResponse.ProtoReflect.Descriptor instead.
 func (*GetResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_rawDescGZIP(), []int{7}
+	return file_api_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *GetResponse) GetResource() *Resource {
@@ -474,7 +572,7 @@ type ListRequest struct {
 
 func (x *ListRequest) Reset() {
 	*x = ListRequest{}
-	mi := &file_api_proto_msgTypes[8]
+	mi := &file_api_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -486,7 +584,7 @@ func (x *ListRequest) String() string {
 func (*ListRequest) ProtoMessage() {}
 
 func (x *ListRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_msgTypes[8]
+	mi := &file_api_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -499,7 +597,7 @@ func (x *ListRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRequest.ProtoReflect.Descriptor instead.
 func (*ListRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_rawDescGZIP(), []int{8}
+	return file_api_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ListRequest) GetApiVersion() string {
@@ -525,7 +623,7 @@ type ListResponse struct {
 
 func (x *ListResponse) Reset() {
 	*x = ListResponse{}
-	mi := &file_api_proto_msgTypes[9]
+	mi := &file_api_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -537,7 +635,7 @@ func (x *ListResponse) String() string {
 func (*ListResponse) ProtoMessage() {}
 
 func (x *ListResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_msgTypes[9]
+	mi := &file_api_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -550,7 +648,7 @@ func (x *ListResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListResponse.ProtoReflect.Descriptor instead.
 func (*ListResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_rawDescGZIP(), []int{9}
+	return file_api_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ListResponse) GetResources() []*Resource {
@@ -571,7 +669,7 @@ type DeleteRequest struct {
 
 func (x *DeleteRequest) Reset() {
 	*x = DeleteRequest{}
-	mi := &file_api_proto_msgTypes[10]
+	mi := &file_api_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -583,7 +681,7 @@ func (x *DeleteRequest) String() string {
 func (*DeleteRequest) ProtoMessage() {}
 
 func (x *DeleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_msgTypes[10]
+	mi := &file_api_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -596,7 +694,7 @@ func (x *DeleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteRequest.ProtoReflect.Descriptor instead.
 func (*DeleteRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_rawDescGZIP(), []int{10}
+	return file_api_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *DeleteRequest) GetApiVersion() string {
@@ -631,7 +729,7 @@ type DeleteResponse struct {
 
 func (x *DeleteResponse) Reset() {
 	*x = DeleteResponse{}
-	mi := &file_api_proto_msgTypes[11]
+	mi := &file_api_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -643,7 +741,7 @@ func (x *DeleteResponse) String() string {
 func (*DeleteResponse) ProtoMessage() {}
 
 func (x *DeleteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_msgTypes[11]
+	mi := &file_api_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -656,7 +754,7 @@ func (x *DeleteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteResponse.ProtoReflect.Descriptor instead.
 func (*DeleteResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_rawDescGZIP(), []int{11}
+	return file_api_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *DeleteResponse) GetOperationId() string {
@@ -693,7 +791,7 @@ type Operation struct {
 
 func (x *Operation) Reset() {
 	*x = Operation{}
-	mi := &file_api_proto_msgTypes[12]
+	mi := &file_api_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -705,7 +803,7 @@ func (x *Operation) String() string {
 func (*Operation) ProtoMessage() {}
 
 func (x *Operation) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_msgTypes[12]
+	mi := &file_api_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -718,7 +816,7 @@ func (x *Operation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Operation.ProtoReflect.Descriptor instead.
 func (*Operation) Descriptor() ([]byte, []int) {
-	return file_api_proto_rawDescGZIP(), []int{12}
+	return file_api_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *Operation) GetId() string {
@@ -814,7 +912,7 @@ type GetOperationRequest struct {
 
 func (x *GetOperationRequest) Reset() {
 	*x = GetOperationRequest{}
-	mi := &file_api_proto_msgTypes[13]
+	mi := &file_api_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -826,7 +924,7 @@ func (x *GetOperationRequest) String() string {
 func (*GetOperationRequest) ProtoMessage() {}
 
 func (x *GetOperationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_msgTypes[13]
+	mi := &file_api_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -839,7 +937,7 @@ func (x *GetOperationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetOperationRequest.ProtoReflect.Descriptor instead.
 func (*GetOperationRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_rawDescGZIP(), []int{13}
+	return file_api_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *GetOperationRequest) GetId() string {
@@ -864,7 +962,7 @@ type ListOperationsRequest struct {
 
 func (x *ListOperationsRequest) Reset() {
 	*x = ListOperationsRequest{}
-	mi := &file_api_proto_msgTypes[14]
+	mi := &file_api_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -876,7 +974,7 @@ func (x *ListOperationsRequest) String() string {
 func (*ListOperationsRequest) ProtoMessage() {}
 
 func (x *ListOperationsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_msgTypes[14]
+	mi := &file_api_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -889,7 +987,7 @@ func (x *ListOperationsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListOperationsRequest.ProtoReflect.Descriptor instead.
 func (*ListOperationsRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_rawDescGZIP(), []int{14}
+	return file_api_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ListOperationsRequest) GetStatus() string {
@@ -936,7 +1034,7 @@ type ListOperationsResponse struct {
 
 func (x *ListOperationsResponse) Reset() {
 	*x = ListOperationsResponse{}
-	mi := &file_api_proto_msgTypes[15]
+	mi := &file_api_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -948,7 +1046,7 @@ func (x *ListOperationsResponse) String() string {
 func (*ListOperationsResponse) ProtoMessage() {}
 
 func (x *ListOperationsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_msgTypes[15]
+	mi := &file_api_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -961,7 +1059,7 @@ func (x *ListOperationsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListOperationsResponse.ProtoReflect.Descriptor instead.
 func (*ListOperationsResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_rawDescGZIP(), []int{15}
+	return file_api_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ListOperationsResponse) GetOperations() []*Operation {
@@ -981,14 +1079,20 @@ const file_api_proto_rawDesc = "" +
 	"\amessage\x18\x01 \x01(\tR\amessage\"I\n" +
 	"\fPingResponse\x12\x12\n" +
 	"\x04echo\x18\x01 \x01(\tR\x04echo\x12%\n" +
-	"\x0eserver_version\x18\x02 \x01(\tR\rserverVersion\"\xcf\x01\n" +
+	"\x0eserver_version\x18\x02 \x01(\tR\rserverVersion\"\xfd\x01\n" +
 	"\bResource\x12\x1f\n" +
 	"\vapi_version\x18\x01 \x01(\tR\n" +
 	"apiVersion\x12\x12\n" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x120\n" +
 	"\bmetadata\x18\x03 \x01(\v2\x14.openctl.v1.MetadataR\bmetadata\x12+\n" +
 	"\x04spec\x18\x04 \x01(\v2\x17.google.protobuf.StructR\x04spec\x12/\n" +
-	"\x06status\x18\x05 \x01(\v2\x17.google.protobuf.StructR\x06status\"\x9c\x02\n" +
+	"\x06status\x18\x05 \x01(\v2\x17.google.protobuf.StructR\x06status\x12,\n" +
+	"\x05drift\x18\x06 \x03(\v2\x16.openctl.v1.DriftEntryR\x05drift\"V\n" +
+	"\n" +
+	"DriftEntry\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x18\n" +
+	"\adesired\x18\x02 \x01(\tR\adesired\x12\x1a\n" +
+	"\bobserved\x18\x03 \x01(\tR\bobserved\"\x9c\x02\n" +
 	"\bMetadata\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x128\n" +
 	"\x06labels\x18\x02 \x03(\v2 .openctl.v1.Metadata.LabelsEntryR\x06labels\x12G\n" +
@@ -998,9 +1102,11 @@ const file_api_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a>\n" +
 	"\x10AnnotationsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"@\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb0\x01\n" +
 	"\fApplyRequest\x120\n" +
-	"\bresource\x18\x01 \x01(\v2\x14.openctl.v1.ResourceR\bresource\"L\n" +
+	"\bresource\x18\x01 \x01(\v2\x14.openctl.v1.ResourceR\bresource\x12+\n" +
+	"\x11allow_destructive\x18\x02 \x01(\bR\x10allowDestructive\x12A\n" +
+	"\x1ei_know_this_breaks_the_cluster\x18\x03 \x01(\bR\x19iKnowThisBreaksTheCluster\"L\n" +
 	"\rApplyResponse\x12!\n" +
 	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\"U\n" +
@@ -1078,58 +1184,60 @@ func file_api_proto_rawDescGZIP() []byte {
 	return file_api_proto_rawDescData
 }
 
-var file_api_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_api_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_api_proto_goTypes = []any{
 	(*PingRequest)(nil),            // 0: openctl.v1.PingRequest
 	(*PingResponse)(nil),           // 1: openctl.v1.PingResponse
 	(*Resource)(nil),               // 2: openctl.v1.Resource
-	(*Metadata)(nil),               // 3: openctl.v1.Metadata
-	(*ApplyRequest)(nil),           // 4: openctl.v1.ApplyRequest
-	(*ApplyResponse)(nil),          // 5: openctl.v1.ApplyResponse
-	(*GetRequest)(nil),             // 6: openctl.v1.GetRequest
-	(*GetResponse)(nil),            // 7: openctl.v1.GetResponse
-	(*ListRequest)(nil),            // 8: openctl.v1.ListRequest
-	(*ListResponse)(nil),           // 9: openctl.v1.ListResponse
-	(*DeleteRequest)(nil),          // 10: openctl.v1.DeleteRequest
-	(*DeleteResponse)(nil),         // 11: openctl.v1.DeleteResponse
-	(*Operation)(nil),              // 12: openctl.v1.Operation
-	(*GetOperationRequest)(nil),    // 13: openctl.v1.GetOperationRequest
-	(*ListOperationsRequest)(nil),  // 14: openctl.v1.ListOperationsRequest
-	(*ListOperationsResponse)(nil), // 15: openctl.v1.ListOperationsResponse
-	nil,                            // 16: openctl.v1.Metadata.LabelsEntry
-	nil,                            // 17: openctl.v1.Metadata.AnnotationsEntry
-	(*structpb.Struct)(nil),        // 18: google.protobuf.Struct
+	(*DriftEntry)(nil),             // 3: openctl.v1.DriftEntry
+	(*Metadata)(nil),               // 4: openctl.v1.Metadata
+	(*ApplyRequest)(nil),           // 5: openctl.v1.ApplyRequest
+	(*ApplyResponse)(nil),          // 6: openctl.v1.ApplyResponse
+	(*GetRequest)(nil),             // 7: openctl.v1.GetRequest
+	(*GetResponse)(nil),            // 8: openctl.v1.GetResponse
+	(*ListRequest)(nil),            // 9: openctl.v1.ListRequest
+	(*ListResponse)(nil),           // 10: openctl.v1.ListResponse
+	(*DeleteRequest)(nil),          // 11: openctl.v1.DeleteRequest
+	(*DeleteResponse)(nil),         // 12: openctl.v1.DeleteResponse
+	(*Operation)(nil),              // 13: openctl.v1.Operation
+	(*GetOperationRequest)(nil),    // 14: openctl.v1.GetOperationRequest
+	(*ListOperationsRequest)(nil),  // 15: openctl.v1.ListOperationsRequest
+	(*ListOperationsResponse)(nil), // 16: openctl.v1.ListOperationsResponse
+	nil,                            // 17: openctl.v1.Metadata.LabelsEntry
+	nil,                            // 18: openctl.v1.Metadata.AnnotationsEntry
+	(*structpb.Struct)(nil),        // 19: google.protobuf.Struct
 }
 var file_api_proto_depIdxs = []int32{
-	3,  // 0: openctl.v1.Resource.metadata:type_name -> openctl.v1.Metadata
-	18, // 1: openctl.v1.Resource.spec:type_name -> google.protobuf.Struct
-	18, // 2: openctl.v1.Resource.status:type_name -> google.protobuf.Struct
-	16, // 3: openctl.v1.Metadata.labels:type_name -> openctl.v1.Metadata.LabelsEntry
-	17, // 4: openctl.v1.Metadata.annotations:type_name -> openctl.v1.Metadata.AnnotationsEntry
-	2,  // 5: openctl.v1.ApplyRequest.resource:type_name -> openctl.v1.Resource
-	2,  // 6: openctl.v1.GetResponse.resource:type_name -> openctl.v1.Resource
-	2,  // 7: openctl.v1.ListResponse.resources:type_name -> openctl.v1.Resource
-	2,  // 8: openctl.v1.Operation.result:type_name -> openctl.v1.Resource
-	12, // 9: openctl.v1.ListOperationsResponse.operations:type_name -> openctl.v1.Operation
-	0,  // 10: openctl.v1.PingService.Ping:input_type -> openctl.v1.PingRequest
-	4,  // 11: openctl.v1.ResourceService.Apply:input_type -> openctl.v1.ApplyRequest
-	6,  // 12: openctl.v1.ResourceService.Get:input_type -> openctl.v1.GetRequest
-	8,  // 13: openctl.v1.ResourceService.List:input_type -> openctl.v1.ListRequest
-	10, // 14: openctl.v1.ResourceService.Delete:input_type -> openctl.v1.DeleteRequest
-	13, // 15: openctl.v1.OperationService.GetOperation:input_type -> openctl.v1.GetOperationRequest
-	14, // 16: openctl.v1.OperationService.ListOperations:input_type -> openctl.v1.ListOperationsRequest
-	1,  // 17: openctl.v1.PingService.Ping:output_type -> openctl.v1.PingResponse
-	5,  // 18: openctl.v1.ResourceService.Apply:output_type -> openctl.v1.ApplyResponse
-	7,  // 19: openctl.v1.ResourceService.Get:output_type -> openctl.v1.GetResponse
-	9,  // 20: openctl.v1.ResourceService.List:output_type -> openctl.v1.ListResponse
-	11, // 21: openctl.v1.ResourceService.Delete:output_type -> openctl.v1.DeleteResponse
-	12, // 22: openctl.v1.OperationService.GetOperation:output_type -> openctl.v1.Operation
-	15, // 23: openctl.v1.OperationService.ListOperations:output_type -> openctl.v1.ListOperationsResponse
-	17, // [17:24] is the sub-list for method output_type
-	10, // [10:17] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	4,  // 0: openctl.v1.Resource.metadata:type_name -> openctl.v1.Metadata
+	19, // 1: openctl.v1.Resource.spec:type_name -> google.protobuf.Struct
+	19, // 2: openctl.v1.Resource.status:type_name -> google.protobuf.Struct
+	3,  // 3: openctl.v1.Resource.drift:type_name -> openctl.v1.DriftEntry
+	17, // 4: openctl.v1.Metadata.labels:type_name -> openctl.v1.Metadata.LabelsEntry
+	18, // 5: openctl.v1.Metadata.annotations:type_name -> openctl.v1.Metadata.AnnotationsEntry
+	2,  // 6: openctl.v1.ApplyRequest.resource:type_name -> openctl.v1.Resource
+	2,  // 7: openctl.v1.GetResponse.resource:type_name -> openctl.v1.Resource
+	2,  // 8: openctl.v1.ListResponse.resources:type_name -> openctl.v1.Resource
+	2,  // 9: openctl.v1.Operation.result:type_name -> openctl.v1.Resource
+	13, // 10: openctl.v1.ListOperationsResponse.operations:type_name -> openctl.v1.Operation
+	0,  // 11: openctl.v1.PingService.Ping:input_type -> openctl.v1.PingRequest
+	5,  // 12: openctl.v1.ResourceService.Apply:input_type -> openctl.v1.ApplyRequest
+	7,  // 13: openctl.v1.ResourceService.Get:input_type -> openctl.v1.GetRequest
+	9,  // 14: openctl.v1.ResourceService.List:input_type -> openctl.v1.ListRequest
+	11, // 15: openctl.v1.ResourceService.Delete:input_type -> openctl.v1.DeleteRequest
+	14, // 16: openctl.v1.OperationService.GetOperation:input_type -> openctl.v1.GetOperationRequest
+	15, // 17: openctl.v1.OperationService.ListOperations:input_type -> openctl.v1.ListOperationsRequest
+	1,  // 18: openctl.v1.PingService.Ping:output_type -> openctl.v1.PingResponse
+	6,  // 19: openctl.v1.ResourceService.Apply:output_type -> openctl.v1.ApplyResponse
+	8,  // 20: openctl.v1.ResourceService.Get:output_type -> openctl.v1.GetResponse
+	10, // 21: openctl.v1.ResourceService.List:output_type -> openctl.v1.ListResponse
+	12, // 22: openctl.v1.ResourceService.Delete:output_type -> openctl.v1.DeleteResponse
+	13, // 23: openctl.v1.OperationService.GetOperation:output_type -> openctl.v1.Operation
+	16, // 24: openctl.v1.OperationService.ListOperations:output_type -> openctl.v1.ListOperationsResponse
+	18, // [18:25] is the sub-list for method output_type
+	11, // [11:18] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_api_proto_init() }
@@ -1143,7 +1251,7 @@ func file_api_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_proto_rawDesc), len(file_api_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   18,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   3,
 		},

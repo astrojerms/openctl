@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	"github.com/openctl/openctl/internal/controller/manifests"
 	"github.com/openctl/openctl/internal/controller/operations"
 	"github.com/openctl/openctl/internal/controller/providers"
 	"github.com/openctl/openctl/internal/schema"
@@ -28,10 +29,13 @@ type resourceHandler struct {
 	registry   *providers.Registry
 	ops        *operations.Store
 	dispatcher *operations.Dispatcher
+	// manifests is optional: when set, Get/List populate the drift field by
+	// comparing observed state against the persisted desired manifest.
+	manifests *manifests.Store
 }
 
-func newResourceHandler(reg *providers.Registry, ops *operations.Store, d *operations.Dispatcher) *resourceHandler {
-	return &resourceHandler{registry: reg, ops: ops, dispatcher: d}
+func newResourceHandler(reg *providers.Registry, ops *operations.Store, d *operations.Dispatcher, m *manifests.Store) *resourceHandler {
+	return &resourceHandler{registry: reg, ops: ops, dispatcher: d, manifests: m}
 }
 
 func (h *resourceHandler) Apply(ctx context.Context, req *apiv1.ApplyRequest) (*apiv1.ApplyResponse, error) {
@@ -49,6 +53,21 @@ func (h *resourceHandler) Apply(ctx context.Context, req *apiv1.ApplyRequest) (*
 	}
 	if manifest.Metadata.Name == "" {
 		return nil, status.Error(codes.InvalidArgument, "metadata.name is required")
+	}
+
+	// Phase 5: surface the destructive flags to providers via annotations.
+	// Annotations ride along on manifest_json through the operations table,
+	// so the dispatcher delivers them to provider.Apply unchanged.
+	if req.GetAllowDestructive() || req.GetIKnowThisBreaksTheCluster() {
+		if manifest.Metadata.Annotations == nil {
+			manifest.Metadata.Annotations = map[string]string{}
+		}
+		if req.GetAllowDestructive() {
+			manifest.Metadata.Annotations["openctl.io/allow-destructive"] = "true"
+		}
+		if req.GetIKnowThisBreaksTheCluster() {
+			manifest.Metadata.Annotations["openctl.io/i-know-this-breaks-the-cluster"] = "true"
+		}
 	}
 
 	// Phase 3: enqueue an op and return immediately. Phase 2 sync fallback
@@ -116,6 +135,9 @@ func (h *resourceHandler) Get(ctx context.Context, req *apiv1.GetRequest) (*apiv
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "encode: %v", err)
 	}
+	if err := h.attachDrift(ctx, out, r); err != nil {
+		return nil, status.Errorf(codes.Internal, "compute drift: %v", err)
+	}
 	return &apiv1.GetResponse{Resource: out}, nil
 }
 
@@ -134,9 +156,31 @@ func (h *resourceHandler) List(ctx context.Context, req *apiv1.ListRequest) (*ap
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "encode: %v", err)
 		}
+		if err := h.attachDrift(ctx, pr, r); err != nil {
+			return nil, status.Errorf(codes.Internal, "compute drift: %v", err)
+		}
 		out = append(out, pr)
 	}
 	return &apiv1.ListResponse{Resources: out}, nil
+}
+
+// attachDrift looks up the resource's persisted manifest and populates
+// out.Drift with the differences between desired and observed specs. No-op
+// if the manifest store isn't wired or no manifest is on file (resource was
+// created out-of-band).
+func (h *resourceHandler) attachDrift(ctx context.Context, out *apiv1.Resource, observed *protocol.Resource) error {
+	if h.manifests == nil || observed == nil {
+		return nil
+	}
+	desired, err := h.manifests.Load(ctx, observed.APIVersion, observed.Kind, observed.Metadata.Name)
+	if err != nil {
+		return err
+	}
+	if desired == nil {
+		return nil
+	}
+	out.Drift = computeDrift(desired.Spec, observed.Spec)
+	return nil
 }
 
 func (h *resourceHandler) Delete(ctx context.Context, req *apiv1.DeleteRequest) (*apiv1.DeleteResponse, error) {

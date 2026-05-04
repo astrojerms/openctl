@@ -92,7 +92,7 @@ func startTestServer(t *testing.T, registry *providers.Registry) (string, *tlspk
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	store := operations.New(db, 50)
-	dispatcher := operations.NewDispatcher(store, registry, 50*time.Millisecond)
+	dispatcher := operations.NewDispatcher(store, registry, nil, 50*time.Millisecond)
 	dispatcher.Start(context.Background())
 	t.Cleanup(dispatcher.Stop)
 

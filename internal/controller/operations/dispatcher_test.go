@@ -59,7 +59,7 @@ func newDispatcherWithStore(t *testing.T, p *fakeProvider) (*Store, *Dispatcher)
 
 	reg := providers.NewRegistry()
 	reg.Register(p)
-	d := NewDispatcher(store, reg, 50*time.Millisecond)
+	d := NewDispatcher(store, reg, nil, 50*time.Millisecond)
 	return store, d
 }
 

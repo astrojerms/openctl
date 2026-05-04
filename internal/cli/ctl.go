@@ -39,16 +39,24 @@ and the exec-plugin paths are removed.`,
 
 func newCtlApplyCommand() *cobra.Command {
 	var (
-		file        string
-		noWait      bool
-		waitTimeout time.Duration
+		file             string
+		noWait           bool
+		waitTimeout      time.Duration
+		allowDestructive bool
+		iKnowThisBreaks  bool
 	)
 	cmd := &cobra.Command{
 		Use:   "apply -f <manifest>",
 		Short: "Submit a manifest to the controller",
 		Long: `Submits the manifest to the controller as an async operation. By default
 waits for the operation to reach a terminal status (succeeded/failed/
-interrupted) before returning. Use --no-wait to fire-and-forget.`,
+interrupted) before returning. Use --no-wait to fire-and-forget.
+
+Destructive convergence (Phase 5):
+  --allow-destructive             permit removing declared children
+                                  (e.g. scaling a Cluster down)
+  --i-know-this-breaks-the-cluster override the catastrophic-op block
+                                  (last CP, quorum loss, last worker)`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if file == "" {
 				return fmt.Errorf("--file is required")
@@ -60,12 +68,14 @@ interrupted) before returning. Use --no-wait to fire-and-forget.`,
 			if err := schema.Validate(r); err != nil {
 				return fmt.Errorf("validation: %w", err)
 			}
-			return ctlApply(cmd.Context(), r, !noWait, waitTimeout)
+			return ctlApply(cmd.Context(), r, !noWait, waitTimeout, allowDestructive, iKnowThisBreaks)
 		},
 	}
 	cmd.Flags().StringVarP(&file, "file", "f", "", "manifest file (.yaml or .cue)")
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "return immediately after submission instead of polling for completion")
 	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 5*time.Minute, "max time to wait for completion when not --no-wait")
+	cmd.Flags().BoolVar(&allowDestructive, "allow-destructive", false, "permit removing declared children when re-applying a Cluster")
+	cmd.Flags().BoolVar(&iKnowThisBreaks, "i-know-this-breaks-the-cluster", false, "override the catastrophic-op block (last CP, quorum loss, last worker)")
 	return cmd
 }
 
@@ -197,7 +207,7 @@ func printOp(op *apiv1.Operation) error {
 	return nil
 }
 
-func ctlApply(ctx context.Context, r *protocol.Resource, wait bool, waitTimeout time.Duration) error {
+func ctlApply(ctx context.Context, r *protocol.Resource, wait bool, waitTimeout time.Duration, allowDestructive, iKnowThisBreaks bool) error {
 	conn, token, err := dialController()
 	if err != nil {
 		return err
@@ -209,7 +219,11 @@ func ctlApply(ctx context.Context, r *protocol.Resource, wait bool, waitTimeout 
 		return err
 	}
 	ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
-	resp, err := apiv1.NewResourceServiceClient(conn).Apply(ctx, &apiv1.ApplyRequest{Resource: pr})
+	resp, err := apiv1.NewResourceServiceClient(conn).Apply(ctx, &apiv1.ApplyRequest{
+		Resource:                  pr,
+		AllowDestructive:          allowDestructive,
+		IKnowThisBreaksTheCluster: iKnowThisBreaks,
+	})
 	if err != nil {
 		return fmt.Errorf("apply: %w", err)
 	}
@@ -383,10 +397,20 @@ func normalizeNumericValue(v any) any {
 
 // printResource emits the response in the user's chosen output format. For
 // Phase 2 we just dump JSON since the table formatter is provider-shaped
-// and the controller path is generic.
+// and the controller path is generic. Phase 5 also surfaces drift as a
+// dedicated `drift` block when the controller computed any.
 func printResource(r *apiv1.Resource) error {
 	if r == nil {
 		return nil
+	}
+	type driftLine struct {
+		Path     string `json:"path"`
+		Desired  string `json:"desired"`
+		Observed string `json:"observed"`
+	}
+	var drift []driftLine
+	for _, e := range r.GetDrift() {
+		drift = append(drift, driftLine{Path: e.GetPath(), Desired: e.GetDesired(), Observed: e.GetObserved()})
 	}
 	js, err := json.MarshalIndent(struct {
 		APIVersion string          `json:"apiVersion"`
@@ -394,12 +418,14 @@ func printResource(r *apiv1.Resource) error {
 		Metadata   *apiv1.Metadata `json:"metadata"`
 		Spec       any             `json:"spec,omitempty"`
 		Status     any             `json:"status,omitempty"`
+		Drift      []driftLine     `json:"drift,omitempty"`
 	}{
 		APIVersion: r.GetApiVersion(),
 		Kind:       r.GetKind(),
 		Metadata:   r.GetMetadata(),
 		Spec:       r.GetSpec().AsMap(),
 		Status:     r.GetStatus().AsMap(),
+		Drift:      drift,
 	}, "", "  ")
 	if err != nil {
 		return err

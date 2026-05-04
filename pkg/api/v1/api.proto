@@ -59,6 +59,22 @@ message Resource {
   Metadata metadata = 3;
   google.protobuf.Struct spec = 4;
   google.protobuf.Struct status = 5;
+  // Phase 5: drift surfaces "the resource set/spec differs from the manifest".
+  // Populated only on Get/List responses, after the controller compares the
+  // observed state against the persisted desired state. Empty entries means
+  // either the resource matches its manifest or no manifest is on file
+  // (e.g. resource was created out-of-band).
+  repeated DriftEntry drift = 6;
+}
+
+// DriftEntry describes a single field where the observed state differs from
+// the desired state. path is a dot-separated walk into the spec
+// (e.g. "spec.cpus" or "spec.nodes.workers[0].count"); desired and observed
+// are the values rendered as strings for human display.
+message DriftEntry {
+  string path = 1;
+  string desired = 2;
+  string observed = 3;
 }
 
 message Metadata {
@@ -69,6 +85,13 @@ message Metadata {
 
 message ApplyRequest {
   Resource resource = 1;
+  // Phase 5 destructive guardrails. allow_destructive permits removing
+  // declared children (e.g. scaling a Cluster down). i_know_this_breaks_the_cluster
+  // overrides the catastrophic-op block (single-CP recreate, quorum loss,
+  // last-worker removal). Both default false; the CLI exposes them as
+  // --allow-destructive and --i-know-this-breaks-the-cluster.
+  bool allow_destructive = 2;
+  bool i_know_this_breaks_the_cluster = 3;
 }
 
 message ApplyResponse {

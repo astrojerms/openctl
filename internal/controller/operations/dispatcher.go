@@ -18,12 +18,22 @@ import (
 // Keep small enough to feel responsive; large enough to avoid burning CPU.
 const DefaultPollInterval = 500 * time.Millisecond
 
+// ManifestSink lets the dispatcher persist desired-state on apply/delete
+// success. Kept as a narrow interface so this package doesn't depend on
+// internal/controller/manifests (the wiring lives in cmd/openctl-controller).
+// nil is permitted — tests skip the sink.
+type ManifestSink interface {
+	Save(ctx context.Context, r *protocol.Resource) error
+	Delete(ctx context.Context, apiVersion, kind, name string) error
+}
+
 // Dispatcher pulls pending operations from the Store and runs them through
 // the appropriate Provider. Runs as a single goroutine started by Start;
 // Stop blocks until in-flight ops finish (or ctx cancels first).
 type Dispatcher struct {
 	store        *Store
 	registry     *providers.Registry
+	manifests    ManifestSink
 	pollInterval time.Duration
 
 	notify  chan struct{}
@@ -33,14 +43,15 @@ type Dispatcher struct {
 }
 
 // NewDispatcher constructs a Dispatcher. pollInterval==0 uses
-// DefaultPollInterval.
-func NewDispatcher(store *Store, registry *providers.Registry, pollInterval time.Duration) *Dispatcher {
+// DefaultPollInterval. manifests may be nil (tests).
+func NewDispatcher(store *Store, registry *providers.Registry, manifests ManifestSink, pollInterval time.Duration) *Dispatcher {
 	if pollInterval == 0 {
 		pollInterval = DefaultPollInterval
 	}
 	return &Dispatcher{
 		store:        store,
 		registry:     registry,
+		manifests:    manifests,
 		pollInterval: pollInterval,
 		notify:       make(chan struct{}, 1),
 		done:         make(chan struct{}),
@@ -136,6 +147,15 @@ func (d *Dispatcher) execute(ctx context.Context, op *Operation) {
 			_ = d.store.Complete(ctx, op.ID, StatusFailed, err.Error(), "")
 			return
 		}
+		// Persist desired state for drift detection. Use the submitted
+		// manifest, not the result — manifest is "intent", result is
+		// "observed-after-apply" and may carry provider-set defaults that
+		// would falsely match on the next Get.
+		if d.manifests != nil {
+			if err := d.manifests.Save(ctx, &manifest); err != nil {
+				log.Printf("dispatcher: save manifest for %s %q: %v", op.Kind, op.ResourceName, err)
+			}
+		}
 		var resultJSON []byte
 		if result != nil {
 			resultJSON, _ = json.Marshal(result)
@@ -146,6 +166,11 @@ func (d *Dispatcher) execute(ctx context.Context, op *Operation) {
 		if err := p.Delete(ctx, op.Kind, op.ResourceName); err != nil {
 			_ = d.store.Complete(ctx, op.ID, StatusFailed, err.Error(), "")
 			return
+		}
+		if d.manifests != nil {
+			if err := d.manifests.Delete(ctx, op.APIVersion, op.Kind, op.ResourceName); err != nil {
+				log.Printf("dispatcher: delete manifest for %s %q: %v", op.Kind, op.ResourceName, err)
+			}
 		}
 		_ = d.store.Complete(ctx, op.ID, StatusSucceeded, "", "")
 

@@ -16,6 +16,7 @@ import (
 
 	"github.com/openctl/openctl/internal/config"
 	"github.com/openctl/openctl/internal/controller/auth"
+	"github.com/openctl/openctl/internal/controller/manifests"
 	"github.com/openctl/openctl/internal/controller/operations"
 	"github.com/openctl/openctl/internal/controller/providers"
 	k3sprovider "github.com/openctl/openctl/internal/controller/providers/k3s"
@@ -122,7 +123,8 @@ func runServe(args []string) error {
 	} else if n > 0 {
 		log.Printf("marked %d previously-running operation(s) as interrupted", n)
 	}
-	dispatcher := operations.NewDispatcher(opStore, registry, 0)
+	manifestStore := manifests.New(db)
+	dispatcher := operations.NewDispatcher(opStore, registry, manifestStore, 0)
 	dispatcher.Start(ctx)
 	defer dispatcher.Stop()
 
@@ -133,6 +135,7 @@ func runServe(args []string) error {
 		Registry:   registry,
 		Operations: opStore,
 		Dispatcher: dispatcher,
+		Manifests:  manifestStore,
 	}
 	if !*noAuth {
 		opts.Token = token
