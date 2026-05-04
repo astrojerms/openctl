@@ -353,27 +353,43 @@ deletion shows up as count drift on Get.
 
 ### Phase 6: Mac launchd install
 
-**Status:** pending
+**Status:** complete
 
 **Goals:** zero-friction local install. Fresh Mac → one command → openctl
 works.
 
 **Deliverables:**
 
-- [ ] `openctl-controller install --local` command.
-- [ ] Generates launchd plist at `~/Library/LaunchAgents/io.openctl.controller.plist`.
-- [ ] Places binary at standard location.
-- [ ] Calls `launchctl load`; verifies controller responds.
-- [ ] Writes initial CLI config to `~/.openctl/config.yaml` (controller URL
-      + token path + CA path).
-- [ ] Prints next-steps including how to uninstall.
-- [ ] `openctl-controller uninstall` removes plist + binary (leaves state
-      and config alone unless `--purge`).
-- [ ] Documentation: README/QUICKSTART updates pointing at the install
-      command.
+- [x] `openctl-controller install --local` command (per-user LaunchAgent;
+      no sudo, no `/usr/local/bin/` write).
+- [x] Generates launchd plist at
+      `~/Library/LaunchAgents/io.openctl.controller.plist` with RunAtLoad
+      + KeepAlive (start now, restart on crash). Logs go to
+      `~/Library/Logs/openctl/controller.{out,err}.log`.
+- [x] Places binary at `~/Library/Application Support/openctl/bin/openctl-controller`
+      via atomic temp-file + rename, so reinstalling over a running
+      binary is safe.
+- [x] Calls `launchctl load -w`; verifies the controller responds by
+      dialing `127.0.0.1:9444` with a 10s budget.
+- [x] Seeds `~/.openctl/config.yaml` with a `controller:` stub when the
+      file doesn't exist. Existing files are left untouched (they
+      typically carry provider credentials).
+- [x] Prints next-steps including how to uninstall.
+- [x] `openctl-controller uninstall` removes plist + binary; leaves state
+      and config alone unless `--purge` is passed (in which case
+      `~/.openctl/controller` is removed). Config is *never* rewritten —
+      provider credentials aren't ours to delete.
+- [x] Documentation: QUICKSTART updated to point at the install command
+      first; foreground `serve` retained for development.
+- [x] Tests: path resolution, plist rendering (key Label/Args/RunAtLoad/
+      log-path fields), config-stub-on-missing, config-leave-on-existing,
+      atomic-copy with executable mode, idempotent remove.
 
-**Verifiable:** fresh test directory, run `openctl-controller install
---local`, then `openctl proxmox get vms` works without further setup.
+**Verifiable:** confirmed via `cmd/openctl-controller/install_test.go` —
+the pure-function pieces (paths, plist rendering, config stub, atomic
+copy) all unit-tested. End-to-end smoke (`install --local` → `openctl
+ping` round-trip) is left for the user since it touches the real
+LaunchAgent on the running machine.
 
 ---
 

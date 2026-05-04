@@ -46,6 +46,10 @@ func run() error {
 	switch os.Args[1] {
 	case "serve":
 		return runServe(os.Args[2:])
+	case "install":
+		return runInstall(os.Args[2:])
+	case "uninstall":
+		return runUninstall(os.Args[2:])
 	case "version":
 		fmt.Println(server.ServerVersion)
 		return nil
@@ -62,11 +66,13 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, `usage: openctl-controller <subcommand> [flags]
 
 Subcommands:
-  serve     Run the controller in the foreground
-  version   Print the controller version
-  help      Show this message
+  serve      Run the controller in the foreground
+  install    Install the controller as a per-user LaunchAgent (macOS)
+  uninstall  Remove the LaunchAgent install
+  version    Print the controller version
+  help       Show this message
 
-Run 'openctl-controller serve --help' for serve flags.`)
+Run 'openctl-controller <subcommand> --help' for per-subcommand flags.`)
 }
 
 func runServe(args []string) error {

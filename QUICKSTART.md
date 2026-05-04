@@ -29,16 +29,38 @@ This builds and installs:
 The agent binaries live in a subdirectory so their `openctl-*` filenames
 don't get picked up by plugin discovery.
 
-## Running the controller (Phase 1)
+## Running the controller
 
-The controller is the new persistent reconciler that's gradually replacing
-the stateless CLI-with-state-files model. As of Phase 1 it speaks gRPC over
-TLS with an API token, and the CLI's `openctl ping` round-trips against it.
-Providers haven't moved over yet; for actual cluster work, keep using the
-exec-plugin commands described below.
+The controller is the persistent reconciler. From Phase 4 onward, both
+proxmox and k3s providers are compiled into the controller binary; the
+CLI's `openctl ctl ...` commands route through it. The legacy exec-plugin
+commands still work for transition, and graduate to top-level after
+Phase 6.
+
+### Install as a per-user LaunchAgent (macOS, recommended)
 
 ```sh
-# Foreground run (defaults: 127.0.0.1:9444, state in ~/.openctl/controller/)
+make build
+./build/openctl-controller install --local
+```
+
+This copies the controller into `~/Library/Application Support/openctl/bin/`,
+writes a LaunchAgent plist at `~/Library/LaunchAgents/io.openctl.controller.plist`,
+loads it (RunAtLoad + KeepAlive), verifies the controller comes up, and
+seeds `~/.openctl/config.yaml` with a controller section if missing. Logs
+land at `~/Library/Logs/openctl/controller.{out,err}.log`.
+
+To remove:
+
+```sh
+openctl-controller uninstall          # leaves state intact
+openctl-controller uninstall --purge  # also removes ~/.openctl/controller
+```
+
+### Foreground run (development)
+
+```sh
+# Defaults: 127.0.0.1:9444, state in ~/.openctl/controller/
 openctl-controller serve
 
 # In another terminal:
