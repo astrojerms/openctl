@@ -185,3 +185,29 @@ export const resources = {
   get: (apiVersion: string, kind: string, name: string) =>
     api.post<GetResourceResponse>('/v1/resources:get', { apiVersion, kind, name }),
 };
+
+// --- Repo (manifest dir / git) -------------------------------------------
+
+export interface RepoStatus {
+  enabled?: boolean;
+  dir?: string;
+  branch?: string;
+  headSha?: string;
+  remote?: string;
+  clean?: boolean;
+  dirtyPaths?: string[];
+  // ahead/behind: -1 when there's no upstream branch (e.g. local-only repo).
+  ahead?: number;
+  behind?: number;
+  pushMode?: 'onCommit' | 'periodic' | 'manual' | string;
+}
+
+export interface RepoActionResponse {
+  message?: string;
+}
+
+export const repo = {
+  status: () => api.get<RepoStatus>('/v1/repo/status'),
+  push: () => api.post<RepoActionResponse>('/v1/repo:push'),
+  pull: () => api.post<RepoActionResponse>('/v1/repo:pull'),
+};

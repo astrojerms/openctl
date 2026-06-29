@@ -18,10 +18,12 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
-UI Phase U3 (browser UI shell) underway. U3.1–U3.4 shipped — scaffold +
-login, layout + list, detail pane, live Watch streams + ops drawer.
-Next sub-phase is U3.5 (git status indicator + Push now + Watch-driven
-catalogue counts + e2e tests).
+Nothing actively in progress. UI Phase U3 fully shipped (U3.1–U3.5):
+scaffold + login, layout + list, detail pane, live Watch streams + ops
+drawer, git status indicator + Push-now + Watch-driven catalogue
+counts + Vitest harness. Next major item per ROADMAP suggested order:
+UI Phase U4 (Monaco-based CUE/manifest editor + DryRunApply RPC), or
+arch Phase 8 (K3sNode as a first-class resource).
 
 ## Suggested next order
 
@@ -123,7 +125,7 @@ committing to a phase.
             (background ticker), `manual` (RPC only). `RepoService`
             RPC: GetStatus/Push/Pull. Push failures logged, never
             block apply.
-- [~] **Phase U3** — UI shell + read-only views (Vite+Svelte skeleton,
+- [x] **Phase U3** — UI shell + read-only views (Vite+Svelte skeleton,
       list/detail/op-history with live Watch streams, git status
       indicator).
       - [x] **U3.1** — Vite+Svelte+TS scaffold; embed pipeline (Vite →
@@ -146,6 +148,14 @@ committing to a phase.
             bottom drawer subscribes to OperationService.WatchOperations
             with the last 200 ops, in-flight count, and per-op links.
             Reconnect-with-backoff on transient errors.
+      - [x] **U3.5** — Git status indicator in the header (10s
+            poll of RepoService.GetStatus) + Push-now button when remote
+            is configured; Watch-driven catalogue counts (one stream
+            per kind, ADDED/DELETED updates); Vitest harness with unit
+            tests for stream parsing, router, and status-badge format.
+            Playwright headless-Chrome e2e explicitly deferred (~200MB
+            of browsers + non-trivial CI is wrong tradeoff for a
+            homelab project).
       - [ ] **U3.4** — ops drawer + live Watch streams.
       - [ ] **U3.5** — git status indicator + Push now + e2e tests.
 - [ ] **Phase U4** — CUE/manifest editor (Monaco-based, server-side

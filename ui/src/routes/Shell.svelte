@@ -3,9 +3,13 @@
   import type { WhoAmIResponse } from '../lib/api';
   import { logout } from '../lib/auth';
   import { route } from '../lib/router';
-  import { catalogue, catalogueError, refreshCatalogue, type KindEntry } from '../lib/catalogue';
+  import {
+    catalogue, catalogueError, refreshCatalogue, stopCatalogue,
+    type KindEntry,
+  } from '../lib/catalogue';
   import { routeHref } from '../lib/router';
   import { startOpsWatcher, stopOpsWatcher } from '../lib/ops';
+  import GitStatus from '../components/GitStatus.svelte';
   import Nav from '../components/Nav.svelte';
   import OpsDrawer from '../components/OpsDrawer.svelte';
   import HomePane from './HomePane.svelte';
@@ -23,6 +27,7 @@
 
   onDestroy(() => {
     stopOpsWatcher();
+    stopCatalogue();
   });
 
   async function doLogout() {
@@ -48,6 +53,7 @@
 <header>
   <a class="brand" href={routeHref({ name: 'home' })}>openctl</a>
   <div class="meta">
+    <GitStatus />
     <span class="who" title="Session: {me.sessionId}">
       signed in {me.userId ? `as ${me.userId}` : ''}
     </span>
