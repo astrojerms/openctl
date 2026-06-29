@@ -18,9 +18,9 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
-UI Phase U3 (browser UI shell) underway. U3.1 (Vite+Svelte scaffold +
-embed pipeline + login/logout) shipped; next sub-phase is U3.2 (layout
-shell + resource list with drift/health badges).
+UI Phase U3 (browser UI shell) underway. U3.1 (scaffold + login) and
+U3.2 (layout shell + resource list with state/drift badges) shipped;
+next sub-phase is U3.3 (resource detail pane).
 
 ## Suggested next order
 
@@ -130,7 +130,10 @@ committing to a phase.
             `//go:embed all:uiassets/dist`); `make ui` install+build;
             login screen (root bearer → HttpOnly session cookie);
             WhoAmI confirms session; logout button + 401 → login.
-      - [ ] **U3.2** — layout shell + resource list.
+      - [x] **U3.2** — Layout shell (header + left nav grouped by
+            provider, main pane); hash router; kind catalogue with live
+            counts (ListSchemas + parallel List fan-out); per-kind
+            resource list with state + drift badges.
       - [ ] **U3.3** — resource detail (applied/observed/drift/children).
       - [ ] **U3.4** — ops drawer + live Watch streams.
       - [ ] **U3.5** — git status indicator + Push now + e2e tests.

@@ -120,3 +120,56 @@ export const ping = {
   ping: (message = 'hello from ui') =>
     api.get<PingResponse>('/v1/ping?message=' + encodeURIComponent(message)),
 };
+
+// --- Schemas -------------------------------------------------------------
+
+export interface SchemaInfo {
+  apiVersion: string;
+  kind: string;
+  provider: string;
+  fileName: string;
+}
+
+export interface ListSchemasResponse {
+  schemas?: SchemaInfo[];
+}
+
+export const schemas = {
+  list: () => api.get<ListSchemasResponse>('/v1/schemas'),
+};
+
+// --- Resources -----------------------------------------------------------
+
+export interface ResourceMetadata {
+  name: string;
+  labels?: Record<string, string>;
+  annotations?: Record<string, string>;
+}
+
+export interface DriftEntry {
+  path: string;
+  desired: string;
+  observed: string;
+}
+
+export interface Resource {
+  apiVersion: string;
+  kind: string;
+  metadata: ResourceMetadata;
+  // spec/status are google.protobuf.Struct on the wire — JSON-shaped opaque
+  // objects on this side. Components that drill into them do so behind
+  // kind-aware adapters in src/lib/render.ts so the rendering surface stays
+  // schema-aware even though the transport is generic.
+  spec?: Record<string, unknown>;
+  status?: Record<string, unknown>;
+  drift?: DriftEntry[];
+}
+
+export interface ListResourcesResponse {
+  resources?: Resource[];
+}
+
+export const resources = {
+  list: (apiVersion: string, kind: string) =>
+    api.post<ListResourcesResponse>('/v1/resources:list', { apiVersion, kind }),
+};

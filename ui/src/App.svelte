@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { auth, refresh } from './lib/auth';
   import Login from './routes/Login.svelte';
-  import Home from './routes/Home.svelte';
+  import Shell from './routes/Shell.svelte';
 
   onMount(() => {
     void refresh();
@@ -16,7 +16,7 @@
 {:else if $auth.kind === 'signed-out'}
   <Login />
 {:else}
-  <Home me={$auth.me} />
+  <Shell me={$auth.me} />
 {/if}
 
 <style>
