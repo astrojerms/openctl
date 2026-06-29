@@ -1,7 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import { loadMonaco } from '../lib/monaco';
-  import type * as MonacoNs from 'monaco-editor/esm/vs/editor/editor.api';
+  import type * as MonacoNs from 'monaco-editor';
 
   export let value: string = '';
   export let language: string = 'yaml';

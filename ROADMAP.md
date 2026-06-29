@@ -18,10 +18,10 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
-UI Phase U4 (CUE/manifest editor) underway. U4.1 (DryRunApply RPC) and
-U4.2 (Monaco editor + debounced Validate, lazy-loaded so list/detail
-stay light) shipped; next sub-phase is U4.3 (Apply panel with
-DryRunApply preview + destructive-gate checkboxes + live op progress).
+UI Phase U4 (CUE/manifest editor) underway. U4.1–U4.3 shipped —
+DryRunApply RPC, Monaco editor + Validate, Apply panel with preview
++ destructive-gate checkboxes + live op progress. Next sub-phase is
+U4.4 (side-by-side Monaco diff editor vs the applied manifest).
 
 ## Suggested next order
 
@@ -167,8 +167,11 @@ committing to a phase.
             lazy-loaded so list/detail bundles stay light. 350 ms
             debounce on edits → SchemaService.Validate → Monaco markers
             + diagnostics card. Detail pane gets an "Edit" button.
-      - [ ] **U4.3** — Apply panel: DryRunApply preview + destructive
-            gates + live op progress.
+      - [x] **U4.3** — Apply panel inline in the edit pane: one
+            debounce fires Validate + DryRunApply in parallel; preview
+            shows diff + child verbs + summary; required gates render
+            as labelled checkboxes; Apply submits with gate flags and
+            tails the resulting op via the existing ops store.
       - [ ] **U4.4** — Side-by-side diff view (Monaco diff editor).
 - [ ] **Phase U5** — Typed form editor (CUE-AST → form-schema bridge,
       AWS-console stepped sections, live manifest preview, view

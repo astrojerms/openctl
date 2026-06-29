@@ -19,7 +19,13 @@ declare global {
   }
 }
 
-export type Monaco = typeof import('monaco-editor/esm/vs/editor/editor.api');
+// The runtime import targets `editor.api` (skips `editor.main`'s
+// auto-load-every-language barrel), but TypeScript resolves types
+// through the package's `.` export entry which only declares
+// `editor.main.d.ts`. The Monaco API surface is identical between the
+// two — `editor.api` is the subset re-exported from `editor.main` —
+// so we use the bare `monaco-editor` import for types only.
+export type Monaco = typeof import('monaco-editor');
 
 let cached: Monaco | null = null;
 
@@ -31,11 +37,14 @@ export async function loadMonaco(): Promise<Monaco> {
     },
   };
   const [api] = await Promise.all([
+    // @ts-expect-error — subpath export carries no types; surface is
+    // identical to the bare `monaco-editor` types declared above.
     import('monaco-editor/esm/vs/editor/editor.api'),
     // Side-effect import that registers the YAML basic-language. Loaded
     // alongside the API so highlighting works on the first render.
+    // @ts-expect-error — subpath export carries no types; runtime only.
     import('monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution'),
   ]);
-  cached = api;
-  return api;
+  cached = api as Monaco;
+  return cached;
 }

@@ -200,6 +200,17 @@ export interface GetResourceResponse {
   appliedAt?: string;
 }
 
+export interface ApplyRequest {
+  resource: Resource | Partial<Resource>;
+  allowDestructive?: boolean;
+  iKnowThisBreaksTheCluster?: boolean;
+}
+
+export interface ApplyResponse {
+  operationId?: string;
+  message?: string;
+}
+
 export const resources = {
   list: (apiVersion: string, kind: string) =>
     api.post<ListResourcesResponse>('/v1/resources:list', { apiVersion, kind }),
@@ -207,6 +218,8 @@ export const resources = {
     api.post<GetResourceResponse>('/v1/resources:get', { apiVersion, kind, name }),
   dryRunApply: (resource: Resource | Partial<Resource>) =>
     api.post<DryRunApplyResponse>('/v1/resources:dryRunApply', { resource }),
+  apply: (req: ApplyRequest) =>
+    api.post<ApplyResponse>('/v1/resources:apply', req),
 };
 
 // --- Repo (manifest dir / git) -------------------------------------------
