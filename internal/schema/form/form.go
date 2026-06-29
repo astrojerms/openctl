@@ -35,6 +35,7 @@ const (
 	FieldBool        FieldType = "bool"
 	FieldObject      FieldType = "object"
 	FieldArray       FieldType = "array"
+	FieldMap         FieldType = "map"         // CUE {[string]: T} — key/value editor
 	FieldAny         FieldType = "any"         // CUE `_` — escape hatch
 	FieldUnsupported FieldType = "unsupported" // walker hit something it can't model
 )
@@ -70,6 +71,18 @@ type Field struct {
 	// FieldArray so the renderer shows an add-row affordance; each row
 	// renders as Field.Type=any).
 	Items *Field `json:"items,omitempty"`
+
+	// FieldMap: value schema for `{[string]: T}`. The key is always a
+	// string; surfacing the key type is a future enhancement.
+	ValueType *Field `json:"valueType,omitempty"`
+
+	// FieldString + literal disjunction: the allowed values
+	// (`"a" | "b" | "c"` → ["a", "b", "c"]). Renderer shows a select.
+	Enum []string `json:"enum,omitempty"`
+
+	// FieldString + regex constraint (`=~"..."`). Renderer attaches
+	// the pattern attribute + a live validity check.
+	Pattern string `json:"pattern,omitempty"`
 
 	// FieldUnsupported: human-readable reason.
 	Reason string `json:"reason,omitempty"`
@@ -117,14 +130,33 @@ func walk(v cue.Value, optional bool) Field {
 
 	switch kind := v.IncompleteKind(); kind {
 	case cue.StructKind:
-		f.Type = FieldObject
-		f.Fields = walkStruct(v)
+		// Distinguish three struct shapes:
+		//   - map: no named fields + `[string]: T` pattern → FieldMap
+		//   - open struct: named fields + `...` rest → FieldObject (rest
+		//     ignored for now)
+		//   - plain object: just named fields
+		named := walkStruct(v)
+		valueElem := v.LookupPath(cue.MakePath(cue.AnyString))
+		if len(named) == 0 && valueElem.Exists() && valueElem.IncompleteKind() != cue.TopKind {
+			f.Type = FieldMap
+			val := walk(valueElem, false)
+			f.ValueType = &val
+		} else {
+			f.Type = FieldObject
+			f.Fields = named
+		}
 	case cue.ListKind:
 		f.Type = FieldArray
 		items := walkListElem(v)
 		f.Items = &items
 	case cue.StringKind:
 		f.Type = FieldString
+		if enum, ok := stringEnum(v); ok {
+			f.Enum = enum
+		}
+		if p, ok := regexPattern(v); ok {
+			f.Pattern = p
+		}
 	case cue.IntKind:
 		f.Type = FieldInt
 		applyNumberBounds(v, &f)
@@ -235,6 +267,50 @@ func readDocs(v cue.Value) string {
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+// stringEnum detects the CUE pattern `"a" | "b" | "c"` (with optional
+// `*"default"` marker) and returns the literal alternatives. Returns
+// ok=false when the disjunction includes non-literal arms (e.g.
+// `string | "fast"`) — the form renderer falls back to a text input
+// in that case.
+func stringEnum(v cue.Value) ([]string, bool) {
+	op, args := v.Expr()
+	if op != cue.OrOp || len(args) < 2 {
+		return nil, false
+	}
+	out := make([]string, 0, len(args))
+	for _, a := range args {
+		if a.Kind() != cue.StringKind || !a.IsConcrete() {
+			return nil, false
+		}
+		var s string
+		if err := a.Decode(&s); err != nil {
+			return nil, false
+		}
+		out = append(out, s)
+	}
+	return out, true
+}
+
+// regexPattern detects the CUE pattern `=~"regex"` and returns the
+// pattern string. Returns ok=false when the value isn't bound to a
+// regex constraint. Nested constraints (e.g. `string & =~"..."`) are
+// not pulled out — those need a deeper walk; revisit when a shipped
+// schema needs it.
+func regexPattern(v cue.Value) (string, bool) {
+	op, args := v.Expr()
+	if op != cue.RegexMatchOp || len(args) != 1 {
+		return "", false
+	}
+	if args[0].Kind() != cue.StringKind {
+		return "", false
+	}
+	var s string
+	if err := args[0].Decode(&s); err != nil {
+		return "", false
+	}
+	return s, true
 }
 
 func kindToFieldType(k cue.Kind) FieldType {

@@ -100,6 +100,34 @@ describe('fromManifest', () => {
   });
 });
 
+describe('maps', () => {
+  const labels: FormField = {
+    type: 'object',
+    fields: [{
+      name: 'labels',
+      type: 'map',
+      optional: true,
+      valueType: { type: 'string' },
+    }],
+  };
+
+  it('fromManifest copies map entries through valueType', () => {
+    const v = fromManifest(labels, { labels: { env: 'prod', tier: 'web' } }) as Record<string, unknown>;
+    expect(v.labels).toEqual({ env: 'prod', tier: 'web' });
+  });
+
+  it('initialValue for map is an empty object', () => {
+    expect(initialValue({ type: 'map', valueType: { type: 'string' } })).toEqual({});
+  });
+
+  it('scrubEmpty drops empty-string values and empty-key rows from maps', () => {
+    const v = scrubEmpty(labels, {
+      labels: { keep: 'x', empty: '', '': 'orphan' },
+    }) as Record<string, unknown>;
+    expect(v.labels).toEqual({ keep: 'x' });
+  });
+});
+
 describe('scrubEmpty', () => {
   it('drops empty optional fields from generated manifest', () => {
     const f: FormField = {
