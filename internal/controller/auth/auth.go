@@ -60,15 +60,26 @@ func LoadOrCreateToken(path string) (string, error) {
 	return tok, nil
 }
 
-// Validator validates the bearer token on incoming gRPC requests.
+// Validator validates the bearer token on incoming gRPC requests. Accepts
+// either the install-time root token OR a session token minted via
+// SessionService.Login (UI Phase U1.4 — sessions optional, nil to disable).
 type Validator struct {
 	expected []byte
+	sessions *SessionStore // optional; nil disables session-token auth
 }
 
 // NewValidator builds a Validator that accepts requests presenting the given
 // token in the Authorization header as `Bearer <token>`.
 func NewValidator(token string) *Validator {
 	return &Validator{expected: []byte(token)}
+}
+
+// WithSessions attaches a SessionStore so the validator accepts session
+// tokens (sha256-looked-up in the sessions table) alongside the root
+// token. Idempotent — repeated calls overwrite.
+func (v *Validator) WithSessions(s *SessionStore) *Validator {
+	v.sessions = s
+	return v
 }
 
 // UnaryInterceptor returns a gRPC unary interceptor that validates the
@@ -79,6 +90,17 @@ func (v *Validator) UnaryInterceptor() grpc.UnaryServerInterceptor {
 			return nil, err
 		}
 		return handler(ctx, req)
+	}
+}
+
+// StreamInterceptor mirrors UnaryInterceptor for server-streaming RPCs
+// like ResourceService.Watch. Same token semantics.
+func (v *Validator) StreamInterceptor() grpc.StreamServerInterceptor {
+	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		if err := v.check(ss.Context()); err != nil {
+			return err
+		}
+		return handler(srv, ss)
 	}
 }
 
@@ -95,8 +117,14 @@ func (v *Validator) check(ctx context.Context) error {
 	if !ok {
 		return status.Error(codes.Unauthenticated, "authorization header must start with Bearer")
 	}
-	if subtle.ConstantTimeCompare([]byte(tok), v.expected) != 1 {
-		return status.Error(codes.Unauthenticated, "invalid token")
+	if subtle.ConstantTimeCompare([]byte(tok), v.expected) == 1 {
+		return nil
 	}
-	return nil
+	if v.sessions != nil {
+		sess, err := v.sessions.Lookup(ctx, tok)
+		if err == nil && sess != nil {
+			return nil
+		}
+	}
+	return status.Error(codes.Unauthenticated, "invalid token")
 }

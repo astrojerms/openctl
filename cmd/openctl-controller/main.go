@@ -134,6 +134,8 @@ func runServe(args []string) error {
 	dispatcher.Start(ctx)
 	defer dispatcher.Stop()
 
+	sessionStore := auth.NewSessionStore(db)
+
 	opts := server.Options{
 		Listen:     *listen,
 		CertFile:   mat.ServerCertPath,
@@ -142,6 +144,7 @@ func runServe(args []string) error {
 		Operations: opStore,
 		Dispatcher: dispatcher,
 		Manifests:  manifestStore,
+		Sessions:   sessionStore,
 	}
 	if !*noAuth {
 		opts.Token = token

@@ -223,6 +223,47 @@ message ListOperationsResponse {
 
 // WatchOperationsRequest filters the OperationService.WatchOperations
 // stream. All fields optional — empty filters watch every op.
+// SessionService mints and revokes per-session tokens. The browser UI
+// will exchange the install-time bearer token for a session token via
+// Login (UI Phase U1.3 wraps that response in an HttpOnly cookie). gRPC
+// callers can use the session token directly as a Bearer header.
+service SessionService {
+  rpc Login(LoginRequest) returns (LoginResponse);
+  rpc Logout(LogoutRequest) returns (LogoutResponse);
+  rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse);
+}
+
+message LoginRequest {
+  // Human-readable display name (e.g. browser/device label) shown in
+  // session listings. Optional.
+  string display_name = 1;
+  // TTL in seconds for the new session. 0 = server default
+  // (auth.DefaultSessionTTL = 7 days).
+  int64 ttl_seconds = 2;
+}
+
+message LoginResponse {
+  // Raw session token. Pass as `Bearer <token>` in subsequent requests
+  // (or wait for U1.3 to wrap as an HttpOnly cookie).
+  string token = 1;
+  string session_id = 2;
+  string expires_at = 3; // RFC3339
+}
+
+message LogoutRequest {}
+message LogoutResponse {}
+
+message WhoAmIRequest {}
+
+// WhoAmIResponse returns identifying info about the auth credential used
+// on the call. For root-bearer-token callers user_id is empty; for
+// session-token callers it carries the session's user_id (always
+// "default" in single-user mode).
+message WhoAmIResponse {
+  string user_id = 1;
+  string session_id = 2; // empty if authenticated via root bearer
+}
+
 // SchemaService introspects the controller's embedded CUE schemas and
 // runs validation. UI uses ListSchemas to populate kind pickers,
 // GetSchema to feed the Monaco editor's autocomplete / form-schema

@@ -45,6 +45,10 @@ type Options struct {
 	// state against the stored desired manifest. May be nil — drift just
 	// won't be populated.
 	Manifests *manifests.Store
+	// Sessions enables SessionService.Login / browser-shaped auth (UI
+	// Phase U1.4). When set, the auth interceptor accepts session tokens
+	// alongside the root bearer.
+	Sessions *auth.SessionStore
 }
 
 // Server is the controller's gRPC server.
@@ -70,7 +74,13 @@ func New(opts Options) (*Server, error) {
 	}
 	if opts.Token != "" {
 		v := auth.NewValidator(opts.Token)
-		srvOpts = append(srvOpts, grpc.UnaryInterceptor(v.UnaryInterceptor()))
+		if opts.Sessions != nil {
+			v = v.WithSessions(opts.Sessions)
+		}
+		srvOpts = append(srvOpts,
+			grpc.UnaryInterceptor(v.UnaryInterceptor()),
+			grpc.StreamInterceptor(v.StreamInterceptor()),
+		)
 	}
 
 	g := grpc.NewServer(srvOpts...)
@@ -85,6 +95,9 @@ func New(opts Options) (*Server, error) {
 		apiv1.RegisterOperationServiceServer(g, newOperationHandler(opts.Operations))
 	}
 	apiv1.RegisterSchemaServiceServer(g, newSchemaHandler())
+	if opts.Sessions != nil {
+		apiv1.RegisterSessionServiceServer(g, newSessionHandler(opts.Sessions))
+	}
 
 	reflection.Register(g)
 
