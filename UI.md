@@ -236,6 +236,20 @@ a deletion commit. With remote configured, see the commit reach origin.
       preserves the existing Load signature. Owner-ref + composite
       children tree deferred — needs proto-level relationship surface
       (planned alongside arch Phase 8 K3sNode work).
+- [x] **U3.4** — Ops drawer + live Watch streams. Streaming bridge
+      (`lib/stream.ts`) reads grpc-gateway's newline-delimited
+      `{"result": <event>}` chunks over `fetch` + `ReadableStream`,
+      cancellable via AbortSignal. Typed wrappers
+      (`watchResources`, `watchOperations`) feed:
+      ResourceList (initial `List` snapshot + Watch deltas merged in by
+      name), Detail (single-resource Watch triggers re-Get so applied/
+      drift refresh, not just observed), and a shell-wide ops store
+      (`lib/ops.ts`) that drives a collapsible bottom drawer with the
+      last 200 ops, in-flight count, and per-op status/error/resource
+      links. Reconnect-with-backoff on transient errors; AbortError on
+      route change is silenced. Catalogue counts still poll on shell
+      mount — Watch-driven catalogue counts is a known follow-up,
+      easy to add by fanning out N Watch streams.
 
 **Deliverables:**
 
@@ -256,6 +270,13 @@ a deletion commit. With remote configured, see the commit reach origin.
 - [x] Resource detail (read-only): desired (applied) manifest, observed
       state, drift diff. Owner-ref + children tree deferred — see U3.3
       sub-phase note above.
+- [x] Operations drawer: collapsible bottom pane fed by
+      WatchOperations. Each row links to its resource detail. Substep
+      checklist comes with U7.
+- [x] Live updates throughout — ResourceList and Detail subscribe to
+      ResourceService.Watch; ops drawer subscribes to
+      OperationService.WatchOperations. Catalogue counts refresh on
+      shell mount (Watch-driven counts is a small follow-up).
 - [ ] Layout shell: left nav grouped by `apiVersion/kind` with resource
       counts; main pane; bottom drawer for op history.
 - [ ] Resource list per kind: name, drift badge (count of drifted
