@@ -205,20 +205,30 @@ a deletion commit. With remote configured, see the commit reach origin.
 
 ### Phase U3: UI shell + read-only views
 
-**Status:** not started
+**Status:** in progress.
 
-**Goal:** working console — list resources, drill in, see drift, watch
-ops live. No editing yet.
+**Sub-phases:**
+
+- [x] **U3.1** — Vite + Svelte + TypeScript project under `ui/`; Vite
+      writes to `internal/controller/server/uiassets/dist/` (embedded by
+      `//go:embed all:uiassets/dist`); `make ui` orchestrates install +
+      build + `.gitkeep` restore; login screen exchanges the root bearer
+      token for an HttpOnly session cookie via `POST /v1/session/login`;
+      `WhoAmI` confirms the session on first load and post-login;
+      Logout button + 401 handling routes back to login. Hand-rolled
+      REST client over the grpc-gateway surface (60 LoC, no protoc dep);
+      generated client deferred until U3.4 (streaming Watch RPCs) when
+      typed schemas pay for themselves.
 
 **Deliverables:**
 
-- [ ] Vite + Svelte project under `ui/` with embed pipeline (`make ui`
-      → `dist/` → `cmd/openctl-controller/uiassets/`). TypeScript on.
-      Generated proto/gateway client checked in (not regenerated on
-      build to avoid Buf/protoc dep at build time).
-- [ ] Login screen: bearer token in → session cookie out. Stored token
-      hint (last 4 chars) for "logged in as ..." display. Logout
-      button.
+- [x] Vite + Svelte project under `ui/` with embed pipeline. TypeScript
+      on. Hand-rolled REST client for now; generated client revisited in
+      U3.4.
+- [x] Login screen: bearer token in → session cookie out. Logout button.
+      Token never persisted in JS (cookie is HttpOnly); "signed in as
+      &lt;userId&gt;" with session-id-on-hover replaces the planned
+      last-4-chars hint since the JS layer can't see the cookie value.
 - [ ] Layout shell: left nav grouped by `apiVersion/kind` with resource
       counts; main pane; bottom drawer for op history.
 - [ ] Resource list per kind: name, drift badge (count of drifted

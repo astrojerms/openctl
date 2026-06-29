@@ -1,0 +1,7 @@
+# `vite build` writes to dist/ — we don't want any of that in git, but
+# we DO want dist/ itself tracked so `//go:embed all:uiassets/dist` works
+# on a fresh checkout. dist/.gitkeep is the marker; everything else is
+# build output. The `make ui` target re-touches .gitkeep after Vite empties
+# the directory so this list stays accurate.
+dist/*
+!dist/.gitkeep

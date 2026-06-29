@@ -1,4 +1,4 @@
-.PHONY: all build build-cli build-controller build-plugins build-plugin-proxmox build-plugin-k3s build-plugin-k3s-agent build-plugin-k3s-agent-linux install clean test test-e2e fmt lint modernize modernize-check generate
+.PHONY: all build build-cli build-controller build-plugins build-plugin-proxmox build-plugin-k3s build-plugin-k3s-agent build-plugin-k3s-agent-linux install clean test test-e2e fmt lint modernize modernize-check generate ui ui-install ui-clean
 
 # Binary names
 CLI_BINARY=openctl
@@ -11,6 +11,8 @@ PLUGIN_K3S_AGENT_BINARY=openctl-k3s-agent
 BUILD_DIR=bin
 PROXMOX_PLUGIN_DIR=plugins/proxmox
 K3S_PLUGIN_DIR=plugins/k3s
+UI_DIR=ui
+UI_OUT=internal/controller/server/uiassets/dist
 
 # Go settings
 GOFLAGS=-ldflags="-s -w"
@@ -90,9 +92,33 @@ install-plugin-k3s: build-plugin-k3s build-plugin-k3s-agent-linux
 	cp $(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-arm64 $(HOME)/.openctl/plugins/k3s-agents/
 	cp $(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-armv7 $(HOME)/.openctl/plugins/k3s-agents/
 
-clean:
+clean: ui-clean
 	@echo "Cleaning..."
 	rm -rf $(BUILD_DIR)
+
+# Build the browser UI (Vite + Svelte). Output goes directly into the
+# controller's embed.FS root ($(UI_OUT)) so a subsequent `make build` bakes
+# it into the binary. ui-install runs `npm ci` against committed
+# package-lock.json — keep it separate from ui so iterative builds don't
+# re-resolve deps on every invocation.
+ui-install:
+	@echo "Installing UI dependencies..."
+	cd $(UI_DIR) && npm install
+
+ui: ui-install
+	@echo "Building UI ($(UI_DIR) -> $(UI_OUT))..."
+	cd $(UI_DIR) && npm run build
+	@# Vite's emptyOutDir wipes the .gitkeep marker we use to keep the
+	@# dist/ directory present in git for fresh checkouts; restore it so
+	@# `go:embed all:uiassets/dist` keeps working after `make clean` etc.
+	@touch $(UI_OUT)/.gitkeep
+
+ui-clean:
+	@echo "Cleaning UI build output..."
+	@# Use find rather than rm -rf $(UI_OUT) so we don't blow away the
+	@# directory itself (embed.FS needs it to exist) or the .gitkeep.
+	@find $(UI_OUT) -mindepth 1 ! -name .gitkeep -delete 2>/dev/null || true
+	@rm -rf $(UI_DIR)/node_modules
 
 test:
 	go test ./...
