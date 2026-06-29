@@ -7,6 +7,7 @@
 package apiv1
 
 import (
+	_ "google.golang.org/genproto/googleapis/api/annotations"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	structpb "google.golang.org/protobuf/types/known/structpb"
@@ -2038,7 +2039,7 @@ var File_api_proto protoreflect.FileDescriptor
 const file_api_proto_rawDesc = "" +
 	"\n" +
 	"\tapi.proto\x12\n" +
-	"openctl.v1\x1a\x1cgoogle/protobuf/struct.proto\"'\n" +
+	"openctl.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1cgoogle/api/annotations.proto\"'\n" +
 	"\vPingRequest\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\"I\n" +
 	"\fPingResponse\x12\x12\n" +
@@ -2190,27 +2191,28 @@ const file_api_proto_rawDesc = "" +
 	"\x10include_children\x18\x05 \x01(\bR\x0fincludeChildren\"a\n" +
 	"\x0eOperationEvent\x123\n" +
 	"\toperation\x18\x01 \x01(\v2\x15.openctl.v1.OperationR\toperation\x12\x1a\n" +
-	"\bterminal\x18\x02 \x01(\bR\bterminal2H\n" +
-	"\vPingService\x129\n" +
-	"\x04Ping\x12\x17.openctl.v1.PingRequest\x1a\x18.openctl.v1.PingResponse2\xc0\x02\n" +
-	"\x0fResourceService\x12<\n" +
-	"\x05Apply\x12\x18.openctl.v1.ApplyRequest\x1a\x19.openctl.v1.ApplyResponse\x126\n" +
-	"\x03Get\x12\x16.openctl.v1.GetRequest\x1a\x17.openctl.v1.GetResponse\x129\n" +
-	"\x04List\x12\x17.openctl.v1.ListRequest\x1a\x18.openctl.v1.ListResponse\x12?\n" +
-	"\x06Delete\x12\x19.openctl.v1.DeleteRequest\x1a\x1a.openctl.v1.DeleteResponse\x12;\n" +
-	"\x05Watch\x12\x18.openctl.v1.WatchRequest\x1a\x16.openctl.v1.WatchEvent0\x012\x88\x02\n" +
-	"\x10OperationService\x12F\n" +
-	"\fGetOperation\x12\x1f.openctl.v1.GetOperationRequest\x1a\x15.openctl.v1.Operation\x12W\n" +
-	"\x0eListOperations\x12!.openctl.v1.ListOperationsRequest\x1a\".openctl.v1.ListOperationsResponse\x12S\n" +
-	"\x0fWatchOperations\x12\".openctl.v1.WatchOperationsRequest\x1a\x1a.openctl.v1.OperationEvent0\x012\xd0\x01\n" +
-	"\x0eSessionService\x12<\n" +
-	"\x05Login\x12\x18.openctl.v1.LoginRequest\x1a\x19.openctl.v1.LoginResponse\x12?\n" +
-	"\x06Logout\x12\x19.openctl.v1.LogoutRequest\x1a\x1a.openctl.v1.LogoutResponse\x12?\n" +
-	"\x06WhoAmI\x12\x19.openctl.v1.WhoAmIRequest\x1a\x1a.openctl.v1.WhoAmIResponse2\xf0\x01\n" +
-	"\rSchemaService\x12N\n" +
-	"\vListSchemas\x12\x1e.openctl.v1.ListSchemasRequest\x1a\x1f.openctl.v1.ListSchemasResponse\x12H\n" +
-	"\tGetSchema\x12\x1c.openctl.v1.GetSchemaRequest\x1a\x1d.openctl.v1.GetSchemaResponse\x12E\n" +
-	"\bValidate\x12\x1b.openctl.v1.ValidateRequest\x1a\x1c.openctl.v1.ValidateResponseB-Z+github.com/openctl/openctl/pkg/api/v1;apiv1b\x06proto3"
+	"\bterminal\x18\x02 \x01(\bR\bterminal2Z\n" +
+	"\vPingService\x12K\n" +
+	"\x04Ping\x12\x17.openctl.v1.PingRequest\x1a\x18.openctl.v1.PingResponse\"\x10\x82\xd3\xe4\x93\x02\n" +
+	"\x12\b/v1/ping2\xde\x03\n" +
+	"\x0fResourceService\x12\\\n" +
+	"\x05Apply\x12\x18.openctl.v1.ApplyRequest\x1a\x19.openctl.v1.ApplyResponse\"\x1e\x82\xd3\xe4\x93\x02\x18:\x01*\"\x13/v1/resources:apply\x12T\n" +
+	"\x03Get\x12\x16.openctl.v1.GetRequest\x1a\x17.openctl.v1.GetResponse\"\x1c\x82\xd3\xe4\x93\x02\x16:\x01*\"\x11/v1/resources:get\x12X\n" +
+	"\x04List\x12\x17.openctl.v1.ListRequest\x1a\x18.openctl.v1.ListResponse\"\x1d\x82\xd3\xe4\x93\x02\x17:\x01*\"\x12/v1/resources:list\x12`\n" +
+	"\x06Delete\x12\x19.openctl.v1.DeleteRequest\x1a\x1a.openctl.v1.DeleteResponse\"\x1f\x82\xd3\xe4\x93\x02\x19:\x01*\"\x14/v1/resources:delete\x12[\n" +
+	"\x05Watch\x12\x18.openctl.v1.WatchRequest\x1a\x16.openctl.v1.WatchEvent\"\x1e\x82\xd3\xe4\x93\x02\x18:\x01*\"\x13/v1/resources:watch0\x012\xe6\x02\n" +
+	"\x10OperationService\x12c\n" +
+	"\fGetOperation\x12\x1f.openctl.v1.GetOperationRequest\x1a\x15.openctl.v1.Operation\"\x1b\x82\xd3\xe4\x93\x02\x15\x12\x13/v1/operations/{id}\x12w\n" +
+	"\x0eListOperations\x12!.openctl.v1.ListOperationsRequest\x1a\".openctl.v1.ListOperationsResponse\"\x1e\x82\xd3\xe4\x93\x02\x18:\x01*\"\x13/v1/operations:list\x12t\n" +
+	"\x0fWatchOperations\x12\".openctl.v1.WatchOperationsRequest\x1a\x1a.openctl.v1.OperationEvent\"\x1f\x82\xd3\xe4\x93\x02\x19:\x01*\"\x14/v1/operations:watch0\x012\xa9\x02\n" +
+	"\x0eSessionService\x12Z\n" +
+	"\x05Login\x12\x18.openctl.v1.LoginRequest\x1a\x19.openctl.v1.LoginResponse\"\x1c\x82\xd3\xe4\x93\x02\x16:\x01*\"\x11/v1/session/login\x12^\n" +
+	"\x06Logout\x12\x19.openctl.v1.LogoutRequest\x1a\x1a.openctl.v1.LogoutResponse\"\x1d\x82\xd3\xe4\x93\x02\x17:\x01*\"\x12/v1/session/logout\x12[\n" +
+	"\x06WhoAmI\x12\x19.openctl.v1.WhoAmIRequest\x1a\x1a.openctl.v1.WhoAmIResponse\"\x1a\x82\xd3\xe4\x93\x02\x14\x12\x12/v1/session/whoami2\xc2\x02\n" +
+	"\rSchemaService\x12c\n" +
+	"\vListSchemas\x12\x1e.openctl.v1.ListSchemasRequest\x1a\x1f.openctl.v1.ListSchemasResponse\"\x13\x82\xd3\xe4\x93\x02\r\x12\v/v1/schemas\x12d\n" +
+	"\tGetSchema\x12\x1c.openctl.v1.GetSchemaRequest\x1a\x1d.openctl.v1.GetSchemaResponse\"\x1a\x82\xd3\xe4\x93\x02\x14:\x01*\"\x0f/v1/schemas:get\x12f\n" +
+	"\bValidate\x12\x1b.openctl.v1.ValidateRequest\x1a\x1c.openctl.v1.ValidateResponse\"\x1f\x82\xd3\xe4\x93\x02\x19:\x01*\"\x14/v1/schemas:validateB-Z+github.com/openctl/openctl/pkg/api/v1;apiv1b\x06proto3"
 
 var (
 	file_api_proto_rawDescOnce sync.Once

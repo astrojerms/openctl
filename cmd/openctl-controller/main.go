@@ -79,6 +79,7 @@ func runServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	dir := fs.String("dir", defaultDir(), "controller state directory")
 	listen := fs.String("listen", "127.0.0.1:9444", "gRPC listen address (host:port)")
+	httpListen := fs.String("http-listen", "127.0.0.1:9445", "HTTP gateway + UI listen address (empty to disable)")
 	noAuth := fs.Bool("no-auth", false, "disable token auth (only for localhost-only setups)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -173,6 +174,23 @@ func runServe(args []string) error {
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Serve() }()
+
+	// HTTP gateway (UI Phase U1.3+U1.5). Dials the gRPC listener over TLS
+	// using the CA we generated above; serves /v1/* (REST) and /ui/*
+	// (embed.FS assets) on a sibling port. Disable with --http-listen="".
+	if *httpListen != "" {
+		caBytes, err := os.ReadFile(mat.CACertPath) // #nosec G304 -- controller-owned path
+		if err != nil {
+			return fmt.Errorf("read CA cert: %w", err)
+		}
+		go func() {
+			log.Printf("openctl-controller HTTP gateway listening on %s", *httpListen)
+			log.Printf("  UI:          http://%s/ui/", *httpListen)
+			if err := server.ServeHTTPGateway(ctx, *httpListen, *listen, caBytes, host); err != nil {
+				errCh <- fmt.Errorf("http gateway: %w", err)
+			}
+		}()
+	}
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)

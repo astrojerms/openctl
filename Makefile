@@ -123,10 +123,15 @@ deps:
 # plugins (see DEVELOPMENT.md for install instructions). The generated
 # files are committed so building the project doesn't require protoc.
 generate:
-	@echo "Regenerating gRPC bindings..."
-	protoc --proto_path=pkg/api/v1 \
+	@echo "Regenerating gRPC + gateway bindings..."
+	@GW1=$$(go env GOMODCACHE)/github.com/grpc-ecosystem/grpc-gateway@v1.16.0/third_party/googleapis; \
+	test -d "$$GW1" || (echo "missing $$GW1 — run: go mod download github.com/grpc-ecosystem/grpc-gateway" && exit 1); \
+	protoc \
+		--proto_path=pkg/api/v1 \
+		--proto_path=$$GW1 \
 		--go_out=pkg/api/v1 --go_opt=paths=source_relative \
 		--go-grpc_out=pkg/api/v1 --go-grpc_opt=paths=source_relative \
+		--grpc-gateway_out=pkg/api/v1 --grpc-gateway_opt=paths=source_relative \
 		pkg/api/v1/api.proto
 
 # Modernize code using latest Go idioms

@@ -101,9 +101,12 @@ committing to a phase.
 
 ## UI rollout — UI.md
 
-- [ ] **Phase U1** — UI backend prerequisites (Watch + WatchOperations
-      RPCs, SchemaService, grpc-gateway REST, session cookie auth,
-      embedded asset hosting). No frontend yet.
+- [x] **Phase U1** — UI backend prerequisites complete (U1.1 Watch RPCs,
+      U1.2 SchemaService, U1.3+U1.5 grpc-gateway REST + embed.FS UI
+      asset hosting + session cookie middleware, U1.4 SessionService
+      with sha256-stored session tokens). HTTP gateway listens on
+      127.0.0.1:9445 alongside gRPC on 9444; UI placeholder page until
+      Vite build lands. No frontend code yet.
 - [ ] **Phase U2** — Manifest store on disk + git sync (controller
       materializes desired state to `~/.openctl/manifests/`, optional
       git auto-commit and remote push, `RepoService` RPC).

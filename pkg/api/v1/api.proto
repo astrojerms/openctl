@@ -3,6 +3,7 @@ syntax = "proto3";
 package openctl.v1;
 
 import "google/protobuf/struct.proto";
+import "google/api/annotations.proto";
 
 option go_package = "github.com/openctl/openctl/pkg/api/v1;apiv1";
 
@@ -11,7 +12,9 @@ option go_package = "github.com/openctl/openctl/pkg/api/v1;apiv1";
 // depending on any provider code.
 service PingService {
   // Ping echoes the caller's message and returns the server's version.
-  rpc Ping(PingRequest) returns (PingResponse);
+  rpc Ping(PingRequest) returns (PingResponse) {
+    option (google.api.http) = { get: "/v1/ping" };
+  }
 }
 
 message PingRequest {
@@ -38,24 +41,34 @@ service ResourceService {
   // Apply creates a resource. Phase 2 is no-op-on-existing: if a resource
   // with the manifest's name already exists, the response carries its
   // observed state without mutating it.
-  rpc Apply(ApplyRequest) returns (ApplyResponse);
+  rpc Apply(ApplyRequest) returns (ApplyResponse) {
+    option (google.api.http) = { post: "/v1/resources:apply" body: "*" };
+  }
 
   // Get returns the observed state of a single resource.
-  rpc Get(GetRequest) returns (GetResponse);
+  rpc Get(GetRequest) returns (GetResponse) {
+    option (google.api.http) = { post: "/v1/resources:get" body: "*" };
+  }
 
   // List returns all resources of a kind.
-  rpc List(ListRequest) returns (ListResponse);
+  rpc List(ListRequest) returns (ListResponse) {
+    option (google.api.http) = { post: "/v1/resources:list" body: "*" };
+  }
 
   // Delete removes a resource. Idempotent: delete on a missing resource
   // returns success, not NotFound.
-  rpc Delete(DeleteRequest) returns (DeleteResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse) {
+    option (google.api.http) = { post: "/v1/resources:delete" body: "*" };
+  }
 
   // Watch streams resource state changes. The first batch of events carries
   // the current snapshot (one ADDED per existing resource matching the
   // filter); subsequent events fire when resources are added, modified, or
   // deleted. UI Phase U1.1: poll-based implementation. Filter is api_version
   // (required) + kind (required) + optional name to watch a single resource.
-  rpc Watch(WatchRequest) returns (stream WatchEvent);
+  rpc Watch(WatchRequest) returns (stream WatchEvent) {
+    option (google.api.http) = { post: "/v1/resources:watch" body: "*" };
+  }
 }
 
 // Resource is the k8s-style envelope for any resource kind. spec/status are
@@ -168,14 +181,20 @@ message WatchEvent {
 // return an operation_id immediately; clients call GetOperation to poll
 // until terminal status (succeeded, failed, interrupted).
 service OperationService {
-  rpc GetOperation(GetOperationRequest) returns (Operation);
-  rpc ListOperations(ListOperationsRequest) returns (ListOperationsResponse);
+  rpc GetOperation(GetOperationRequest) returns (Operation) {
+    option (google.api.http) = { get: "/v1/operations/{id}" };
+  }
+  rpc ListOperations(ListOperationsRequest) returns (ListOperationsResponse) {
+    option (google.api.http) = { post: "/v1/operations:list" body: "*" };
+  }
 
   // WatchOperations streams op state transitions. Same poll-based v1 as
   // ResourceService.Watch. Optional filters: by resource (apiVersion/kind/
   // name) and/or by op id (to follow a single op to terminal). Empty
   // filters watch all ops.
-  rpc WatchOperations(WatchOperationsRequest) returns (stream OperationEvent);
+  rpc WatchOperations(WatchOperationsRequest) returns (stream OperationEvent) {
+    option (google.api.http) = { post: "/v1/operations:watch" body: "*" };
+  }
 }
 
 message Operation {
@@ -228,9 +247,15 @@ message ListOperationsResponse {
 // Login (UI Phase U1.3 wraps that response in an HttpOnly cookie). gRPC
 // callers can use the session token directly as a Bearer header.
 service SessionService {
-  rpc Login(LoginRequest) returns (LoginResponse);
-  rpc Logout(LogoutRequest) returns (LogoutResponse);
-  rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse);
+  rpc Login(LoginRequest) returns (LoginResponse) {
+    option (google.api.http) = { post: "/v1/session/login" body: "*" };
+  }
+  rpc Logout(LogoutRequest) returns (LogoutResponse) {
+    option (google.api.http) = { post: "/v1/session/logout" body: "*" };
+  }
+  rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse) {
+    option (google.api.http) = { get: "/v1/session/whoami" };
+  }
 }
 
 message LoginRequest {
@@ -269,9 +294,15 @@ message WhoAmIResponse {
 // GetSchema to feed the Monaco editor's autocomplete / form-schema
 // bridge, and Validate to surface errors as the user types.
 service SchemaService {
-  rpc ListSchemas(ListSchemasRequest) returns (ListSchemasResponse);
-  rpc GetSchema(GetSchemaRequest) returns (GetSchemaResponse);
-  rpc Validate(ValidateRequest) returns (ValidateResponse);
+  rpc ListSchemas(ListSchemasRequest) returns (ListSchemasResponse) {
+    option (google.api.http) = { get: "/v1/schemas" };
+  }
+  rpc GetSchema(GetSchemaRequest) returns (GetSchemaResponse) {
+    option (google.api.http) = { post: "/v1/schemas:get" body: "*" };
+  }
+  rpc Validate(ValidateRequest) returns (ValidateResponse) {
+    option (google.api.http) = { post: "/v1/schemas:validate" body: "*" };
+  }
 }
 
 message ListSchemasRequest {}
