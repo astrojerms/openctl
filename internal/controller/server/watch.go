@@ -65,6 +65,7 @@ func (h *resourceHandler) Watch(req *apiv1.WatchRequest, stream apiv1.ResourceSe
 			// Drift surfaces as observed state changing; attach so MODIFIED
 			// fires on drift transitions.
 			_ = h.attachDrift(ctx, r, m)
+			attachRelationships(h.registry, r)
 			h := manifests.Hash(m)
 			seen[m.Metadata.Name] = h
 

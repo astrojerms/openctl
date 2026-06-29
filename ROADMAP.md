@@ -18,14 +18,16 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
-Nothing actively in progress. UI Phase U5 fully shipped (U5.1–U5.4):
-CUE → form-schema bridge + GetFormSchema RPC, Svelte form renderer +
-live YAML preview + 3-way view toggle, advanced field types (enums,
-patterns, key/value maps), Form ↔ CUE round-trip detection. Next per
-ROADMAP order: UI Phase U6 (composite resource UX — cluster parent +
-children tree, aggregated badges, per-child verbs in apply preview;
-some of this is gated on arch Phase 8 K3sNode), or arch Phase 8
-itself.
+Arch Phase 8 (scoped) shipped: owner-ref / children plumbing on the
+Resource proto, Registry.ChildrenOf + OwnerRefOf, k3s Cluster surfaces
+its VM children, Get/List/Watch populate the new fields. This is the
+minimum to unblock the UI work that needs composite relationships
+(deferred U3.3 children tree, U6 composite UX). The full HTML
+target-architecture Phase 8 (K3sNode as first-class resource +
+AgentInstall + Cluster.Plan refactor + wire-level refs) is still
+deferred — it's a separate architectural lift. Next: UI U3.3 deferred
+(children tree on Detail.svelte) → UI Phase U6 (composite resource
+UX) → UI Phase U7 (op orchestration polish).
 
 ## Suggested next order
 
@@ -91,8 +93,15 @@ HTML doc:
       label). Parent-hash-aware (children's hashes folded into the
       parent hash) deferred until composite ops are reified in arch
       Phase 9-10.
-- [ ] **Arch Phase 8** — K3sNode as first-class resource; Cluster
-      becomes a composer that emits typed children.
+- [~] **Arch Phase 8 (scoped)** — Owner-ref / children plumbing on the
+      Resource proto, Registry.ChildrenOf + OwnerRefOf helpers, k3s
+      Cluster implements ChildrenLister so Get/List/Watch return its
+      VM children, child resources surface their owning Cluster via
+      Metadata.OwnerRefs. Unblocks UI U3.3 deferred + U6. The full
+      Phase 8 (K3sNode as first-class resource + AgentInstall +
+      Cluster.Plan refactor + wire-level refs) remains deferred — a
+      separate architectural lift to be planned when the UI flushes
+      out demand for it.
 - [ ] **Arch Phase 9** — Typed task IR (frontend/IR/executor split,
       BuildKit-LLB-shape). Frontends: YAML, CUE, programmatic Go.
 - [ ] **Arch Phase 10** — Full DAG scheduler with parallel execution

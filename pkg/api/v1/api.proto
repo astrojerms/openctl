@@ -129,6 +129,20 @@ message Resource {
   // either the resource matches its manifest or no manifest is on file
   // (e.g. resource was created out-of-band).
   repeated DriftEntry drift = 6;
+  // Arch Phase 8: children lists resources composed by this one (e.g. a
+  // Cluster's member VMs). Populated by Get for composite resources from
+  // the provider's persisted state; empty for atomics. Refs carry full
+  // apiVersion/kind/name so the UI can navigate without a second lookup.
+  repeated ResourceRef children = 7;
+}
+
+// ResourceRef is a typed reference to another resource — a fully-qualified
+// (apiVersion, kind, name) triple. Used for owner/child relationships
+// returned on Resource (arch Phase 8 scoped owner-ref plumbing).
+message ResourceRef {
+  string api_version = 1;
+  string kind = 2;
+  string name = 3;
 }
 
 // DriftEntry describes a single field where the observed state differs from
@@ -145,6 +159,11 @@ message Metadata {
   string name = 1;
   map<string, string> labels = 2;
   map<string, string> annotations = 3;
+  // Arch Phase 8: owner_refs lists resources that own this one (e.g. a
+  // VM owned by its Cluster). Currently always 0 or 1 entry; list shape
+  // matches k8s ownerReferences to leave room for multi-owner relationships
+  // later. Populated by Get/List for owned resources.
+  repeated ResourceRef owner_refs = 4;
 }
 
 message ApplyRequest {
