@@ -205,7 +205,7 @@ a deletion commit. With remote configured, see the commit reach origin.
 
 ### Phase U3: UI shell + read-only views
 
-**Status:** in progress.
+**Status:** complete.
 
 **Sub-phases:**
 
@@ -247,9 +247,20 @@ a deletion commit. With remote configured, see the commit reach origin.
       (`lib/ops.ts`) that drives a collapsible bottom drawer with the
       last 200 ops, in-flight count, and per-op status/error/resource
       links. Reconnect-with-backoff on transient errors; AbortError on
-      route change is silenced. Catalogue counts still poll on shell
-      mount — Watch-driven catalogue counts is a known follow-up,
-      easy to add by fanning out N Watch streams.
+      route change is silenced.
+- [x] **U3.5** — Git status indicator in the chrome
+      (`components/GitStatus.svelte`): polls `RepoService.GetStatus`
+      every 10s and renders a colour-coded pill (clean/dirty/behind);
+      Push-now button shows when a remote is configured and there's
+      something to push (or push_mode=manual). Catalogue counts now
+      live-update via one Watch stream per kind — ADDED grows the
+      count, DELETED shrinks it, MODIFIED is a no-op. Vitest harness
+      (happy-dom env) with unit tests for the streaming bridge (chunk
+      reassembly, error envelope, auth), the router (apiVersion
+      splitting, encoding round-trips), and the status-badge format
+      adapter. Playwright headless-Chrome e2e is explicitly deferred —
+      ~200MB of browsers + non-trivial CI is too much weight for a
+      homelab project; revisit if/when collaboration warrants it.
 
 **Deliverables:**
 
@@ -273,10 +284,13 @@ a deletion commit. With remote configured, see the commit reach origin.
 - [x] Operations drawer: collapsible bottom pane fed by
       WatchOperations. Each row links to its resource detail. Substep
       checklist comes with U7.
-- [x] Live updates throughout — ResourceList and Detail subscribe to
-      ResourceService.Watch; ops drawer subscribes to
-      OperationService.WatchOperations. Catalogue counts refresh on
-      shell mount (Watch-driven counts is a small follow-up).
+- [x] Live updates throughout — ResourceList, Detail, ops drawer, AND
+      catalogue counts all subscribe to Watch streams. The shell needs
+      no refresh button.
+- [x] Git status indicator + manual Push-now button (U3.5).
+- [x] Tests: unit-level Vitest covers stream/router/format. Playwright
+      headless-Chrome e2e deferred — see U3.5 sub-phase note for
+      reasoning.
 - [ ] Layout shell: left nav grouped by `apiVersion/kind` with resource
       counts; main pane; bottom drawer for op history.
 - [ ] Resource list per kind: name, drift badge (count of drifted
