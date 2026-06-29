@@ -18,9 +18,9 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
-Nothing actively in progress. UI Phase U2 fully shipped; suggested next
-items are UI Phase U3 (Vite+Svelte shell) or arch Phase 8 (K3sNode as a
-first-class resource).
+UI Phase U3 (browser UI shell) underway. U3.1 (Vite+Svelte scaffold +
+embed pipeline + login/logout) shipped; next sub-phase is U3.2 (layout
+shell + resource list with drift/health badges).
 
 ## Suggested next order
 
@@ -122,9 +122,18 @@ committing to a phase.
             (background ticker), `manual` (RPC only). `RepoService`
             RPC: GetStatus/Push/Pull. Push failures logged, never
             block apply.
-- [ ] **Phase U3** — UI shell + read-only views (Vite+Svelte skeleton,
+- [~] **Phase U3** — UI shell + read-only views (Vite+Svelte skeleton,
       list/detail/op-history with live Watch streams, git status
       indicator).
+      - [x] **U3.1** — Vite+Svelte+TS scaffold; embed pipeline (Vite →
+            `internal/controller/server/uiassets/dist/` via
+            `//go:embed all:uiassets/dist`); `make ui` install+build;
+            login screen (root bearer → HttpOnly session cookie);
+            WhoAmI confirms session; logout button + 401 → login.
+      - [ ] **U3.2** — layout shell + resource list.
+      - [ ] **U3.3** — resource detail (applied/observed/drift/children).
+      - [ ] **U3.4** — ops drawer + live Watch streams.
+      - [ ] **U3.5** — git status indicator + Push now + e2e tests.
 - [ ] **Phase U4** — CUE/manifest editor (Monaco-based, server-side
       validation, diff view, `DryRunApply` RPC, destructive gates as
       checkboxes).

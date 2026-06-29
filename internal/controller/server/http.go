@@ -31,7 +31,11 @@ const sessionCookieName = "openctl_session"
 // dev — the package returns a friendly "run `make ui`" page when no
 // assets are present, so the binary always works even pre-build.
 //
-//go:embed all:uiassets
+// We embed `uiassets/dist` (not `uiassets/`) so Vite can blow the dist
+// directory away on every build without disturbing the parent's git
+// metadata (`.gitkeep`, `.gitignore`).
+//
+//go:embed all:uiassets/dist
 var uiAssets embed.FS
 
 // NewHTTPGateway constructs an HTTP handler combining the grpc-gateway
@@ -94,7 +98,7 @@ func NewHTTPGateway(ctx context.Context, grpcAddr string, caCertPEM []byte, serv
 	// cookie-setter so the browser persists the session token automatically.
 	mux.Handle("/v1/", cookieToBearer(setCookieOnLogin(gw)))
 
-	// UI assets. embed.FS roots at "uiassets/"; strip to serve at /ui/.
+	// UI assets. embed.FS roots at "uiassets/dist/"; strip to serve at /ui/.
 	mux.Handle("/ui/", http.StripPrefix("/ui/", uiHandler()))
 	mux.Handle("/ui", http.RedirectHandler("/ui/", http.StatusMovedPermanently))
 
@@ -109,27 +113,36 @@ func NewHTTPGateway(ctx context.Context, grpcAddr string, caCertPEM []byte, serv
 	return mux, nil
 }
 
-// uiHandler serves UI assets out of embed.FS when present, or returns a
-// friendly placeholder page in dev (when `make ui` hasn't built yet).
+// uiHandler serves UI assets out of the embedded FS when present, or
+// returns a friendly placeholder page in dev (when `make ui` hasn't built
+// yet). Parameterized over assets so tests can inject an empty FS to
+// exercise the placeholder path even after a real build is baked in.
 func uiHandler() http.Handler {
-	sub, err := fs.Sub(uiAssets, "uiassets")
+	sub, err := fs.Sub(uiAssets, "uiassets/dist")
 	if err != nil {
 		return http.HandlerFunc(uiPlaceholder)
 	}
-	entries, _ := fs.ReadDir(sub, ".")
+	return uiHandlerFor(sub)
+}
+
+func uiHandlerFor(assets fs.FS) http.Handler {
+	entries, _ := fs.ReadDir(assets, ".")
 	hasContent := false
 	for _, e := range entries {
-		// Anything other than the .gitkeep / README placeholder counts as
-		// a real build.
-		if e.Name() != ".gitkeep" && e.Name() != "README.md" {
-			hasContent = true
-			break
+		// Anything other than the .gitkeep / .gitignore / README placeholder
+		// counts as a real build. .gitignore exists so Vite output stays
+		// untracked in git; it's not user-facing content.
+		switch e.Name() {
+		case ".gitkeep", ".gitignore", "README.md":
+			continue
 		}
+		hasContent = true
+		break
 	}
 	if !hasContent {
 		return http.HandlerFunc(uiPlaceholder)
 	}
-	return http.FileServer(http.FS(sub))
+	return http.FileServer(http.FS(assets))
 }
 
 func uiPlaceholder(w http.ResponseWriter, _ *http.Request) {
@@ -144,9 +157,9 @@ const uiPlaceholderBody = `<!doctype html>
 <h1>openctl controller</h1>
 <p>The API is up at <code>/v1/*</code> (try <code>GET /v1/ping</code>).</p>
 <p>The UI is not built yet. Run <code>make ui</code> from the openctl repo to populate
-<code>cmd/openctl-controller/uiassets/</code> with the Vite build output, then restart
-the controller.</p>
-<p>UI implementation tracker: <code>UI.md</code>, Phase U2 onward.</p>
+<code>internal/controller/server/uiassets/dist/</code> with the Vite build output, then
+restart the controller.</p>
+<p>UI implementation tracker: <code>UI.md</code>, Phase U3 onward.</p>
 </body></html>`
 
 // cookieToBearer rewrites an openctl_session cookie into the

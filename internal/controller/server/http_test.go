@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/openctl/openctl/internal/controller/auth"
@@ -145,11 +147,17 @@ func TestHTTPGatewayLoginSetsSessionCookie(t *testing.T) {
 	}
 }
 
-func TestHTTPGatewayUIPlaceholder(t *testing.T) {
-	base, _ := startGatewayTestServer(t)
-	resp, err := http.Get(base + "/ui/")
+func TestUIHandlerServesPlaceholderWhenEmpty(t *testing.T) {
+	// Direct test of uiHandlerFor against an empty FS — this is the path
+	// users see in dev before `make ui` has built anything. Doesn't
+	// depend on the package-level uiAssets, which would be populated in
+	// a release build.
+	srv := httptest.NewServer(uiHandlerFor(emptyFS{}))
+	t.Cleanup(srv.Close)
+
+	resp, err := http.Get(srv.URL + "/")
 	if err != nil {
-		t.Fatalf("GET /ui/: %v", err)
+		t.Fatalf("GET /: %v", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
@@ -157,9 +165,39 @@ func TestHTTPGatewayUIPlaceholder(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", resp.StatusCode, body)
 	}
 	if !strings.Contains(string(body), "openctl controller") {
-		t.Errorf("placeholder page missing expected content; body = %s", body)
+		t.Errorf("placeholder missing expected text; body = %s", body)
 	}
 }
+
+func TestUIHandlerServesAssetsWhenPresent(t *testing.T) {
+	// Mirror what Vite produces: an index.html plus an assets/ subdir.
+	// uiHandlerFor should fall through to http.FileServer, not the
+	// placeholder.
+	assets := fstest.MapFS{
+		"index.html":           {Data: []byte("<!doctype html><title>BUILT</title>")},
+		"assets/index-abc.js":  {Data: []byte("/* js */")},
+		"assets/index-xyz.css": {Data: []byte("/* css */")},
+		".gitkeep":             {Data: []byte("")},
+	}
+	srv := httptest.NewServer(uiHandlerFor(assets))
+	t.Cleanup(srv.Close)
+
+	resp, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "BUILT") {
+		t.Errorf("expected built index.html, got: %s", body)
+	}
+}
+
+// emptyFS is an fs.FS with no entries — exercises uiHandlerFor's
+// placeholder branch without needing a temp directory.
+type emptyFS struct{}
+
+func (emptyFS) Open(_ string) (fs.File, error) { return nil, fs.ErrNotExist }
 
 func TestHTTPGatewayRootRedirectsToUI(t *testing.T) {
 	base, _ := startGatewayTestServer(t)
