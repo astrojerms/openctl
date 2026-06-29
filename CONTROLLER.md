@@ -356,10 +356,15 @@ destructive guardrails enforced.
       in-place. Pure adds are non-destructive (no flag needed); mixed
       apply (down + up) still requires `--allow-destructive` for the
       remove side.
-- [ ] Phase 5.x followup: spec changes to existing children with
+- [x] Phase 5.x followup: spec changes to existing children with
       `--allow-destructive` (destroy + recreate of a node whose
-      cpu/memory/disk changed). Deferred during Phase 5 scoping because
-      it adds significant complexity for limited homelab value.
+      cpu/memory changed; runs one at a time so the cluster keeps
+      majority CPs throughout). Re-uses the count-up Joiner per node
+      after the recreate. Catastrophic gate fires when the only CP or
+      the only worker would respec (no apiserver / no scheduling
+      target during the gap). Disk respec deferred — the proxmox
+      VMToResourceWithIP doesn't surface disk size yet, so we have
+      nothing to diff against.
 
 **Verifiable:** confirmed via tests in
 `internal/controller/providers/k3s/provider_test.go` —

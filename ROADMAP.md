@@ -54,8 +54,10 @@ phases, and 4.5 / 5.x meaningfully improve the UI's UX. See
 - [x] **Phase 5.x** — Cluster apply count-up (new `Joiner` adds nodes
       to a live cluster, extending the existing CA bundle without
       rotating it).
-- [ ] **Phase 5.x** — In-place spec changes on existing children
-      (destroy+recreate of a node whose cpu/memory/disk changed).
+- [x] **Phase 5.x** — In-place spec changes on existing children
+      (destroy+recreate of a node whose cpu/memory drifted; one at a
+      time, rejoined via the Joiner). Disk respec deferred — observed
+      VM spec doesn't surface disk size.
 
 ### Followups (post-Phase-6, parked)
 

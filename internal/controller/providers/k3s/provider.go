@@ -14,6 +14,7 @@ package k3s
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -185,17 +186,17 @@ func (p *Provider) Apply(ctx context.Context, manifest *protocol.Resource) (*pro
 // applyExisting handles re-apply of a Cluster that already has state. It
 // computes the structural diff vs. the new manifest, enforces the
 // destructive/catastrophic guardrails, and converges the child set —
-// removals via VM delete (Phase 5) and additions via the Joiner
-// (Phase 5.x count-up). In-place spec changes to existing children
-// (cpu/memory/disk) are still out of scope (see CONTROLLER.md 5.x followup).
+// removals via VM delete (Phase 5), additions via the Joiner (Phase 5.x
+// count-up), and per-node CPU/memory respecs via destroy + recreate +
+// rejoin (Phase 5.x in-place spec changes).
 func (p *Provider) applyExisting(ctx context.Context, manifest *protocol.Resource, name string, spec *k3sresources.ClusterSpec) (*protocol.Resource, error) {
 	current, _ := readChildren(name)
 	plan := computeChangePlan(name, spec, current)
 
-	if !plan.hasChanges() {
-		// No structural diff — just return existing state. (Spec-only
-		// changes to children, e.g. cpu/memory, are out of scope for
-		// Phase 5 — see the deferred 5.6 followup in CONTROLLER.md.)
+	respecs := p.computeSpecRespecs(ctx, name, spec, current, toSet(append(plan.removeCPs, plan.removeWorkers...)))
+
+	if !plan.hasChanges() && len(respecs) == 0 {
+		// No structural diff and no spec drift — just return existing state.
 		return p.loadState(name)
 	}
 
@@ -204,6 +205,13 @@ func (p *Provider) applyExisting(ctx context.Context, manifest *protocol.Resourc
 
 	if plan.removesAny() && !allowDestructive {
 		return nil, fmt.Errorf("would remove %d node(s) (CPs %v, workers %v); pass --allow-destructive to confirm", len(plan.removeCPs)+len(plan.removeWorkers), plan.removeCPs, plan.removeWorkers)
+	}
+	if len(respecs) > 0 && !allowDestructive {
+		names := make([]string, len(respecs))
+		for i, r := range respecs {
+			names[i] = r.Name
+		}
+		return nil, fmt.Errorf("would respec %d node(s) (%v) via destroy + recreate; pass --allow-destructive to confirm", len(respecs), names)
 	}
 
 	// Catastrophic-op detection: count current CPs/workers before applying
@@ -221,6 +229,9 @@ func (p *Provider) applyExisting(ctx context.Context, manifest *protocol.Resourc
 		}
 	}
 	if reason := catastrophicReason(plan, haveCPs, haveWorkers); reason != "" && !iKnowThisBreaks {
+		return nil, fmt.Errorf("catastrophic: %s; pass --i-know-this-breaks-the-cluster to override", reason)
+	}
+	if reason := catastrophicRespecReason(respecs, haveCPs, haveWorkers); reason != "" && !iKnowThisBreaks {
 		return nil, fmt.Errorf("catastrophic: %s; pass --i-know-this-breaks-the-cluster to override", reason)
 	}
 
@@ -264,6 +275,42 @@ func (p *Provider) applyExisting(ctx context.Context, manifest *protocol.Resourc
 		for _, n := range plan.addWorkers {
 			keep = append(keep, childRef{Provider: "proxmox", Kind: "VirtualMachine", Name: n})
 		}
+	}
+
+	// Phase 5.x in-place respec: destroy → recreate → rejoin each affected
+	// node, one at a time. Runs after adds so the cluster has its maximum
+	// replica count before any individual node goes down for the respec.
+	if len(respecs) > 0 {
+		existingState, err := p.loadState(name)
+		if err != nil {
+			return nil, err
+		}
+		existingIPs := readAgentEndpoints(existingState)
+		// Merge in any IPs we just learned from the count-up so respec on a
+		// freshly-added node uses its new IP rather than failing the lookup.
+		maps.Copy(existingIPs, addedEndpoints)
+		survivingCPs := []string{}
+		for _, c := range current {
+			if c.Kind == "VirtualMachine" && strings.HasPrefix(c.Name, cpPrefix) && !removed[c.Name] {
+				survivingCPs = append(survivingCPs, c.Name)
+			}
+		}
+		if len(survivingCPs) == 0 && len(plan.addCPs) > 0 {
+			survivingCPs = plan.addCPs
+		}
+		if len(survivingCPs) == 0 {
+			return nil, fmt.Errorf("respec requires at least one CP to remain reachable")
+		}
+		firstCPName := survivingCPs[0]
+		firstCPIP := existingIPs[firstCPName]
+		if firstCPIP == "" {
+			return nil, fmt.Errorf("no IP for surviving CP %s; can't rejoin after respec", firstCPName)
+		}
+		updated, err := p.applyRespecs(ctx, rec, name, spec, respecs, existingIPs, firstCPName, firstCPIP)
+		if err != nil {
+			return nil, err
+		}
+		maps.Copy(addedEndpoints, updated)
 	}
 
 	if err := p.rewriteState(name, manifest, keep, addedEndpoints, removed); err != nil {
