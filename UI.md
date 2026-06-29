@@ -384,20 +384,37 @@ to scale workers down surfaces the `--allow-destructive` checkbox.
 
 ### Phase U5: Typed form editor
 
-**Status:** not started
+**Status:** in progress.
 
 **Goal:** form-driven creation/editing for users who don't want to write
 CUE. AWS-console-shape.
 
+**Sub-phases:**
+
+- [x] **U5.1** — Form schema Go package + `SchemaService.GetFormSchema`
+      RPC. `internal/schema/form` walks a CUE value into a typed
+      `Field` tree (strings/ints/numbers/bools/objects/arrays/any/
+      unsupported) carrying optional+required, defaults, number bounds
+      (>=, <=, >, <), const literals (pinned values like `apiVersion`),
+      and CUE doc comments. RPC returns the tree as JSON-in-a-string
+      so the proto stays non-recursive; the browser parses and renders.
+      Same SchemaSelector the validator uses → form + Validate always
+      agree on which CUE def to consult. 10 unit tests cover each
+      construct, including a round-trip against the real shipped
+      k3s `Cluster` schema. Unsupported constructs (free disjunctions,
+      regex patterns, key-value maps) deferred to U5.3 — they emit a
+      `{type:"unsupported", reason:"..."}` leaf the renderer can grey
+      out.
+
 **Deliverables:**
 
-- [ ] `internal/controller/schema/form` package: walks the CUE AST and
-      produces a typed form schema. Handles scalars, strings (with
-      regex/enum constraints), numbers (with range constraints), bools,
-      arrays (homogeneous and heterogeneous), nested structs, optional
-      fields, defaults, and disjunctions (rendered as discriminated
-      unions / "pick a variant" UI).
-- [ ] `SchemaService.GetFormSchema(kind)` RPC returns the form schema.
+- [x] `internal/schema/form` package: walks the CUE AST and
+      produces a typed form schema. Handles scalars, strings, numbers
+      (with range constraints), bools, arrays (homogeneous), nested
+      structs, optional fields, defaults, and const literals. Regex
+      patterns + enums + free disjunctions deferred to U5.3 (emit
+      `unsupported` leaves for now).
+- [x] `SchemaService.GetFormSchema(kind)` RPC returns the form schema.
 - [ ] Form renderer in Svelte: stepped sections (AWS-style "step 1:
       compute, step 2: network, step 3: review"), inline validation
       from the form schema constraints, sensible defaults pulled from

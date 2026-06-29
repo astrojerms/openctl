@@ -27,7 +27,7 @@ func Validate(r *protocol.Resource) error {
 		return fmt.Errorf("resource missing apiVersion or kind")
 	}
 
-	pkg, def, ok := schemaSelector(r.APIVersion, r.Kind)
+	pkg, def, ok := SchemaSelector(r.APIVersion, r.Kind)
 	if !ok {
 		// No embedded schema for this apiVersion+kind — pass through.
 		return nil
@@ -72,13 +72,15 @@ func Validate(r *protocol.Resource) error {
 	return nil
 }
 
-// schemaSelector returns the embedded-schema (package, definition) for a
+// SchemaSelector returns the embedded-schema (package, definition) for a
 // given apiVersion+kind. Returns ok=false when no schema is registered.
+// Exported so internal/schema/form can pick the same CUE def Validate
+// would — keeps the form bridge and the validator in lockstep.
 //
 // The mapping is intentionally explicit. Adding a new resource kind
 // requires updating both the .cue file under internal/schema/schemas/ and
 // this map.
-func schemaSelector(apiVersion, kind string) (pkg, def string, ok bool) {
+func SchemaSelector(apiVersion, kind string) (pkg, def string, ok bool) {
 	provider := providerOf(apiVersion)
 	switch provider {
 	case "proxmox":

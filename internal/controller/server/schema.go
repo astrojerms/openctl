@@ -2,11 +2,13 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"github.com/openctl/openctl/internal/schema"
+	"github.com/openctl/openctl/internal/schema/form"
 	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 )
 
@@ -57,6 +59,29 @@ func (h *schemaHandler) Validate(_ context.Context, req *apiv1.ValidateRequest) 
 		return &apiv1.ValidateResponse{Errors: []string{err.Error()}}, nil
 	}
 	return &apiv1.ValidateResponse{}, nil
+}
+
+// GetFormSchema walks the embedded CUE schema for (apiVersion, kind)
+// and returns the form-schema tree as JSON. The wire format is "JSON
+// inside a string" so the proto stays non-recursive and the browser
+// gets exactly what it needs to render.
+func (h *schemaHandler) GetFormSchema(_ context.Context, req *apiv1.GetFormSchemaRequest) (*apiv1.GetFormSchemaResponse, error) {
+	if req.GetApiVersion() == "" || req.GetKind() == "" {
+		return nil, status.Error(codes.InvalidArgument, "api_version and kind are required")
+	}
+	f, ok, err := form.BuildForKind(req.GetApiVersion(), req.GetKind())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "build form: %v", err)
+	}
+	if !ok {
+		return nil, status.Errorf(codes.NotFound,
+			"no embedded schema for %s/%s", req.GetApiVersion(), req.GetKind())
+	}
+	out, err := json.Marshal(f)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "encode form schema: %v", err)
+	}
+	return &apiv1.GetFormSchemaResponse{Json: string(out)}, nil
 }
 
 func infoToProto(i schema.Info) *apiv1.SchemaInfo {
