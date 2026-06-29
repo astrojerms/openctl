@@ -625,3 +625,195 @@ var OperationService_ServiceDesc = grpc.ServiceDesc{
 	},
 	Metadata: "api.proto",
 }
+
+const (
+	SchemaService_ListSchemas_FullMethodName = "/openctl.v1.SchemaService/ListSchemas"
+	SchemaService_GetSchema_FullMethodName   = "/openctl.v1.SchemaService/GetSchema"
+	SchemaService_Validate_FullMethodName    = "/openctl.v1.SchemaService/Validate"
+)
+
+// SchemaServiceClient is the client API for SchemaService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// WatchOperationsRequest filters the OperationService.WatchOperations
+// stream. All fields optional — empty filters watch every op.
+// SchemaService introspects the controller's embedded CUE schemas and
+// runs validation. UI uses ListSchemas to populate kind pickers,
+// GetSchema to feed the Monaco editor's autocomplete / form-schema
+// bridge, and Validate to surface errors as the user types.
+type SchemaServiceClient interface {
+	ListSchemas(ctx context.Context, in *ListSchemasRequest, opts ...grpc.CallOption) (*ListSchemasResponse, error)
+	GetSchema(ctx context.Context, in *GetSchemaRequest, opts ...grpc.CallOption) (*GetSchemaResponse, error)
+	Validate(ctx context.Context, in *ValidateRequest, opts ...grpc.CallOption) (*ValidateResponse, error)
+}
+
+type schemaServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewSchemaServiceClient(cc grpc.ClientConnInterface) SchemaServiceClient {
+	return &schemaServiceClient{cc}
+}
+
+func (c *schemaServiceClient) ListSchemas(ctx context.Context, in *ListSchemasRequest, opts ...grpc.CallOption) (*ListSchemasResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListSchemasResponse)
+	err := c.cc.Invoke(ctx, SchemaService_ListSchemas_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schemaServiceClient) GetSchema(ctx context.Context, in *GetSchemaRequest, opts ...grpc.CallOption) (*GetSchemaResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetSchemaResponse)
+	err := c.cc.Invoke(ctx, SchemaService_GetSchema_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schemaServiceClient) Validate(ctx context.Context, in *ValidateRequest, opts ...grpc.CallOption) (*ValidateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ValidateResponse)
+	err := c.cc.Invoke(ctx, SchemaService_Validate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SchemaServiceServer is the server API for SchemaService service.
+// All implementations must embed UnimplementedSchemaServiceServer
+// for forward compatibility.
+//
+// WatchOperationsRequest filters the OperationService.WatchOperations
+// stream. All fields optional — empty filters watch every op.
+// SchemaService introspects the controller's embedded CUE schemas and
+// runs validation. UI uses ListSchemas to populate kind pickers,
+// GetSchema to feed the Monaco editor's autocomplete / form-schema
+// bridge, and Validate to surface errors as the user types.
+type SchemaServiceServer interface {
+	ListSchemas(context.Context, *ListSchemasRequest) (*ListSchemasResponse, error)
+	GetSchema(context.Context, *GetSchemaRequest) (*GetSchemaResponse, error)
+	Validate(context.Context, *ValidateRequest) (*ValidateResponse, error)
+	mustEmbedUnimplementedSchemaServiceServer()
+}
+
+// UnimplementedSchemaServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedSchemaServiceServer struct{}
+
+func (UnimplementedSchemaServiceServer) ListSchemas(context.Context, *ListSchemasRequest) (*ListSchemasResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListSchemas not implemented")
+}
+func (UnimplementedSchemaServiceServer) GetSchema(context.Context, *GetSchemaRequest) (*GetSchemaResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetSchema not implemented")
+}
+func (UnimplementedSchemaServiceServer) Validate(context.Context, *ValidateRequest) (*ValidateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Validate not implemented")
+}
+func (UnimplementedSchemaServiceServer) mustEmbedUnimplementedSchemaServiceServer() {}
+func (UnimplementedSchemaServiceServer) testEmbeddedByValue()                       {}
+
+// UnsafeSchemaServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to SchemaServiceServer will
+// result in compilation errors.
+type UnsafeSchemaServiceServer interface {
+	mustEmbedUnimplementedSchemaServiceServer()
+}
+
+func RegisterSchemaServiceServer(s grpc.ServiceRegistrar, srv SchemaServiceServer) {
+	// If the following call panics, it indicates UnimplementedSchemaServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&SchemaService_ServiceDesc, srv)
+}
+
+func _SchemaService_ListSchemas_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListSchemasRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchemaServiceServer).ListSchemas(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchemaService_ListSchemas_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchemaServiceServer).ListSchemas(ctx, req.(*ListSchemasRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchemaService_GetSchema_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSchemaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchemaServiceServer).GetSchema(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchemaService_GetSchema_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchemaServiceServer).GetSchema(ctx, req.(*GetSchemaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchemaService_Validate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ValidateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchemaServiceServer).Validate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchemaService_Validate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchemaServiceServer).Validate(ctx, req.(*ValidateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// SchemaService_ServiceDesc is the grpc.ServiceDesc for SchemaService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var SchemaService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "openctl.v1.SchemaService",
+	HandlerType: (*SchemaServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ListSchemas",
+			Handler:    _SchemaService_ListSchemas_Handler,
+		},
+		{
+			MethodName: "GetSchema",
+			Handler:    _SchemaService_GetSchema_Handler,
+		},
+		{
+			MethodName: "Validate",
+			Handler:    _SchemaService_Validate_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "api.proto",
+}

@@ -84,6 +84,7 @@ func New(opts Options) (*Server, error) {
 	if opts.Operations != nil {
 		apiv1.RegisterOperationServiceServer(g, newOperationHandler(opts.Operations))
 	}
+	apiv1.RegisterSchemaServiceServer(g, newSchemaHandler())
 
 	reflection.Register(g)
 

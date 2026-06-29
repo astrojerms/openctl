@@ -223,6 +223,55 @@ message ListOperationsResponse {
 
 // WatchOperationsRequest filters the OperationService.WatchOperations
 // stream. All fields optional — empty filters watch every op.
+// SchemaService introspects the controller's embedded CUE schemas and
+// runs validation. UI uses ListSchemas to populate kind pickers,
+// GetSchema to feed the Monaco editor's autocomplete / form-schema
+// bridge, and Validate to surface errors as the user types.
+service SchemaService {
+  rpc ListSchemas(ListSchemasRequest) returns (ListSchemasResponse);
+  rpc GetSchema(GetSchemaRequest) returns (GetSchemaResponse);
+  rpc Validate(ValidateRequest) returns (ValidateResponse);
+}
+
+message ListSchemasRequest {}
+
+message ListSchemasResponse {
+  repeated SchemaInfo schemas = 1;
+}
+
+// SchemaInfo describes one embedded CUE schema. file_name is the relative
+// path under internal/schema/schemas/ (e.g. "proxmox/vm.cue") so the
+// client can compose links back to source if it wants to.
+message SchemaInfo {
+  string api_version = 1;   // e.g. "proxmox.openctl.io/v1"
+  string kind = 2;          // e.g. "VirtualMachine"
+  string provider = 3;      // e.g. "proxmox"
+  string file_name = 4;
+}
+
+message GetSchemaRequest {
+  string api_version = 1;
+  string kind = 2;
+}
+
+message GetSchemaResponse {
+  SchemaInfo info = 1;
+  // CUE source text. Multi-file packages join all files in deterministic
+  // order so a single string is sufficient for editor consumption.
+  string cue_source = 2;
+}
+
+message ValidateRequest {
+  Resource resource = 1;
+}
+
+message ValidateResponse {
+  // Empty errors[] = valid. Populated = validation failed; each entry is
+  // one human-readable diagnostic. No structured location info yet — CUE
+  // doesn't surface it cleanly through Validate; future enhancement.
+  repeated string errors = 1;
+}
+
 message WatchOperationsRequest {
   string id = 1;             // narrow to one op id (terminate when terminal)
   string api_version = 2;
