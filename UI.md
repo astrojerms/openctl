@@ -219,6 +219,15 @@ a deletion commit. With remote configured, see the commit reach origin.
       REST client over the grpc-gateway surface (60 LoC, no protoc dep);
       generated client deferred until U3.4 (streaming Watch RPCs) when
       typed schemas pay for themselves.
+- [x] **U3.2** — Layout shell with header (logout) + left nav grouped
+      by provider + main pane; tiny hash-based router (`#/k/<apiVersion>/
+      <kind>[/<name>]`, no SPA framework); kind catalogue derived from
+      `SchemaService.ListSchemas` with per-kind live resource counts
+      (parallel `List` fan-out); per-kind resource list table with
+      state/drift badges. `state` adapter centralises the
+      proxmox-vs-k3s status-key inconsistency (`status.state` vs
+      `status.phase`). Bottom ops drawer deferred to U3.4 alongside
+      Watch wiring; detail pane deferred to U3.3.
 
 **Deliverables:**
 
@@ -229,6 +238,13 @@ a deletion commit. With remote configured, see the commit reach origin.
       Token never persisted in JS (cookie is HttpOnly); "signed in as
       &lt;userId&gt;" with session-id-on-hover replaces the planned
       last-4-chars hint since the JS layer can't see the cookie value.
+- [x] Layout shell: left nav grouped by provider/kind with resource
+      counts; main pane. Bottom drawer for op history deferred to U3.4
+      (lands with Watch streams).
+- [x] Resource list per kind: name, state badge, drift badge. Click →
+      detail (placeholder until U3.3). Last-applied timestamp deferred
+      until the controller surfaces it on Resource (currently only on
+      Operation rows).
 - [ ] Layout shell: left nav grouped by `apiVersion/kind` with resource
       counts; main pane; bottom drawer for op history.
 - [ ] Resource list per kind: name, drift badge (count of drifted
