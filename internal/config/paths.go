@@ -14,14 +14,19 @@ const (
 	PluginsDirName = "plugins"
 	// SecretsDirName is the name of the secrets directory
 	SecretsDirName = "secrets"
+	// ManifestsDirName is the default subdirectory for the controller's
+	// materialized manifest mirror (UI Phase U2). Resolved as
+	// ~/.openctl/manifests when no override is set in config.
+	ManifestsDirName = "manifests"
 )
 
 // Paths holds the various paths used by openctl
 type Paths struct {
-	ConfigDir  string
-	ConfigFile string
-	PluginsDir string
-	SecretsDir string
+	ConfigDir    string
+	ConfigFile   string
+	PluginsDir   string
+	SecretsDir   string
+	ManifestsDir string
 }
 
 // GetPaths returns the paths for the current user
@@ -34,10 +39,11 @@ func GetPaths() (*Paths, error) {
 	configDir := filepath.Join(homeDir, ConfigDirName)
 
 	return &Paths{
-		ConfigDir:  configDir,
-		ConfigFile: filepath.Join(configDir, ConfigFileName),
-		PluginsDir: filepath.Join(configDir, PluginsDirName),
-		SecretsDir: filepath.Join(configDir, SecretsDirName),
+		ConfigDir:    configDir,
+		ConfigFile:   filepath.Join(configDir, ConfigFileName),
+		PluginsDir:   filepath.Join(configDir, PluginsDirName),
+		SecretsDir:   filepath.Join(configDir, SecretsDirName),
+		ManifestsDir: filepath.Join(configDir, ManifestsDirName),
 	}, nil
 }
 

@@ -128,6 +128,36 @@ func (s *Store) Load(ctx context.Context, apiVersion, kind, name string) (*proto
 	return r, nil
 }
 
+// Ref is a (apiVersion, kind, name) tuple. Returned by ListAll for callers
+// that need to enumerate the set of applied manifests without loading every
+// spec — e.g. startup reconciliation against the disk mirror.
+type Ref struct {
+	APIVersion string
+	Kind       string
+	Name       string
+}
+
+// ListAll returns every applied manifest's identity, oldest first by
+// applied_at. Cheap: doesn't decode spec/metadata. Used by the disk mirror's
+// startup reconciliation to compare against what's on disk.
+func (s *Store) ListAll(ctx context.Context) ([]Ref, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT api_version, kind, name FROM applied_manifests ORDER BY applied_at ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list applied_manifests: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Ref
+	for rows.Next() {
+		var r Ref
+		if err := rows.Scan(&r.APIVersion, &r.Kind, &r.Name); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // Delete removes the row for a resource. Idempotent — delete on missing
 // returns nil, matching the provider Delete contract.
 func (s *Store) Delete(ctx context.Context, apiVersion, kind, name string) error {
