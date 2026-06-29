@@ -106,9 +106,12 @@
       </p>
       <h2>{resourceName}</h2>
     </div>
-    {#if state}
-      <span class="state state-{state.tone}">{state.label}</span>
-    {/if}
+    <div class="header-right">
+      {#if state}
+        <span class="state state-{state.tone}">{state.label}</span>
+      {/if}
+      <a class="edit-btn" href={routeHref({ name: 'edit', apiVersion, kind, resourceName })}>Edit</a>
+    </div>
   </header>
 
   {#if loading}
@@ -217,6 +220,23 @@
     margin: 0 0 0.75rem;
     font-size: 0.95rem;
     color: #aaa;
+  }
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  .edit-btn {
+    background: #4a8ef0;
+    color: white;
+    padding: 0.4em 1em;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    text-decoration: none;
+    font-weight: 500;
+  }
+  .edit-btn:hover {
+    background: #3a7ee0;
   }
   .state {
     padding: 0.15em 0.7em;

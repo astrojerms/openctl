@@ -25,6 +25,10 @@ export default defineConfig({
     outDir: path.resolve(__dirname, '../internal/controller/server/uiassets/dist'),
     emptyOutDir: true,
     sourcemap: true,
+    // Monaco's editor.api + yaml.contribution legitimately blow past
+    // the 500 KB default; the index chunk stays small (~180 KB) and the
+    // editor chunks only load when /edit is visited.
+    chunkSizeWarningLimit: 1500,
   },
   server: {
     port: 5173,

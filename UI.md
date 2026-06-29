@@ -319,13 +319,25 @@ real schema.
       k3s `Cluster` provider wired up — reuses `computeChangePlan` +
       `computeSpecRespecs` + `catastrophicReason` so the gates fire on
       the same conditions Apply would.
+- [x] **U4.2** — Monaco editor wired into a new `/edit/...` route.
+      Lazy-loaded — the editor + YAML language ship in their own chunks
+      that only download on first /edit visit; list/detail/home stay
+      light (~180 KB index). Pre-fills from `GetResponse.applied`
+      (falls back to a skeleton built from observed state when no
+      manifest is on file). 350 ms debounce on edits → YAML parse → if
+      shaped right, `SchemaService.Validate` → errors surfaced as Monaco
+      markers and listed in a diagnostics card below the editor.
+      "Discard" reverts to the applied baseline; "Apply" is wired into
+      the UI but disabled until U4.3 (with a tooltip pointing to it).
+      Hash route gains `#/k/.../<name>/edit`. Detail pane gets an
+      "Edit" button.
 
 **Deliverables:**
 
-- [ ] Monaco editor integration. YAML mode for the editor surface
+- [x] Monaco editor integration. YAML mode for the editor surface
       (CUE doesn't ship a Monaco grammar; if/when manifests graduate to
       raw CUE, add a custom grammar).
-- [ ] Debounced server-side validation via `SchemaService.Validate`.
+- [x] Debounced server-side validation via `SchemaService.Validate`.
       Errors render as Monaco markers with hover detail.
 - [ ] Side-by-side diff vs. currently-applied manifest (Monaco's diff
       editor).

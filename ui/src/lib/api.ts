@@ -134,8 +134,14 @@ export interface ListSchemasResponse {
   schemas?: SchemaInfo[];
 }
 
+export interface ValidateResponse {
+  errors?: string[];
+}
+
 export const schemas = {
   list: () => api.get<ListSchemasResponse>('/v1/schemas'),
+  validate: (resource: Resource | Partial<Resource>) =>
+    api.post<ValidateResponse>('/v1/schemas:validate', { resource }),
 };
 
 // --- Resources -----------------------------------------------------------
@@ -169,6 +175,21 @@ export interface ListResourcesResponse {
   resources?: Resource[];
 }
 
+export interface DryRunChildAction {
+  verb: string;       // "create" | "destroy" | "respec" | "no-op"
+  kind: string;
+  name: string;
+  detail?: string;
+}
+
+export interface DryRunApplyResponse {
+  diff?: DriftEntry[];
+  children?: DryRunChildAction[];
+  requiredGates?: string[];
+  validationErrors?: string[];
+  summary?: string;
+}
+
 export interface GetResourceResponse {
   resource: Resource;
   // Desired manifest currently on file in applied_manifests; unset when
@@ -184,6 +205,8 @@ export const resources = {
     api.post<ListResourcesResponse>('/v1/resources:list', { apiVersion, kind }),
   get: (apiVersion: string, kind: string, name: string) =>
     api.post<GetResourceResponse>('/v1/resources:get', { apiVersion, kind, name }),
+  dryRunApply: (resource: Resource | Partial<Resource>) =>
+    api.post<DryRunApplyResponse>('/v1/resources:dryRunApply', { resource }),
 };
 
 // --- Repo (manifest dir / git) -------------------------------------------
