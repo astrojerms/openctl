@@ -18,16 +18,12 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
-Arch Phase 8 (scoped) shipped: owner-ref / children plumbing on the
-Resource proto, Registry.ChildrenOf + OwnerRefOf, k3s Cluster surfaces
-its VM children, Get/List/Watch populate the new fields. This is the
-minimum to unblock the UI work that needs composite relationships
-(deferred U3.3 children tree, U6 composite UX). The full HTML
-target-architecture Phase 8 (K3sNode as first-class resource +
-AgentInstall + Cluster.Plan refactor + wire-level refs) is still
-deferred — it's a separate architectural lift. Next: UI U3.3 deferred
-(children tree on Detail.svelte) → UI Phase U6 (composite resource
-UX) → UI Phase U7 (op orchestration polish).
+Arch Phase 8 (scoped) + U3.3-deferred shipped. The Resource proto now
+carries owner_refs + children populated from the existing state-file
+surface; Detail.svelte renders the owner banner + children tree.
+Next: UI Phase U6 (composite resource UX — aggregated badges,
+per-child verbs threaded into apply preview, Cluster detail tree
+polish) → UI Phase U7 (op orchestration polish).
 
 ## Suggested next order
 
@@ -151,8 +147,11 @@ committing to a phase.
       - [x] **U3.3** — Resource detail (desired manifest / observed
             state / drift diff / last-applied timestamp). Proto: Get
             response gains `applied` + `applied_at`. Owner-ref +
-            composite children tree deferred (needs proto relationship
-            surface, lands with arch Phase 8).
+            composite children tree shipped as a U3.3-deferred follow-up
+            after arch Phase 8 (scoped) added the proto surface —
+            Detail.svelte now renders an owner banner above the manifest
+            panes for owned resources and a read-only children list
+            below for composite parents.
       - [x] **U3.4** — Live Watch streams + ops drawer. fetch +
             ReadableStream bridge over grpc-gateway's ndjson; ResourceList
             and Detail subscribe to ResourceService.Watch; collapsible
