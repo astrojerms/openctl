@@ -18,12 +18,12 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
-Arch Phase 8 (scoped) + U3.3-deferred shipped. The Resource proto now
-carries owner_refs + children populated from the existing state-file
-surface; Detail.svelte renders the owner banner + children tree.
-Next: UI Phase U6 (composite resource UX — aggregated badges,
-per-child verbs threaded into apply preview, Cluster detail tree
-polish) → UI Phase U7 (op orchestration polish).
+Arch Phase 8 (scoped) + U3.3-deferred + U6 shipped. Composite
+resources now render with per-child status/drift pills, aggregated
+parent badges, owner-block guards on Edit, and clickable child links
+in apply preview. Next: UI Phase U7 (op orchestration polish —
+CancelOperation RPC, retry/re-apply, history filtering, per-substep
+checklist).
 
 ## Suggested next order
 
@@ -214,9 +214,15 @@ committing to a phase.
             when an unknown key appears while on Form. Closes Phase U5.
       - [ ] **U5.4** — Form ↔ CUE round-trip + disable form when manifest
             has hand-edits the form can't represent.
-- [ ] **Phase U6** — Composite resource UX (Cluster parent + read-only
-      children tree, aggregated badges, per-child verbs in apply
-      preview, DAG view gated on arch Phase 8).
+- [x] **Phase U6** — Composite resource UX. Detail.svelte fans out one
+      Get per child to render per-row status + drift pills; an
+      aggregated "N children · M drifted · K unhealthy" pill rides next
+      to the parent state in the header. Edit.svelte detects ownerRefs
+      and blocks Apply with a banner pointing to the owner ("Edit X
+      instead →"). Apply preview's child verbs link to each child's
+      detail page (except for `create` verbs whose target doesn't exist
+      yet). DAG view remains gated on a future arch Phase 8 lift
+      (target-architecture HTML).
 - [ ] **Phase U7** — Op orchestration polish (live substep checklist,
       `CancelOperation` RPC, retry/re-apply, history filtering).
 
