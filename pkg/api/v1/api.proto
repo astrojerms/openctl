@@ -130,7 +130,17 @@ message GetRequest {
 }
 
 message GetResponse {
+  // Observed state from the provider (plus computed drift).
   Resource resource = 1;
+  // The desired manifest currently on file in applied_manifests, or unset
+  // if no manifest has been applied for this resource. Populated by the
+  // controller from manifests.Store.Load — same source the drift diff is
+  // computed against. UI uses this to render the "desired" pane next to
+  // the observed state without a second round-trip.
+  Resource applied = 2;
+  // RFC3339 timestamp of the most recent apply for this resource, or
+  // empty when applied is unset. Source: applied_manifests.applied_at.
+  string applied_at = 3;
 }
 
 message ListRequest {

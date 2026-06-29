@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	"github.com/openctl/openctl/internal/controller/manifests"
 	"github.com/openctl/openctl/internal/controller/operations"
 	"github.com/openctl/openctl/internal/controller/providers"
 	"github.com/openctl/openctl/internal/controller/storage"
@@ -79,6 +80,19 @@ func (f *fakeProvider) Delete(_ context.Context, kind, name string) error {
 // startTestServer spins up a controller server with real async operations
 // wiring (Store + Dispatcher) so the tests exercise the production path.
 func startTestServer(t *testing.T, registry *providers.Registry) (string, *tlspkg.Material) {
+	addr, mat, _ := startTestServerWithManifests(t, registry, nil)
+	return addr, mat
+}
+
+// startTestServerWithManifests is startTestServer plus a manifests.Store
+// hook so tests can populate desired state before exercising Get/List. The
+// store is returned so the caller can call Save() directly without going
+// through the dispatcher.
+func startTestServerWithManifests(
+	t *testing.T,
+	registry *providers.Registry,
+	manifestStore *manifests.Store,
+) (string, *tlspkg.Material, *manifests.Store) {
 	t.Helper()
 	dir := t.TempDir()
 	mat, err := tlspkg.EnsureMaterial(dir, "localhost", []net.IP{net.ParseIP("127.0.0.1")})
@@ -92,6 +106,9 @@ func startTestServer(t *testing.T, registry *providers.Registry) (string, *tlspk
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	store := operations.New(db, 50)
+	if manifestStore == nil {
+		manifestStore = manifests.New(db)
+	}
 	dispatcher := operations.NewDispatcher(store, registry, nil, 50*time.Millisecond)
 	dispatcher.Start(context.Background())
 	t.Cleanup(dispatcher.Stop)
@@ -103,6 +120,7 @@ func startTestServer(t *testing.T, registry *providers.Registry) (string, *tlspk
 		Registry:   registry,
 		Operations: store,
 		Dispatcher: dispatcher,
+		Manifests:  manifestStore,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -113,7 +131,7 @@ func startTestServer(t *testing.T, registry *providers.Registry) (string, *tlspk
 	}
 	go func() { _ = srv.ServeListener(ln) }()
 	t.Cleanup(srv.Stop)
-	return ln.Addr().String(), mat
+	return ln.Addr().String(), mat, manifestStore
 }
 
 // awaitOp polls OperationService.GetOperation until terminal or timeout.
@@ -246,6 +264,101 @@ func TestResourceServiceApplyConflictOnSameResource(t *testing.T) {
 	st, _ := status.FromError(err)
 	if st.Code() != codes.AlreadyExists {
 		t.Errorf("code = %v, want AlreadyExists", st.Code())
+	}
+}
+
+func TestResourceServiceGetReturnsAppliedManifestAndDrift(t *testing.T) {
+	// Desired manifest has cpus=2; provider reports cpus=4 (drift). The
+	// response should carry Applied (desired) + AppliedAt populated and
+	// drift listing "spec.cpus" with both values.
+	fake := &fakeProvider{
+		getReturn: &protocol.Resource{
+			APIVersion: "fake.openctl.io/v1",
+			Kind:       "FakeKind",
+			Metadata:   protocol.ResourceMetadata{Name: "drifty"},
+			Spec:       map[string]any{"cpus": 4.0, "memory": "2Gi"},
+			Status:     map[string]any{"state": "running"},
+		},
+	}
+	reg := providers.NewRegistry()
+	reg.Register(fake)
+	addr, mat, mstore := startTestServerWithManifests(t, reg, nil)
+	conn := dialTestServer(t, addr, mat.CACertPath)
+	defer func() { _ = conn.Close() }()
+
+	if err := mstore.Save(context.Background(), &protocol.Resource{
+		APIVersion: "fake.openctl.io/v1",
+		Kind:       "FakeKind",
+		Metadata:   protocol.ResourceMetadata{Name: "drifty"},
+		Spec:       map[string]any{"cpus": 2.0, "memory": "2Gi"},
+	}); err != nil {
+		t.Fatalf("Save manifest: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := apiv1.NewResourceServiceClient(conn).Get(ctx, &apiv1.GetRequest{
+		ApiVersion: "fake.openctl.io/v1",
+		Kind:       "FakeKind",
+		Name:       "drifty",
+	})
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	if resp.GetApplied() == nil {
+		t.Fatal("response missing Applied; want desired manifest")
+	}
+	appliedSpec := resp.GetApplied().GetSpec().AsMap()
+	if got := appliedSpec["cpus"]; got != 2.0 {
+		t.Errorf("applied.spec.cpus = %v, want 2.0", got)
+	}
+	if resp.GetAppliedAt() == "" {
+		t.Error("response missing AppliedAt; want non-empty RFC3339 timestamp")
+	}
+	// Drift should call out the changed key.
+	drift := resp.GetResource().GetDrift()
+	if len(drift) != 1 || drift[0].GetPath() != "spec.cpus" {
+		t.Errorf("drift = %+v, want one entry at spec.cpus", drift)
+	}
+}
+
+func TestResourceServiceGetWithoutAppliedManifest(t *testing.T) {
+	// Resource was created out-of-band — no manifest on file. Get should
+	// still return the observed state, with Applied unset and no drift.
+	fake := &fakeProvider{
+		getReturn: &protocol.Resource{
+			APIVersion: "fake.openctl.io/v1",
+			Kind:       "FakeKind",
+			Metadata:   protocol.ResourceMetadata{Name: "orphan"},
+			Spec:       map[string]any{"cpus": 1.0},
+		},
+	}
+	reg := providers.NewRegistry()
+	reg.Register(fake)
+	addr, mat, _ := startTestServerWithManifests(t, reg, nil)
+	conn := dialTestServer(t, addr, mat.CACertPath)
+	defer func() { _ = conn.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := apiv1.NewResourceServiceClient(conn).Get(ctx, &apiv1.GetRequest{
+		ApiVersion: "fake.openctl.io/v1",
+		Kind:       "FakeKind",
+		Name:       "orphan",
+	})
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if resp.GetApplied() != nil {
+		t.Error("Applied should be nil when no manifest exists")
+	}
+	if resp.GetAppliedAt() != "" {
+		t.Errorf("AppliedAt = %q, want empty", resp.GetAppliedAt())
+	}
+	if len(resp.GetResource().GetDrift()) != 0 {
+		t.Errorf("drift = %+v, want empty", resp.GetResource().GetDrift())
 	}
 }
 

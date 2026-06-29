@@ -169,7 +169,19 @@ export interface ListResourcesResponse {
   resources?: Resource[];
 }
 
+export interface GetResourceResponse {
+  resource: Resource;
+  // Desired manifest currently on file in applied_manifests; unset when
+  // the resource was created out-of-band or has no manifest.
+  applied?: Resource;
+  // RFC3339 timestamp of the most recent apply; empty when `applied` is
+  // unset.
+  appliedAt?: string;
+}
+
 export const resources = {
   list: (apiVersion: string, kind: string) =>
     api.post<ListResourcesResponse>('/v1/resources:list', { apiVersion, kind }),
+  get: (apiVersion: string, kind: string, name: string) =>
+    api.post<GetResourceResponse>('/v1/resources:get', { apiVersion, kind, name }),
 };

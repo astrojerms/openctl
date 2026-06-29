@@ -96,18 +96,26 @@ func (s *Store) LoadHash(ctx context.Context, apiVersion, kind, name string) (st
 // Load returns the most recent applied manifest spec for the resource, or
 // (nil, nil) if none has been recorded.
 func (s *Store) Load(ctx context.Context, apiVersion, kind, name string) (*protocol.Resource, error) {
-	var specJSON, metaJSON sql.NullString
+	r, _, err := s.LoadWithTime(ctx, apiVersion, kind, name)
+	return r, err
+}
+
+// LoadWithTime is Load plus the applied_at timestamp. Returns (nil, zero,
+// nil) when no manifest is on file. Used by Get RPC handlers that want
+// to surface "last applied" to clients without a second round-trip.
+func (s *Store) LoadWithTime(ctx context.Context, apiVersion, kind, name string) (*protocol.Resource, time.Time, error) {
+	var specJSON, metaJSON, appliedAt sql.NullString
 	err := s.db.QueryRowContext(ctx,
-		`SELECT spec_json, COALESCE(metadata_json, '')
+		`SELECT spec_json, COALESCE(metadata_json, ''), COALESCE(applied_at, '')
 		 FROM applied_manifests
 		 WHERE api_version = ? AND kind = ? AND name = ?`,
 		apiVersion, kind, name,
-	).Scan(&specJSON, &metaJSON)
+	).Scan(&specJSON, &metaJSON, &appliedAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
+		return nil, time.Time{}, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("load applied_manifest: %w", err)
+		return nil, time.Time{}, fmt.Errorf("load applied_manifest: %w", err)
 	}
 	r := &protocol.Resource{
 		APIVersion: apiVersion,
@@ -116,7 +124,7 @@ func (s *Store) Load(ctx context.Context, apiVersion, kind, name string) (*proto
 	}
 	if specJSON.Valid && specJSON.String != "" && specJSON.String != "null" {
 		if err := json.Unmarshal([]byte(specJSON.String), &r.Spec); err != nil {
-			return nil, fmt.Errorf("decode spec: %w", err)
+			return nil, time.Time{}, fmt.Errorf("decode spec: %w", err)
 		}
 	}
 	if metaJSON.Valid && metaJSON.String != "" && metaJSON.String != "null" {
@@ -125,7 +133,17 @@ func (s *Store) Load(ctx context.Context, apiVersion, kind, name string) (*proto
 			r.Metadata = md
 		}
 	}
-	return r, nil
+	var ts time.Time
+	if appliedAt.Valid && appliedAt.String != "" {
+		// Tolerate RFC3339 with and without sub-second precision; the writer
+		// uses RFC3339Nano but older rows may have second-resolution stamps.
+		if t, parseErr := time.Parse(time.RFC3339Nano, appliedAt.String); parseErr == nil {
+			ts = t
+		} else if t, parseErr := time.Parse(time.RFC3339, appliedAt.String); parseErr == nil {
+			ts = t
+		}
+	}
+	return r, ts, nil
 }
 
 // Ref is a (apiVersion, kind, name) tuple. Returned by ListAll for callers

@@ -8,6 +8,7 @@
   import Nav from '../components/Nav.svelte';
   import HomePane from './HomePane.svelte';
   import ResourceList from './ResourceList.svelte';
+  import Detail from './Detail.svelte';
 
   export let me: WhoAmIResponse;
 
@@ -68,12 +69,11 @@
         provider={entry?.provider ?? ''}
       />
     {:else}
-      <section class="placeholder">
-        <p>Detail view lands in U3.3.</p>
-        <p class="hint">
-          {$route.apiVersion}/{$route.kind}/{$route.resourceName}
-        </p>
-      </section>
+      <Detail
+        apiVersion={$route.apiVersion}
+        kind={$route.kind}
+        resourceName={$route.resourceName}
+      />
     {/if}
   </main>
 </div>
@@ -121,14 +121,6 @@
     color: #f57171;
     font-size: 0.875rem;
     margin: 0 0 1rem;
-  }
-  .placeholder {
-    color: #888;
-  }
-  .placeholder .hint {
-    font-family: ui-monospace, SFMono-Regular, monospace;
-    font-size: 0.875rem;
-    color: #666;
   }
   @media (prefers-color-scheme: light) {
     header,
