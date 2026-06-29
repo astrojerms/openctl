@@ -1,0 +1,12 @@
+-- Phase 7 verifying-trace cache. input_hash is a sha256 (hex) over the
+-- canonicalized apply input — apiVersion, kind, metadata.name,
+-- metadata.labels, spec. Excludes metadata.annotations because those carry
+-- runtime flags (allow-destructive, i-know-this-breaks-the-cluster) that
+-- don't change what the resource SHOULD look like.
+--
+-- The dispatcher checks this hash before invoking the provider; a match
+-- means "same input as the last successful apply" and the provider call
+-- is skipped (BSALC verifying trace). Nullable for backward compatibility:
+-- rows written by older controller versions don't have a hash and always
+-- miss.
+ALTER TABLE applied_manifests ADD COLUMN input_hash TEXT;

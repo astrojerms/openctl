@@ -80,8 +80,12 @@ Speculative roadmap from the BSALC / Crossplane / BuildKit discussion.
 Sketch only; no committed deliverables yet. Phases as written in the
 HTML doc:
 
-- [ ] **Arch Phase 7** — Verifying-trace cache (skip provider calls
-      when inputs+refs hash matches last success; parent-hash-aware).
+- [x] **Arch Phase 7** — Verifying-trace cache (per-resource v1: skip
+      provider.Apply when manifest hash matches last success; calls
+      provider.Get to populate result and marks op with a "cached"
+      label). Parent-hash-aware (children's hashes folded into the
+      parent hash) deferred until composite ops are reified in arch
+      Phase 9-10.
 - [ ] **Arch Phase 8** — K3sNode as first-class resource; Cluster
       becomes a composer that emits typed children.
 - [ ] **Arch Phase 9** — Typed task IR (frontend/IR/executor split,

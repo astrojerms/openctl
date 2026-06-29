@@ -19,10 +19,12 @@ type fakeProvider struct {
 	name      string
 	kinds     []string
 	applies   atomic.Int32
+	gets      atomic.Int32
 	deletes   atomic.Int32
 	applyErr  error
 	deleteErr error
 	applyOut  *protocol.Resource
+	getOut    *protocol.Resource
 }
 
 func (f *fakeProvider) Name() string    { return f.name }
@@ -38,7 +40,8 @@ func (f *fakeProvider) Apply(_ context.Context, m *protocol.Resource) (*protocol
 	return m, nil
 }
 func (f *fakeProvider) Get(_ context.Context, _, _ string) (*protocol.Resource, error) {
-	return nil, nil
+	f.gets.Add(1)
+	return f.getOut, nil
 }
 func (f *fakeProvider) List(_ context.Context, _ string) ([]*protocol.Resource, error) {
 	return nil, nil

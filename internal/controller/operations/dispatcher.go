@@ -19,12 +19,19 @@ import (
 const DefaultPollInterval = 500 * time.Millisecond
 
 // ManifestSink lets the dispatcher persist desired-state on apply/delete
-// success. Kept as a narrow interface so this package doesn't depend on
-// internal/controller/manifests (the wiring lives in cmd/openctl-controller).
-// nil is permitted — tests skip the sink.
+// success and look up the verifying-trace cache hash. Kept as a narrow
+// interface so this package doesn't depend on internal/controller/manifests
+// (the wiring lives in cmd/openctl-controller). nil is permitted — tests
+// skip the sink, which also disables the cache.
 type ManifestSink interface {
 	Save(ctx context.Context, r *protocol.Resource) error
 	Delete(ctx context.Context, apiVersion, kind, name string) error
+	// LoadHash returns the input hash recorded by the previous successful
+	// apply for this resource, or "" if no prior apply is on file.
+	LoadHash(ctx context.Context, apiVersion, kind, name string) (string, error)
+	// Hash computes the verifying-trace key for a manifest. Must be a pure
+	// function of the manifest's apply input.
+	Hash(r *protocol.Resource) string
 }
 
 // Dispatcher pulls pending operations from the Store and runs them through
@@ -128,6 +135,49 @@ func (d *Dispatcher) drain(ctx context.Context) {
 	}
 }
 
+// tryCacheHit checks the verifying-trace cache and, on a hit, fast-paths
+// the op to succeeded without calling provider.Apply. Returns true if the
+// op was completed via the cache; false if the caller should fall through
+// to the normal Apply path.
+//
+// Cache miss conditions (return false):
+//   - manifests sink not configured (tests)
+//   - no prior apply recorded for this resource
+//   - prior hash differs from current input hash
+//   - manifest carries the i-know-this-breaks-the-cluster annotation
+//     (treated as "user is forcing a destructive operation" — never
+//     short-circuit those)
+//
+// On hit, calls provider.Get to populate a useful result. If Get errors
+// (e.g. the underlying resource was deleted out-of-band), the cache hit
+// is abandoned and the caller falls through to normal Apply.
+func (d *Dispatcher) tryCacheHit(ctx context.Context, p providers.Provider, op *Operation, manifest *protocol.Resource) bool {
+	if d.manifests == nil {
+		return false
+	}
+	if manifest.Metadata.Annotations["openctl.io/i-know-this-breaks-the-cluster"] == "true" {
+		return false
+	}
+	storedHash, err := d.manifests.LoadHash(ctx, manifest.APIVersion, manifest.Kind, manifest.Metadata.Name)
+	if err != nil || storedHash == "" {
+		return false
+	}
+	if d.manifests.Hash(manifest) != storedHash {
+		return false
+	}
+	// Hash match — confirm the resource still exists by fetching it.
+	// If Get fails or returns nil, the cache is stale; fall through to
+	// the normal Apply which will recreate from scratch.
+	result, err := p.Get(ctx, manifest.Kind, manifest.Metadata.Name)
+	if err != nil || result == nil {
+		return false
+	}
+	_ = d.store.SetLabel(ctx, op.ID, "cached: input hash unchanged since last apply")
+	resultJSON, _ := json.Marshal(result)
+	_ = d.store.Complete(ctx, op.ID, StatusSucceeded, "", string(resultJSON))
+	return true
+}
+
 func (d *Dispatcher) execute(ctx context.Context, op *Operation) {
 	p, err := d.registry.For(op.APIVersion)
 	if err != nil {
@@ -145,6 +195,13 @@ func (d *Dispatcher) execute(ctx context.Context, op *Operation) {
 		var manifest protocol.Resource
 		if err := json.Unmarshal([]byte(op.ManifestJSON), &manifest); err != nil {
 			_ = d.store.Complete(ctx, op.ID, StatusFailed, fmt.Sprintf("decode manifest: %v", err), "")
+			return
+		}
+		// Verifying-trace cache: if the manifest's input hash matches what
+		// the previous successful apply stored, skip the provider call.
+		// We still call provider.Get to populate a useful result for the
+		// caller — Get is cheap (no mutation, no SSH, no Proxmox writes).
+		if d.tryCacheHit(ctx, p, op, &manifest) {
 			return
 		}
 		result, err := p.Apply(ctx, &manifest)

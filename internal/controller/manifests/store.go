@@ -30,8 +30,17 @@ func New(db *sql.DB) *Store {
 	return &Store{db: db}
 }
 
+// Hash delegates to the package-level Hash function. Exposed as a method
+// so callers that hold a *Store (the dispatcher's ManifestSink) can compute
+// hashes without importing the manifests package directly.
+func (s *Store) Hash(r *protocol.Resource) string {
+	return Hash(r)
+}
+
 // Save upserts the manifest's spec for (apiVersion, kind, name). Called by
-// the dispatcher after a successful apply.
+// the dispatcher after a successful apply. Also stores the verifying-trace
+// input hash so subsequent applies of the same manifest can short-circuit
+// the provider call.
 func (s *Store) Save(ctx context.Context, r *protocol.Resource) error {
 	if r == nil || r.APIVersion == "" || r.Kind == "" || r.Metadata.Name == "" {
 		return fmt.Errorf("save: apiVersion, kind, metadata.name all required")
@@ -45,20 +54,43 @@ func (s *Store) Save(ctx context.Context, r *protocol.Resource) error {
 		return fmt.Errorf("encode metadata: %w", err)
 	}
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO applied_manifests (api_version, kind, name, spec_json, metadata_json, applied_at)
-		 VALUES (?, ?, ?, ?, ?, ?)
+		`INSERT INTO applied_manifests (api_version, kind, name, spec_json, metadata_json, applied_at, input_hash)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(api_version, kind, name) DO UPDATE SET
 		   spec_json = excluded.spec_json,
 		   metadata_json = excluded.metadata_json,
-		   applied_at = excluded.applied_at`,
+		   applied_at = excluded.applied_at,
+		   input_hash = excluded.input_hash`,
 		r.APIVersion, r.Kind, r.Metadata.Name,
 		string(specJSON), string(metaJSON),
 		time.Now().UTC().Format(time.RFC3339Nano),
+		Hash(r),
 	)
 	if err != nil {
 		return fmt.Errorf("upsert applied_manifest: %w", err)
 	}
 	return nil
+}
+
+// LoadHash returns the stored verifying-trace input hash for a resource,
+// or "" if no manifest is on file (cache miss). Cheaper than Load — used
+// on the hot path before every Apply to decide whether to call the
+// provider at all.
+func (s *Store) LoadHash(ctx context.Context, apiVersion, kind, name string) (string, error) {
+	var hash sql.NullString
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(input_hash, '')
+		 FROM applied_manifests
+		 WHERE api_version = ? AND kind = ? AND name = ?`,
+		apiVersion, kind, name,
+	).Scan(&hash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("load input_hash: %w", err)
+	}
+	return hash.String, nil
 }
 
 // Load returns the most recent applied manifest spec for the resource, or

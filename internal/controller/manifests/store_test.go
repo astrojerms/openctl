@@ -104,3 +104,50 @@ func TestDeleteOnMissingIsIdempotent(t *testing.T) {
 		t.Errorf("delete on missing: %v", err)
 	}
 }
+
+func TestLoadHashReturnsStoredHash(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	r := sampleVM(2)
+	if err := s.Save(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.LoadHash(ctx, "proxmox.openctl.io/v1", "VirtualMachine", "vm-1")
+	if err != nil {
+		t.Fatalf("LoadHash: %v", err)
+	}
+	if got == "" {
+		t.Fatal("LoadHash returned empty string for present row")
+	}
+	if got != Hash(r) {
+		t.Errorf("stored hash %q != Hash(r) %q", got, Hash(r))
+	}
+}
+
+func TestLoadHashReturnsEmptyForMissingRow(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	got, err := s.LoadHash(ctx, "proxmox.openctl.io/v1", "VirtualMachine", "nope")
+	if err != nil {
+		t.Fatalf("LoadHash on missing: %v", err)
+	}
+	if got != "" {
+		t.Errorf("LoadHash on missing returned %q, want \"\"", got)
+	}
+}
+
+func TestSaveOverwritesHash(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	_ = s.Save(ctx, sampleVM(2))
+	h1, _ := s.LoadHash(ctx, "proxmox.openctl.io/v1", "VirtualMachine", "vm-1")
+
+	_ = s.Save(ctx, sampleVM(8))
+	h2, _ := s.LoadHash(ctx, "proxmox.openctl.io/v1", "VirtualMachine", "vm-1")
+
+	if h1 == h2 {
+		t.Error("hashes should differ after spec change; got identical")
+	}
+}

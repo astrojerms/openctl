@@ -353,6 +353,18 @@ func (s *Store) ListChildren(ctx context.Context, parentID string) ([]*Operation
 	return out, rows.Err()
 }
 
+// SetLabel updates the label column for an op. Used by the dispatcher to
+// annotate ops (e.g. "cached: input hash unchanged") after they're already
+// in flight, since the label is set at Submit time and we don't always
+// know what to write then.
+func (s *Store) SetLabel(ctx context.Context, id, label string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE operations SET label = ? WHERE id = ?`,
+		nullable(label), id,
+	)
+	return err
+}
+
 // MarkRunningInterrupted rewrites every op currently in `running` as
 // `interrupted`. Called once at controller startup so the user knows which
 // ops were active when the previous controller died.
