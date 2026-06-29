@@ -37,10 +37,6 @@ func (p *Provider) applyCountUp(
 	current []childRef,
 	removed map[string]bool,
 ) (map[string]string, error) {
-	if spec.Network.StaticIPs == nil || spec.Network.StaticIPs.StartIP == "" {
-		return nil, fmt.Errorf("count-up requires static IPs (set spec.network.staticIPs.{startIP,gateway,netmask}); QGA-based discovery in the controller path is a Phase 4.5 followup")
-	}
-
 	// Find a surviving CP — preferred order: dev-cp-0, dev-cp-1, ... — and
 	// fetch its IP from the saved agent endpoints.
 	state, err := p.loadState(name)
@@ -73,29 +69,32 @@ func (p *Provider) applyCountUp(
 		return nil, fmt.Errorf("cluster state has no IP for surviving CP %s (status.outputs.agent.endpoints missing or stale)", firstCPName)
 	}
 
-	// IP allocation: AllocateIPs is deterministic over (cluster, spec)
-	// — existing nodes keep their IPs; new nodes get the next slots.
-	allIPs, err := k3sresources.AllocateIPs(name, spec)
-	if err != nil {
-		return nil, fmt.Errorf("allocate IPs for count-up: %w", err)
-	}
-	newNodeIPs := map[string]string{}
-	for _, n := range plan.addCPs {
-		ip := allIPs[n]
-		if ip == "" {
-			return nil, fmt.Errorf("no allocated IP for new CP %s", n)
+	newNodeNames := append([]string(nil), plan.addCPs...)
+	newNodeNames = append(newNodeNames, plan.addWorkers...)
+
+	// Create VMs for the new nodes (filtered subset of the full dispatch list).
+	creator := k3scluster.NewCreator(name, spec, p.config)
+	all := creator.GenerateDispatchRequests()
+	addSet := toSet(newNodeNames)
+	for _, d := range all {
+		if !addSet[d.Manifest.Metadata.Name] {
+			continue
 		}
-		newNodeIPs[n] = ip
-	}
-	for _, n := range plan.addWorkers {
-		ip := allIPs[n]
-		if ip == "" {
-			return nil, fmt.Errorf("no allocated IP for new worker %s", n)
+		if err := runChildVMApply(ctx, rec, d.Manifest, p.vms); err != nil {
+			return nil, err
 		}
-		newNodeIPs[n] = ip
 	}
 
-	// Load existing bundle and extend it with certs for the new nodes.
+	// Resolve IPs for the new nodes. Static: deterministic from AllocateIPs.
+	// DHCP+QGA: poll vms.Get until status.ip shows up. Must happen AFTER
+	// VM apply because QGA reports only once the guest is up.
+	newNodeIPs, err := p.resolveNodeIPs(ctx, rec, name, spec, newNodeNames)
+	if err != nil {
+		return nil, err
+	}
+
+	// Load existing bundle and extend it with certs for the new nodes,
+	// now that we know each node's IP.
 	bundleDir, err := clusterBundleDir(name)
 	if err != nil {
 		return nil, err
@@ -108,24 +107,11 @@ func (p *Provider) applyCountUp(
 		return nil, fmt.Errorf("load existing bundle: %w", err)
 	}
 	newIdentities := make([]certs.NodeIdentity, 0, len(newNodeIPs))
-	for _, n := range append(plan.addCPs, plan.addWorkers...) {
+	for _, n := range newNodeNames {
 		newIdentities = append(newIdentities, certs.NodeIdentity{Name: n, IP: newNodeIPs[n]})
 	}
 	if err := bundle.MintServerCerts(newIdentities); err != nil {
 		return nil, fmt.Errorf("mint new server certs: %w", err)
-	}
-
-	// Create VMs for the new nodes (filtered subset of the full dispatch list).
-	creator := k3scluster.NewCreator(name, spec, p.config)
-	all := creator.GenerateDispatchRequests()
-	addSet := toSet(append(plan.addCPs, plan.addWorkers...))
-	for _, d := range all {
-		if !addSet[d.Manifest.Metadata.Name] {
-			continue
-		}
-		if err := runChildVMApply(ctx, rec, d.Manifest, p.vms); err != nil {
-			return nil, err
-		}
 	}
 
 	// Run the Joiner under a single "step" child op so the user sees one

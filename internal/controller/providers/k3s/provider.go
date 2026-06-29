@@ -100,10 +100,15 @@ const (
 // Apply creates a fresh cluster, or — if the cluster already exists —
 // converges its child set toward the new manifest. Phase 5 supports
 // removals (with --allow-destructive) and detects catastrophic ops (with
-// --i-know-this-breaks-the-cluster). Adding nodes to a live cluster is
-// deferred to Phase 5.x (needs join machinery in pkg/k3s/cluster).
+// --i-know-this-breaks-the-cluster). Phase 5.x adds count-up support
+// (adding nodes to a live cluster via the Joiner).
 //
-// Static IPs are required (no QGA polling in the in-process path yet).
+// IP allocation: if spec.network.staticIPs is set the IPs are deterministic
+// per node name (existing nodes keep their IPs across re-applies). If
+// staticIPs is omitted, the VMs come up via DHCP and the controller polls
+// the QEMU guest agent (status.ip on the VM provider's Get response) until
+// each node reports its IP. QGA polling requires qemu-guest-agent installed
+// in the VM template; without it the poll times out with a clear message.
 func (p *Provider) Apply(ctx context.Context, manifest *protocol.Resource) (*protocol.Resource, error) {
 	if err := requireKindCluster(manifest.Kind); err != nil {
 		return nil, err
@@ -116,21 +121,12 @@ func (p *Provider) Apply(ctx context.Context, manifest *protocol.Resource) (*pro
 	if err != nil {
 		return nil, fmt.Errorf("parse cluster spec: %w", err)
 	}
-	if spec.Network.StaticIPs == nil || spec.Network.StaticIPs.StartIP == "" {
-		return nil, fmt.Errorf("static IPs required (set spec.network.staticIPs.{startIP,gateway,netmask}); QGA-based IP discovery in the controller path is a Phase 4.5 followup")
-	}
 
 	// If the cluster already exists, plan the structural diff against the
 	// new manifest and either no-op, converge, or refuse depending on the
 	// destructive flags.
 	if existing, _ := p.loadState(name); existing != nil {
 		return p.applyExisting(ctx, manifest, name, spec)
-	}
-
-	// Pre-allocate static IPs deterministically per node name.
-	staticIPs, err := k3sresources.AllocateIPs(name, spec)
-	if err != nil {
-		return nil, fmt.Errorf("allocate static IPs: %w", err)
 	}
 
 	creator := k3scluster.NewCreator(name, spec, p.config)
@@ -149,13 +145,26 @@ func (p *Provider) Apply(ctx context.Context, manifest *protocol.Resource) (*pro
 		}
 	}
 
+	// Determine node IPs. Static path: AllocateIPs is deterministic per
+	// (cluster, name). QGA path: poll vms.Get for each node's status.ip
+	// until populated. Surfaced as a "discover-ips" child op so the user
+	// can see the wait happening when the cluster is using DHCP+QGA.
+	nodeNames := make([]string, 0, len(dispatches))
+	for _, d := range dispatches {
+		nodeNames = append(nodeNames, d.Manifest.Metadata.Name)
+	}
+	nodeIPs, err := p.resolveNodeIPs(ctx, rec, name, spec, nodeNames)
+	if err != nil {
+		return nil, err
+	}
+
 	// Install k3s + agent. cluster.InstallK3s does the SSH heavy lifting
 	// + cert generation + verification — surfaced as one child step op
 	// since splitting the per-node SSH work into separate rows would
 	// require restructuring InstallK3s itself.
 	result, err := runChildStep(ctx, rec, name, "install-k3s",
 		"Install k3s + openctl-k3s-agent on all nodes",
-		func() (any, error) { return creator.InstallK3s(staticIPs) })
+		func() (any, error) { return creator.InstallK3s(nodeIPs) })
 	if err != nil {
 		return nil, fmt.Errorf("install k3s: %w", err)
 	}
@@ -166,7 +175,7 @@ func (p *Provider) Apply(ctx context.Context, manifest *protocol.Resource) (*pro
 
 	// Persist state file (legacy YAML location for now; the controller may
 	// migrate this to its DB in a later phase).
-	state, err := p.saveState(name, manifest, spec, installResult, staticIPs)
+	state, err := p.saveState(name, manifest, spec, installResult, nodeIPs)
 	if err != nil {
 		return nil, fmt.Errorf("save state: %w", err)
 	}

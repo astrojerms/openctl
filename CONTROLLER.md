@@ -281,9 +281,16 @@ stays unchanged — it's called from in-process Go now instead of via exec.
       needs. A "true" parent-child orchestration (each child claimable,
       retryable in isolation, parent suspends until children complete)
       is the architectural Phase 9-10 typed-task-IR work.
-- [ ] Phase 4.5 followup: QGA-based IP discovery in the controller
-      path (current path requires `spec.network.staticIPs.{startIP,
-      gateway,netmask}`).
+- [x] Phase 4.5 followup: QGA-based IP discovery in the controller
+      path. When `spec.network.staticIPs` is unset, the k3s provider
+      polls the VM provider's Get response for `status.ip` (populated
+      by the QEMU guest agent) until every node reports its IP, then
+      proceeds with the k3s install. Surfaced as a `discover-ips`
+      child op so the wait is visible. Static path unchanged.
+      Requires `qemu-guest-agent` in the VM template; without it the
+      poll times out with a clear "set spec.network.staticIPs to
+      bypass" pointer. Used by both the fresh-create and count-up
+      paths.
 
 **Verifiable:** confirmed via tests — `TestDeleteCascadesToChildVMs`
 exercises cluster-delete → child VM cascade, `TestOwnerOfFindsClusterChild`

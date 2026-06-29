@@ -48,8 +48,9 @@ phases, and 4.5 / 5.x meaningfully improve the UI's UX. See
 - [x] **Phase 4.5** — Parent-child operation rows (descriptive child
       ops: per-VM apply + k3s-install rows under the parent). True
       suspending-dispatcher orchestration deferred to arch Phase 9-10.
-- [ ] **Phase 4.5** — QGA-based IP discovery (lift the
-      `spec.network.staticIPs.*` requirement in the controller path).
+- [x] **Phase 4.5** — QGA-based IP discovery (polls VM provider's
+      `status.ip` so `spec.network.staticIPs` is optional when the VM
+      template has qemu-guest-agent).
 - [x] **Phase 5.x** — Cluster apply count-up (new `Joiner` adds nodes
       to a live cluster, extending the existing CA bundle without
       rotating it).
