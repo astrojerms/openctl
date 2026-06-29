@@ -80,18 +80,16 @@ func (f *fakeProvider) Delete(_ context.Context, kind, name string) error {
 // startTestServer spins up a controller server with real async operations
 // wiring (Store + Dispatcher) so the tests exercise the production path.
 func startTestServer(t *testing.T, registry *providers.Registry) (string, *tlspkg.Material) {
-	addr, mat, _ := startTestServerWithManifests(t, registry, nil)
+	addr, mat, _ := startTestServerWithManifests(t, registry)
 	return addr, mat
 }
 
-// startTestServerWithManifests is startTestServer plus a manifests.Store
-// hook so tests can populate desired state before exercising Get/List. The
-// store is returned so the caller can call Save() directly without going
-// through the dispatcher.
+// startTestServerWithManifests is startTestServer plus a returned
+// manifests.Store so tests can populate desired state directly without
+// going through the dispatcher.
 func startTestServerWithManifests(
 	t *testing.T,
 	registry *providers.Registry,
-	manifestStore *manifests.Store,
 ) (string, *tlspkg.Material, *manifests.Store) {
 	t.Helper()
 	dir := t.TempDir()
@@ -106,9 +104,7 @@ func startTestServerWithManifests(
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	store := operations.New(db, 50)
-	if manifestStore == nil {
-		manifestStore = manifests.New(db)
-	}
+	manifestStore := manifests.New(db)
 	dispatcher := operations.NewDispatcher(store, registry, nil, 50*time.Millisecond)
 	dispatcher.Start(context.Background())
 	t.Cleanup(dispatcher.Stop)
@@ -282,7 +278,7 @@ func TestResourceServiceGetReturnsAppliedManifestAndDrift(t *testing.T) {
 	}
 	reg := providers.NewRegistry()
 	reg.Register(fake)
-	addr, mat, mstore := startTestServerWithManifests(t, reg, nil)
+	addr, mat, mstore := startTestServerWithManifests(t, reg)
 	conn := dialTestServer(t, addr, mat.CACertPath)
 	defer func() { _ = conn.Close() }()
 
@@ -337,7 +333,7 @@ func TestResourceServiceGetWithoutAppliedManifest(t *testing.T) {
 	}
 	reg := providers.NewRegistry()
 	reg.Register(fake)
-	addr, mat, _ := startTestServerWithManifests(t, reg, nil)
+	addr, mat, _ := startTestServerWithManifests(t, reg)
 	conn := dialTestServer(t, addr, mat.CACertPath)
 	defer func() { _ = conn.Close() }()
 
@@ -359,6 +355,141 @@ func TestResourceServiceGetWithoutAppliedManifest(t *testing.T) {
 	}
 	if len(resp.GetResource().GetDrift()) != 0 {
 		t.Errorf("drift = %+v, want empty", resp.GetResource().GetDrift())
+	}
+}
+
+// fakeDryRunner is a fakeProvider extension that implements
+// providers.DryRunner. Used by the DryRunApply tests below.
+type fakeDryRunner struct {
+	*fakeProvider
+	result *providers.DryRunResult
+	err    error
+}
+
+func (f *fakeDryRunner) DryRun(_ context.Context, _ *protocol.Resource) (*providers.DryRunResult, error) {
+	return f.result, f.err
+}
+
+func TestResourceServiceDryRunApplyComputesDriftWhenManifestExists(t *testing.T) {
+	// Atomic provider (no DryRunner) — handler returns just the spec
+	// diff against the persisted applied manifest.
+	fake := &fakeProvider{}
+	reg := providers.NewRegistry()
+	reg.Register(fake)
+	addr, mat, mstore := startTestServerWithManifests(t, reg)
+	conn := dialTestServer(t, addr, mat.CACertPath)
+	defer func() { _ = conn.Close() }()
+
+	if err := mstore.Save(context.Background(), &protocol.Resource{
+		APIVersion: "fake.openctl.io/v1",
+		Kind:       "FakeKind",
+		Metadata:   protocol.ResourceMetadata{Name: "preview"},
+		Spec:       map[string]any{"cpus": 2.0, "memory": "2Gi"},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	specStruct, _ := structpb.NewStruct(map[string]any{"cpus": 4.0, "memory": "2Gi"})
+	resp, err := apiv1.NewResourceServiceClient(conn).DryRunApply(ctx, &apiv1.DryRunApplyRequest{
+		Resource: &apiv1.Resource{
+			ApiVersion: "fake.openctl.io/v1",
+			Kind:       "FakeKind",
+			Metadata:   &apiv1.Metadata{Name: "preview"},
+			Spec:       specStruct,
+		},
+	})
+	if err != nil {
+		t.Fatalf("DryRunApply: %v", err)
+	}
+	if len(resp.GetDiff()) != 1 || resp.GetDiff()[0].GetPath() != "spec.cpus" {
+		t.Errorf("diff = %+v, want one entry at spec.cpus", resp.GetDiff())
+	}
+	if resp.GetSummary() == "" {
+		t.Error("summary should be populated even for atomic providers")
+	}
+	if len(resp.GetValidationErrors()) != 0 {
+		t.Errorf("validation errors = %v, want none", resp.GetValidationErrors())
+	}
+}
+
+func TestResourceServiceDryRunApplyForwardsProviderPlan(t *testing.T) {
+	// Composite provider — handler returns the provider's per-child
+	// actions + required gates verbatim.
+	fake := &fakeProvider{}
+	dr := &fakeDryRunner{
+		fakeProvider: fake,
+		result: &providers.DryRunResult{
+			Children: []providers.ChildAction{
+				{Verb: "create", Kind: "VirtualMachine", Name: "node-1", Detail: "new worker"},
+				{Verb: "destroy", Kind: "VirtualMachine", Name: "node-0", Detail: "drop worker"},
+			},
+			RequiredGates: []string{providers.GateAllowDestructive},
+			Summary:       "would add 1, remove 1 node(s)",
+		},
+	}
+	reg := providers.NewRegistry()
+	reg.Register(dr)
+	addr, mat, _ := startTestServerWithManifests(t, reg)
+	conn := dialTestServer(t, addr, mat.CACertPath)
+	defer func() { _ = conn.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := apiv1.NewResourceServiceClient(conn).DryRunApply(ctx, &apiv1.DryRunApplyRequest{
+		Resource: &apiv1.Resource{
+			ApiVersion: "fake.openctl.io/v1",
+			Kind:       "FakeKind",
+			Metadata:   &apiv1.Metadata{Name: "composite"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("DryRunApply: %v", err)
+	}
+	if got := len(resp.GetChildren()); got != 2 {
+		t.Errorf("children = %d, want 2", got)
+	}
+	if resp.GetChildren()[0].GetVerb() != "create" || resp.GetChildren()[1].GetVerb() != "destroy" {
+		t.Errorf("unexpected child verbs: %+v", resp.GetChildren())
+	}
+	if len(resp.GetRequiredGates()) != 1 || resp.GetRequiredGates()[0] != providers.GateAllowDestructive {
+		t.Errorf("gates = %v, want [allow_destructive]", resp.GetRequiredGates())
+	}
+	if resp.GetSummary() != "would add 1, remove 1 node(s)" {
+		t.Errorf("summary = %q, want provider-supplied", resp.GetSummary())
+	}
+}
+
+func TestResourceServiceDryRunApplyReturnsValidationErrorsInline(t *testing.T) {
+	// Bad apiVersion (no provider registered for it) — surfaces as a
+	// gRPC InvalidArgument so the editor distinguishes "wrong manifest
+	// shape" from "schema validation failed".
+	fake := &fakeProvider{}
+	reg := providers.NewRegistry()
+	reg.Register(fake)
+	addr, mat, _ := startTestServerWithManifests(t, reg)
+	conn := dialTestServer(t, addr, mat.CACertPath)
+	defer func() { _ = conn.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Missing metadata.name — surfaces in validation_errors (not as RPC error).
+	resp, err := apiv1.NewResourceServiceClient(conn).DryRunApply(ctx, &apiv1.DryRunApplyRequest{
+		Resource: &apiv1.Resource{
+			ApiVersion: "fake.openctl.io/v1",
+			Kind:       "FakeKind",
+			Metadata:   &apiv1.Metadata{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("DryRunApply: %v", err)
+	}
+	if len(resp.GetValidationErrors()) == 0 {
+		t.Error("validation_errors should be populated for missing name")
 	}
 }
 

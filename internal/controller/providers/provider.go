@@ -27,6 +27,46 @@ type OwnershipChecker interface {
 	OwnerOf(kind, name string) (ownerKind, ownerName string, owned bool)
 }
 
+// DryRunner is an optional provider capability for previewing what an
+// Apply would do without performing it. Composite providers (k3s Cluster
+// → VMs) implement this to surface per-child actions and the gates the
+// user would need to enable. Atomic providers don't need to; the
+// resource handler computes spec-level drift on its own.
+//
+// Returning a nil result with nil error means "no extra planning info";
+// the handler proceeds with just the spec-level diff.
+type DryRunner interface {
+	DryRun(ctx context.Context, manifest *protocol.Resource) (*DryRunResult, error)
+}
+
+// DryRunResult carries provider-side planning info for DryRunApply. Maps
+// 1:1 onto apiv1.DryRunApplyResponse.{children,required_gates,summary} —
+// kept in this package so providers don't need to import the proto.
+type DryRunResult struct {
+	Children      []ChildAction
+	RequiredGates []string
+	Summary       string
+}
+
+// ChildAction mirrors apiv1.ChildAction. Verb is one of:
+//   - "create" — child will be added
+//   - "destroy" — child will be removed
+//   - "respec" — child will be destroyed and recreated with new spec
+//   - "no-op" — no change to this child
+type ChildAction struct {
+	Verb   string
+	Kind   string
+	Name   string
+	Detail string
+}
+
+// Gate string constants. Use these in DryRunResult.RequiredGates to keep
+// providers in sync with the proto/UI surface.
+const (
+	GateAllowDestructive = "allow_destructive"
+	GateIKnowThisBreaks  = "i_know_this_breaks_the_cluster"
+)
+
 // Provider implements operations for resources of a particular vendor
 // (proxmox, k3s, etc). Phase 2 semantics are synchronous; Phase 3 layers
 // async operations + persisted state on top.

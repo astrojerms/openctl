@@ -18,12 +18,10 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
-Nothing actively in progress. UI Phase U3 fully shipped (U3.1–U3.5):
-scaffold + login, layout + list, detail pane, live Watch streams + ops
-drawer, git status indicator + Push-now + Watch-driven catalogue
-counts + Vitest harness. Next major item per ROADMAP suggested order:
-UI Phase U4 (Monaco-based CUE/manifest editor + DryRunApply RPC), or
-arch Phase 8 (K3sNode as a first-class resource).
+UI Phase U4 (CUE/manifest editor) underway. U4.1 (DryRunApply RPC +
+providers.DryRunner interface + k3s implementation) shipped; next
+sub-phase is U4.2 (Monaco editor integration in the UI with debounced
+server-side Validate).
 
 ## Suggested next order
 
@@ -158,9 +156,18 @@ committing to a phase.
             homelab project).
       - [ ] **U3.4** — ops drawer + live Watch streams.
       - [ ] **U3.5** — git status indicator + Push now + e2e tests.
-- [ ] **Phase U4** — CUE/manifest editor (Monaco-based, server-side
+- [~] **Phase U4** — CUE/manifest editor (Monaco-based, server-side
       validation, diff view, `DryRunApply` RPC, destructive gates as
       checkboxes).
+      - [x] **U4.1** — `ResourceService.DryRunApply` RPC server-side +
+            optional `providers.DryRunner` interface for composite
+            providers (k3s `Cluster` wired up; reuses the existing
+            change-plan + catastrophic-check chain).
+      - [ ] **U4.2** — Monaco editor integration in UI with
+            `SchemaService.Validate` debounce.
+      - [ ] **U4.3** — Apply panel: DryRunApply preview + destructive
+            gates + live op progress.
+      - [ ] **U4.4** — Side-by-side diff view (Monaco diff editor).
 - [ ] **Phase U5** — Typed form editor (CUE-AST → form-schema bridge,
       AWS-console stepped sections, live manifest preview, view
       toggle).

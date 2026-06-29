@@ -69,6 +69,50 @@ service ResourceService {
   rpc Watch(WatchRequest) returns (stream WatchEvent) {
     option (google.api.http) = { post: "/v1/resources:watch" body: "*" };
   }
+
+  // DryRunApply previews what an Apply would do without mutating anything.
+  // Runs the same change-plan + catastrophic-check logic the dispatcher
+  // would; returns the spec diff against the currently-applied manifest,
+  // per-child action verbs for composite resources, and the destructive
+  // gates the user would need to check off. UI Phase U4.1: editor calls
+  // this on the debounce timer to power the "preview before apply" pane.
+  rpc DryRunApply(DryRunApplyRequest) returns (DryRunApplyResponse) {
+    option (google.api.http) = { post: "/v1/resources:dryRunApply" body: "*" };
+  }
+}
+
+message DryRunApplyRequest {
+  Resource resource = 1;
+}
+
+// DryRunApplyResponse describes the would-be effect of an Apply.
+// validation_errors is populated even on otherwise-valid runs so the UI
+// can surface schema problems inline without a second SchemaService roundtrip.
+message DryRunApplyResponse {
+  // Spec-level differences between the submitted manifest and the
+  // currently-applied manifest, or empty when this would be the first
+  // apply. Same shape as Resource.drift.
+  repeated DriftEntry diff = 1;
+  // Per-child actions for composite resources (e.g. Cluster → VMs).
+  // Empty for atomics. Verbs: "create" | "destroy" | "respec" | "no-op".
+  repeated ChildAction children = 2;
+  // Required gates: destructive-flag flags the user must explicitly enable
+  // before Apply will accept the request. Values match the Apply request
+  // boolean fields: "allow_destructive", "i_know_this_breaks_the_cluster".
+  repeated string required_gates = 3;
+  // Schema validation errors. When non-empty the UI should show them
+  // inline; Apply will reject with the same errors anyway.
+  repeated string validation_errors = 4;
+  // Human-readable single-line summary suitable for a status pill —
+  // e.g. "no-op", "would add 1 worker", "would respec dev-cp-0 (destructive)".
+  string summary = 5;
+}
+
+message ChildAction {
+  string verb = 1;       // "create" | "destroy" | "respec" | "no-op"
+  string kind = 2;       // e.g. "VirtualMachine"
+  string name = 3;
+  string detail = 4;     // optional explanation
 }
 
 // Resource is the k8s-style envelope for any resource kind. spec/status are

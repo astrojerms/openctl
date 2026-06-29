@@ -131,11 +131,12 @@ var PingService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	ResourceService_Apply_FullMethodName  = "/openctl.v1.ResourceService/Apply"
-	ResourceService_Get_FullMethodName    = "/openctl.v1.ResourceService/Get"
-	ResourceService_List_FullMethodName   = "/openctl.v1.ResourceService/List"
-	ResourceService_Delete_FullMethodName = "/openctl.v1.ResourceService/Delete"
-	ResourceService_Watch_FullMethodName  = "/openctl.v1.ResourceService/Watch"
+	ResourceService_Apply_FullMethodName       = "/openctl.v1.ResourceService/Apply"
+	ResourceService_Get_FullMethodName         = "/openctl.v1.ResourceService/Get"
+	ResourceService_List_FullMethodName        = "/openctl.v1.ResourceService/List"
+	ResourceService_Delete_FullMethodName      = "/openctl.v1.ResourceService/Delete"
+	ResourceService_Watch_FullMethodName       = "/openctl.v1.ResourceService/Watch"
+	ResourceService_DryRunApply_FullMethodName = "/openctl.v1.ResourceService/DryRunApply"
 )
 
 // ResourceServiceClient is the client API for ResourceService service.
@@ -167,6 +168,13 @@ type ResourceServiceClient interface {
 	// deleted. UI Phase U1.1: poll-based implementation. Filter is api_version
 	// (required) + kind (required) + optional name to watch a single resource.
 	Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchEvent], error)
+	// DryRunApply previews what an Apply would do without mutating anything.
+	// Runs the same change-plan + catastrophic-check logic the dispatcher
+	// would; returns the spec diff against the currently-applied manifest,
+	// per-child action verbs for composite resources, and the destructive
+	// gates the user would need to check off. UI Phase U4.1: editor calls
+	// this on the debounce timer to power the "preview before apply" pane.
+	DryRunApply(ctx context.Context, in *DryRunApplyRequest, opts ...grpc.CallOption) (*DryRunApplyResponse, error)
 }
 
 type resourceServiceClient struct {
@@ -236,6 +244,16 @@ func (c *resourceServiceClient) Watch(ctx context.Context, in *WatchRequest, opt
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ResourceService_WatchClient = grpc.ServerStreamingClient[WatchEvent]
 
+func (c *resourceServiceClient) DryRunApply(ctx context.Context, in *DryRunApplyRequest, opts ...grpc.CallOption) (*DryRunApplyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DryRunApplyResponse)
+	err := c.cc.Invoke(ctx, ResourceService_DryRunApply_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ResourceServiceServer is the server API for ResourceService service.
 // All implementations must embed UnimplementedResourceServiceServer
 // for forward compatibility.
@@ -265,6 +283,13 @@ type ResourceServiceServer interface {
 	// deleted. UI Phase U1.1: poll-based implementation. Filter is api_version
 	// (required) + kind (required) + optional name to watch a single resource.
 	Watch(*WatchRequest, grpc.ServerStreamingServer[WatchEvent]) error
+	// DryRunApply previews what an Apply would do without mutating anything.
+	// Runs the same change-plan + catastrophic-check logic the dispatcher
+	// would; returns the spec diff against the currently-applied manifest,
+	// per-child action verbs for composite resources, and the destructive
+	// gates the user would need to check off. UI Phase U4.1: editor calls
+	// this on the debounce timer to power the "preview before apply" pane.
+	DryRunApply(context.Context, *DryRunApplyRequest) (*DryRunApplyResponse, error)
 	mustEmbedUnimplementedResourceServiceServer()
 }
 
@@ -289,6 +314,9 @@ func (UnimplementedResourceServiceServer) Delete(context.Context, *DeleteRequest
 }
 func (UnimplementedResourceServiceServer) Watch(*WatchRequest, grpc.ServerStreamingServer[WatchEvent]) error {
 	return status.Error(codes.Unimplemented, "method Watch not implemented")
+}
+func (UnimplementedResourceServiceServer) DryRunApply(context.Context, *DryRunApplyRequest) (*DryRunApplyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DryRunApply not implemented")
 }
 func (UnimplementedResourceServiceServer) mustEmbedUnimplementedResourceServiceServer() {}
 func (UnimplementedResourceServiceServer) testEmbeddedByValue()                         {}
@@ -394,6 +422,24 @@ func _ResourceService_Watch_Handler(srv interface{}, stream grpc.ServerStream) e
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ResourceService_WatchServer = grpc.ServerStreamingServer[WatchEvent]
 
+func _ResourceService_DryRunApply_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DryRunApplyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ResourceServiceServer).DryRunApply(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ResourceService_DryRunApply_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ResourceServiceServer).DryRunApply(ctx, req.(*DryRunApplyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ResourceService_ServiceDesc is the grpc.ServiceDesc for ResourceService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -416,6 +462,10 @@ var ResourceService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Delete",
 			Handler:    _ResourceService_Delete_Handler,
+		},
+		{
+			MethodName: "DryRunApply",
+			Handler:    _ResourceService_DryRunApply_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
