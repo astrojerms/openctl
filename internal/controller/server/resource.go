@@ -174,13 +174,49 @@ func (h *resourceHandler) Get(ctx context.Context, req *apiv1.GetRequest) (*apiv
 			if perr != nil {
 				return nil, status.Errorf(codes.Internal, "encode applied: %v", perr)
 			}
+			// Arch Phase 8: applied also gets the relationship fields so the
+			// UI can show the same children/owner_refs in the "desired" pane
+			// without a second lookup.
+			attachRelationships(h.registry, applied)
 			resp.Applied = applied
 			if !appliedAt.IsZero() {
 				resp.AppliedAt = appliedAt.UTC().Format(time.RFC3339Nano)
 			}
 		}
 	}
+	attachRelationships(h.registry, out)
 	return resp, nil
+}
+
+// attachRelationships populates out.Children and out.Metadata.OwnerRefs from
+// the registry's ChildrenOf / OwnerRefOf helpers (arch Phase 8 scoped
+// owner-ref plumbing). No-op when nothing's claimed.
+func attachRelationships(reg *providers.Registry, out *apiv1.Resource) {
+	if out == nil || reg == nil {
+		return
+	}
+	kind := out.GetKind()
+	name := out.GetMetadata().GetName()
+	if children := reg.ChildrenOf(kind, name); len(children) > 0 {
+		out.Children = make([]*apiv1.ResourceRef, 0, len(children))
+		for _, c := range children {
+			out.Children = append(out.Children, &apiv1.ResourceRef{
+				ApiVersion: c.APIVersion,
+				Kind:       c.Kind,
+				Name:       c.Name,
+			})
+		}
+	}
+	if owner, ok := reg.OwnerRefOf(kind, name); ok {
+		if out.Metadata == nil {
+			out.Metadata = &apiv1.Metadata{Name: name}
+		}
+		out.Metadata.OwnerRefs = []*apiv1.ResourceRef{{
+			ApiVersion: owner.APIVersion,
+			Kind:       owner.Kind,
+			Name:       owner.Name,
+		}}
+	}
 }
 
 // DryRunApply previews what an Apply would do without enqueuing an op or
@@ -288,6 +324,7 @@ func (h *resourceHandler) List(ctx context.Context, req *apiv1.ListRequest) (*ap
 		if err := h.attachDrift(ctx, pr, r); err != nil {
 			return nil, status.Errorf(codes.Internal, "compute drift: %v", err)
 		}
+		attachRelationships(h.registry, pr)
 		out = append(out, pr)
 	}
 	return &apiv1.ListResponse{Resources: out}, nil

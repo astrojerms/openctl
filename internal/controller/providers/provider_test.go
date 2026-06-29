@@ -87,3 +87,71 @@ func TestRegistryForListsKnownProviders(t *testing.T) {
 		t.Errorf("error should list known providers, got: %s", msg)
 	}
 }
+
+// relationshipProvider implements OwnershipChecker + ChildrenLister so the
+// Registry helpers can be exercised end-to-end.
+type relationshipProvider struct {
+	fakeProvider
+	owns     map[string]string // "kind:name" → owner name (kind is implicit)
+	children map[string][]ResourceRef
+}
+
+func (r *relationshipProvider) OwnerOf(kind, name string) (string, string, bool) {
+	if owner, ok := r.owns[kind+":"+name]; ok {
+		return "Cluster", owner, true
+	}
+	return "", "", false
+}
+
+func (r *relationshipProvider) ChildrenOf(kind, name string) []ResourceRef {
+	return r.children[kind+":"+name]
+}
+
+func TestRegistryChildrenOfAggregatesAcrossProviders(t *testing.T) {
+	r := NewRegistry()
+	r.Register(&relationshipProvider{
+		fakeProvider: fakeProvider{name: "k3s", kinds: []string{"Cluster"}},
+		children: map[string][]ResourceRef{
+			"Cluster:dev": {
+				{APIVersion: "proxmox.openctl.io/v1", Kind: "VirtualMachine", Name: "dev-cp-0"},
+				{APIVersion: "proxmox.openctl.io/v1", Kind: "VirtualMachine", Name: "dev-w-0"},
+			},
+		},
+	})
+	r.Register(&fakeProvider{name: "proxmox", kinds: []string{"VirtualMachine"}})
+
+	got := r.ChildrenOf("Cluster", "dev")
+	if len(got) != 2 {
+		t.Fatalf("ChildrenOf len = %d, want 2: %+v", len(got), got)
+	}
+	if got[0].Name != "dev-cp-0" || got[0].APIVersion != "proxmox.openctl.io/v1" {
+		t.Errorf("got[0] = %+v", got[0])
+	}
+	if r.ChildrenOf("Cluster", "missing") != nil {
+		t.Error("ChildrenOf for unknown name should be nil")
+	}
+}
+
+func TestRegistryOwnerRefOfDerivesAPIVersionFromProvider(t *testing.T) {
+	r := NewRegistry()
+	r.Register(&relationshipProvider{
+		fakeProvider: fakeProvider{name: "k3s", kinds: []string{"Cluster"}},
+		owns: map[string]string{
+			"VirtualMachine:dev-cp-0": "dev",
+		},
+	})
+	r.Register(&fakeProvider{name: "proxmox", kinds: []string{"VirtualMachine"}})
+
+	ref, ok := r.OwnerRefOf("VirtualMachine", "dev-cp-0")
+	if !ok {
+		t.Fatal("OwnerRefOf returned ok=false for owned resource")
+	}
+	want := ResourceRef{APIVersion: "k3s.openctl.io/v1", Kind: "Cluster", Name: "dev"}
+	if ref != want {
+		t.Errorf("OwnerRefOf = %+v, want %+v", ref, want)
+	}
+
+	if _, ok := r.OwnerRefOf("VirtualMachine", "freebird"); ok {
+		t.Error("OwnerRefOf should return ok=false for unowned resource")
+	}
+}

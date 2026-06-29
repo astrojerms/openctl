@@ -90,6 +90,33 @@ func (p *Provider) OwnerOf(kind, name string) (string, string, bool) {
 	return "", "", false
 }
 
+// ChildrenOf implements providers.ChildrenLister: returns the VirtualMachine
+// children of the named Cluster from its state file. Empty when kind isn't
+// Cluster, the cluster doesn't exist, or the state file is unreadable.
+// Each ref carries the child's owning provider's apiVersion (e.g. proxmox
+// VMs become `proxmox.openctl.io/v1`) so callers can navigate without
+// inferring conventions.
+func (p *Provider) ChildrenOf(kind, name string) []providers.ResourceRef {
+	if kind != kindCluster {
+		return nil
+	}
+	children, err := readChildren(name)
+	if err != nil || len(children) == 0 {
+		return nil
+	}
+	out := make([]providers.ResourceRef, 0, len(children))
+	for _, c := range children {
+		// childRef.Provider is the short name ("proxmox"); construct the
+		// apiVersion via the same convention the Registry uses.
+		out = append(out, providers.ResourceRef{
+			APIVersion: c.Provider + ".openctl.io/v1",
+			Kind:       c.Kind,
+			Name:       c.Name,
+		})
+	}
+	return out
+}
+
 // Annotation keys for the destructive-flag plumbing. The CLI sets these on
 // the manifest's metadata.annotations before submitting; the apply path
 // reads them to decide whether to honor structural changes.

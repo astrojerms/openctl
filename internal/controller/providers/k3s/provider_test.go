@@ -122,6 +122,48 @@ children:
 	}
 }
 
+func TestChildrenOfReturnsVMRefs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	writeClusterState(t, home, "dev", `apiVersion: k3s.openctl.io/v1
+kind: Cluster
+metadata:
+  name: dev
+children:
+  - provider: proxmox
+    kind: VirtualMachine
+    name: dev-cp-0
+  - provider: proxmox
+    kind: VirtualMachine
+    name: dev-worker-0
+`)
+
+	p := New(&protocol.ProviderConfig{}, &fakeVMs{})
+	got := p.ChildrenOf(kindCluster, "dev")
+	if len(got) != 2 {
+		t.Fatalf("ChildrenOf len = %d, want 2: %+v", len(got), got)
+	}
+	want := []providers.ResourceRef{
+		{APIVersion: "proxmox.openctl.io/v1", Kind: "VirtualMachine", Name: "dev-cp-0"},
+		{APIVersion: "proxmox.openctl.io/v1", Kind: "VirtualMachine", Name: "dev-worker-0"},
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("ChildrenOf[%d] = %+v, want %+v", i, got[i], w)
+		}
+	}
+
+	// Wrong kind: don't find anything.
+	if got := p.ChildrenOf("VirtualMachine", "dev"); got != nil {
+		t.Errorf("ChildrenOf on VirtualMachine should be nil, got %+v", got)
+	}
+	// Unknown name: nothing.
+	if got := p.ChildrenOf(kindCluster, "missing"); got != nil {
+		t.Errorf("ChildrenOf on unknown cluster should be nil, got %+v", got)
+	}
+}
+
 func TestOwnerOfReturnsFalseForUnowned(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

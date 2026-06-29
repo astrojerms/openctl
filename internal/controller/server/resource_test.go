@@ -634,6 +634,127 @@ func TestResourceServiceDeleteBlockedWhenOwned(t *testing.T) {
 	}
 }
 
+// relationshipProvider implements OwnershipChecker + ChildrenLister so the
+// resource handler's owner-ref / children plumbing (arch Phase 8) can be
+// exercised end-to-end via Get.
+type relationshipProvider struct {
+	owned    map[string]string // "kind:name" → owner name; owner kind is constant ("Cluster")
+	children map[string][]providers.ResourceRef
+}
+
+func (p *relationshipProvider) Name() string    { return "k3s" }
+func (p *relationshipProvider) Kinds() []string { return []string{"Cluster"} }
+func (p *relationshipProvider) Apply(context.Context, *protocol.Resource) (*protocol.Resource, error) {
+	return nil, nil
+}
+func (p *relationshipProvider) Get(_ context.Context, kind, name string) (*protocol.Resource, error) {
+	return &protocol.Resource{
+		APIVersion: "k3s.openctl.io/v1",
+		Kind:       kind,
+		Metadata:   protocol.ResourceMetadata{Name: name},
+		Status:     map[string]any{"phase": "running"},
+	}, nil
+}
+func (p *relationshipProvider) List(context.Context, string) ([]*protocol.Resource, error) {
+	return nil, nil
+}
+func (p *relationshipProvider) Delete(context.Context, string, string) error { return nil }
+func (p *relationshipProvider) OwnerOf(kind, name string) (string, string, bool) {
+	if owner, ok := p.owned[kind+":"+name]; ok {
+		return "Cluster", owner, true
+	}
+	return "", "", false
+}
+func (p *relationshipProvider) ChildrenOf(kind, name string) []providers.ResourceRef {
+	return p.children[kind+":"+name]
+}
+
+func TestResourceServiceGetSurfacesChildren(t *testing.T) {
+	parent := &relationshipProvider{
+		children: map[string][]providers.ResourceRef{
+			"Cluster:dev": {
+				{APIVersion: "proxmox.openctl.io/v1", Kind: "VirtualMachine", Name: "dev-cp-0"},
+				{APIVersion: "proxmox.openctl.io/v1", Kind: "VirtualMachine", Name: "dev-w-0"},
+			},
+		},
+	}
+	vm := &fakeProvider{
+		getReturn: &protocol.Resource{
+			APIVersion: "proxmox.openctl.io/v1",
+			Kind:       "FakeKind",
+			Metadata:   protocol.ResourceMetadata{Name: "dev-cp-0"},
+		},
+	}
+	reg := providers.NewRegistry()
+	reg.Register(parent)
+	reg.Register(vm)
+
+	addr, mat := startTestServer(t, reg)
+	conn := dialTestServer(t, addr, mat.CACertPath)
+	defer func() { _ = conn.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := apiv1.NewResourceServiceClient(conn).Get(ctx, &apiv1.GetRequest{
+		ApiVersion: "k3s.openctl.io/v1",
+		Kind:       "Cluster",
+		Name:       "dev",
+	})
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	got := resp.GetResource().GetChildren()
+	if len(got) != 2 {
+		t.Fatalf("children len = %d, want 2: %+v", len(got), got)
+	}
+	if got[0].GetName() != "dev-cp-0" || got[0].GetApiVersion() != "proxmox.openctl.io/v1" {
+		t.Errorf("children[0] = %+v", got[0])
+	}
+}
+
+func TestResourceServiceGetSurfacesOwnerRefs(t *testing.T) {
+	parent := &relationshipProvider{
+		owned: map[string]string{"FakeKind:dev-cp-0": "dev"},
+	}
+	vm := &fakeProvider{
+		getReturn: &protocol.Resource{
+			APIVersion: "fake.openctl.io/v1",
+			Kind:       "FakeKind",
+			Metadata:   protocol.ResourceMetadata{Name: "dev-cp-0"},
+		},
+	}
+	reg := providers.NewRegistry()
+	reg.Register(parent)
+	reg.Register(vm)
+
+	addr, mat := startTestServer(t, reg)
+	conn := dialTestServer(t, addr, mat.CACertPath)
+	defer func() { _ = conn.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := apiv1.NewResourceServiceClient(conn).Get(ctx, &apiv1.GetRequest{
+		ApiVersion: "fake.openctl.io/v1",
+		Kind:       "FakeKind",
+		Name:       "dev-cp-0",
+	})
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	owners := resp.GetResource().GetMetadata().GetOwnerRefs()
+	if len(owners) != 1 {
+		t.Fatalf("owner_refs len = %d, want 1: %+v", len(owners), owners)
+	}
+	if owners[0].GetKind() != "Cluster" || owners[0].GetName() != "dev" {
+		t.Errorf("owners[0] = %+v", owners[0])
+	}
+	if owners[0].GetApiVersion() != "k3s.openctl.io/v1" {
+		t.Errorf("owner apiVersion = %q, want derived from registering provider", owners[0].GetApiVersion())
+	}
+}
+
 func TestResourceServiceUnknownProviderRejected(t *testing.T) {
 	reg := providers.NewRegistry()
 	addr, mat := startTestServer(t, reg)

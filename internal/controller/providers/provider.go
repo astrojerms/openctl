@@ -27,6 +27,26 @@ type OwnershipChecker interface {
 	OwnerOf(kind, name string) (ownerKind, ownerName string, owned bool)
 }
 
+// ResourceRef is a fully-qualified (apiVersion, kind, name) reference to
+// another resource. Used by Registry.ChildrenOf / OwnerRefOf to surface
+// composition relationships through the gRPC API (arch Phase 8 scoped
+// owner-ref plumbing) without forcing the caller to know provider
+// apiVersion conventions.
+type ResourceRef struct {
+	APIVersion string
+	Kind       string
+	Name       string
+}
+
+// ChildrenLister is an optional provider interface that exposes the
+// resources composed by (kind, name). Providers that don't compose other
+// resources don't need to implement it. The k3s provider returns the
+// VirtualMachine refs belonging to a Cluster; atomic providers return
+// nothing.
+type ChildrenLister interface {
+	ChildrenOf(kind, name string) []ResourceRef
+}
+
 // DryRunner is an optional provider capability for previewing what an
 // Apply would do without performing it. Composite providers (k3s Cluster
 // → VMs) implement this to surface per-child actions and the gates the
@@ -151,6 +171,53 @@ func (r *Registry) OwnerOf(kind, name string) (ownerKind, ownerName string, owne
 		}
 	}
 	return "", "", false
+}
+
+// OwnerRefOf returns the typed ResourceRef of the owner of (kind, name),
+// or owned=false if nothing claims it. The apiVersion is derived from the
+// responding provider's Name() using the documented `<name>.openctl.io/v1`
+// convention — Registry-level callers (the UI/HTTP layer) want full refs
+// for navigation, OwnerOf's three-tuple is preserved for the delete-block
+// call site.
+func (r *Registry) OwnerRefOf(kind, name string) (ResourceRef, bool) {
+	for _, p := range r.providers {
+		checker, ok := p.(OwnershipChecker)
+		if !ok {
+			continue
+		}
+		ownerKind, ownerName, owns := checker.OwnerOf(kind, name)
+		if !owns {
+			continue
+		}
+		return ResourceRef{
+			APIVersion: providerAPIVersion(p),
+			Kind:       ownerKind,
+			Name:       ownerName,
+		}, true
+	}
+	return ResourceRef{}, false
+}
+
+// ChildrenOf aggregates ChildrenLister results across all registered
+// providers. Empty if nothing composes (kind, name) or no provider
+// implements the interface. Caller deduplicates if needed; today providers
+// own disjoint child sets so duplicates are unexpected.
+func (r *Registry) ChildrenOf(kind, name string) []ResourceRef {
+	var out []ResourceRef
+	for _, p := range r.providers {
+		if lister, ok := p.(ChildrenLister); ok {
+			out = append(out, lister.ChildrenOf(kind, name)...)
+		}
+	}
+	return out
+}
+
+// providerAPIVersion returns the canonical apiVersion for a provider,
+// derived from its short Name() and the documented openctl convention
+// `<name>.openctl.io/v1`. Mirrors providerNameFromAPIVersion in the
+// other direction.
+func providerAPIVersion(p Provider) string {
+	return p.Name() + ".openctl.io/v1"
 }
 
 // providerNameFromAPIVersion extracts "proxmox" from `proxmox.openctl.io/v1`.
