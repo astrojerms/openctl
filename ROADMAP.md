@@ -18,10 +18,10 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
-UI Phase U4 (CUE/manifest editor) underway. U4.1 (DryRunApply RPC +
-providers.DryRunner interface + k3s implementation) shipped; next
-sub-phase is U4.2 (Monaco editor integration in the UI with debounced
-server-side Validate).
+UI Phase U4 (CUE/manifest editor) underway. U4.1 (DryRunApply RPC) and
+U4.2 (Monaco editor + debounced Validate, lazy-loaded so list/detail
+stay light) shipped; next sub-phase is U4.3 (Apply panel with
+DryRunApply preview + destructive-gate checkboxes + live op progress).
 
 ## Suggested next order
 
@@ -163,8 +163,10 @@ committing to a phase.
             optional `providers.DryRunner` interface for composite
             providers (k3s `Cluster` wired up; reuses the existing
             change-plan + catastrophic-check chain).
-      - [ ] **U4.2** — Monaco editor integration in UI with
-            `SchemaService.Validate` debounce.
+      - [x] **U4.2** — Monaco editor wired into `/edit/...` route,
+            lazy-loaded so list/detail bundles stay light. 350 ms
+            debounce on edits → SchemaService.Validate → Monaco markers
+            + diagnostics card. Detail pane gets an "Edit" button.
       - [ ] **U4.3** — Apply panel: DryRunApply preview + destructive
             gates + live op progress.
       - [ ] **U4.4** — Side-by-side diff view (Monaco diff editor).

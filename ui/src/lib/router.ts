@@ -15,14 +15,15 @@ import { writable, type Writable } from 'svelte/store';
 export type Route =
   | { name: 'home' }
   | { name: 'list'; apiVersion: string; kind: string }
-  | { name: 'detail'; apiVersion: string; kind: string; resourceName: string };
+  | { name: 'detail'; apiVersion: string; kind: string; resourceName: string }
+  | { name: 'edit'; apiVersion: string; kind: string; resourceName: string };
 
 function parse(hash: string): Route {
   const path = hash.replace(/^#/, '').replace(/^\//, '');
   if (!path) return { name: 'home' };
 
   const parts = path.split('/').map(decodeURIComponent);
-  // ['k', '<encoded-apiVersion-half-1>', '<encoded-apiVersion-half-2>', '<kind>', '<name>?']
+  // ['k', '<encoded-apiVersion-half-1>', '<encoded-apiVersion-half-2>', '<kind>', '<name>?', 'edit'?]
   if (parts[0] === 'k' && parts.length >= 4) {
     // apiVersion is encoded as two segments because it has a single slash.
     const apiVersion = `${parts[1]}/${parts[2]}`;
@@ -30,6 +31,9 @@ function parse(hash: string): Route {
     if (parts.length === 4) return { name: 'list', apiVersion, kind };
     if (parts.length === 5) {
       return { name: 'detail', apiVersion, kind, resourceName: parts[4] };
+    }
+    if (parts.length === 6 && parts[5] === 'edit') {
+      return { name: 'edit', apiVersion, kind, resourceName: parts[4] };
     }
   }
   return { name: 'home' };
@@ -40,7 +44,10 @@ export function routeHref(route: Route): string {
   const [g, v] = route.apiVersion.split('/');
   const base = `#/k/${encodeURIComponent(g)}/${encodeURIComponent(v)}/${encodeURIComponent(route.kind)}`;
   if (route.name === 'list') return base;
-  return `${base}/${encodeURIComponent(route.resourceName)}`;
+  const detail = `${base}/${encodeURIComponent(route.resourceName)}`;
+  if (route.name === 'detail') return detail;
+  // edit
+  return `${detail}/edit`;
 }
 
 export const route: Writable<Route> = writable(parse(location.hash));

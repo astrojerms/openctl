@@ -15,6 +15,7 @@
   import HomePane from './HomePane.svelte';
   import ResourceList from './ResourceList.svelte';
   import Detail from './Detail.svelte';
+  import Edit from './Edit.svelte';
 
   export let me: WhoAmIResponse;
 
@@ -81,8 +82,14 @@
         kind={$route.kind}
         provider={entry?.provider ?? ''}
       />
-    {:else}
+    {:else if $route.name === 'detail'}
       <Detail
+        apiVersion={$route.apiVersion}
+        kind={$route.kind}
+        resourceName={$route.resourceName}
+      />
+    {:else}
+      <Edit
         apiVersion={$route.apiVersion}
         kind={$route.kind}
         resourceName={$route.resourceName}

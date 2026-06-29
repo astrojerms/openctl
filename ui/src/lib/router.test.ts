@@ -22,4 +22,15 @@ describe('routeHref', () => {
       }),
     ).toBe('#/k/k3s.openctl.io/v1/Cluster/dev%20cluster');
   });
+
+  it('suffixes /edit on edit routes', () => {
+    expect(
+      routeHref({
+        name: 'edit',
+        apiVersion: 'k3s.openctl.io/v1',
+        kind: 'Cluster',
+        resourceName: 'dev',
+      }),
+    ).toBe('#/k/k3s.openctl.io/v1/Cluster/dev/edit');
+  });
 });
