@@ -391,6 +391,19 @@ CUE. AWS-console-shape.
 
 **Sub-phases:**
 
+- [x] **U5.3** — Advanced field types. CUE walker detects:
+      string-literal disjunctions (`"a" | "b" | "c"` → `enum` field
+      array; renderer shows a `<select>`), regex constraints
+      (`=~"..."` → `pattern` string; renderer attaches the HTML
+      pattern attr + a `:invalid` red border + a `title` hover with
+      the regex), and `{[string]: T}` maps → new `FieldMap` type with
+      `valueType`; renderer surfaces a key/value add-row editor with
+      collision-safe key edits and per-row remove. Stepped sections
+      deferred (none of the shipped schemas demand them — single
+      scrollable form is fine for the homelab use). Disjunctions over
+      non-literal types (e.g. `string | int`) still emit
+      `{type:"unsupported"}` — that's discriminated-union territory
+      and lands later if/when a shipped schema needs it.
 - [x] **U5.2** — Svelte form renderer with live YAML preview. The
       edit pane gets a three-way view toggle: Form / Editor / Diff.
       Form view loads the U5.1 Field tree via `schemas.getForm(av, kind)`,

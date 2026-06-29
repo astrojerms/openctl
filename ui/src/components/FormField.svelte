@@ -56,6 +56,48 @@
     const n = Number(raw);
     return Number.isFinite(n) ? n : null;
   }
+
+  // Map row editing: maintain a stable display order via Object.entries
+  // so insertion ordering doesn't jitter while the user types. A draft
+  // "new key" row is appended when the user clicks "+ Add row".
+  function setMapKey(oldKey: string, newKey: string) {
+    const m = (typeof value === 'object' && value && !Array.isArray(value))
+      ? { ...(value as Record<string, unknown>) }
+      : {};
+    if (oldKey === newKey) return;
+    if (newKey in m && oldKey !== newKey) return; // collision: ignore
+    const v = m[oldKey];
+    delete m[oldKey];
+    m[newKey] = v;
+    set(m);
+  }
+  function setMapValue(key: string, v: unknown) {
+    const m = (typeof value === 'object' && value && !Array.isArray(value))
+      ? { ...(value as Record<string, unknown>) }
+      : {};
+    m[key] = v;
+    set(m);
+  }
+  function removeMapKey(key: string) {
+    const m = (typeof value === 'object' && value && !Array.isArray(value))
+      ? { ...(value as Record<string, unknown>) }
+      : {};
+    delete m[key];
+    set(m);
+  }
+  function addMapRow() {
+    const m = (typeof value === 'object' && value && !Array.isArray(value))
+      ? { ...(value as Record<string, unknown>) }
+      : {};
+    // Pick a fresh placeholder key. Users edit it immediately; collisions
+    // resolved by setMapKey.
+    let i = 0;
+    let base = 'key';
+    while ((`${base}${i ? i : ''}`) in m) i++;
+    const key = `${base}${i ? i : ''}`;
+    m[key] = field.valueType ? initialValue(field.valueType) : '';
+    set(m);
+  }
 </script>
 
 {#if field.type === 'object'}
@@ -104,12 +146,54 @@
     {/if}
     <button type="button" class="add" on:click={addArrayItem}>+ Add item</button>
   </div>
+{:else if field.type === 'map'}
+  <div class="map">
+    {#if value && typeof value === 'object' && !Array.isArray(value)}
+      {#each Object.entries(value as Record<string, unknown>) as [k, v] (k)}
+        <div class="map-row">
+          <input
+            type="text"
+            class="map-key"
+            value={k}
+            placeholder="key"
+            on:change={(e) => setMapKey(k, (e.currentTarget as HTMLInputElement).value)}
+          />
+          <span class="map-sep">:</span>
+          <div class="map-value">
+            <Self
+              field={field.valueType ?? { type: 'string' }}
+              value={v}
+              depth={depth + 1}
+              on:change={(e) => setMapValue(k, e.detail)}
+            />
+          </div>
+          <button type="button" class="remove" on:click={() => removeMapKey(k)}
+            title="Remove entry">×</button>
+        </div>
+      {/each}
+    {/if}
+    <button type="button" class="add" on:click={addMapRow}>+ Add row</button>
+  </div>
 {:else if field.const !== undefined}
   <input class="const" type="text" value={String(field.const)} readonly tabindex="-1" />
+{:else if field.type === 'string' && field.enum && field.enum.length > 0}
+  <select
+    value={value as string ?? ''}
+    on:change={(e) => set((e.currentTarget as HTMLSelectElement).value)}
+  >
+    {#if field.optional && (value === '' || value === undefined || value === null)}
+      <option value="">— unset —</option>
+    {/if}
+    {#each field.enum as opt}
+      <option value={opt}>{opt}</option>
+    {/each}
+  </select>
 {:else if field.type === 'string'}
   <input
     type="text"
     value={value as string ?? ''}
+    pattern={field.pattern ?? null}
+    title={field.pattern ? `Must match: ${field.pattern}` : null}
     on:input={(e) => set((e.currentTarget as HTMLInputElement).value)}
   />
 {:else if field.type === 'int' || field.type === 'number'}
@@ -211,6 +295,49 @@
     background: rgba(127, 127, 127, 0.08);
     color: #888;
     cursor: not-allowed;
+  }
+  select {
+    width: 100%;
+    box-sizing: border-box;
+    font-family: inherit;
+    padding: 0.4rem 0.6rem;
+    background: rgba(0, 0, 0, 0.2);
+    color: inherit;
+    border: 1px solid rgba(127, 127, 127, 0.25);
+    border-radius: 4px;
+    font-size: 0.9rem;
+  }
+  @media (prefers-color-scheme: light) {
+    select {
+      background: #fff;
+      border-color: #ccc;
+    }
+  }
+  input[type='text']:invalid {
+    border-color: #ff8980;
+  }
+  .map {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  .map-row {
+    display: grid;
+    grid-template-columns: minmax(8rem, 1fr) auto minmax(8rem, 2fr) auto;
+    gap: 0.35rem;
+    align-items: center;
+    padding: 0.3rem;
+    background: rgba(127, 127, 127, 0.06);
+    border-radius: 4px;
+  }
+  .map-sep {
+    color: #888;
+  }
+  .map-key {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+  }
+  .map-value {
+    min-width: 0;
   }
   .bool {
     display: inline-flex;

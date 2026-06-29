@@ -18,10 +18,11 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
-UI Phase U5 (typed form editor) underway. U5.1 (CUE → form-schema
-bridge) and U5.2 (Svelte form renderer + live YAML preview + three-way
-view toggle) shipped; next sub-phase is U5.3 (advanced field types:
-enums, patterns, disjunctions, key/value maps, stepped sections).
+UI Phase U5 (typed form editor) underway. U5.1–U5.3 shipped — CUE →
+form-schema bridge, Svelte form renderer + live YAML preview + 3-way
+toggle, advanced field types (enums, regex patterns, key/value maps).
+Next sub-phase is U5.4 (form ↔ CUE round-trip detection; disable Form
+view when manifest has hand-edits the form can't represent).
 
 ## Suggested next order
 
@@ -188,8 +189,13 @@ committing to a phase.
             live YAML preview alongside the form; form edits drive
             the same `text` state as the editor so Validate +
             DryRunApply preview + Apply keep working unchanged.
-      - [ ] **U5.3** — Advanced field types (enums, patterns,
-            disjunctions, key/value maps) + stepped sections.
+      - [x] **U5.3** — Advanced field types: string-literal disjunctions
+            → enums (rendered as select), regex constraints → pattern
+            (rendered with HTML pattern attr + invalid styling), maps
+            (`{[string]: T}`) → FieldMap (rendered as key/value
+            add-row editor). Non-literal disjunctions still emit
+            `unsupported`; stepped sections deferred until a real
+            schema demands them.
       - [ ] **U5.4** — Form ↔ CUE round-trip + disable form when manifest
             has hand-edits the form can't represent.
 - [ ] **Phase U6** — Composite resource UX (Cluster parent + read-only

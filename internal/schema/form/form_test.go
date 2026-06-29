@@ -174,6 +174,81 @@ func TestWalkConstFieldsAreMarkedReadOnly(t *testing.T) {
 	}
 }
 
+func TestWalkStringEnum(t *testing.T) {
+	src := `
+		mode: "fast" | "slow" | *"fast"
+	`
+	f := build(t, src)
+	by := byName(f.Fields)
+	mode := by["mode"]
+	if mode.Type != FieldString {
+		t.Errorf("mode type = %s, want string", mode.Type)
+	}
+	if len(mode.Enum) != 2 || mode.Enum[0] != "fast" || mode.Enum[1] != "slow" {
+		t.Errorf("mode enum = %v, want [fast slow]", mode.Enum)
+	}
+	if mode.Default != "fast" {
+		t.Errorf("mode default = %v, want fast", mode.Default)
+	}
+}
+
+func TestWalkRegexPattern(t *testing.T) {
+	src := `
+		name: =~"^[a-z]+$"
+	`
+	f := build(t, src)
+	by := byName(f.Fields)
+	name := by["name"]
+	if name.Type != FieldString {
+		t.Errorf("name type = %s, want string", name.Type)
+	}
+	if name.Pattern != "^[a-z]+$" {
+		t.Errorf("name pattern = %q, want %q", name.Pattern, "^[a-z]+$")
+	}
+}
+
+func TestWalkMapOfStringToString(t *testing.T) {
+	src := `
+		labels: {[string]: string}
+	`
+	f := build(t, src)
+	by := byName(f.Fields)
+	labels := by["labels"]
+	if labels.Type != FieldMap {
+		t.Errorf("labels type = %s, want map", labels.Type)
+	}
+	if labels.ValueType == nil || labels.ValueType.Type != FieldString {
+		t.Errorf("labels.valueType = %+v, want string", labels.ValueType)
+	}
+}
+
+func TestWalkMapOfStringToInt(t *testing.T) {
+	src := `
+		counts: {[string]: int}
+	`
+	f := build(t, src)
+	by := byName(f.Fields)
+	counts := by["counts"]
+	if counts.Type != FieldMap {
+		t.Errorf("counts type = %s, want map", counts.Type)
+	}
+	if counts.ValueType == nil || counts.ValueType.Type != FieldInt {
+		t.Errorf("counts.valueType = %+v, want int", counts.ValueType)
+	}
+}
+
+func TestWalkPlainObjectStaysObject(t *testing.T) {
+	// Sanity: a struct with named fields shouldn't be misclassified as map.
+	src := `
+		nested: {a: string, b: int}
+	`
+	f := build(t, src)
+	by := byName(f.Fields)
+	if by["nested"].Type != FieldObject {
+		t.Errorf("nested type = %s, want object", by["nested"].Type)
+	}
+}
+
 func TestWalkTopAndAny(t *testing.T) {
 	// CUE `_` collapses to TopKind — render as the "any" escape hatch.
 	src := `

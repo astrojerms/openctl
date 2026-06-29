@@ -13,6 +13,7 @@ export type FieldType =
   | 'bool'
   | 'object'
   | 'array'
+  | 'map'
   | 'any'
   | 'unsupported';
 
@@ -27,6 +28,12 @@ export interface FormField {
   max?: number;
   fields?: FormField[];
   items?: FormField;
+  // map: value schema for `{[string]: T}`.
+  valueType?: FormField;
+  // string + literal disjunction → select options.
+  enum?: string[];
+  // string + regex constraint → HTML pattern attribute.
+  pattern?: string;
   reason?: string;
 }
 
@@ -68,6 +75,8 @@ export function initialValue(f: FormField): unknown {
     }
     case 'array':
       return [];
+    case 'map':
+      return {};
     default:
       return null;
   }
@@ -105,6 +114,16 @@ export function fromManifest(f: FormField, data: unknown): unknown {
       const arr = Array.isArray(data) ? data : [];
       if (!f.items) return arr;
       return arr.map((el) => fromManifest(f.items!, el));
+    }
+    case 'map': {
+      const obj = (typeof data === 'object' && !Array.isArray(data))
+        ? (data as Record<string, unknown>)
+        : {};
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(obj)) {
+        out[k] = f.valueType ? fromManifest(f.valueType, v) : v;
+      }
+      return out;
     }
     case 'int':
     case 'number':
@@ -153,6 +172,22 @@ export function scrubEmpty(f: FormField, value: unknown): unknown {
       if (!Array.isArray(value)) return value;
       if (!f.items) return value;
       return value.map((el) => scrubEmpty(f.items!, el));
+    }
+    case 'map': {
+      // Maps just pass through after dropping empty values when value
+      // type is scalar — for `{[string]: string}` we drop entries
+      // whose value is the empty string so the preview doesn't carry
+      // half-typed rows the user hasn't filled in yet.
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+        return value;
+      }
+      const src = value as Record<string, unknown>;
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(src)) {
+        if (k === '' || isEmpty(v)) continue;
+        out[k] = f.valueType ? scrubEmpty(f.valueType, v) : v;
+      }
+      return out;
     }
     default:
       return value;
