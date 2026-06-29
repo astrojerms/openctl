@@ -1,0 +1,725 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>openctl: target architecture</title>
+<style>
+  :root {
+    --fg: #1a1a1a;
+    --fg-muted: #555;
+    --fg-dim: #888;
+    --bg: #fdfdfb;
+    --bg-code: #f5f3ee;
+    --bg-callout: #f0ede4;
+    --border: #d8d4ca;
+    --accent: #6b3410;
+    --link: #a04010;
+    --good: #2d6a2d;
+    --bad: #a02020;
+  }
+  * { box-sizing: border-box; }
+  html { font-size: 16px; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    line-height: 1.6;
+  }
+  article {
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 3rem 2rem 6rem;
+  }
+  header { margin-bottom: 2.5rem; padding-bottom: 1.5rem; border-bottom: 1px solid var(--border); }
+  h1 { font-size: 2rem; margin: 0 0 0.5rem; font-weight: 600; color: var(--fg); }
+  .subtitle { color: var(--fg-muted); font-size: 1.1rem; margin: 0; font-style: italic; }
+  .meta { color: var(--fg-dim); font-size: 0.85rem; margin-top: 0.75rem; }
+
+  h2 {
+    font-size: 1.45rem;
+    margin: 3rem 0 1rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid var(--border);
+    color: var(--accent);
+    font-weight: 600;
+  }
+  h3 { font-size: 1.15rem; margin: 2rem 0 0.75rem; font-weight: 600; color: var(--fg); }
+  h4 { font-size: 1rem; margin: 1.5rem 0 0.5rem; font-weight: 600; color: var(--fg-muted); }
+
+  p { margin: 0 0 1rem; }
+  strong { font-weight: 600; color: var(--fg); }
+  em { color: var(--fg-muted); }
+  a { color: var(--link); }
+  a:hover { text-decoration: underline; }
+
+  ul, ol { margin: 0 0 1rem; padding-left: 1.5rem; }
+  li { margin: 0.3rem 0; }
+  li > ul, li > ol { margin: 0.3rem 0; }
+
+  code {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.875em;
+    background: var(--bg-code);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    color: var(--accent);
+  }
+  pre {
+    background: var(--bg-code);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.9rem 1.1rem;
+    overflow-x: auto;
+    margin: 1rem 0 1.5rem;
+    font-size: 0.82rem;
+    line-height: 1.5;
+  }
+  pre code {
+    background: none;
+    padding: 0;
+    color: var(--fg);
+    font-size: inherit;
+  }
+  pre.diagram {
+    font-size: 0.78rem;
+    line-height: 1.35;
+    text-align: center;
+  }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0 1.5rem;
+    font-size: 0.92rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.55rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th {
+    font-weight: 600;
+    background: var(--bg-code);
+    color: var(--fg);
+  }
+  td code { font-size: 0.85em; }
+
+  .toc {
+    background: var(--bg-callout);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1rem 1.5rem;
+    margin: 0 0 3rem;
+    font-size: 0.92rem;
+  }
+  .toc-title {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--fg-dim);
+    margin: 0 0 0.5rem;
+    font-weight: 600;
+  }
+  .toc ol { margin: 0; padding-left: 1.2rem; }
+  .toc li { margin: 0.2rem 0; }
+
+  .callout {
+    background: var(--bg-callout);
+    border-left: 3px solid var(--accent);
+    padding: 0.8rem 1.2rem;
+    margin: 1.25rem 0;
+    border-radius: 0 4px 4px 0;
+  }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout-label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+    font-weight: 600;
+    margin: 0 0 0.4rem;
+  }
+
+  .phase-card {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1rem 1.25rem;
+    margin: 1rem 0;
+    background: #fdfcf8;
+  }
+  .phase-card h3 { margin-top: 0; }
+  .phase-status {
+    display: inline-block;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 0.15em 0.55em;
+    border-radius: 3px;
+    font-weight: 600;
+    margin-left: 0.6rem;
+    vertical-align: middle;
+  }
+  .phase-status.done { background: #d6e8d6; color: var(--good); }
+  .phase-status.target { background: #fde6c8; color: var(--accent); }
+
+  hr {
+    border: 0;
+    border-top: 1px solid var(--border);
+    margin: 2.5rem 0;
+  }
+  footer {
+    margin-top: 4rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+    color: var(--fg-dim);
+    font-size: 0.85rem;
+    font-style: italic;
+  }
+
+  @media (max-width: 600px) {
+    article { padding: 1.5rem 1rem 4rem; }
+    h1 { font-size: 1.5rem; }
+    h2 { font-size: 1.2rem; }
+    pre { font-size: 0.75rem; }
+    pre.diagram { font-size: 0.6rem; }
+  }
+</style>
+</head>
+<body>
+<article>
+
+<header>
+  <h1>openctl: target architecture</h1>
+  <p class="subtitle">A DAG-shaped controller, Build Systems à la Carte at heart, Crossplane without a Kubernetes cluster.</p>
+  <p class="meta">Design discussion captured 2026-05-25 · Phases 1–6 shipped · Phases 7–10 proposed</p>
+</header>
+
+<nav class="toc">
+  <p class="toc-title">Contents</p>
+  <ol>
+    <li><a href="#today">Where we are today</a></li>
+    <li><a href="#target">The target shape</a></li>
+    <li><a href="#bsalc">In Build Systems à la Carte terms</a></li>
+    <li><a href="#crossplane">Compared to Crossplane</a></li>
+    <li><a href="#primitives">New primitives</a>
+      <ol>
+        <li><a href="#refs">Typed resource references</a></li>
+        <li><a href="#conditions">Conditions on status</a></li>
+        <li><a href="#recovery">Recovery policies</a></li>
+      </ol>
+    </li>
+    <li><a href="#k3snode">Concrete sketch: K3sNode</a></li>
+    <li><a href="#roadmap">Roadmap: Phases 7–10</a></li>
+    <li><a href="#open">Open design questions</a></li>
+  </ol>
+</nav>
+
+<section id="today">
+<h2>1. Where we are today</h2>
+
+<p>After Phases 1–6, openctl is a single-binary controller with persisted state, async operations, an in-process provider model (proxmox + k3s compiled in), declarative apply with destructive guardrails, drift detection on Get, and a one-command macOS install. It's a working homelab tool today.</p>
+
+<p>But the execution model is still largely procedural. <code>k3s.Apply</code> imperatively walks through "create VMs, install k3s, install agents, save state" as a single block of code. The dispatcher serializes per-resource ops with a parent_id column reserved for parent/child relationships, but it doesn't yet use that column meaningfully. Drift is observed but doesn't trigger rebuilds at the sub-resource level. Scaling an existing cluster up isn't supported because there's no way to express "add a new node task that depends on the existing first-CP's join token."</p>
+
+<p>The pieces foreshadow a build graph; they don't yet form one.</p>
+</section>
+
+<section id="target">
+<h2>2. The target shape</h2>
+
+<pre class="diagram">┌─────────────────────────────────────────────────────────────────┐
+│                         openctl CLI                              │
+│         apply / get / delete / op / plan / reconcile             │
+└────────────────────────────┬────────────────────────────────────┘
+                             │ gRPC + TLS + token
+┌────────────────────────────▼────────────────────────────────────┐
+│  openctl-controller (single binary, LaunchAgent / systemd)       │
+│                                                                  │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │  Resource handler                                           │ │
+│  │  - CUE validation (server-side, never trust the wire)      │ │
+│  │  - Submits root ops; computes drift on Get/List            │ │
+│  └─────────────────────────────┬──────────────────────────────┘ │
+│                                │                                 │
+│  ┌─────────────────────────────▼──────────────────────────────┐ │
+│  │  Scheduler / reconciler  (topological + suspending)         │ │
+│  │  - Walks the DAG implied by parent_id + ref deps           │ │
+│  │  - Resolves ResourceRefs by demanding dep status at runtime│ │
+│  │  - Rebuilder: skip if (inputHash, refsHash) == last run    │ │
+│  │  - Parallelizes independent siblings (configurable cap)    │ │
+│  │  - On restart, rewrites running ops to interrupted         │ │
+│  └─────────────────────────────┬──────────────────────────────┘ │
+│                                │                                 │
+│  ┌─────────────────────────────▼──────────────────────────────┐ │
+│  │  Providers (compiled in)                                    │ │
+│  │  proxmox: VirtualMachine, Template                          │ │
+│  │  k3s:     K3sNode, AgentInstall                             │ │
+│  │  k3s:     Cluster (a composer — Plan returns children)      │ │
+│  │  ...      (door open for an exec-plugin shim for 3rd party) │ │
+│  └────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │  Persistence (SQLite, single file)                          │ │
+│  │  applied_manifests  desired state per resource              │ │
+│  │  operations         execution log (= build history)         │ │
+│  │  task_results       (key, input_hash, refs_hash, output)    │ │
+│  │  resource_refs      explicit (parent → child) dep edges     │ │
+│  └────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘</pre>
+
+<h3>The key shifts from today</h3>
+
+<table>
+  <thead>
+    <tr><th>Today</th><th>Target</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Per-resource serial lock</td>
+      <td>Topological scheduler over a real DAG</td>
+    </tr>
+    <tr>
+      <td><code>Apply</code> is a black-box procedure</td>
+      <td><code>Apply</code> is "create/update one resource"; composers have <code>Plan(manifest) → []child manifests</code></td>
+    </tr>
+    <tr>
+      <td>Implicit deps (k3s.Apply directly calls vms.Apply)</td>
+      <td>Explicit <code>ResourceRef</code>s in spec, resolved at runtime by the scheduler</td>
+    </tr>
+    <tr>
+      <td>Dirty-bit rebuild ("does the cluster exist?")</td>
+      <td>Verifying trace ("does (input, refs) hash match last success?")</td>
+    </tr>
+    <tr>
+      <td>Drift surfaces but doesn't trigger anything</td>
+      <td>Drift on Get; on re-apply, hash mismatch reruns <em>only</em> affected sub-resources</td>
+    </tr>
+    <tr>
+      <td>Status is free-form map</td>
+      <td>Status carries typed <code>conditions[]</code> (Healthy / Reachable / Progressing) + computed outputs</td>
+    </tr>
+    <tr>
+      <td>Single-cluster, single-provider</td>
+      <td>Composers + refs make multi-resource graphs natural</td>
+    </tr>
+  </tbody>
+</table>
+</section>
+
+<section id="bsalc">
+<h2>3. In Build Systems à la Carte terms</h2>
+
+<p>Mokhov, Mitchell, and Peyton Jones decompose build systems into three orthogonal dimensions: <em>persistent build info</em>, <em>scheduler</em>, and <em>rebuilder</em>. The target architecture lands at a specific, defensible point in their design space.</p>
+
+<h3>Persistent build info: verifying trace</h3>
+
+<p>We store <code>(resource_key → input_hash, refs_hash, output_summary, last_succeeded_at)</code> after each successful task. Not a full constructive trace (which would cache outputs and let us serve from cache without re-running) — infrastructure operations don't have pure-function semantics, so caching outputs doesn't help; we always have to read reality. But the hash-of-inputs is enough to answer "do I need to act?" which is the actual question.</p>
+
+<h3>Scheduler: suspending</h3>
+
+<p>Tasks may depend on values that aren't materialized at plan time. The k3s join token isn't known until <code>cp-0</code> finishes installing. A suspending scheduler lets the task announce "I need <code>K3sNode/cp-0</code>'s <code>status.nodeToken</code>" and the scheduler resolves it then — running <code>cp-0</code>'s install first if needed.</p>
+
+<p>Topological scheduling falls out as the common case when all refs are statically inspectable from the manifest. <em>Restarting</em> scheduling — the Excel-style "if it changed mid-run, redo everything that read it" — we explicitly don't want; too expensive for infrastructure.</p>
+
+<h3>Rebuilder: trace-verifying</h3>
+
+<p>Compare current <code>(input_hash, refs_hash)</code> to last success. If match → skip. If mismatch → run, update trace. This is what makes drift convergence work end-to-end, and what makes scale-up cheap (existing tasks are skipped because their hashes haven't changed).</p>
+
+<div class="callout">
+  <p class="callout-label">Comparison</p>
+  <p>In BSALC's taxonomy table, that puts us in roughly the same cell as Shake — <em>suspending scheduler + verifying traces</em>. Bazel is constructive-trace + restarting; Make is dirty-bit + topological. We're closer to Shake than to either, which feels right because infrastructure has the same "deps known at run-time, outputs not cacheable" character as build systems that touch generated headers.</p>
+</div>
+</section>
+
+<section id="crossplane">
+<h2>4. Compared to Crossplane</h2>
+
+<p>Crossplane is genuinely the closest existing thing. Both have k8s-shaped resources, providers that own CRUD for a resource family, a composer pattern (Crossplane's <code>Composition</code> + <code>XR</code>; ours: <code>Cluster</code> planning child manifests), drift detection through periodic Read, typed schemas validated on submit, and conditions in status.</p>
+
+<table>
+  <thead>
+    <tr><th></th><th>Crossplane</th><th>openctl (target)</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Runtime</td><td>k8s cluster (etcd, apiserver, controller-manager)</td><td>Single binary + SQLite</td></tr>
+    <tr><td>Identity</td><td>k8s service accounts</td><td>Per-controller API token</td></tr>
+    <tr><td>Wire</td><td>k8s API</td><td>gRPC</td></tr>
+    <tr><td>Reconciliation</td><td>Continuous controller loop (informer-driven)</td><td>On-demand by default; periodic optional</td></tr>
+    <tr><td>Composition language</td><td>YAML DSL (<code>Composition</code> / <code>Function</code>)</td><td>Native Go in the provider</td></tr>
+    <tr><td>Drift response</td><td>Always auto-repair (you turn it off per-field)</td><td>Surface in <code>Get</code>; act only on apply, with policy knobs</td></tr>
+    <tr><td>Provider distribution</td><td>OCI images, separate pods</td><td>Compiled in (door open for exec-plugin shim)</td></tr>
+    <tr><td>Bootstrap</td><td>Need a cluster to manage clusters</td><td>None — single <code>install --local</code></td></tr>
+  </tbody>
+</table>
+
+<p>The "Crossplane without k8s" framing is exactly right. We get the k8s <em>model</em> (declarative resources, providers, compositions, conditions) without the k8s <em>runtime</em>. The tradeoff: less mature ecosystem, but radically cheaper to run, no chicken-and-egg bootstrap problem, no etcd, no operators. A reasonable choice for a tool that wants to manage a small fleet, not a multi-tenant cloud.</p>
+</section>
+
+<section id="primitives">
+<h2>5. New primitives</h2>
+
+<p>Three additions to the wire protocol enable everything downstream. None are huge on their own; together they're what makes the DAG model work.</p>
+
+<h3 id="refs">5.1 Typed resource references</h3>
+
+<p>The current protocol can't express "this field's value comes from another resource." That's needed for the join-token problem (the worker's K3sNode spec needs cp-0's nodeToken) and any future cross-resource value flow.</p>
+
+<p>Two designs to choose from. <strong>Design A: typed references on the wire.</strong> The CUE schema accepts either a literal or a <code>#Ref</code> object:</p>
+
+<pre><code>K3sNodeSpec: {
+    join?: {
+        serverIP: string | #Ref   // either literal IP or a ref
+        token:    string | #Ref
+    }
+    ...
+}
+
+#Ref: {
+    ref: {
+        kind:  string
+        name:  string
+        field: string  // e.g. "status.nodeIP"
+    }
+}</code></pre>
+
+<p>Wire form (YAML):</p>
+
+<pre><code>spec:
+  join:
+    serverIP:
+      ref: { kind: K3sNode, name: dev-cp-0, field: status.nodeIP }
+    token:
+      ref: { kind: K3sNode, name: dev-cp-0, field: status.nodeToken }</code></pre>
+
+<p><strong>Design B: string templating</strong> — the Terraform answer:</p>
+
+<pre><code>spec:
+  join:
+    serverIP: "${ref:K3sNode/dev-cp-0/status.nodeIP}"
+    token:    "${ref:K3sNode/dev-cp-0/status.nodeToken}"</code></pre>
+
+<p>Cheaper to add, reads naturally, but you pay the standard template-language taxes: parse errors deferred to apply time, no static typing, easy to typo. <strong>Recommend Design A</strong> — openctl already validates with CUE, and the disjunction-of-types pattern is what CUE is <em>good at</em>.</p>
+
+<p>The resolution happens in the dispatcher, before <code>provider.Apply</code> is called:</p>
+
+<pre><code>// In dispatcher.execute, before calling p.Apply(manifest):
+resolved, refs, err := refs.Resolve(ctx, manifest, d.registry)
+if err != nil {
+    _ = d.store.Complete(ctx, op.ID, StatusFailed,
+        fmt.Sprintf("resolve refs: %v", err), "")
+    return
+}
+// `refs` is the list of (kind, name) the manifest depended on — record
+// them on the op so future drift/rebuild can ask "which deps did this
+// op actually read?". Mirrors Shake/Nix's verifying-trace.
+result, err := p.Apply(ctx, resolved)</code></pre>
+
+<p>Capturing the set of refs an apply actually resolved gives you the input to a verifying trace: store <code>(task_key, manifest_hash, refs_hash)</code> and the rebuilder can ask "are any of the resolved values different from last time?" — that's how you correctly trigger a worker reinstall when <em>only</em> the join token changed.</p>
+
+<h3 id="conditions">5.2 Conditions on status</h3>
+
+<p>Borrow verbatim from Kubernetes. Small wire addition, big semantic win:</p>
+
+<pre><code>status:
+  installedVersion: v1.29.0+k3s1
+  serviceState: failed
+  inputHash: a7b3c9...
+  conditions:
+    - type: Healthy
+      status: "False"
+      reason: PartialInstall
+      message: "service files present at /etc/systemd/system/k3s.service but systemctl is-active returns failed"
+      lastTransitionTime: 2026-05-25T14:22:11Z
+    - type: Reachable
+      status: "True"
+      lastTransitionTime: 2026-05-25T14:22:09Z</code></pre>
+
+<p>Three condition types per resource, echoing k8s patterns:</p>
+
+<table>
+  <thead>
+    <tr><th>Type</th><th>True means</th><th>Set by</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>Reachable</code></td><td>SSH / network connectivity works</td><td><code>Get</code></td></tr>
+    <tr><td><code>Healthy</code></td><td>service is <code>active</code> AND <code>installedVersion</code> matches <code>inputHash</code>'s version</td><td><code>Get</code></td></tr>
+    <tr><td><code>Progressing</code></td><td>an Apply is currently running on this resource</td><td>dispatcher</td></tr>
+  </tbody>
+</table>
+
+<p>The <code>lastTransitionTime</code> is the audit trail — even when everything's fine now, the history of state changes is visible via <code>openctl ctl get</code>.</p>
+
+<h3 id="recovery">5.3 Recovery policies</h3>
+
+<p>Conditions tell you <em>what</em> is wrong; a per-resource recovery policy tells the controller <em>what to do</em> about it.</p>
+
+<pre><code>spec:
+  recovery: AutoRepair   # AutoRepair | Manual | RecreateOnly</code></pre>
+
+<dl>
+  <dt><code>AutoRepair</code></dt>
+  <dd>(default, the k8s controller-style answer): on Apply, if <code>Healthy=False</code> and <code>Reason=PartialInstall</code> (or similar repairable reasons), do delete-then-create. Print a line: "K3sNode dev-cp-0: PartialInstall detected, auto-repairing (delete + recreate)."</dd>
+
+  <dt><code>Manual</code></dt>
+  <dd>Apply refuses with <code>FailedPrecondition: Healthy=False, Reason=PartialInstall; remediate manually or set recovery: AutoRepair</code>. The user gets full visibility via <code>get</code>, decides themselves.</dd>
+
+  <dt><code>RecreateOnly</code></dt>
+  <dd>Forces delete-then-create on <em>every</em> Apply where <code>Healthy=False</code>, no matter the reason. The "I don't trust in-place updates" knob.</dd>
+</dl>
+</section>
+
+<section id="k3snode">
+<h2>6. Concrete sketch: K3sNode as a first-class resource</h2>
+
+<p>The first imperative-thing-made-declarative is k3s installation per node. Today it lives in 200 lines of imperative procedure inside <code>cluster.InstallK3s</code>. Pulled out as a resource:</p>
+
+<pre><code>apiVersion: k3s.openctl.io/v1
+kind: K3sNode
+metadata:
+  name: dev-cp-0
+spec:
+  role: server                          # server | agent
+  node:
+    ip: 192.168.0.233
+    ssh:
+      user: ubuntu
+      privateKeyPath: ~/.ssh/id_ed25519
+  k3s:
+    version: v1.29.0+k3s1
+    extraArgs: [--disable=traefik]
+  join:                                 # omitted for the first server
+    serverIP: 192.168.0.233             # resolved from sibling K3sNode at plan time
+    token: &lt;opaque&gt;                     # resolved from sibling K3sNode's status
+  recovery: AutoRepair
+status:
+  installedVersion: v1.29.0+k3s1
+  serviceState: active
+  nodeToken: &lt;opaque&gt;                   # only populated for role=server
+  inputHash: a7b3c9...
+  conditions: [...]</code></pre>
+
+<h3>Provider CRUD (sketch)</h3>
+
+<pre><code>func (p *Provider) Apply(ctx context.Context, m *protocol.Resource) (*protocol.Resource, error) {
+    spec, _ := resources.ParseK3sNodeSpec(m)
+    observed, _ := p.Get(ctx, "K3sNode", m.Metadata.Name)
+
+    healthy := isConditionTrue(observed, "Healthy")
+    hashMatches := observed != nil && observed.Status["inputHash"] == spec.inputHash()
+
+    switch {
+    case observed == nil:
+        return p.create(ctx, spec)
+
+    case healthy && hashMatches:
+        return observed, nil  // converged
+
+    case !healthy:
+        switch spec.Recovery {
+        case "Manual":
+            return nil, fmt.Errorf("not healthy (%s); recovery=Manual, refusing auto-repair",
+                conditionReason(observed, "Healthy"))
+        case "AutoRepair", "RecreateOnly", "":
+            log.Printf("K3sNode %s: %s — auto-repairing",
+                m.Metadata.Name, conditionReason(observed, "Healthy"))
+            if err := p.Delete(ctx, "K3sNode", m.Metadata.Name); err != nil {
+                return nil, fmt.Errorf("repair-delete: %w", err)
+            }
+            return p.create(ctx, spec)
+        }
+
+    case !hashMatches:
+        return p.update(ctx, spec, observed)  // inputs changed, deliberate update
+    }
+    return observed, nil
+}</code></pre>
+
+<p>Reality is read first (the Terraform central trick). The plan is derived from comparing observed to desired. The imperative side-effect (<code>create</code> runs the SSH installer) only fires when the plan calls for it.</p>
+
+<p>The input hash:</p>
+
+<pre><code>// What we hash for the re-run decision. Everything that genuinely affects
+// what's installed/configured goes in; connection material doesn't.
+func (s *K3sNodeSpec) inputHash() string {
+    h := sha256.New()
+    fmt.Fprintf(h, "role=%s\n", s.Role)
+    fmt.Fprintf(h, "version=%s\n", s.K3s.Version)
+    fmt.Fprintf(h, "args=%s\n", strings.Join(sortedCopy(s.K3s.ExtraArgs), ","))
+    if s.Join != nil {
+        fmt.Fprintf(h, "joinServer=%s\n", s.Join.ServerIP)
+        // Note: token is NOT in the hash — rotating it shouldn't force reinstall.
+    }
+    return hex.EncodeToString(h.Sum(nil))
+}</code></pre>
+
+<h3>Cluster as a composer</h3>
+
+<p>The existing <code>Cluster</code> provider stops doing the work directly. Its <code>Apply</code> becomes a planner that submits child resources through the same controller pipeline:</p>
+
+<pre><code>func (p *ClusterProvider) Apply(ctx context.Context, m *protocol.Resource) (*protocol.Resource, error) {
+    spec, _ := resources.ParseClusterSpec(m)
+    cpNames, workerNames := resources.NodeNames(m.Metadata.Name, spec)
+
+    // VMs first (proxmox provider, independent of each other).
+    for _, vmName := range append(cpNames, workerNames...) {
+        p.applyChild(ctx, vmManifestFor(vmName, spec))
+    }
+
+    // First server bootstraps; no join.
+    firstCP := cpNames[0]
+    firstNodeRes, _ := p.applyChild(ctx, k3sNodeManifest(firstCP, "server", spec, nil))
+
+    // Token is a "computed attribute" dep — Terraform makes you declare these
+    // explicitly. Here, the scheduler resolved a ResourceRef pointing at
+    // firstNodeRes.Status["nodeToken"].
+    join := &amp;JoinConfig{
+        ServerIP: firstNodeRes.Status["nodeIP"].(string),
+        Token:    firstNodeRes.Status["nodeToken"].(string),
+    }
+
+    // Remaining servers + workers all join the first.
+    for _, cp := range cpNames[1:] {
+        p.applyChild(ctx, k3sNodeManifest(cp, "server", spec, join))
+    }
+    for _, w := range workerNames {
+        p.applyChild(ctx, k3sNodeManifest(w, "agent", spec, join))
+    }
+
+    // Per-node openctl-k3s-agent install — separate resource, separate cadence.
+    for _, n := range append(cpNames, workerNames...) {
+        p.applyChild(ctx, agentInstallManifest(n, spec))
+    }
+
+    return p.assembleClusterStatus(ctx, m, spec, cpNames, workerNames)
+}</code></pre>
+
+<p>Each <code>applyChild</code> is a <code>Submit</code> to the operations store with <code>parent_id</code> set. Phase 3 reserved that column for exactly this. Now those parent-child ops mean something real — a build graph, not just logical grouping.</p>
+
+<h3>What you get vs. what stays painful</h3>
+
+<h4>Wins</h4>
+<ul>
+  <li><strong>Drift on a per-node basis.</strong> <code>openctl ctl get K3sNode dev-cp-0</code> shows current version + serviceState + inputHash. Bump <code>k3s.version</code> in the cluster manifest, only K3sNode resources see drift; VMs untouched.</li>
+  <li><strong>Scale-up falls out.</strong> Adding a worker = new VirtualMachine + new K3sNode(agent) tasks. Scheduler sees firstCP K3sNode is already succeeded, doesn't re-run. Just installs on the new node and joins.</li>
+  <li><strong>Version bumps are cheap.</strong> Change <code>k3s.version</code> → only K3sNode tasks see input hash change → they update (reinstall) sequentially or in parallel. VMs untouched.</li>
+  <li><strong>The observability agent decouples.</strong> Bumping <code>openctl-k3s-agent</code> doesn't touch k3s. Two separate input hashes, two separate convergence cycles.</li>
+</ul>
+
+<h4>Stays painful</h4>
+<ul>
+  <li><strong>First-server-vs-join ordering.</strong> Always sequential. The DAG correctly serializes it, but the wall-clock floor doesn't move — minimum apply time is bounded by the longest path through the graph.</li>
+  <li><strong>"Update" semantics for k3s version bumps in place</strong> are k3s-version-dependent and not always safe. Honest v1 is destroy+recreate per node (rolling) — which means brief outage windows even for "minor" bumps.</li>
+  <li><strong>Naming.</strong> Using IP as a resource name is brittle (DHCP, recreation). Want a stable logical name (<code>dev-cp-0</code>) + a separate IP lookup. Small registry addition.</li>
+</ul>
+</section>
+
+<section id="roadmap">
+<h2>7. Roadmap: Phases 7–10</h2>
+
+<p>We've shipped Phases 1–6. The architectural goal is reachable in three more phases plus an optional one. Each is shippable on its own, and the intermediate states are coherent.</p>
+
+<div class="phase-card">
+  <h3>Phase 7: Refs + Conditions + Plan<span class="phase-status target">target</span></h3>
+  <p><strong>Goal:</strong> add the wire-level vocabulary the DAG model needs, without yet using it for execution.</p>
+  <ul>
+    <li>Add <code>ResourceRef</code> to the protocol (Design A — CUE disjunction, typed)</li>
+    <li>Add <code>conditions[]</code> to <code>Resource.Status</code>, Kubernetes-shaped</li>
+    <li>Add <code>recovery</code> policy field to spec</li>
+    <li>Add <code>Provider.Plan(manifest) → []ChildManifest</code> as an optional interface; default = "single task = current Apply"</li>
+    <li>Scheduler resolves refs before calling provider; captures resolved deps on the operation row</li>
+  </ul>
+  <p><em>Outcome:</em> typed cross-resource references and conditions are available, even though no provider uses Plan yet. Existing providers keep working unchanged.</p>
+</div>
+
+<div class="phase-card">
+  <h3>Phase 8: K3sNode + decompose Cluster<span class="phase-status target">target</span></h3>
+  <p><strong>Goal:</strong> prove the model with the most-painful imperative path. Cluster becomes a composer.</p>
+  <ul>
+    <li>Implement <code>K3sNode</code> resource + provider (per the sketch above)</li>
+    <li>Implement <code>AgentInstall</code> as a sibling resource</li>
+    <li>Refactor <code>Cluster.Apply</code> to <code>Cluster.Plan</code> returning K3sNode + AgentInstall + VM child manifests with explicit refs</li>
+    <li>Now the cluster apply naturally produces a DAG, executed via existing parent_id ops</li>
+  </ul>
+  <p><em>Outcome:</em> scale-up problem evaporates — it's just "compose a manifest with more workers and apply." The Phase 5.x followup is no longer a special case.</p>
+</div>
+
+<div class="phase-card">
+  <h3>Phase 9: Verifying-trace rebuilder<span class="phase-status target">target</span></h3>
+  <p><strong>Goal:</strong> close the loop on declarative convergence. The rebuilder skips work intelligently.</p>
+  <ul>
+    <li>Add <code>task_results</code> table: <code>(resource_key, input_hash, refs_hash, output_summary, last_succeeded_at)</code></li>
+    <li>Apply path: before calling provider, check if <code>(input, refs)</code> hash matches; if yes and <code>Healthy=True</code>, skip with status <code>succeeded (cached)</code></li>
+    <li>Version bumps, extraArgs changes, in-place spec changes all work declaratively</li>
+  </ul>
+  <p><em>Outcome:</em> drift triggers correct rebuilds. The "change one node's args, re-apply, only that node reinstalls" workflow works end to end.</p>
+</div>
+
+<div class="phase-card">
+  <h3>Phase 10 (optional, much later): Continuous reconcile<span class="phase-status target">target</span></h3>
+  <p><strong>Goal:</strong> Crossplane-style continuous loop, if you want it.</p>
+  <ul>
+    <li>Background ticker re-Gets each managed resource on an interval</li>
+    <li>If drift detected and <code>recovery: AutoRepair</code>, enqueue a reconcile op</li>
+    <li>Per-resource <code>reconcile.interval</code> spec field, throttling, jitter</li>
+  </ul>
+  <p><em>Outcome:</em> brings us to "always reconciling" mode. The architecture supports it without forcing it.</p>
+</div>
+
+<div class="callout">
+  <p class="callout-label">Sequencing rationale</p>
+  <p><strong>Phase 7 is the smallest and unlocks the most</strong> — it's the language to talk about deps. <strong>Phase 8 is the proof point</strong> — Cluster as composer actually working against real infrastructure. <strong>Phase 9 is what makes drift mean something at apply time.</strong> <strong>Phase 10 is the optional "always reconciling" mode.</strong></p>
+</div>
+</section>
+
+<section id="open">
+<h2>8. Open design questions</h2>
+
+<p>Surfaced from the K3sNode sketch and the broader architecture, in roughly the order they need to be decided:</p>
+
+<ol>
+  <li>
+    <strong>Where does inputHash live — on the node (marker file) or in controller state?</strong>
+    <p>Marker file is more robust to controller state loss (re-install controller, state intact). Controller-side is faster (no SSH for Get) and cleaner; you accept that controller state loss = "everything looks like drift."</p>
+    <p><em>Provisional answer:</em> on the node. Resilience wins for a homelab tool.</p>
+  </li>
+
+  <li>
+    <strong>Is <code>K3sNode</code> one resource type with a <code>role</code> field, or two (<code>K3sServer</code> + <code>K3sAgent</code>)?</strong>
+    <p>One type with role-as-data, following <code>aws_instance</code>'s lead — most lifecycle code overlaps; role is just a discriminator.</p>
+    <p><em>Provisional answer:</em> one type.</p>
+  </li>
+
+  <li>
+    <strong>How does the planner pass the join token from first-CP's status into the agent K3sNode manifests?</strong>
+    <p>Either: (a) synchronously Apply first-CP, read its status, then submit the rest as already-resolved manifests; or (b) use a <code>ResourceRef</code> placeholder that the scheduler resolves at execution time. (b) is the proper DAG-shaped answer and is what Phase 7's <code>ResourceRef</code> protocol delivers.</p>
+    <p><em>Provisional answer:</em> ResourceRef. The whole point of Phase 7.</p>
+  </li>
+
+  <li>
+    <strong>Recovery on a partially-installed node?</strong>
+    <p>Report status to user via <code>conditions[]</code>; act based on <code>recovery</code> spec field. Default <code>AutoRepair</code> = delete-then-create. Like Kubernetes: visibility + policy + a default that does the right thing.</p>
+    <p><em>Resolved.</em></p>
+  </li>
+
+  <li>
+    <strong>Should refs be resolvable across providers?</strong>
+    <p>e.g. can a K3sNode's spec ref a VirtualMachine's status.ip? Yes — the registry already routes by apiVersion. Worth being explicit about it in the Phase 7 spec so the resolver doesn't accidentally scope to single-provider.</p>
+  </li>
+
+  <li>
+    <strong>What's the parallelism cap?</strong>
+    <p>The topological scheduler can run N independent tasks at once. Sensible default for a homelab is probably 4–8; configurable per-provider (proxmox API may rate-limit; SSH may not). Worth a flag.</p>
+  </li>
+</ol>
+</section>
+
+<footer>
+  Captured from a design conversation, May 2026. Lives in <code>docs/target-architecture.html</code> alongside the existing <code>CONTROLLER.md</code> phase log. When Phase 7 starts, this doc gets the "Status" line on each phase card updated.
+</footer>
+
+</article>
+</body>
+</html>

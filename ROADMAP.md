@@ -1,0 +1,164 @@
+# openctl Roadmap
+
+Single index of all tracked work across the project. Each entry links
+to the detail doc that owns it; this file is the index, not the source
+of truth.
+
+- **Controller rollout:** [CONTROLLER.md](CONTROLLER.md) — Phases 1–6
+  complete, 4.5 + 5.x followups pending.
+- **Target architecture:** [docs/target-architecture.html](docs/target-architecture.html)
+  — speculative Phase 7–10 (verifying-trace cache, K3sNode, typed task
+  IR, DAG scheduler). Sketch, not committed plan.
+- **UI rollout:** [UI.md](UI.md) — Phases U1–U7. Not started.
+
+Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
+`[d]` deferred / parked.
+
+---
+
+## In flight
+
+Nothing actively in progress. `feat/controller` is 3 commits ahead of
+origin (Phases 4–6 unpushed) and has `docs/target-architecture.html`
+untracked.
+
+## Suggested next order
+
+`4.5 → 5.x → arch Phase 7 → U1 → U2 → U3 → U4 → U5 → U6 → U7`
+
+Tracks can interleave; the architectural Phase 7+ doesn't gate the UI
+phases, and 4.5 / 5.x meaningfully improve the UI's UX. See
+[UI.md](UI.md) § Dependencies summary for the hard prereqs.
+
+---
+
+## Controller rollout — CONTROLLER.md
+
+### Phases (complete)
+
+- [x] **Phase 1** — Controller skeleton + auth + minimal CLI client
+- [x] **Phase 2** — proxmox VirtualMachine provider compiled in
+- [x] **Phase 3** — Async operations + persistence
+- [x] **Phase 4** — k3s Cluster provider compiled in
+- [x] **Phase 5** — Declarative reconciliation + drift surfacing
+- [x] **Phase 6** — macOS LaunchAgent install/uninstall
+
+### Followups (pending)
+
+- [ ] **Phase 4.5** — Parent-child operation rows (Cluster apply splits
+      into per-VM + k3s-install + agent-install children). Unlocks
+      richer op UI in U3/U7.
+- [ ] **Phase 4.5** — QGA-based IP discovery (lift the
+      `spec.network.staticIPs.*` requirement in the controller path).
+- [ ] **Phase 5.x** — Cluster apply count-up (add nodes to a live
+      cluster; needs join machinery in `pkg/k3s/cluster`).
+- [ ] **Phase 5.x** — In-place spec changes on existing children
+      (destroy+recreate of a node whose cpu/memory/disk changed).
+
+### Followups (post-Phase-6, parked)
+
+- [ ] External plugin protocol (3rd-party providers as exec'd binaries
+      over the existing JSON-over-stdio protocol).
+- [ ] Linux install via SSH (`openctl-controller install --target
+      ssh://user@host`).
+- [ ] Proxmox bootstrap install (`openctl-controller install --target
+      proxmox://homelab`).
+- [ ] Plugin-defined CLI subcommands (`openctl k3s logs/restart/upgrade`).
+- [ ] Bug fix: `pkg/proxmox/handler/handler.go:114` collapses any
+      `GetVM` error to NotFound — network timeouts produce false "VM
+      gone" results.
+
+---
+
+## Target architecture — docs/target-architecture.html
+
+Speculative roadmap from the BSALC / Crossplane / BuildKit discussion.
+Sketch only; no committed deliverables yet. Phases as written in the
+HTML doc:
+
+- [ ] **Arch Phase 7** — Verifying-trace cache (skip provider calls
+      when inputs+refs hash matches last success; parent-hash-aware).
+- [ ] **Arch Phase 8** — K3sNode as first-class resource; Cluster
+      becomes a composer that emits typed children.
+- [ ] **Arch Phase 9** — Typed task IR (frontend/IR/executor split,
+      BuildKit-LLB-shape). Frontends: YAML, CUE, programmatic Go.
+- [ ] **Arch Phase 10** — Full DAG scheduler with parallel execution
+      of independent nodes, content-addressed cache for pure
+      sub-operations (cert bundles, cloud-init, IP allocation).
+
+Open design questions captured in the HTML doc; revisit before
+committing to a phase.
+
+---
+
+## UI rollout — UI.md
+
+- [ ] **Phase U1** — UI backend prerequisites (Watch + WatchOperations
+      RPCs, SchemaService, grpc-gateway REST, session cookie auth,
+      embedded asset hosting). No frontend yet.
+- [ ] **Phase U2** — Manifest store on disk + git sync (controller
+      materializes desired state to `~/.openctl/manifests/`, optional
+      git auto-commit and remote push, `RepoService` RPC).
+- [ ] **Phase U3** — UI shell + read-only views (Vite+Svelte skeleton,
+      list/detail/op-history with live Watch streams, git status
+      indicator).
+- [ ] **Phase U4** — CUE/manifest editor (Monaco-based, server-side
+      validation, diff view, `DryRunApply` RPC, destructive gates as
+      checkboxes).
+- [ ] **Phase U5** — Typed form editor (CUE-AST → form-schema bridge,
+      AWS-console stepped sections, live manifest preview, view
+      toggle).
+- [ ] **Phase U6** — Composite resource UX (Cluster parent + read-only
+      children tree, aggregated badges, per-child verbs in apply
+      preview, DAG view gated on arch Phase 8).
+- [ ] **Phase U7** — Op orchestration polish (live substep checklist,
+      `CancelOperation` RPC, retry/re-apply, history filtering).
+
+---
+
+## Future goals (parked)
+
+Cross-cutting items that don't belong to a single track. Promote into a
+phase plan when ready to commit.
+
+- [ ] **Two-way GitOps** — file edits in the manifest dir trigger
+      reconciler reapply. Needs conflict resolution between UI edits
+      and file edits, `inotify`/`fsnotify` watch, and a "GitOps mode"
+      toggle. Big enough to be its own track.
+- [ ] **Multi-user auth** — OIDC integration, named sessions, RBAC on
+      `ResourceService`. Cookie/session layer from U1 is the
+      foundation.
+- [ ] **Provider credential editing** — surface
+      `~/.openctl/config.yaml` providers in the UI with secret-write
+      affordances. Currently read-only.
+- [ ] **Cancel of `running` ops** — cooperative cancellation hooks in
+      proxmox and k3s providers. U7 only does `pending` cancel.
+- [ ] **Client-side CUE WASM validation** — faster editor diagnostics
+      without a server roundtrip.
+- [ ] **Historical diff** — diff a resource against arbitrary commits
+      in the manifest repo.
+- [ ] **UI for controller config** — tunable retention, dispatcher
+      concurrency, etc.
+- [ ] **Mobile-friendly layout** — not v1 but worth flagging.
+- [ ] **Plugin-defined CLI subcommands** — deferred from agent work,
+      see DESIGN.md "TODO: Plugin-defined CLI subcommands."
+- [ ] **Default-timeout problem** — controller's submit-returns-immediately
+      model mostly fixes this, but verify the CLI's defaults match the
+      new shape.
+
+---
+
+## Recently completed (housekeeping)
+
+When phases or followups land, move them up out of "pending" into their
+detail doc's marked-complete section, then leave a one-line entry here
+with the commit hash for at-a-glance history. Trim to the last 10.
+
+- `30c8036` — Phase 6: macOS LaunchAgent install/uninstall.
+- `98636a7` — Phase 5: drift surfacing + declarative scale-down.
+- `9db1144` — Phase 4: k3s Cluster provider compiled in.
+- `bc24de0` — Phase 3: async operations with persistence.
+- `2101107` — Phase 2: proxmox VirtualMachine provider.
+- `383cae5` — Phase 1: scaffold persistent reconciler.
+- `f19aefd` — k3s per-node agent for out-of-band cluster operations.
+- `aa0f235` — CUE configuration support (Phase 1 of CUE rollout).
