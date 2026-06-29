@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/openctl/openctl/internal/config"
 	"github.com/openctl/openctl/internal/controller/auth"
@@ -138,6 +139,8 @@ func runServe(args []string) error {
 	// `sink` becomes the dispatcher's ManifestSink — either the bare store
 	// or the DiskMirror wrapping it.
 	var sink operations.ManifestSink = manifestStore
+	var diskMirror *manifests.DiskMirror
+	var gitRepo *manifests.Repo
 	if cfg, err := config.Load(); err == nil {
 		mirror, mErr := buildDiskMirror(ctx, manifestStore, cfg)
 		if mErr != nil {
@@ -145,7 +148,27 @@ func runServe(args []string) error {
 		}
 		if mirror != nil {
 			sink = mirror
+			diskMirror = mirror
 			log.Printf("  manifests:   %s", mirror.Root())
+
+			// UI Phase U2.2: optionally wire git tracking on top of the disk
+			// mirror. Each successful apply/delete commits to the local repo
+			// with a structured message; remote push is governed by the
+			// configured push mode. Hook is best-effort — git failures log
+			// but never bubble back into the dispatcher (apply ops never
+			// fail because of a flaky remote).
+			gitRepo, err = buildGitRepo(ctx, mirror, cfg)
+			if err != nil {
+				return fmt.Errorf("init git tracking: %w", err)
+			}
+			if gitRepo != nil {
+				log.Printf("  git:         %s (branch=%s pushMode=%s)",
+					gitRepo.Dir(), gitRepo.Branch(), gitRepo.PushMode())
+				if gitRepo.Remote() != "" {
+					log.Printf("  git remote:  %s", gitRepo.Remote())
+				}
+				gitRepo.StartPeriodicPush(ctx, log.Printf)
+			}
 		}
 	}
 
@@ -164,6 +187,8 @@ func runServe(args []string) error {
 		Dispatcher: dispatcher,
 		Manifests:  manifestStore,
 		Sessions:   sessionStore,
+		DiskMirror: diskMirror,
+		Repo:       gitRepo,
 	}
 	if !*noAuth {
 		opts.Token = token
@@ -228,6 +253,43 @@ func defaultDir() string {
 		return "./openctl-controller"
 	}
 	return filepath.Join(home, ".openctl", "controller")
+}
+
+// buildGitRepo initializes a git repo over the disk mirror when config has
+// `manifests.git.enabled: true`. Returns nil when disabled (the disk mirror
+// works fine without git). Attaches a post-write hook to the mirror so
+// every materialize/delete becomes a commit; periodic push (when
+// configured) is started by the caller via repo.StartPeriodicPush.
+func buildGitRepo(ctx context.Context, mirror *manifests.DiskMirror, cfg *config.Config) (*manifests.Repo, error) {
+	if cfg == nil || cfg.Manifests == nil || cfg.Manifests.Git == nil || !cfg.Manifests.Git.Enabled {
+		return nil, nil
+	}
+	g := cfg.Manifests.Git
+
+	var interval time.Duration
+	if g.PushInterval != "" {
+		d, err := time.ParseDuration(g.PushInterval)
+		if err != nil {
+			return nil, fmt.Errorf("parse manifests.git.pushInterval %q: %w", g.PushInterval, err)
+		}
+		interval = d
+	}
+
+	repo, err := manifests.NewRepo(manifests.RepoOptions{
+		Dir:          mirror.Root(),
+		Branch:       g.Branch,
+		Remote:       g.Remote,
+		PushMode:     g.PushMode,
+		PushInterval: interval,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := repo.EnsureInit(ctx); err != nil {
+		return nil, fmt.Errorf("git init: %w", err)
+	}
+	mirror.SetHook(manifests.GitHook(repo, repo.PushMode() == manifests.PushModeOnCommit))
+	return repo, nil
 }
 
 // buildDiskMirror resolves the manifest-mirror root from config (defaulting

@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 
@@ -17,6 +18,28 @@ import (
 	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 	"github.com/openctl/openctl/pkg/protocol"
 )
+
+// sourceMetadataKey is the incoming-metadata header that the HTTP gateway
+// stamps on every request it proxies. CLI clients (direct gRPC) don't
+// set it, so absent = CLI.
+const sourceMetadataKey = "x-openctl-source"
+
+// sourceFromContext returns the request originator: SourceUI when the
+// metadata header is present and set to "ui", SourceCLI otherwise. Used to
+// stamp Operation.Source so git commit messages can distinguish browser
+// from CLI traffic.
+func sourceFromContext(ctx context.Context) string {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return manifests.SourceCLI
+	}
+	for _, v := range md.Get(sourceMetadataKey) {
+		if v == manifests.SourceUI {
+			return manifests.SourceUI
+		}
+	}
+	return manifests.SourceCLI
+}
 
 // resourceHandler implements apiv1.ResourceServiceServer. Apply/Delete
 // insert ops into the operations Store and notify the Dispatcher; Get/List
@@ -86,6 +109,7 @@ func (h *resourceHandler) Apply(ctx context.Context, req *apiv1.ApplyRequest) (*
 		Kind:         manifest.Kind,
 		ResourceName: manifest.Metadata.Name,
 		ManifestJSON: string(manifestJSON),
+		Source:       sourceFromContext(ctx),
 	})
 	if err != nil {
 		var conflict *operations.ConflictError
@@ -216,6 +240,7 @@ func (h *resourceHandler) Delete(ctx context.Context, req *apiv1.DeleteRequest) 
 		APIVersion:   req.GetApiVersion(),
 		Kind:         req.GetKind(),
 		ResourceName: req.GetName(),
+		Source:       sourceFromContext(ctx),
 	})
 	if err != nil {
 		var conflict *operations.ConflictError

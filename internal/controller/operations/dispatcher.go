@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openctl/openctl/internal/controller/manifests"
 	"github.com/openctl/openctl/internal/controller/providers"
 	"github.com/openctl/openctl/pkg/protocol"
 )
@@ -214,7 +215,8 @@ func (d *Dispatcher) execute(ctx context.Context, op *Operation) {
 		// "observed-after-apply" and may carry provider-set defaults that
 		// would falsely match on the next Get.
 		if d.manifests != nil {
-			if err := d.manifests.Save(ctx, &manifest); err != nil {
+			sinkCtx := manifests.WithSource(ctx, op.Source)
+			if err := d.manifests.Save(sinkCtx, &manifest); err != nil {
 				log.Printf("dispatcher: save manifest for %s %q: %v", op.Kind, op.ResourceName, err)
 			}
 		}
@@ -230,7 +232,8 @@ func (d *Dispatcher) execute(ctx context.Context, op *Operation) {
 			return
 		}
 		if d.manifests != nil {
-			if err := d.manifests.Delete(ctx, op.APIVersion, op.Kind, op.ResourceName); err != nil {
+			sinkCtx := manifests.WithSource(ctx, op.Source)
+			if err := d.manifests.Delete(sinkCtx, op.APIVersion, op.Kind, op.ResourceName); err != nil {
 				log.Printf("dispatcher: delete manifest for %s %q: %v", op.Kind, op.ResourceName, err)
 			}
 		}

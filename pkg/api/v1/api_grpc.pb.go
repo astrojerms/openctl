@@ -1005,3 +1005,201 @@ var SchemaService_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "api.proto",
 }
+
+const (
+	RepoService_GetStatus_FullMethodName = "/openctl.v1.RepoService/GetStatus"
+	RepoService_Push_FullMethodName      = "/openctl.v1.RepoService/Push"
+	RepoService_Pull_FullMethodName      = "/openctl.v1.RepoService/Pull"
+)
+
+// RepoServiceClient is the client API for RepoService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// RepoService surfaces the controller's on-disk manifest mirror to the UI.
+// The mirror is materialized by the dispatcher on every successful
+// apply/delete (UI Phase U2.1); when git tracking is enabled (U2.2) each
+// commit lands here and an optional remote push is triggered per the
+// configured push mode.
+//
+// Pull is advisory only — it does NOT trigger any reapply or
+// reconciliation. The controller treats disk as a one-way materialized
+// output; the SQLite applied_manifests table is canonical.
+type RepoServiceClient interface {
+	GetStatus(ctx context.Context, in *GetRepoStatusRequest, opts ...grpc.CallOption) (*GetRepoStatusResponse, error)
+	Push(ctx context.Context, in *PushRepoRequest, opts ...grpc.CallOption) (*PushRepoResponse, error)
+	Pull(ctx context.Context, in *PullRepoRequest, opts ...grpc.CallOption) (*PullRepoResponse, error)
+}
+
+type repoServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewRepoServiceClient(cc grpc.ClientConnInterface) RepoServiceClient {
+	return &repoServiceClient{cc}
+}
+
+func (c *repoServiceClient) GetStatus(ctx context.Context, in *GetRepoStatusRequest, opts ...grpc.CallOption) (*GetRepoStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetRepoStatusResponse)
+	err := c.cc.Invoke(ctx, RepoService_GetStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *repoServiceClient) Push(ctx context.Context, in *PushRepoRequest, opts ...grpc.CallOption) (*PushRepoResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PushRepoResponse)
+	err := c.cc.Invoke(ctx, RepoService_Push_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *repoServiceClient) Pull(ctx context.Context, in *PullRepoRequest, opts ...grpc.CallOption) (*PullRepoResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PullRepoResponse)
+	err := c.cc.Invoke(ctx, RepoService_Pull_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// RepoServiceServer is the server API for RepoService service.
+// All implementations must embed UnimplementedRepoServiceServer
+// for forward compatibility.
+//
+// RepoService surfaces the controller's on-disk manifest mirror to the UI.
+// The mirror is materialized by the dispatcher on every successful
+// apply/delete (UI Phase U2.1); when git tracking is enabled (U2.2) each
+// commit lands here and an optional remote push is triggered per the
+// configured push mode.
+//
+// Pull is advisory only — it does NOT trigger any reapply or
+// reconciliation. The controller treats disk as a one-way materialized
+// output; the SQLite applied_manifests table is canonical.
+type RepoServiceServer interface {
+	GetStatus(context.Context, *GetRepoStatusRequest) (*GetRepoStatusResponse, error)
+	Push(context.Context, *PushRepoRequest) (*PushRepoResponse, error)
+	Pull(context.Context, *PullRepoRequest) (*PullRepoResponse, error)
+	mustEmbedUnimplementedRepoServiceServer()
+}
+
+// UnimplementedRepoServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedRepoServiceServer struct{}
+
+func (UnimplementedRepoServiceServer) GetStatus(context.Context, *GetRepoStatusRequest) (*GetRepoStatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetStatus not implemented")
+}
+func (UnimplementedRepoServiceServer) Push(context.Context, *PushRepoRequest) (*PushRepoResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Push not implemented")
+}
+func (UnimplementedRepoServiceServer) Pull(context.Context, *PullRepoRequest) (*PullRepoResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Pull not implemented")
+}
+func (UnimplementedRepoServiceServer) mustEmbedUnimplementedRepoServiceServer() {}
+func (UnimplementedRepoServiceServer) testEmbeddedByValue()                     {}
+
+// UnsafeRepoServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to RepoServiceServer will
+// result in compilation errors.
+type UnsafeRepoServiceServer interface {
+	mustEmbedUnimplementedRepoServiceServer()
+}
+
+func RegisterRepoServiceServer(s grpc.ServiceRegistrar, srv RepoServiceServer) {
+	// If the following call panics, it indicates UnimplementedRepoServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&RepoService_ServiceDesc, srv)
+}
+
+func _RepoService_GetStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetRepoStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RepoServiceServer).GetStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RepoService_GetStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RepoServiceServer).GetStatus(ctx, req.(*GetRepoStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RepoService_Push_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PushRepoRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RepoServiceServer).Push(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RepoService_Push_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RepoServiceServer).Push(ctx, req.(*PushRepoRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RepoService_Pull_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PullRepoRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RepoServiceServer).Pull(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RepoService_Pull_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RepoServiceServer).Pull(ctx, req.(*PullRepoRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// RepoService_ServiceDesc is the grpc.ServiceDesc for RepoService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var RepoService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "openctl.v1.RepoService",
+	HandlerType: (*RepoServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetStatus",
+			Handler:    _RepoService_GetStatus_Handler,
+		},
+		{
+			MethodName: "Push",
+			Handler:    _RepoService_Push_Handler,
+		},
+		{
+			MethodName: "Pull",
+			Handler:    _RepoService_Pull_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "api.proto",
+}

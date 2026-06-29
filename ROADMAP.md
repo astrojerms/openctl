@@ -18,8 +18,9 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
-`feat/u2-disk-manifests` — UI Phase U2.1 complete; U2.2 (git layer)
-queued on top.
+Nothing actively in progress. UI Phase U2 fully shipped; suggested next
+items are UI Phase U3 (Vite+Svelte shell) or arch Phase 8 (K3sNode as a
+first-class resource).
 
 ## Suggested next order
 
@@ -106,15 +107,21 @@ committing to a phase.
       with sha256-stored session tokens). HTTP gateway listens on
       127.0.0.1:9445 alongside gRPC on 9444; UI placeholder page until
       Vite build lands. No frontend code yet.
-- [~] **Phase U2** — Manifest store on disk + git sync.
+- [x] **Phase U2** — Manifest store on disk + git sync.
       - [x] **U2.1** — Disk mirror (controller materializes desired state
             to `~/.openctl/manifests/<apiVersion>/<kind>/<name>.yaml`
             after every successful apply, removes on delete; atomic write
             via temp+rename; startup reconciliation re-materializes
             missing files, logs orphans without deleting; config schema
             in `manifests:` block).
-      - [ ] **U2.2** — Git integration (init/add/commit, push modes,
-            `RepoService` RPC).
+      - [x] **U2.2** — Git integration. `manifests.git.enabled` opts in;
+            controller runs `git init -b <branch>` on first start,
+            commits each materialize/delete with `apply X/Y via CLI|UI`
+            (source from gRPC metadata, stamped by HTTP gateway).
+            Push modes: `onCommit` (default w/ remote), `periodic`
+            (background ticker), `manual` (RPC only). `RepoService`
+            RPC: GetStatus/Push/Pull. Push failures logged, never
+            block apply.
 - [ ] **Phase U3** — UI shell + read-only views (Vite+Svelte skeleton,
       list/detail/op-history with live Watch streams, git status
       indicator).
