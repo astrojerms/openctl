@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import {
-    resources, schemas, UnauthorizedError,
+    resources, schemas, operations as opsApi, UnauthorizedError,
     type DryRunApplyResponse,
   } from '../lib/api';
   import { parseYAML, resourceToYAML } from '../lib/yaml';
@@ -52,6 +52,12 @@
   // preview — DryRunApply ChildAction carries only kind+name today, so
   // we look it up here to build the detail-page link.
   let liveChildren: import('../lib/api').ResourceRef[] = [];
+  // U7 retry handoff: the op id we pre-filled from, surfaced as a
+  // banner so the user knows they're re-applying a specific failed op
+  // (and isn't surprised when the diff shows their changes vs the
+  // applied baseline).
+  let retryFromOpId = '';
+  const RETRY_KEY = 'openctl.retryFromOp';
 
   // View toggle: 'form' is the typed-form view (U5.2), 'edit' is the
   // Monaco editor (default), 'diff' is the read-only side-by-side diff.
@@ -78,6 +84,7 @@
     loading = true;
     loadError = '';
     ownerRefs = [];
+    retryFromOpId = '';
     try {
       const r = await resources.get(av, k, n);
       const applied = r.applied;
@@ -97,6 +104,28 @@
       ownerRefs = r.resource.metadata?.ownerRefs ?? applied?.metadata?.ownerRefs ?? [];
       liveChildren = r.resource.children ?? [];
       text = baseline;
+      // U7 retry handoff: if the user clicked Retry on an op in the
+      // drawer, sessionStorage carries the op id. Pull the original
+      // manifest and seed `text` with it instead of the applied
+      // baseline — otherwise the retry would silently re-submit the
+      // last successful state, not what failed.
+      try {
+        const opId = sessionStorage.getItem(RETRY_KEY);
+        if (opId) {
+          sessionStorage.removeItem(RETRY_KEY);
+          const op = await opsApi.get(opId);
+          if (op.manifestJson && op.kind === k && op.resourceName === n) {
+            const parsed = JSON.parse(op.manifestJson);
+            text = resourceToYAML(parsed);
+            retryFromOpId = opId;
+          }
+        }
+      } catch (e) {
+        // Best-effort: a missing/expired op or sessionStorage failure
+        // just falls through to the applied baseline.
+        // eslint-disable-next-line no-console
+        console.warn('retry-from-op handoff failed', e);
+      }
       schedulePreview();
       void loadFormSchema(av, k);
     } catch (err) {
@@ -433,6 +462,12 @@
   {:else if loadError}
     <p class="err">{loadError}</p>
   {:else}
+    {#if retryFromOpId}
+      <article class="retry-block">
+        Pre-filled from operation
+        <code class="mono">{retryFromOpId.slice(0, 12)}</code> — review the manifest before re-applying.
+      </article>
+    {/if}
     {#if ownedByAnother}
       {@const owner = ownerRefs[0]}
       <article class="owner-block">
@@ -790,6 +825,19 @@
   }
   .child-link:hover {
     text-decoration: underline;
+  }
+  .retry-block {
+    background: rgba(255, 184, 0, 0.08);
+    border-left: 3px solid #ffce4d;
+    border-radius: 6px;
+    padding: 0.65rem 1rem;
+    font-size: 0.88rem;
+  }
+  .retry-block code {
+    background: rgba(0, 0, 0, 0.2);
+    padding: 0.05em 0.4em;
+    border-radius: 3px;
+    margin: 0 0.3em;
   }
   .preview-head {
     display: flex;

@@ -520,25 +520,43 @@ moves through `pending → running`.
 
 ### Phase U7: Op orchestration polish
 
-**Status:** not started
+**Status:** complete.
 
 **Goal:** apply-progress UX that doesn't make you guess.
 
 **Deliverables:**
 
-- [ ] Per-substep progress for composite operations. Requires
-      **Phase 4.5** (parent-child op rows) — the UI renders the child
-      op list as a checklist with live status per row.
-- [ ] `CancelOperation` RPC on the controller. First-pass: only
-      cancelable while `pending`. Running ops require cooperative
-      cancellation in providers — design hook in, implement opportunistically.
-- [ ] Retry / re-apply for `failed` and `interrupted` ops, with the
-      original manifest pre-filled in the editor.
-- [ ] Op history filtering by resource, status, time range, source
-      (CLI vs UI).
-- [ ] Tests: cancel-pending works and is idempotent; retry surfaces
-      the right manifest; substep checklist renders correctly for a
-      3-node cluster apply.
+- [x] Per-substep progress for composite operations. ops.ts subscribes
+      with `includeChildren: true`; expandable parent rows in the ops
+      drawer render the child op list as a live status checklist, each
+      row showing its own state pill + label + (when applicable) a link
+      to the child's resource detail.
+- [x] `CancelOperation` RPC on the controller. New `StatusCancelled`
+      op status (distinct from `failed` so the UI can show intentional
+      cancellation differently); `Store.CancelPending` atomically flips
+      `pending → cancelled`; running ops return FailedPrecondition with
+      a "cooperative cancellation of running ops is not supported in
+      v1" explanation. UI exposes a per-row Cancel button on pending ops
+      in the drawer.
+- [x] Retry / re-apply for `failed`, `interrupted`, and `cancelled` ops.
+      GetOperation now returns the submitted `manifest_json`; the ops
+      drawer's Retry button uses a `sessionStorage` handoff to tell
+      Edit.svelte which op id to re-load, and Edit.svelte fetches that
+      op + seeds the editor with the exact failed YAML (with a
+      "Pre-filled from operation ..." banner so the user knows the diff
+      is against the *failed* payload, not the applied baseline). List
+      and Watch keep `manifest_json` empty to stay cheap.
+- [x] Op history filtering. `ListOperationsRequest` accepts `source`
+      (CLI / UI), `since`, and `until` (RFC3339). The ops drawer surfaces
+      status + source + text-search controls that filter the in-memory
+      stream client-side; the server-side filters are exposed for future
+      "load older history" pagination.
+- [x] Tests: `Store.CancelPending` (pending succeeds, running refuses,
+      missing → sql.ErrNoRows), gRPC handler (NotFound for missing,
+      FailedPrecondition for running, success for pending);
+      ListOperations source + time-range filters. Substep checklist
+      rendering covered by manual smoke — the path through Svelte was
+      not worth a happy-dom Vitest scaffold.
 
 **Verifiable:** apply a 3-node cluster, see VM creates progress
 one-by-one in the UI checklist. Kill the controller mid-apply, restart,

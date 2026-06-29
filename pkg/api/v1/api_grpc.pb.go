@@ -482,6 +482,7 @@ const (
 	OperationService_GetOperation_FullMethodName    = "/openctl.v1.OperationService/GetOperation"
 	OperationService_ListOperations_FullMethodName  = "/openctl.v1.OperationService/ListOperations"
 	OperationService_WatchOperations_FullMethodName = "/openctl.v1.OperationService/WatchOperations"
+	OperationService_CancelOperation_FullMethodName = "/openctl.v1.OperationService/CancelOperation"
 )
 
 // OperationServiceClient is the client API for OperationService service.
@@ -499,6 +500,11 @@ type OperationServiceClient interface {
 	// name) and/or by op id (to follow a single op to terminal). Empty
 	// filters watch all ops.
 	WatchOperations(ctx context.Context, in *WatchOperationsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[OperationEvent], error)
+	// UI Phase U7: CancelOperation marks a `pending` op as `cancelled` so the
+	// dispatcher skips it when it next claims work. Returns FailedPrecondition
+	// when the op is already past pending (running ops require cooperative
+	// cancellation in the provider, deferred to a future track).
+	CancelOperation(ctx context.Context, in *CancelOperationRequest, opts ...grpc.CallOption) (*CancelOperationResponse, error)
 }
 
 type operationServiceClient struct {
@@ -548,6 +554,16 @@ func (c *operationServiceClient) WatchOperations(ctx context.Context, in *WatchO
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type OperationService_WatchOperationsClient = grpc.ServerStreamingClient[OperationEvent]
 
+func (c *operationServiceClient) CancelOperation(ctx context.Context, in *CancelOperationRequest, opts ...grpc.CallOption) (*CancelOperationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CancelOperationResponse)
+	err := c.cc.Invoke(ctx, OperationService_CancelOperation_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // OperationServiceServer is the server API for OperationService service.
 // All implementations must embed UnimplementedOperationServiceServer
 // for forward compatibility.
@@ -563,6 +579,11 @@ type OperationServiceServer interface {
 	// name) and/or by op id (to follow a single op to terminal). Empty
 	// filters watch all ops.
 	WatchOperations(*WatchOperationsRequest, grpc.ServerStreamingServer[OperationEvent]) error
+	// UI Phase U7: CancelOperation marks a `pending` op as `cancelled` so the
+	// dispatcher skips it when it next claims work. Returns FailedPrecondition
+	// when the op is already past pending (running ops require cooperative
+	// cancellation in the provider, deferred to a future track).
+	CancelOperation(context.Context, *CancelOperationRequest) (*CancelOperationResponse, error)
 	mustEmbedUnimplementedOperationServiceServer()
 }
 
@@ -581,6 +602,9 @@ func (UnimplementedOperationServiceServer) ListOperations(context.Context, *List
 }
 func (UnimplementedOperationServiceServer) WatchOperations(*WatchOperationsRequest, grpc.ServerStreamingServer[OperationEvent]) error {
 	return status.Error(codes.Unimplemented, "method WatchOperations not implemented")
+}
+func (UnimplementedOperationServiceServer) CancelOperation(context.Context, *CancelOperationRequest) (*CancelOperationResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CancelOperation not implemented")
 }
 func (UnimplementedOperationServiceServer) mustEmbedUnimplementedOperationServiceServer() {}
 func (UnimplementedOperationServiceServer) testEmbeddedByValue()                          {}
@@ -650,6 +674,24 @@ func _OperationService_WatchOperations_Handler(srv interface{}, stream grpc.Serv
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type OperationService_WatchOperationsServer = grpc.ServerStreamingServer[OperationEvent]
 
+func _OperationService_CancelOperation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CancelOperationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OperationServiceServer).CancelOperation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OperationService_CancelOperation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OperationServiceServer).CancelOperation(ctx, req.(*CancelOperationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // OperationService_ServiceDesc is the grpc.ServiceDesc for OperationService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -664,6 +706,10 @@ var OperationService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListOperations",
 			Handler:    _OperationService_ListOperations_Handler,
+		},
+		{
+			MethodName: "CancelOperation",
+			Handler:    _OperationService_CancelOperation_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
