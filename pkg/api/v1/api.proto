@@ -49,6 +49,13 @@ service ResourceService {
   // Delete removes a resource. Idempotent: delete on a missing resource
   // returns success, not NotFound.
   rpc Delete(DeleteRequest) returns (DeleteResponse);
+
+  // Watch streams resource state changes. The first batch of events carries
+  // the current snapshot (one ADDED per existing resource matching the
+  // filter); subsequent events fire when resources are added, modified, or
+  // deleted. UI Phase U1.1: poll-based implementation. Filter is api_version
+  // (required) + kind (required) + optional name to watch a single resource.
+  rpc Watch(WatchRequest) returns (stream WatchEvent);
 }
 
 // Resource is the k8s-style envelope for any resource kind. spec/status are
@@ -134,12 +141,41 @@ message DeleteResponse {
   string message = 2;
 }
 
+// WatchRequest configures a resource Watch stream. api_version + kind are
+// required (you must scope to a kind because there's no cross-kind list
+// in the controller); name optional to narrow to one resource.
+message WatchRequest {
+  string api_version = 1;
+  string kind = 2;
+  string name = 3;
+}
+
+// WatchEvent describes a single resource change. The first batch after
+// subscribe carries one ADDED event per existing resource so the client
+// gets a complete snapshot before live deltas start.
+message WatchEvent {
+  enum Type {
+    UNKNOWN = 0;
+    ADDED = 1;       // first observed (or seen for the first time this stream)
+    MODIFIED = 2;    // observed state or drift changed since last emit
+    DELETED = 3;     // gone from the controller's view (resource.name still set)
+  }
+  Type type = 1;
+  Resource resource = 2;
+}
+
 // OperationService exposes the persisted operation log. Apply/Delete RPCs
 // return an operation_id immediately; clients call GetOperation to poll
 // until terminal status (succeeded, failed, interrupted).
 service OperationService {
   rpc GetOperation(GetOperationRequest) returns (Operation);
   rpc ListOperations(ListOperationsRequest) returns (ListOperationsResponse);
+
+  // WatchOperations streams op state transitions. Same poll-based v1 as
+  // ResourceService.Watch. Optional filters: by resource (apiVersion/kind/
+  // name) and/or by op id (to follow a single op to terminal). Empty
+  // filters watch all ops.
+  rpc WatchOperations(WatchOperationsRequest) returns (stream OperationEvent);
 }
 
 message Operation {
@@ -183,4 +219,24 @@ message ListOperationsRequest {
 
 message ListOperationsResponse {
   repeated Operation operations = 1;
+}
+
+// WatchOperationsRequest filters the OperationService.WatchOperations
+// stream. All fields optional — empty filters watch every op.
+message WatchOperationsRequest {
+  string id = 1;             // narrow to one op id (terminate when terminal)
+  string api_version = 2;
+  string kind = 3;
+  string resource_name = 4;
+  bool include_children = 5; // populate children on each emitted op
+}
+
+// OperationEvent carries an op state transition. The full op is included
+// (not a delta); clients render it directly. The first batch after
+// subscribe emits all ops matching the filter so the client gets a
+// snapshot. terminal=true signals the op reached a terminal status; for
+// id-scoped subscribes that's the cue to close the stream.
+message OperationEvent {
+  Operation operation = 1;
+  bool terminal = 2;
 }

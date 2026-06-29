@@ -135,6 +135,7 @@ const (
 	ResourceService_Get_FullMethodName    = "/openctl.v1.ResourceService/Get"
 	ResourceService_List_FullMethodName   = "/openctl.v1.ResourceService/List"
 	ResourceService_Delete_FullMethodName = "/openctl.v1.ResourceService/Delete"
+	ResourceService_Watch_FullMethodName  = "/openctl.v1.ResourceService/Watch"
 )
 
 // ResourceServiceClient is the client API for ResourceService service.
@@ -160,6 +161,12 @@ type ResourceServiceClient interface {
 	// Delete removes a resource. Idempotent: delete on a missing resource
 	// returns success, not NotFound.
 	Delete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (*DeleteResponse, error)
+	// Watch streams resource state changes. The first batch of events carries
+	// the current snapshot (one ADDED per existing resource matching the
+	// filter); subsequent events fire when resources are added, modified, or
+	// deleted. UI Phase U1.1: poll-based implementation. Filter is api_version
+	// (required) + kind (required) + optional name to watch a single resource.
+	Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchEvent], error)
 }
 
 type resourceServiceClient struct {
@@ -210,6 +217,25 @@ func (c *resourceServiceClient) Delete(ctx context.Context, in *DeleteRequest, o
 	return out, nil
 }
 
+func (c *resourceServiceClient) Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ResourceService_ServiceDesc.Streams[0], ResourceService_Watch_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WatchRequest, WatchEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ResourceService_WatchClient = grpc.ServerStreamingClient[WatchEvent]
+
 // ResourceServiceServer is the server API for ResourceService service.
 // All implementations must embed UnimplementedResourceServiceServer
 // for forward compatibility.
@@ -233,6 +259,12 @@ type ResourceServiceServer interface {
 	// Delete removes a resource. Idempotent: delete on a missing resource
 	// returns success, not NotFound.
 	Delete(context.Context, *DeleteRequest) (*DeleteResponse, error)
+	// Watch streams resource state changes. The first batch of events carries
+	// the current snapshot (one ADDED per existing resource matching the
+	// filter); subsequent events fire when resources are added, modified, or
+	// deleted. UI Phase U1.1: poll-based implementation. Filter is api_version
+	// (required) + kind (required) + optional name to watch a single resource.
+	Watch(*WatchRequest, grpc.ServerStreamingServer[WatchEvent]) error
 	mustEmbedUnimplementedResourceServiceServer()
 }
 
@@ -254,6 +286,9 @@ func (UnimplementedResourceServiceServer) List(context.Context, *ListRequest) (*
 }
 func (UnimplementedResourceServiceServer) Delete(context.Context, *DeleteRequest) (*DeleteResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Delete not implemented")
+}
+func (UnimplementedResourceServiceServer) Watch(*WatchRequest, grpc.ServerStreamingServer[WatchEvent]) error {
+	return status.Error(codes.Unimplemented, "method Watch not implemented")
 }
 func (UnimplementedResourceServiceServer) mustEmbedUnimplementedResourceServiceServer() {}
 func (UnimplementedResourceServiceServer) testEmbeddedByValue()                         {}
@@ -348,6 +383,17 @@ func _ResourceService_Delete_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ResourceService_Watch_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WatchRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ResourceServiceServer).Watch(m, &grpc.GenericServerStream[WatchRequest, WatchEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ResourceService_WatchServer = grpc.ServerStreamingServer[WatchEvent]
+
 // ResourceService_ServiceDesc is the grpc.ServiceDesc for ResourceService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -372,13 +418,20 @@ var ResourceService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ResourceService_Delete_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "Watch",
+			Handler:       _ResourceService_Watch_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "api.proto",
 }
 
 const (
-	OperationService_GetOperation_FullMethodName   = "/openctl.v1.OperationService/GetOperation"
-	OperationService_ListOperations_FullMethodName = "/openctl.v1.OperationService/ListOperations"
+	OperationService_GetOperation_FullMethodName    = "/openctl.v1.OperationService/GetOperation"
+	OperationService_ListOperations_FullMethodName  = "/openctl.v1.OperationService/ListOperations"
+	OperationService_WatchOperations_FullMethodName = "/openctl.v1.OperationService/WatchOperations"
 )
 
 // OperationServiceClient is the client API for OperationService service.
@@ -391,6 +444,11 @@ const (
 type OperationServiceClient interface {
 	GetOperation(ctx context.Context, in *GetOperationRequest, opts ...grpc.CallOption) (*Operation, error)
 	ListOperations(ctx context.Context, in *ListOperationsRequest, opts ...grpc.CallOption) (*ListOperationsResponse, error)
+	// WatchOperations streams op state transitions. Same poll-based v1 as
+	// ResourceService.Watch. Optional filters: by resource (apiVersion/kind/
+	// name) and/or by op id (to follow a single op to terminal). Empty
+	// filters watch all ops.
+	WatchOperations(ctx context.Context, in *WatchOperationsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[OperationEvent], error)
 }
 
 type operationServiceClient struct {
@@ -421,6 +479,25 @@ func (c *operationServiceClient) ListOperations(ctx context.Context, in *ListOpe
 	return out, nil
 }
 
+func (c *operationServiceClient) WatchOperations(ctx context.Context, in *WatchOperationsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[OperationEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &OperationService_ServiceDesc.Streams[0], OperationService_WatchOperations_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WatchOperationsRequest, OperationEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type OperationService_WatchOperationsClient = grpc.ServerStreamingClient[OperationEvent]
+
 // OperationServiceServer is the server API for OperationService service.
 // All implementations must embed UnimplementedOperationServiceServer
 // for forward compatibility.
@@ -431,6 +508,11 @@ func (c *operationServiceClient) ListOperations(ctx context.Context, in *ListOpe
 type OperationServiceServer interface {
 	GetOperation(context.Context, *GetOperationRequest) (*Operation, error)
 	ListOperations(context.Context, *ListOperationsRequest) (*ListOperationsResponse, error)
+	// WatchOperations streams op state transitions. Same poll-based v1 as
+	// ResourceService.Watch. Optional filters: by resource (apiVersion/kind/
+	// name) and/or by op id (to follow a single op to terminal). Empty
+	// filters watch all ops.
+	WatchOperations(*WatchOperationsRequest, grpc.ServerStreamingServer[OperationEvent]) error
 	mustEmbedUnimplementedOperationServiceServer()
 }
 
@@ -446,6 +528,9 @@ func (UnimplementedOperationServiceServer) GetOperation(context.Context, *GetOpe
 }
 func (UnimplementedOperationServiceServer) ListOperations(context.Context, *ListOperationsRequest) (*ListOperationsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListOperations not implemented")
+}
+func (UnimplementedOperationServiceServer) WatchOperations(*WatchOperationsRequest, grpc.ServerStreamingServer[OperationEvent]) error {
+	return status.Error(codes.Unimplemented, "method WatchOperations not implemented")
 }
 func (UnimplementedOperationServiceServer) mustEmbedUnimplementedOperationServiceServer() {}
 func (UnimplementedOperationServiceServer) testEmbeddedByValue()                          {}
@@ -504,6 +589,17 @@ func _OperationService_ListOperations_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _OperationService_WatchOperations_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WatchOperationsRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(OperationServiceServer).WatchOperations(m, &grpc.GenericServerStream[WatchOperationsRequest, OperationEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type OperationService_WatchOperationsServer = grpc.ServerStreamingServer[OperationEvent]
+
 // OperationService_ServiceDesc is the grpc.ServiceDesc for OperationService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -520,6 +616,12 @@ var OperationService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _OperationService_ListOperations_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "WatchOperations",
+			Handler:       _OperationService_WatchOperations_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "api.proto",
 }
