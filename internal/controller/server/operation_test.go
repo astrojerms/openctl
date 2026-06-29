@@ -82,3 +82,64 @@ func TestGetOperationIncludesChildrenWhenRequested(t *testing.T) {
 		t.Errorf("last child = type=%q label=%q, want type=step label=\"Install k3s\"", last.GetType(), last.GetLabel())
 	}
 }
+
+func TestCancelOperationCancelsPending(t *testing.T) {
+	store := openOpStore(t)
+	ctx := context.Background()
+	op, err := store.Submit(ctx, &operations.Operation{
+		Type:         operations.TypeApply,
+		APIVersion:   "p.openctl.io/v1",
+		Kind:         "VM",
+		ResourceName: "x",
+		ManifestJSON: `{"apiVersion":"p.openctl.io/v1","kind":"VM"}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newOperationHandler(store)
+	resp, err := h.CancelOperation(ctx, &apiv1.CancelOperationRequest{Id: op.ID})
+	if err != nil {
+		t.Fatalf("CancelOperation: %v", err)
+	}
+	if resp.GetStatus() != operations.StatusCancelled {
+		t.Errorf("status = %q, want cancelled", resp.GetStatus())
+	}
+
+	// GetOperation also includes the submitted manifest now.
+	got, err := h.GetOperation(ctx, &apiv1.GetOperationRequest{Id: op.ID})
+	if err != nil {
+		t.Fatalf("GetOperation: %v", err)
+	}
+	if got.GetManifestJson() == "" {
+		t.Error("ManifestJson should be populated on GetOperation")
+	}
+	if got.GetStatus() != operations.StatusCancelled {
+		t.Errorf("Get status = %q, want cancelled", got.GetStatus())
+	}
+}
+
+func TestCancelOperationRefusesRunningOp(t *testing.T) {
+	store := openOpStore(t)
+	ctx := context.Background()
+	op, _ := store.Submit(ctx, &operations.Operation{
+		Type: operations.TypeApply, APIVersion: "p.openctl.io/v1", Kind: "VM", ResourceName: "x",
+	})
+	// Move to running.
+	if _, err := store.ClaimNextPending(ctx); err != nil {
+		t.Fatal(err)
+	}
+	h := newOperationHandler(store)
+	_, err := h.CancelOperation(ctx, &apiv1.CancelOperationRequest{Id: op.ID})
+	if err == nil {
+		t.Fatal("want FailedPrecondition, got nil")
+	}
+}
+
+func TestCancelOperationMissingReturnsNotFound(t *testing.T) {
+	store := openOpStore(t)
+	h := newOperationHandler(store)
+	_, err := h.CancelOperation(context.Background(), &apiv1.CancelOperationRequest{Id: "op-missing"})
+	if err == nil {
+		t.Fatal("want NotFound, got nil")
+	}
+}

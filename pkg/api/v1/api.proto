@@ -268,6 +268,14 @@ service OperationService {
   rpc WatchOperations(WatchOperationsRequest) returns (stream OperationEvent) {
     option (google.api.http) = { post: "/v1/operations:watch" body: "*" };
   }
+
+  // UI Phase U7: CancelOperation marks a `pending` op as `cancelled` so the
+  // dispatcher skips it when it next claims work. Returns FailedPrecondition
+  // when the op is already past pending (running ops require cooperative
+  // cancellation in the provider, deferred to a future track).
+  rpc CancelOperation(CancelOperationRequest) returns (CancelOperationResponse) {
+    option (google.api.http) = { post: "/v1/operations/{id}:cancel" body: "*" };
+  }
 }
 
 message Operation {
@@ -277,8 +285,8 @@ message Operation {
   string api_version = 4;
   string kind = 5;
   string resource_name = 6;
-  string status = 7;             // pending | running | succeeded | failed | interrupted
-  string error = 8;              // populated on failed/interrupted
+  string status = 7;             // pending | running | succeeded | failed | interrupted | cancelled
+  string error = 8;              // populated on failed/interrupted/cancelled
   string submitted_at = 9;       // RFC3339
   string started_at = 10;        // empty until claimed
   string completed_at = 11;      // empty until terminal
@@ -290,6 +298,14 @@ message Operation {
   // GetOperation is called with include_children=true (omitted from List
   // responses to keep them cheap).
   repeated Operation children = 14;
+  // UI Phase U7: caller source ("CLI" / "UI"). Populated when the op was
+  // submitted; lets the history view filter by where work came from.
+  string source = 15;
+  // UI Phase U7: serialized submitted manifest. Populated only on
+  // GetOperation responses (omitted from List/Watch to keep them cheap)
+  // so the UI's retry path can pre-fill the editor with the exact YAML
+  // the failed/interrupted op was trying to apply.
+  string manifest_json = 16;
 }
 
 message GetOperationRequest {
@@ -307,10 +323,27 @@ message ListOperationsRequest {
   string resource_name = 4;
   // Cap on results returned, newest-first. 0 = no cap.
   int32 limit = 5;
+  // UI Phase U7: filter by op source (CLI / UI). Empty matches both.
+  string source = 6;
+  // UI Phase U7: filter by submission time. RFC3339; either side may be
+  // empty to leave that end open.
+  string since = 7;
+  string until = 8;
 }
 
 message ListOperationsResponse {
   repeated Operation operations = 1;
+}
+
+message CancelOperationRequest {
+  string id = 1;
+}
+
+message CancelOperationResponse {
+  // Final status after the cancel attempt: "cancelled" on success.
+  string status = 1;
+  // Human-friendly note for the UI.
+  string message = 2;
 }
 
 // WatchOperationsRequest filters the OperationService.WatchOperations

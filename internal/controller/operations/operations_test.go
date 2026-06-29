@@ -3,6 +3,7 @@ package operations
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -236,5 +237,101 @@ func TestListFiltersAndOrders(t *testing.T) {
 	filtered, _ := s.List(ctx, ListFilter{ResourceName: "beta"})
 	if len(filtered) != 1 || filtered[0].ResourceName != "beta" {
 		t.Errorf("filter by name=beta: %v", filtered)
+	}
+}
+
+func TestCancelPendingFlipsStatusAndPreventsClaim(t *testing.T) {
+	s := openStore(t, 50)
+	ctx := context.Background()
+
+	op, err := s.Submit(ctx, &Operation{
+		Type: TypeApply, APIVersion: "p.openctl.io/v1", Kind: "VM", ResourceName: "x",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := s.CancelPending(ctx, op.ID)
+	if err != nil {
+		t.Fatalf("CancelPending: %v", err)
+	}
+	if res.Status != StatusCancelled {
+		t.Errorf("Status = %q, want cancelled (reason=%q)", res.Status, res.Reason)
+	}
+
+	got, _ := s.Get(ctx, op.ID)
+	if got.Status != StatusCancelled {
+		t.Errorf("persisted status = %q, want cancelled", got.Status)
+	}
+	if got.CompletedAt == "" {
+		t.Error("CompletedAt not set after cancel")
+	}
+
+	// Dispatcher should now find nothing to claim.
+	if _, err := s.ClaimNextPending(ctx); err == nil {
+		t.Error("ClaimNextPending should return sql.ErrNoRows after cancel")
+	}
+}
+
+func TestCancelPendingRefusesRunningOp(t *testing.T) {
+	s := openStore(t, 50)
+	ctx := context.Background()
+
+	op, _ := s.Submit(ctx, &Operation{
+		Type: TypeApply, APIVersion: "p.openctl.io/v1", Kind: "VM", ResourceName: "x",
+	})
+	// Move to running.
+	if _, err := s.ClaimNextPending(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := s.CancelPending(ctx, op.ID)
+	if err != nil {
+		t.Fatalf("CancelPending: %v", err)
+	}
+	if res.Status != StatusRunning {
+		t.Errorf("Status = %q, want running (refused)", res.Status)
+	}
+	if res.Reason == "" {
+		t.Error("Reason should be populated when cancel refused")
+	}
+}
+
+func TestCancelPendingMissingReturnsErrNoRows(t *testing.T) {
+	s := openStore(t, 50)
+	_, err := s.CancelPending(context.Background(), "op-does-not-exist")
+	if err == nil {
+		t.Fatal("want error for missing op")
+	}
+}
+
+func TestListFiltersBySourceAndTimeRange(t *testing.T) {
+	s := openStore(t, 50)
+	ctx := context.Background()
+
+	for i, src := range []string{"cli", "ui", "cli"} {
+		if _, err := s.Submit(ctx, &Operation{
+			Type: TypeApply, APIVersion: "p.openctl.io/v1", Kind: "VM",
+			ResourceName: fmt.Sprintf("%s-vm-%d", src, i),
+			Source:       src,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	uiOnly, _ := s.List(ctx, ListFilter{Source: "ui"})
+	if len(uiOnly) != 1 || uiOnly[0].Source != "ui" {
+		t.Errorf("source=ui filter: %v", uiOnly)
+	}
+
+	// Time range — Since after the latest submitted_at narrows to nothing.
+	all, _ := s.List(ctx, ListFilter{})
+	if len(all) == 0 {
+		t.Fatal("no ops to test time filter")
+	}
+	future := "2099-01-01T00:00:00Z"
+	none, _ := s.List(ctx, ListFilter{Since: future})
+	if len(none) != 0 {
+		t.Errorf("Since=%q should match nothing, got %d", future, len(none))
 	}
 }

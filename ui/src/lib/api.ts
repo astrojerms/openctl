@@ -240,6 +240,55 @@ export const resources = {
     api.post<ApplyResponse>('/v1/resources:apply', req),
 };
 
+// --- Operations ----------------------------------------------------------
+
+export interface Operation {
+  id: string;
+  parentId?: string;
+  type: string;
+  apiVersion?: string;
+  kind?: string;
+  resourceName?: string;
+  status: string;
+  error?: string;
+  submittedAt?: string;
+  startedAt?: string;
+  completedAt?: string;
+  label?: string;
+  source?: string;
+  manifestJson?: string;
+  children?: Operation[];
+}
+
+export interface ListOperationsRequest {
+  status?: string;
+  apiVersion?: string;
+  kind?: string;
+  resourceName?: string;
+  source?: string;
+  since?: string;
+  until?: string;
+  limit?: number;
+}
+
+export interface ListOperationsResponse {
+  operations?: Operation[];
+}
+
+export interface CancelOperationResponse {
+  status?: string;
+  message?: string;
+}
+
+export const operations = {
+  get: (id: string, includeChildren = false) =>
+    api.get<Operation>(`/v1/operations/${encodeURIComponent(id)}${includeChildren ? '?include_children=true' : ''}`),
+  list: (req: ListOperationsRequest = {}) =>
+    api.post<ListOperationsResponse>('/v1/operations:list', req),
+  cancel: (id: string) =>
+    api.post<CancelOperationResponse>(`/v1/operations/${encodeURIComponent(id)}:cancel`, {}),
+};
+
 // --- Repo (manifest dir / git) -------------------------------------------
 
 export interface RepoStatus {

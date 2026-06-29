@@ -18,12 +18,15 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
-Arch Phase 8 (scoped) + U3.3-deferred + U6 shipped. Composite
-resources now render with per-child status/drift pills, aggregated
-parent badges, owner-block guards on Edit, and clickable child links
-in apply preview. Next: UI Phase U7 (op orchestration polish —
-CancelOperation RPC, retry/re-apply, history filtering, per-substep
-checklist).
+Nothing actively in progress. Arch Phase 8 (scoped) + U3.3-deferred +
+U6 + U7 all shipped this session. The UI rollout (U1–U7) is complete:
+composite-resource UX, op orchestration polish (CancelOperation RPC +
+StatusCancelled, retry/re-apply with manifest preload, source +
+since/until filters, substep checklist on the ops drawer). Optional
+remaining tracks: the full target-architecture Phase 8 (K3sNode as
+first-class resource + Cluster.Plan refactor + wire-level refs), arch
+Phase 9 (verifying-trace rebuilder), arch Phase 10 (continuous
+reconcile), and parked post-Phase-6 controller followups.
 
 ## Suggested next order
 
@@ -223,8 +226,18 @@ committing to a phase.
       detail page (except for `create` verbs whose target doesn't exist
       yet). DAG view remains gated on a future arch Phase 8 lift
       (target-architecture HTML).
-- [ ] **Phase U7** — Op orchestration polish (live substep checklist,
-      `CancelOperation` RPC, retry/re-apply, history filtering).
+- [x] **Phase U7** — Op orchestration polish. CancelOperation RPC +
+      new StatusCancelled status (pending-only first pass; running ops
+      still need cooperative cancellation in providers, parked).
+      ListOperationsRequest gains source + since/until filters;
+      GetOperation now returns manifest_json so the UI's retry button
+      can pre-fill the editor with the exact failed payload (via
+      sessionStorage handoff between the ops drawer and Edit.svelte).
+      Ops drawer rewritten: status/source/text filter controls,
+      per-row Cancel button on pending ops, Retry on
+      failed/interrupted/cancelled, expandable parent rows with a
+      substep checklist driven by include_children on
+      WatchOperations.
 
 ---
 

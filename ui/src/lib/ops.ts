@@ -37,7 +37,10 @@ async function loop(): Promise<void> {
     controller = new AbortController();
     try {
       opsError.set('');
-      await watchOperations({ includeChildren: false }, applyEvent, {
+      // UI Phase U7: include children so the drawer's substep checklist
+      // can render live progress for composite ops without a second
+      // round-trip per parent.
+      await watchOperations({ includeChildren: true }, applyEvent, {
         signal: controller.signal,
       });
       // Server closed the stream cleanly — usually means a deploy or

@@ -42,6 +42,10 @@ func (h *operationHandler) GetOperation(ctx context.Context, req *apiv1.GetOpera
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "encode: %v", err)
 	}
+	// UI Phase U7: GetOperation includes the submitted manifest so the
+	// browser's retry path can pre-fill the editor with the exact YAML
+	// the failed/interrupted op was applying. List/Watch omit it.
+	pb.ManifestJson = op.ManifestJSON
 	if req.GetIncludeChildren() {
 		children, err := h.store.ListChildren(ctx, op.ID)
 		if err != nil {
@@ -64,6 +68,9 @@ func (h *operationHandler) ListOperations(ctx context.Context, req *apiv1.ListOp
 		APIVersion:   req.GetApiVersion(),
 		Kind:         req.GetKind(),
 		ResourceName: req.GetResourceName(),
+		Source:       req.GetSource(),
+		Since:        req.GetSince(),
+		Until:        req.GetUntil(),
 		Limit:        int(req.GetLimit()),
 	})
 	if err != nil {
@@ -80,8 +87,35 @@ func (h *operationHandler) ListOperations(ctx context.Context, req *apiv1.ListOp
 	return &apiv1.ListOperationsResponse{Operations: out}, nil
 }
 
+// CancelOperation marks a pending op as cancelled. UI Phase U7 surfaces
+// this as a "Cancel" button on pending-op rows. Running ops require
+// cooperative cancellation in providers (deferred); cancelling a running
+// op returns FailedPrecondition.
+func (h *operationHandler) CancelOperation(ctx context.Context, req *apiv1.CancelOperationRequest) (*apiv1.CancelOperationResponse, error) {
+	if req.GetId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "id is required")
+	}
+	res, err := h.store.CancelPending(ctx, req.GetId())
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, status.Errorf(codes.NotFound, "operation %s not found", req.GetId())
+		}
+		return nil, status.Errorf(codes.Internal, "cancel: %v", err)
+	}
+	if res.Status != operations.StatusCancelled {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"operation %s status=%s: %s", req.GetId(), res.Status, res.Reason)
+	}
+	return &apiv1.CancelOperationResponse{
+		Status:  res.Status,
+		Message: fmt.Sprintf("operation %s cancelled", req.GetId()),
+	}, nil
+}
+
 // opToProto converts the in-process Operation into the wire form. The
 // result_json field, when present, is decoded back into a Resource value.
+// manifest_json is left empty by default; GetOperation explicitly sets it
+// (UI Phase U7) so List/Watch responses stay cheap.
 func opToProto(op *operations.Operation) (*apiv1.Operation, error) {
 	pb := &apiv1.Operation{
 		Id:           op.ID,
@@ -96,6 +130,7 @@ func opToProto(op *operations.Operation) (*apiv1.Operation, error) {
 		SubmittedAt:  op.SubmittedAt,
 		StartedAt:    op.StartedAt,
 		CompletedAt:  op.CompletedAt,
+		Source:       op.Source,
 	}
 	if op.ResultJSON != "" {
 		var r protocol.Resource

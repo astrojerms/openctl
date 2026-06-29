@@ -50,6 +50,11 @@ export interface OperationRow {
   startedAt?: string;
   completedAt?: string;
   label?: string;
+  // UI Phase U7: caller source (cli / ui) and live substep children.
+  // children populated only when WatchOperations is called with
+  // includeChildren: true (default false to keep the firehose cheap).
+  source?: string;
+  children?: OperationRow[];
 }
 
 export interface OperationEvent {

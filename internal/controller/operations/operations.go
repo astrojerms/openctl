@@ -40,6 +40,12 @@ const (
 	StatusSucceeded   = "succeeded"
 	StatusFailed      = "failed"
 	StatusInterrupted = "interrupted"
+	// StatusCancelled means a pending op was cancelled before the
+	// dispatcher claimed it. Distinct from `failed` so the UI/CLI can
+	// distinguish intentional cancellation from provider errors. Running
+	// ops can't currently be cancelled (cooperative cancellation deferred
+	// to the per-provider audits).
+	StatusCancelled = "cancelled"
 )
 
 // Operation is the in-process representation of a row in the operations
@@ -71,7 +77,7 @@ type Operation struct {
 // nothing more will happen to it.
 func (o *Operation) IsTerminal() bool {
 	switch o.Status {
-	case StatusSucceeded, StatusFailed, StatusInterrupted:
+	case StatusSucceeded, StatusFailed, StatusInterrupted, StatusCancelled:
 		return true
 	}
 	return false
@@ -195,6 +201,18 @@ func (s *Store) List(ctx context.Context, filter ListFilter) ([]*Operation, erro
 		q += " AND resource_name = ?"
 		args = append(args, filter.ResourceName)
 	}
+	if filter.Source != "" {
+		q += " AND source = ?"
+		args = append(args, filter.Source)
+	}
+	if filter.Since != "" {
+		q += " AND submitted_at >= ?"
+		args = append(args, filter.Since)
+	}
+	if filter.Until != "" {
+		q += " AND submitted_at <= ?"
+		args = append(args, filter.Until)
+	}
 	q += " ORDER BY submitted_at DESC"
 	if filter.Limit > 0 {
 		// #nosec G202 -- filter.Limit is an int from typed Go API, not user-supplied SQL.
@@ -217,12 +235,17 @@ func (s *Store) List(ctx context.Context, filter ListFilter) ([]*Operation, erro
 	return out, rows.Err()
 }
 
-// ListFilter is the optional filter set for List.
+// ListFilter is the optional filter set for List. Source and Since/Until
+// (RFC3339) were added in UI Phase U7 so the ops history pane can filter
+// by submission source and time range.
 type ListFilter struct {
 	Status       string
 	APIVersion   string
 	Kind         string
 	ResourceName string
+	Source       string
+	Since        string
+	Until        string
 	Limit        int
 }
 
@@ -370,6 +393,61 @@ func (s *Store) SetLabel(ctx context.Context, id, label string) error {
 		nullable(label), id,
 	)
 	return err
+}
+
+// CancelResult describes what CancelPending did: succeeded with the new
+// terminal status, or refused with a reason.
+type CancelResult struct {
+	// Status after the operation: StatusCancelled when cancellation took
+	// effect; the op's current status when the cancel was a no-op (already
+	// terminal or already running).
+	Status string
+	// Reason carries a human-friendly explanation when the cancel didn't
+	// take effect — e.g. "operation already running, cannot cancel".
+	// Empty when Status == StatusCancelled.
+	Reason string
+}
+
+// CancelPending atomically marks a pending op as cancelled. The dispatcher
+// uses StatusPending in its WHERE clause when claiming work, so flipping
+// the row out of pending is sufficient to prevent execution; no separate
+// notification is needed.
+//
+// Behaviour by current status:
+//   - pending  → flipped to cancelled, completed_at set; returns
+//     {Status: cancelled}
+//   - running  → refused, returns {Status: running, Reason: …}; cooperative
+//     cancellation of running ops is deferred to the per-provider audits
+//   - terminal → refused, returns {Status: current, Reason: …}
+//   - missing  → sql.ErrNoRows
+func (s *Store) CancelPending(ctx context.Context, id string) (CancelResult, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE operations SET status = ?, error = ?, completed_at = ?
+		 WHERE id = ? AND status = ?`,
+		StatusCancelled,
+		"cancelled by user before dispatcher claimed the op",
+		nowUTC(),
+		id, StatusPending,
+	)
+	if err != nil {
+		return CancelResult{}, err
+	}
+	if n, _ := res.RowsAffected(); n == 1 {
+		return CancelResult{Status: StatusCancelled}, nil
+	}
+	// No rows updated — either the op is missing or no longer pending.
+	op, gerr := s.Get(ctx, id)
+	if gerr != nil {
+		return CancelResult{}, gerr
+	}
+	if op == nil {
+		return CancelResult{}, sql.ErrNoRows
+	}
+	reason := "operation already terminal, cannot cancel"
+	if op.Status == StatusRunning {
+		reason = "operation already running, cannot cancel (cooperative cancellation of running ops is not supported in v1)"
+	}
+	return CancelResult{Status: op.Status, Reason: reason}, nil
 }
 
 // MarkRunningInterrupted rewrites every op currently in `running` as
