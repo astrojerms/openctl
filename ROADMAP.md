@@ -18,10 +18,13 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
-UI Phase U4 (CUE/manifest editor) underway. U4.1–U4.3 shipped —
-DryRunApply RPC, Monaco editor + Validate, Apply panel with preview
-+ destructive-gate checkboxes + live op progress. Next sub-phase is
-U4.4 (side-by-side Monaco diff editor vs the applied manifest).
+Nothing actively in progress. UI Phase U4 fully shipped (U4.1–U4.4):
+DryRunApply RPC + DryRunner provider hook, Monaco editor + Validate,
+inline Apply panel with preview + destructive-gate checkboxes + live
+op progress, Monaco diff view vs applied. Suggested next item per the
+ROADMAP order: UI Phase U5 (typed form editor; needs the CUE-AST →
+form-schema bridge). Arch Phase 8 (K3sNode as first-class resource)
+also unblocks the deferred composite-children tree on detail.
 
 ## Suggested next order
 
@@ -156,7 +159,7 @@ committing to a phase.
             homelab project).
       - [ ] **U3.4** — ops drawer + live Watch streams.
       - [ ] **U3.5** — git status indicator + Push now + e2e tests.
-- [~] **Phase U4** — CUE/manifest editor (Monaco-based, server-side
+- [x] **Phase U4** — CUE/manifest editor (Monaco-based, server-side
       validation, diff view, `DryRunApply` RPC, destructive gates as
       checkboxes).
       - [x] **U4.1** — `ResourceService.DryRunApply` RPC server-side +
@@ -172,6 +175,9 @@ committing to a phase.
             shows diff + child verbs + summary; required gates render
             as labelled checkboxes; Apply submits with gate flags and
             tails the resulting op via the existing ops store.
+      - [x] **U4.4** — Monaco diff view. Tab toggle in the edit pane
+            ("Editor" / "Diff vs applied"); read-only; shares the
+            lazy Monaco bundle. Closes Phase U4.
       - [ ] **U4.4** — Side-by-side diff view (Monaco diff editor).
 - [ ] **Phase U5** — Typed form editor (CUE-AST → form-schema bridge,
       AWS-console stepped sections, live manifest preview, view
