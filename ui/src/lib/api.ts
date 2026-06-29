@@ -152,10 +152,19 @@ export const schemas = {
 
 // --- Resources -----------------------------------------------------------
 
+export interface ResourceRef {
+  apiVersion: string;
+  kind: string;
+  name: string;
+}
+
 export interface ResourceMetadata {
   name: string;
   labels?: Record<string, string>;
   annotations?: Record<string, string>;
+  // Arch Phase 8: populated for resources owned by another (e.g. a
+  // VirtualMachine owned by its Cluster). Currently always 0 or 1 entry.
+  ownerRefs?: ResourceRef[];
 }
 
 export interface DriftEntry {
@@ -175,6 +184,9 @@ export interface Resource {
   spec?: Record<string, unknown>;
   status?: Record<string, unknown>;
   drift?: DriftEntry[];
+  // Arch Phase 8: child resources composed by this one (e.g. a Cluster's
+  // member VMs). Empty for atomic resources.
+  children?: ResourceRef[];
 }
 
 export interface ListResourcesResponse {

@@ -174,13 +174,50 @@
       </article>
     </div>
 
-    <article class="card">
-      <h3>Owner / children</h3>
-      <p class="muted">
-        Owner-ref and composite children tree ship with a later U3.x
-        followup — the proto surface needs extension first.
-      </p>
-    </article>
+    {@const ownerRefs = data.resource.metadata?.ownerRefs ?? []}
+    {@const children = data.resource.children ?? []}
+
+    {#if ownerRefs.length > 0}
+      <article class="card owner-card">
+        <h3>Owner</h3>
+        <p class="muted small">
+          This resource is owned by another and can only be modified by
+          editing its owner. To change anything here, open the owner instead.
+        </p>
+        <ul class="ref-list">
+          {#each ownerRefs as owner}
+            <li>
+              <a href={routeHref({ name: 'detail', apiVersion: owner.apiVersion, kind: owner.kind, resourceName: owner.name })}>
+                <span class="ref-kind">{owner.kind}</span>
+                <span class="ref-name">{owner.name}</span>
+                <span class="path"> · {owner.apiVersion}</span>
+              </a>
+            </li>
+          {/each}
+        </ul>
+      </article>
+    {/if}
+
+    {#if children.length > 0}
+      <article class="card">
+        <h3>Children ({children.length})</h3>
+        <p class="muted small">
+          Composed resources are read-only — edit this resource to add,
+          remove, or respec them.
+        </p>
+        <ul class="ref-list">
+          {#each children as child}
+            <li>
+              <a href={routeHref({ name: 'detail', apiVersion: child.apiVersion, kind: child.kind, resourceName: child.name })}>
+                <span class="ref-kind">{child.kind}</span>
+                <span class="ref-name">{child.name}</span>
+                <span class="path"> · {child.apiVersion}</span>
+              </a>
+            </li>
+          {/each}
+        </ul>
+      </article>
+    {/if}
   {/if}
 </section>
 
@@ -316,5 +353,38 @@
     color: #888;
     text-transform: uppercase;
     letter-spacing: 0.05em;
+  }
+  .owner-card {
+    border-left: 3px solid #6ea8ff;
+  }
+  .ref-list {
+    list-style: none;
+    margin: 0.5rem 0 0;
+    padding: 0;
+  }
+  .ref-list li {
+    padding: 0.4rem 0;
+    border-bottom: 1px solid rgba(127, 127, 127, 0.12);
+  }
+  .ref-list li:last-child {
+    border-bottom: none;
+  }
+  .ref-list a {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    color: inherit;
+    text-decoration: none;
+  }
+  .ref-list a:hover .ref-name {
+    text-decoration: underline;
+  }
+  .ref-kind {
+    color: #aaa;
+    font-size: 0.85rem;
+  }
+  .ref-name {
+    color: #6ea8ff;
+    font-weight: 500;
   }
 </style>
