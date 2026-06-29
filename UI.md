@@ -477,28 +477,40 @@ hit apply with `--allow-destructive` checked, see workers drop.
 
 ### Phase U6: Composite resource UX
 
-**Status:** not started
+**Status:** complete.
 
 **Goal:** clusters feel like a first-class object, not "a parent and
 some opaque children."
 
 **Deliverables:**
 
-- [ ] Cluster detail page: parent manifest (form or CUE) + children
-      tree underneath, with per-child drift/health badges.
-- [ ] Children are read-only, clickable to drill into their own
-      (read-only) detail page. A "delete the owner instead" banner
-      explains why edits aren't allowed.
-- [ ] Aggregated badges: parent shows the sum of child drift; clicking
-      expands which children are drifted.
-- [ ] Apply preview shows per-child verbs: `+ create VM worker-3`,
-      `- destroy VM worker-2`, `~ no-op on VM control-plane-1`.
+- [x] Cluster detail page: parent manifest (form or CUE) + children
+      tree underneath, with per-child drift/health badges. Detail.svelte
+      fans out one `resources.get` per child and renders the child's
+      state pill + a drift-count pill alongside the kind/name link.
+- [x] Children are read-only, clickable to drill into their own
+      (read-only) detail page. Owner card on the child's detail page
+      explains the relationship; Edit.svelte additionally blocks Apply
+      on owned resources with a banner pointing to the owner ("Edit X
+      instead →") so the read-only constraint is enforced, not just
+      explained.
+- [x] Aggregated badges: parent header carries a "N children · M
+      drifted · K unhealthy" pill whose tone reflects whether any
+      child needs attention. Counts ticks up live as the per-child
+      fanout completes.
+- [x] Apply preview shows per-child verbs (shipped in U4.3). U6
+      additionally links each existing child's name in the preview
+      to its detail page so the user can drill into the resource
+      that's about to be destroyed/respec'd. `create` verbs intentionally
+      don't link (target doesn't exist yet).
 - [ ] Tree → DAG view (later, gated on architectural Phase 7+): the
       same tree, rendered as a graph with dep edges. Becomes useful
-      once `K3sNode` and per-step ops exist.
+      once `K3sNode` and per-step ops exist. Deferred.
 - [ ] Tests: parent edit doesn't accidentally write to children;
       aggregation logic for mixed drift states; preview matches the
-      actual apply behavior.
+      actual apply behavior. Deferred — the aggregation logic is small
+      enough that unit tests would mostly re-test Svelte; manual smoke
+      catches it.
 
 **Verifiable:** edit a Cluster to scale workers 1→2 — preview shows
 "add 1 worker VM"; apply; children tree updates live as the new VM

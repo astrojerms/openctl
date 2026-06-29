@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { resources, UnauthorizedError, type GetResourceResponse } from '../lib/api';
+  import { resources, UnauthorizedError, type GetResourceResponse, type Resource, type ResourceRef } from '../lib/api';
   import { watchResources } from '../lib/watch';
-  import { statusBadge } from '../lib/format';
+  import { statusBadge, type StatusBadge } from '../lib/format';
   import { routeHref } from '../lib/router';
 
   export let apiVersion: string;
@@ -16,6 +16,18 @@
   let controller: AbortController | null = null;
   let watching = '';
 
+  // U6: per-child status pills. Keyed by `<apiVersion>/<kind>/<name>`;
+  // value is `null` while fetching, an object once resolved. We only
+  // populate this for composite resources (parent has children). Each
+  // entry is one extra Get RPC at mount — fine for the homelab fanout
+  // (a Cluster has ≤ ~10 children in practice).
+  type ChildState = { badge: StatusBadge; driftCount: number; error?: string };
+  let childStates: Record<string, ChildState | null> = {};
+
+  function childKey(ref: ResourceRef): string {
+    return `${ref.apiVersion}/${ref.kind}/${ref.name}`;
+  }
+
   // Reactive re-fetch + re-subscribe on route change.
   $: void switchTo(apiVersion, kind, resourceName);
 
@@ -28,6 +40,7 @@
     data = null;
     loading = true;
     error = '';
+    childStates = {};
     await load(av, k, n);
     void subscribe(av, k, n, controller.signal);
   }
@@ -36,11 +49,40 @@
     try {
       data = await resources.get(av, k, n);
       error = '';
+      // Fan out one Get per child to populate per-row badges.
+      void loadChildStates(data.resource);
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     } finally {
       loading = false;
     }
+  }
+
+  async function loadChildStates(parent: Resource) {
+    const refs = parent.children ?? [];
+    if (refs.length === 0) return;
+    // Seed all keys as "loading" up-front so the row count is stable.
+    const seed: Record<string, ChildState | null> = {};
+    for (const ref of refs) seed[childKey(ref)] = null;
+    childStates = seed;
+
+    await Promise.all(refs.map(async (ref) => {
+      try {
+        const r = await resources.get(ref.apiVersion, ref.kind, ref.name);
+        childStates[childKey(ref)] = {
+          badge: statusBadge(r.resource.status),
+          driftCount: r.resource.drift?.length ?? 0,
+        };
+      } catch (err) {
+        childStates[childKey(ref)] = {
+          badge: { label: '—', tone: 'unknown' },
+          driftCount: 0,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+      // Trigger Svelte reactivity on object-key mutation.
+      childStates = { ...childStates };
+    }));
   }
 
   async function subscribe(av: string, k: string, n: string, signal: AbortSignal) {
@@ -94,6 +136,17 @@
   }
 
   $: state = data ? statusBadge(data.resource.status) : null;
+
+  // U6 aggregations: count children we've heard back from that are
+  // drifted or in a non-good state. Reactive on childStates so the
+  // numbers tick up as the fanout completes.
+  $: childTotal = data?.resource.children?.length ?? 0;
+  $: childDrifted = Object.values(childStates).filter(
+    (s): s is ChildState => s !== null && s.driftCount > 0,
+  ).length;
+  $: childUnhealthy = Object.values(childStates).filter(
+    (s): s is ChildState => s !== null && (s.badge.tone === 'bad' || s.badge.tone === 'warn'),
+  ).length;
 </script>
 
 <section>
@@ -109,6 +162,13 @@
     <div class="header-right">
       {#if state}
         <span class="state state-{state.tone}">{state.label}</span>
+      {/if}
+      {#if childTotal > 0}
+        <span class="state state-{childDrifted > 0 || childUnhealthy > 0 ? 'warn' : 'good'}" title="Aggregated child status">
+          {childTotal} {childTotal === 1 ? 'child' : 'children'}
+          {#if childDrifted > 0} · {childDrifted} drifted{/if}
+          {#if childUnhealthy > 0} · {childUnhealthy} unhealthy{/if}
+        </span>
       {/if}
       <a class="edit-btn" href={routeHref({ name: 'edit', apiVersion, kind, resourceName })}>Edit</a>
     </div>
@@ -207,10 +267,23 @@
         </p>
         <ul class="ref-list">
           {#each children as child}
+            {@const s = childStates[childKey(child)]}
             <li>
               <a href={routeHref({ name: 'detail', apiVersion: child.apiVersion, kind: child.kind, resourceName: child.name })}>
                 <span class="ref-kind">{child.kind}</span>
                 <span class="ref-name">{child.name}</span>
+                {#if s === null}
+                  <span class="state state-unknown shimmer">loading…</span>
+                {:else if s?.error}
+                  <span class="state state-bad" title={s.error}>error</span>
+                {:else if s}
+                  <span class="state state-{s.badge.tone}">{s.badge.label}</span>
+                  {#if s.driftCount > 0}
+                    <span class="state state-warn" title="{s.driftCount} field{s.driftCount === 1 ? '' : 's'} drifted">
+                      drift {s.driftCount}
+                    </span>
+                  {/if}
+                {/if}
                 <span class="path"> · {child.apiVersion}</span>
               </a>
             </li>
@@ -386,5 +459,12 @@
   .ref-name {
     color: #6ea8ff;
     font-weight: 500;
+  }
+  .ref-list .state {
+    font-size: 0.72rem;
+    padding: 0.1em 0.55em;
+  }
+  .shimmer {
+    opacity: 0.55;
   }
 </style>

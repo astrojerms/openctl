@@ -42,6 +42,17 @@
   let applyError = '';
   let liveOpId = '';
 
+  // U6 composite-UX gate: when the resource being edited is owned by
+  // another (e.g. a Cluster's member VM), editing is blocked with a
+  // banner pointing back to the owner. Captured on load and stable for
+  // the lifetime of the route.
+  let ownerRefs: import('../lib/api').ResourceRef[] = [];
+  // U6: live children of this resource (from Resource.children on load).
+  // Used to resolve the apiVersion of a child action in the apply
+  // preview — DryRunApply ChildAction carries only kind+name today, so
+  // we look it up here to build the detail-page link.
+  let liveChildren: import('../lib/api').ResourceRef[] = [];
+
   // View toggle: 'form' is the typed-form view (U5.2), 'edit' is the
   // Monaco editor (default), 'diff' is the read-only side-by-side diff.
   // Form and edit share the same `text` state — typing in either
@@ -66,6 +77,7 @@
   async function load(av: string, k: string, n: string) {
     loading = true;
     loadError = '';
+    ownerRefs = [];
     try {
       const r = await resources.get(av, k, n);
       const applied = r.applied;
@@ -79,6 +91,11 @@
           spec: r.resource.spec ?? {},
         });
       }
+      // U6: stash ownerRefs so the edit gate + banner can react to them.
+      // We prefer ownerRefs off the observed resource (live state) so a
+      // brand-new but already-owned resource still surfaces correctly.
+      ownerRefs = r.resource.metadata?.ownerRefs ?? applied?.metadata?.ownerRefs ?? [];
+      liveChildren = r.resource.children ?? [];
       text = baseline;
       schedulePreview();
       void loadFormSchema(av, k);
@@ -267,8 +284,10 @@
     (plan.diff?.length ?? 0) > 0 ||
     (plan.children ?? []).some((c) => c.verb !== 'no-op')
   );
+  $: ownedByAnother = ownerRefs.length > 0;
   $: applyBlocked =
     applying ||
+    ownedByAnother ||
     parseError !== '' ||
     validateErrors.length > 0 ||
     !plan ||
@@ -359,8 +378,20 @@
     }
   }
 
+  // U6: resolve a ChildAction's apiVersion via the live children list.
+  // Returns null when the kind isn't in the live set (e.g. a brand-new
+  // child being created — the link wouldn't 404-safely anyway).
+  function childApiVersion(kind: string): string | null {
+    const m = liveChildren.find((r) => r.kind === kind);
+    return m?.apiVersion ?? null;
+  }
+
   function applyBlockReason(): string {
     if (applying) return 'Apply already submitted';
+    if (ownedByAnother) {
+      const owner = ownerRefs[0];
+      return `This resource is owned by ${owner.kind}/${owner.name} — edit the owner instead.`;
+    }
     if (parseError) return 'Fix YAML parse error before applying';
     if (validateErrors.length > 0) return 'Fix validation errors before applying';
     if (!hasChange) return 'No changes to apply';
@@ -402,6 +433,21 @@
   {:else if loadError}
     <p class="err">{loadError}</p>
   {:else}
+    {#if ownedByAnother}
+      {@const owner = ownerRefs[0]}
+      <article class="owner-block">
+        <strong>Owned resource — read-only.</strong>
+        This {kind} is composed by
+        <a href={routeHref({ name: 'detail', apiVersion: owner.apiVersion, kind: owner.kind, resourceName: owner.name })}>
+          {owner.kind}/{owner.name}
+        </a>.
+        Editing this manifest directly won't take effect — the owner re-creates
+        it from its own spec on every apply.
+        <a class="primary-link" href={routeHref({ name: 'edit', apiVersion: owner.apiVersion, kind: owner.kind, resourceName: owner.name })}>
+          Edit {owner.kind}/{owner.name} instead →
+        </a>
+      </article>
+    {/if}
     <div class="view-toggle" role="tablist" aria-label="View">
       <button
         role="tab"
@@ -517,9 +563,14 @@
         {#if (plan.children?.length ?? 0) > 0}
           <ul class="children">
             {#each plan.children ?? [] as c}
+              {@const ref = childApiVersion(c.kind)}
               <li class={verbClass(c.verb)}>
                 <span class="verb">{c.verb}</span>
-                <span class="mono">{c.kind}/{c.name}</span>
+                {#if ref && c.verb !== 'create'}
+                  <a class="mono child-link" href={routeHref({ name: 'detail', apiVersion: ref, kind: c.kind, resourceName: c.name })}>{c.kind}/{c.name}</a>
+                {:else}
+                  <span class="mono">{c.kind}/{c.name}</span>
+                {/if}
                 {#if c.detail}<span class="muted small">— {c.detail}</span>{/if}
               </li>
             {/each}
@@ -712,6 +763,33 @@
     background: rgba(127, 127, 127, 0.06);
     border-radius: 6px;
     padding: 1rem 1.25rem;
+  }
+  .owner-block {
+    background: rgba(110, 168, 255, 0.08);
+    border-left: 3px solid #6ea8ff;
+    border-radius: 6px;
+    padding: 0.85rem 1.1rem;
+    font-size: 0.9rem;
+    line-height: 1.55;
+  }
+  .owner-block a {
+    color: #6ea8ff;
+    text-decoration: none;
+  }
+  .owner-block a:hover {
+    text-decoration: underline;
+  }
+  .owner-block .primary-link {
+    display: inline-block;
+    margin-left: 0.5rem;
+    font-weight: 500;
+  }
+  .child-link {
+    color: #6ea8ff;
+    text-decoration: none;
+  }
+  .child-link:hover {
+    text-decoration: underline;
   }
   .preview-head {
     display: flex;
