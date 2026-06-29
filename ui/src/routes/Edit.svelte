@@ -8,7 +8,7 @@
   import { ops as opsStore } from '../lib/ops';
   import type { OperationRow } from '../lib/watch';
   import { routeHref, navigate } from '../lib/router';
-  import { fromManifest, scrubEmpty, type FormField as FF } from '../lib/formSchema';
+  import { extraKeys, fromManifest, scrubEmpty, type FormField as FF } from '../lib/formSchema';
   import MonacoEditor from '../components/MonacoEditor.svelte';
   import MonacoDiffEditor from '../components/MonacoDiffEditor.svelte';
   import FormField from '../components/FormField.svelte';
@@ -285,6 +285,24 @@
   // made in the editor view show up.
   $: if (view === 'form' && formSchema && !formDriving) reseedFormState();
 
+  // Detect when the editor text carries keys the form can't represent.
+  // When non-empty, the Form tab is disabled with the offending paths in
+  // the tooltip so the user knows what to remove (or stays in Editor).
+  // Skipped while the form itself is driving — it always produces a
+  // roundtrippable subset by construction.
+  $: nonRoundtrippablePaths = (() => {
+    if (!formSchema || formDriving) return [];
+    const parsed = parseYAML(text);
+    if (parsed.error) return [];
+    return extraKeys(formSchema, parsed.doc);
+  })();
+
+  // If the user is on the Form tab when an external edit introduces a
+  // non-roundtrippable key, bounce them to Editor so they can see the
+  // raw YAML — otherwise the form would silently drop those keys on
+  // the next save.
+  $: if (view === 'form' && nonRoundtrippablePaths.length > 0) view = 'edit';
+
   // Live op row (when an Apply is in flight) drives the inline progress
   // banner. Driven off the shell-wide ops store so we don't open a
   // second WatchOperations.
@@ -390,8 +408,14 @@
         aria-selected={view === 'form'}
         class:active={view === 'form'}
         on:click={() => (view = 'form')}
-        disabled={!formSchema}
-        title={!formSchema ? (formSchemaError || 'No form schema for this kind') : ''}
+        disabled={!formSchema || nonRoundtrippablePaths.length > 0}
+        title={
+          !formSchema
+            ? (formSchemaError || 'No form schema for this kind')
+            : nonRoundtrippablePaths.length > 0
+              ? `Manifest has fields the form can't represent — switching to Form would drop them. Offending keys: ${nonRoundtrippablePaths.slice(0, 5).join(', ')}${nonRoundtrippablePaths.length > 5 ? ', …' : ''}`
+              : ''
+        }
       >Form</button>
       <button
         role="tab"
