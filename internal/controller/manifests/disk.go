@@ -27,10 +27,12 @@ import (
 type DiskMirror struct {
 	store *Store
 	root  string
-	// hook runs after each successful Save/Delete with the materialized
-	// file's absolute path and the "what changed" verb ("apply" or "delete").
-	// Used by U2.2 to plug in git-commit side-effects without DiskMirror
-	// having to import the git package. nil = no hook.
+	// hook runs after each successful Save/Delete with the resource and
+	// the "what changed" verb ("apply" or "delete"). Used by U2.2 to plug
+	// in git-commit side-effects without DiskMirror having to import the
+	// git package. The originator ("cli"/"ui") is read from ctx via
+	// SourceFromContext — the dispatcher injects it before calling Save
+	// or Delete. nil = no hook.
 	hook func(ctx context.Context, kind string, r *protocol.Resource, verb string) error
 }
 

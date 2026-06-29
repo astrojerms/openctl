@@ -150,7 +150,7 @@ requests use without re-auth.
 
 ### Phase U2: Manifest store on disk + git sync
 
-**Status:** in progress — U2.1 complete, U2.2 next.
+**Status:** complete.
 
 **Goal:** materialize the controller's desired state to disk so it's
 visible to users outside the UI, with optional git tracking.
@@ -162,31 +162,40 @@ visible to users outside the UI, with optional git tracking.
       Files go to `<manifest-dir>/<apiVersion>/<kind>/<name>.yaml`
       (apiVersion's `/` becomes a nested directory; names path-scrubbed
       so hostile inputs can't escape the root). Atomic write via temp +
-      rename. Hook-point lets U2.2 plug git in without disk.go knowing
-      about git.
+      rename. Hook-point lets the git layer plug in without disk.go
+      knowing about git.
 - [x] Dispatcher integration: on apply success, write the manifest;
       on delete success, remove the file. On startup, reconcile disk
       against `applied_manifests` — missing-on-disk rows get
       re-materialized; orphan files (no applied_manifests row) are
       logged but never deleted (user may have committed them).
-- [x] Config schema (partial): `manifests: { dir }` lives now; the
-      `git:` sub-block parses but is unused until U2.2.
-- [ ] Git integration (`internal/controller/manifests/git.go`):
-      `git init` on first start when enabled, `git add` + `git commit`
-      after every materialize/delete with a structured commit message
-      (`apply <kind>/<name> via <source>` where source is `UI` or `CLI`,
-      derived from gRPC metadata).
-- [ ] Optional remote push: config carries `remote:` URL and `pushMode:
-      onCommit|periodic|manual`. Periodic mode runs a goroutine with a
-      configurable interval; manual mode only pushes via the
-      `RepoService.Push` RPC. Failures logged, never block apply.
-- [ ] `RepoService` proto: `GetStatus()` (clean/dirty/ahead/behind),
-      `Push()`, `Pull()` (advisory — does NOT trigger reapply in v1).
-      Wired into the controller; UI consumes in U3.
-- [x] Tests (U2.1 scope): round-trip materialize/delete, atomic
-      overwrite (no leftover .tmp files), path-traversal scrubbing,
-      startup reconciliation behavior (re-materialize missing, leave
-      orphans). U2.2 will add git tests.
+- [x] Config schema: `manifests: { dir, git: { enabled, branch,
+      remote, pushMode, pushInterval } }` in `~/.openctl/config.yaml`.
+- [x] Git integration (`internal/controller/manifests/git.go`):
+      `git init -b <branch>` on first start when enabled (idempotent
+      if already a repo), `git add -A` + `git commit -m "..."` after
+      every materialize/delete with the structured message
+      `apply <kind>/<name> via <source>`. Source ("CLI"/"UI") comes
+      from gRPC metadata: the HTTP gateway middleware injects
+      `x-openctl-source: ui` on every browser-proxied request; direct
+      gRPC calls default to "CLI".
+- [x] Optional remote push: `manifests.git.remote` plus `pushMode`
+      (`onCommit` default when remote is set, `periodic`, `manual`).
+      Periodic uses `pushInterval` parsed as a `time.Duration`. Push
+      failures are logged but never bubble back into the dispatcher.
+- [x] `RepoService` proto: `GetStatus` (enabled, dir, branch, head_sha,
+      clean, dirty_paths, ahead/behind, push_mode), `Push`, `Pull`
+      (advisory — does NOT trigger reapply in v1). Wired into both
+      gRPC and HTTP gateway; UI consumes in U3.
+- [x] Op source persisted on the `operations` row (migration
+      `0007_op_source.sql`); dispatcher attaches it to context via
+      `manifests.WithSource(ctx, op.Source)` so the git hook can use it
+      after Save/Delete.
+- [x] Tests: round-trip materialize/delete, atomic overwrite (no
+      leftover .tmp files), path-traversal scrubbing, startup
+      reconciliation behavior, commit-message formatting, source
+      propagation via metadata, nothing-to-commit swallowed cleanly,
+      RepoService.Push/Pull preconditions, ahead/behind reporting.
 
 **Verifiable:** apply a VM via CLI, see `~/.openctl/manifests/proxmox.openctl.io/v1/VirtualMachine/foo.yaml`
 appear with a matching git commit. Delete the VM, see the file gone and

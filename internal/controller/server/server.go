@@ -49,6 +49,14 @@ type Options struct {
 	// Phase U1.4). When set, the auth interceptor accepts session tokens
 	// alongside the root bearer.
 	Sessions *auth.SessionStore
+	// DiskMirror is the on-disk projection of applied manifests (UI Phase
+	// U2.1). When set, the controller surfaces it via RepoService so the
+	// UI can show the directory + git status.
+	DiskMirror *manifests.DiskMirror
+	// Repo wraps DiskMirror.Root() with git operations (UI Phase U2.2).
+	// When set, RepoService.Push/Pull/GetStatus are fully functional; when
+	// nil, GetStatus still returns the dir but Push/Pull error.
+	Repo *manifests.Repo
 }
 
 // Server is the controller's gRPC server.
@@ -97,6 +105,9 @@ func New(opts Options) (*Server, error) {
 	apiv1.RegisterSchemaServiceServer(g, newSchemaHandler())
 	if opts.Sessions != nil {
 		apiv1.RegisterSessionServiceServer(g, newSessionHandler(opts.Sessions))
+	}
+	if opts.DiskMirror != nil {
+		apiv1.RegisterRepoServiceServer(g, newRepoHandler(opts.DiskMirror, opts.Repo))
 	}
 
 	reflection.Register(g)

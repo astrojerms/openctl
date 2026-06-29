@@ -15,7 +15,9 @@ import (
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
 
+	"github.com/openctl/openctl/internal/controller/manifests"
 	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 )
 
@@ -58,9 +60,15 @@ func NewHTTPGateway(ctx context.Context, grpcAddr string, caCertPEM []byte, serv
 		return nil, fmt.Errorf("dial gRPC for gateway: %w", err)
 	}
 
+	// WithMetadata: stamp every gateway-proxied request with the
+	// "x-openctl-source: ui" gRPC metadata header so resource handlers
+	// can tell browser ops from CLI ops (used by the git layer to label
+	// commits "via UI" vs "via CLI"). CLI clients call gRPC directly and
+	// don't set this header, so absence = CLI.
 	gw := runtime.NewServeMux(
-	// IncomingHeaderMatcher: also forward cookies via the openctl_session
-	// → authorization rewrite below; nothing else to do here.
+		runtime.WithMetadata(func(_ context.Context, _ *http.Request) metadata.MD {
+			return metadata.Pairs(sourceMetadataKey, manifests.SourceUI)
+		}),
 	)
 	if err := apiv1.RegisterPingServiceHandler(ctx, gw, conn); err != nil {
 		return nil, err
@@ -75,6 +83,9 @@ func NewHTTPGateway(ctx context.Context, grpcAddr string, caCertPEM []byte, serv
 		return nil, err
 	}
 	if err := apiv1.RegisterSessionServiceHandler(ctx, gw, conn); err != nil {
+		return nil, err
+	}
+	if err := apiv1.RegisterRepoServiceHandler(ctx, gw, conn); err != nil {
 		return nil, err
 	}
 

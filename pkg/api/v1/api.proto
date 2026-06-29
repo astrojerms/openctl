@@ -361,3 +361,54 @@ message OperationEvent {
   Operation operation = 1;
   bool terminal = 2;
 }
+
+// RepoService surfaces the controller's on-disk manifest mirror to the UI.
+// The mirror is materialized by the dispatcher on every successful
+// apply/delete (UI Phase U2.1); when git tracking is enabled (U2.2) each
+// commit lands here and an optional remote push is triggered per the
+// configured push mode.
+//
+// Pull is advisory only — it does NOT trigger any reapply or
+// reconciliation. The controller treats disk as a one-way materialized
+// output; the SQLite applied_manifests table is canonical.
+service RepoService {
+  rpc GetStatus(GetRepoStatusRequest) returns (GetRepoStatusResponse) {
+    option (google.api.http) = { get: "/v1/repo/status" };
+  }
+  rpc Push(PushRepoRequest) returns (PushRepoResponse) {
+    option (google.api.http) = { post: "/v1/repo:push" body: "*" };
+  }
+  rpc Pull(PullRepoRequest) returns (PullRepoResponse) {
+    option (google.api.http) = { post: "/v1/repo:pull" body: "*" };
+  }
+}
+
+message GetRepoStatusRequest {}
+
+// GetRepoStatusResponse is a snapshot of the manifest dir's git status.
+// enabled=false means git tracking is off (no `manifests.git.enabled`
+// in config); the dir and the other fields still describe the disk mirror.
+message GetRepoStatusResponse {
+  bool enabled = 1;        // git tracking turned on?
+  string dir = 2;          // absolute path to the manifest dir
+  string branch = 3;       // current branch ("" if no commits yet)
+  string head_sha = 4;     // short SHA of HEAD ("" if no commits yet)
+  string remote = 5;       // remote URL ("" if none configured)
+  bool clean = 6;          // true when working tree has no changes
+  repeated string dirty_paths = 7; // porcelain output (empty when clean)
+  // ahead/behind are -1 when no upstream tracking branch exists. ahead
+  // counts local-only commits; behind counts remote-only commits.
+  int32 ahead = 8;
+  int32 behind = 9;
+  string push_mode = 10;   // "onCommit" | "periodic" | "manual"
+}
+
+message PushRepoRequest {}
+message PushRepoResponse {
+  string message = 1; // human-readable summary ("pushed N commits to origin/main")
+}
+
+message PullRepoRequest {}
+message PullRepoResponse {
+  string message = 1;
+}

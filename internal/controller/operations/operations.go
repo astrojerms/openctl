@@ -59,6 +59,12 @@ type Operation struct {
 	SubmittedAt  string
 	StartedAt    string
 	CompletedAt  string
+	// Source is the originator of the op — "cli" or "ui". Empty for ops
+	// submitted before the source column existed; readers treat empty as
+	// "cli". The standard values are defined in the manifests package
+	// (SourceCLI, SourceUI); kept as a free-form string here so this
+	// package doesn't pull in manifests just for the constants.
+	Source string
 }
 
 // IsTerminal reports whether the operation has reached a final status —
@@ -138,10 +144,11 @@ func (s *Store) Submit(ctx context.Context, op *Operation) (*Operation, error) {
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO operations
 		   (id, parent_id, type, api_version, kind, resource_name, label,
-		    manifest_json, status, submitted_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		    manifest_json, status, submitted_at, source)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		op.ID, nullable(op.ParentID), op.Type, op.APIVersion, op.Kind, op.ResourceName,
 		nullable(op.Label), nullable(op.ManifestJSON), op.Status, op.SubmittedAt,
+		nullable(op.Source),
 	); err != nil {
 		return nil, fmt.Errorf("insert: %w", err)
 	}
@@ -408,7 +415,8 @@ func (s *Store) gcResource(ctx context.Context, apiVersion, kind, name string) e
 const baseSelect = `SELECT id, COALESCE(parent_id, ''), type, api_version, kind, resource_name,
 	COALESCE(label, ''),
 	COALESCE(manifest_json, ''), COALESCE(result_json, ''), status,
-	COALESCE(error, ''), submitted_at, COALESCE(started_at, ''), COALESCE(completed_at, '')
+	COALESCE(error, ''), submitted_at, COALESCE(started_at, ''), COALESCE(completed_at, ''),
+	COALESCE(source, '')
 	FROM operations`
 
 // rowScanner is the common interface implemented by sql.Row and sql.Rows.
@@ -423,6 +431,7 @@ func scanOp(s rowScanner) (*Operation, error) {
 		&op.Label,
 		&op.ManifestJSON, &op.ResultJSON, &op.Status,
 		&op.Error, &op.SubmittedAt, &op.StartedAt, &op.CompletedAt,
+		&op.Source,
 	); err != nil {
 		return nil, err
 	}
