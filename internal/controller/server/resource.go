@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -159,10 +160,27 @@ func (h *resourceHandler) Get(ctx context.Context, req *apiv1.GetRequest) (*apiv
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "encode: %v", err)
 	}
-	if err := h.attachDrift(ctx, out, r); err != nil {
-		return nil, status.Errorf(codes.Internal, "compute drift: %v", err)
+
+	resp := &apiv1.GetResponse{Resource: out}
+	if h.manifests != nil {
+		desired, appliedAt, lerr := h.manifests.LoadWithTime(ctx,
+			r.APIVersion, r.Kind, r.Metadata.Name)
+		if lerr != nil {
+			return nil, status.Errorf(codes.Internal, "load applied manifest: %v", lerr)
+		}
+		if desired != nil {
+			out.Drift = computeDrift(desired.Spec, r.Spec)
+			applied, perr := resourceToProto(desired)
+			if perr != nil {
+				return nil, status.Errorf(codes.Internal, "encode applied: %v", perr)
+			}
+			resp.Applied = applied
+			if !appliedAt.IsZero() {
+				resp.AppliedAt = appliedAt.UTC().Format(time.RFC3339Nano)
+			}
+		}
 	}
-	return &apiv1.GetResponse{Resource: out}, nil
+	return resp, nil
 }
 
 func (h *resourceHandler) List(ctx context.Context, req *apiv1.ListRequest) (*apiv1.ListResponse, error) {

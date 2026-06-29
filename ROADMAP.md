@@ -18,9 +18,10 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
-UI Phase U3 (browser UI shell) underway. U3.1 (scaffold + login) and
-U3.2 (layout shell + resource list with state/drift badges) shipped;
-next sub-phase is U3.3 (resource detail pane).
+UI Phase U3 (browser UI shell) underway. U3.1 (scaffold + login), U3.2
+(layout shell + resource list), and U3.3 (resource detail pane with
+applied-vs-observed) shipped; next sub-phase is U3.4 (ops drawer + live
+Watch streams).
 
 ## Suggested next order
 
@@ -134,7 +135,11 @@ committing to a phase.
             provider, main pane); hash router; kind catalogue with live
             counts (ListSchemas + parallel List fan-out); per-kind
             resource list with state + drift badges.
-      - [ ] **U3.3** — resource detail (applied/observed/drift/children).
+      - [x] **U3.3** — Resource detail (desired manifest / observed
+            state / drift diff / last-applied timestamp). Proto: Get
+            response gains `applied` + `applied_at`. Owner-ref +
+            composite children tree deferred (needs proto relationship
+            surface, lands with arch Phase 8).
       - [ ] **U3.4** — ops drawer + live Watch streams.
       - [ ] **U3.5** — git status indicator + Push now + e2e tests.
 - [ ] **Phase U4** — CUE/manifest editor (Monaco-based, server-side

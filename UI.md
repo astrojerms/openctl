@@ -228,6 +228,14 @@ a deletion commit. With remote configured, see the commit reach origin.
       proxmox-vs-k3s status-key inconsistency (`status.state` vs
       `status.phase`). Bottom ops drawer deferred to U3.4 alongside
       Watch wiring; detail pane deferred to U3.3.
+- [x] **U3.3** — Resource detail pane: desired manifest (from
+      applied_manifests), observed state (provider Get), drift diff
+      table, last-applied timestamp. Proto extension: GetResponse now
+      carries `applied` (Resource) + `applied_at` (RFC3339). Server
+      loads from manifests.Store via new `LoadWithTime` helper that
+      preserves the existing Load signature. Owner-ref + composite
+      children tree deferred — needs proto-level relationship surface
+      (planned alongside arch Phase 8 K3sNode work).
 
 **Deliverables:**
 
@@ -242,9 +250,12 @@ a deletion commit. With remote configured, see the commit reach origin.
       counts; main pane. Bottom drawer for op history deferred to U3.4
       (lands with Watch streams).
 - [x] Resource list per kind: name, state badge, drift badge. Click →
-      detail (placeholder until U3.3). Last-applied timestamp deferred
-      until the controller surfaces it on Resource (currently only on
-      Operation rows).
+      detail. Last-applied timestamp surfaces on the detail pane (not
+      the list) via GetResponse.applied_at; adding it to List would
+      require N joins on applied_manifests per row.
+- [x] Resource detail (read-only): desired (applied) manifest, observed
+      state, drift diff. Owner-ref + children tree deferred — see U3.3
+      sub-phase note above.
 - [ ] Layout shell: left nav grouped by `apiVersion/kind` with resource
       counts; main pane; bottom drawer for op history.
 - [ ] Resource list per kind: name, drift badge (count of drifted
