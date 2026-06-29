@@ -3,13 +3,48 @@ package k3s
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/openctl/openctl/internal/controller/operations"
 	"github.com/openctl/openctl/internal/controller/providers"
 	"github.com/openctl/openctl/pkg/protocol"
 )
+
+// recordedCall tracks one Begin/End pair from a fake child recorder. Used by
+// the apply-existing tests to assert that the k3s provider routes per-VM
+// work through the child-ops surface.
+type recordedCall struct {
+	Op      operations.Operation
+	Ok      bool
+	Err     string
+	ChildID string
+}
+
+type fakeRecorder struct {
+	calls []recordedCall
+	seq   int
+}
+
+func (r *fakeRecorder) Begin(_ context.Context, op *operations.Operation) (string, error) {
+	r.seq++
+	cid := fmt.Sprintf("child-%d", r.seq)
+	r.calls = append(r.calls, recordedCall{Op: *op, ChildID: cid})
+	return cid, nil
+}
+
+func (r *fakeRecorder) End(_ context.Context, childID string, ok bool, errMsg, _ string) error {
+	for i := range r.calls {
+		if r.calls[i].ChildID == childID {
+			r.calls[i].Ok = ok
+			r.calls[i].Err = errMsg
+			return nil
+		}
+	}
+	return nil
+}
 
 // fakeVMs satisfies VMApplier for tests where we don't need real Proxmox.
 type fakeVMs struct {
@@ -364,6 +399,85 @@ children:
 	}
 	if len(vms.deleted) != 1 || vms.deleted[0][1] != "dev-worker-1" {
 		t.Errorf("expected delete of dev-worker-1, got %v", vms.deleted)
+	}
+}
+
+func TestApplyExistingScaleDownRecordsChildOpsViaRecorder(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeClusterState(t, home, "dev", `apiVersion: k3s.openctl.io/v1
+kind: Cluster
+metadata:
+  name: dev
+spec: {}
+children:
+  - provider: proxmox
+    kind: VirtualMachine
+    name: dev-cp-0
+  - provider: proxmox
+    kind: VirtualMachine
+    name: dev-worker-0
+  - provider: proxmox
+    kind: VirtualMachine
+    name: dev-worker-1
+`)
+	vms := &fakeVMs{}
+	p := New(&protocol.ProviderConfig{}, vms)
+	manifest := scaleDownManifest(1)
+	manifest.Metadata.Annotations = map[string]string{
+		"openctl.io/allow-destructive": "true",
+	}
+	rec := &fakeRecorder{}
+	ctx := operations.WithRecorder(context.Background(), rec, "parent-op-id")
+	if _, err := p.Apply(ctx, manifest); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	// One delete child op for the removed worker, with the right shape.
+	if len(rec.calls) != 1 {
+		t.Fatalf("recorder calls = %d, want 1", len(rec.calls))
+	}
+	c := rec.calls[0]
+	if c.Op.Type != operations.TypeDelete {
+		t.Errorf("child type = %q, want delete", c.Op.Type)
+	}
+	if c.Op.Kind != "VirtualMachine" || c.Op.ResourceName != "dev-worker-1" {
+		t.Errorf("child target = %s/%s, want VirtualMachine/dev-worker-1", c.Op.Kind, c.Op.ResourceName)
+	}
+	if !c.Ok {
+		t.Errorf("child should have ended with ok=true, got err=%q", c.Err)
+	}
+}
+
+func TestApplyExistingNoChangesEmitsNoChildOps(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeClusterState(t, home, "dev", `apiVersion: k3s.openctl.io/v1
+kind: Cluster
+metadata:
+  name: dev
+spec:
+  nodes:
+    controlPlane:
+      count: 1
+    workers:
+      - name: worker
+        count: 1
+children:
+  - provider: proxmox
+    kind: VirtualMachine
+    name: dev-cp-0
+  - provider: proxmox
+    kind: VirtualMachine
+    name: dev-worker-0
+`)
+	rec := &fakeRecorder{}
+	p := New(&protocol.ProviderConfig{}, &fakeVMs{})
+	ctx := operations.WithRecorder(context.Background(), rec, "parent-op-id")
+	if _, err := p.Apply(ctx, scaleDownManifest(1)); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if len(rec.calls) != 0 {
+		t.Errorf("no-op apply should emit no child ops, got %d", len(rec.calls))
 	}
 }
 

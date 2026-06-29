@@ -144,8 +144,8 @@ service OperationService {
 
 message Operation {
   string id = 1;
-  string parent_id = 2;          // empty for top-level ops; populated in Phase 4
-  string type = 3;               // "apply" | "delete"
+  string parent_id = 2;          // empty for top-level ops; populated for child rows
+  string type = 3;               // "apply" | "delete" | "step"
   string api_version = 4;
   string kind = 5;
   string resource_name = 6;
@@ -155,10 +155,20 @@ message Operation {
   string started_at = 10;        // empty until claimed
   string completed_at = 11;      // empty until terminal
   Resource result = 12;          // populated on succeeded apply
+  // Phase 4.5: human-readable label for sub-step ops (e.g. "install-k3s").
+  // Empty for top-level apply/delete unless explicitly set.
+  string label = 13;
+  // Phase 4.5: child operations for composite resources. Populated only when
+  // GetOperation is called with include_children=true (omitted from List
+  // responses to keep them cheap).
+  repeated Operation children = 14;
 }
 
 message GetOperationRequest {
   string id = 1;
+  // Phase 4.5: include child operations in the response. Children are
+  // ordered oldest first. List responses never include children.
+  bool include_children = 2;
 }
 
 message ListOperationsRequest {

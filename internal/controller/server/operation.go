@@ -38,7 +38,24 @@ func (h *operationHandler) GetOperation(ctx context.Context, req *apiv1.GetOpera
 		}
 		return nil, status.Errorf(codes.Internal, "get: %v", err)
 	}
-	return opToProto(op)
+	pb, err := opToProto(op)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "encode: %v", err)
+	}
+	if req.GetIncludeChildren() {
+		children, err := h.store.ListChildren(ctx, op.ID)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "list children: %v", err)
+		}
+		for _, c := range children {
+			cpb, err := opToProto(c)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "encode child %s: %v", c.ID, err)
+			}
+			pb.Children = append(pb.Children, cpb)
+		}
+	}
+	return pb, nil
 }
 
 func (h *operationHandler) ListOperations(ctx context.Context, req *apiv1.ListOperationsRequest) (*apiv1.ListOperationsResponse, error) {
@@ -73,6 +90,7 @@ func opToProto(op *operations.Operation) (*apiv1.Operation, error) {
 		ApiVersion:   op.APIVersion,
 		Kind:         op.Kind,
 		ResourceName: op.ResourceName,
+		Label:        op.Label,
 		Status:       op.Status,
 		Error:        op.Error,
 		SubmittedAt:  op.SubmittedAt,

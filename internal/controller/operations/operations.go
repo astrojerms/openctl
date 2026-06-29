@@ -20,11 +20,17 @@ import (
 	"time"
 )
 
-// Op type values ("apply", "delete"). Kept as string constants so the wire
-// format and the SQL value match.
+// Op type values. Kept as string constants so the wire format and the SQL
+// value match.
+//
+// "apply" and "delete" are the dispatched top-level operation types. "step"
+// is used by Phase 4.5 child rows for sub-operations that don't correspond
+// to a real resource apply (e.g. "install-k3s") — they exist purely to
+// surface substep progress under a parent.
 const (
 	TypeApply  = "apply"
 	TypeDelete = "delete"
+	TypeStep   = "step"
 )
 
 // Status values for the op lifecycle.
@@ -45,6 +51,7 @@ type Operation struct {
 	APIVersion   string
 	Kind         string
 	ResourceName string
+	Label        string
 	ManifestJSON string
 	ResultJSON   string
 	Status       string
@@ -130,11 +137,11 @@ func (s *Store) Submit(ctx context.Context, op *Operation) (*Operation, error) {
 
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO operations
-		   (id, parent_id, type, api_version, kind, resource_name,
+		   (id, parent_id, type, api_version, kind, resource_name, label,
 		    manifest_json, status, submitted_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		op.ID, nullable(op.ParentID), op.Type, op.APIVersion, op.Kind, op.ResourceName,
-		nullable(op.ManifestJSON), op.Status, op.SubmittedAt,
+		nullable(op.Label), nullable(op.ManifestJSON), op.Status, op.SubmittedAt,
 	); err != nil {
 		return nil, fmt.Errorf("insert: %w", err)
 	}
@@ -269,6 +276,83 @@ func (s *Store) Complete(ctx context.Context, id, status, errMsg, resultJSON str
 	return nil
 }
 
+// BeginChild inserts a child operation row in `running` state under the
+// given parent and returns it. Unlike Submit, this does NOT run the
+// fail-fast concurrency check — the provider executing on behalf of the
+// parent has already serialized work and knows what it's doing.
+//
+// Child rows make sub-step progress visible (one row per VM applied, one
+// row for "install-k3s", etc.) but aren't independently dispatched: the
+// parent's provider runs them in-process and reports terminal status via
+// EndChild. Restart semantics: if the controller dies mid-parent, the
+// parent's MarkRunningInterrupted sweep does NOT touch its children
+// (they're already non-pending; orphaned `running` children are surfaced
+// as their own interrupted rows on the next startup sweep).
+func (s *Store) BeginChild(ctx context.Context, parentID string, op *Operation) (*Operation, error) {
+	if parentID == "" {
+		return nil, fmt.Errorf("begin child: parentID required")
+	}
+	if op.Type == "" {
+		return nil, fmt.Errorf("begin child: type required")
+	}
+	op.ID = newOpID()
+	op.ParentID = parentID
+	op.Status = StatusRunning
+	op.SubmittedAt = nowUTC()
+	op.StartedAt = op.SubmittedAt
+
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO operations
+		   (id, parent_id, type, api_version, kind, resource_name, label,
+		    manifest_json, status, submitted_at, started_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		op.ID, op.ParentID, op.Type, op.APIVersion, op.Kind, op.ResourceName,
+		nullable(op.Label), nullable(op.ManifestJSON), op.Status,
+		op.SubmittedAt, op.StartedAt,
+	); err != nil {
+		return nil, fmt.Errorf("insert child: %w", err)
+	}
+	return op, nil
+}
+
+// EndChild writes the terminal status (succeeded|failed) for a child op.
+// resultJSON may be empty.
+func (s *Store) EndChild(ctx context.Context, childID, status, errMsg, resultJSON string) error {
+	if status != StatusSucceeded && status != StatusFailed {
+		return fmt.Errorf("end child: status must be %s or %s, got %s", StatusSucceeded, StatusFailed, status)
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE operations SET status = ?, error = ?, result_json = ?, completed_at = ?
+		 WHERE id = ?`,
+		status, nullable(errMsg), nullable(resultJSON), nowUTC(), childID,
+	)
+	return err
+}
+
+// ListChildren returns the children of the given parent op, oldest first.
+// Empty slice if no children exist.
+func (s *Store) ListChildren(ctx context.Context, parentID string) ([]*Operation, error) {
+	if parentID == "" {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx,
+		baseSelect+` WHERE parent_id = ? ORDER BY submitted_at ASC`,
+		parentID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []*Operation
+	for rows.Next() {
+		op, err := scanOp(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, op)
+	}
+	return out, rows.Err()
+}
+
 // MarkRunningInterrupted rewrites every op currently in `running` as
 // `interrupted`. Called once at controller startup so the user knows which
 // ops were active when the previous controller died.
@@ -310,6 +394,7 @@ func (s *Store) gcResource(ctx context.Context, apiVersion, kind, name string) e
 }
 
 const baseSelect = `SELECT id, COALESCE(parent_id, ''), type, api_version, kind, resource_name,
+	COALESCE(label, ''),
 	COALESCE(manifest_json, ''), COALESCE(result_json, ''), status,
 	COALESCE(error, ''), submitted_at, COALESCE(started_at, ''), COALESCE(completed_at, '')
 	FROM operations`
@@ -323,6 +408,7 @@ func scanOp(s rowScanner) (*Operation, error) {
 	op := &Operation{}
 	if err := s.Scan(
 		&op.ID, &op.ParentID, &op.Type, &op.APIVersion, &op.Kind, &op.ResourceName,
+		&op.Label,
 		&op.ManifestJSON, &op.ResultJSON, &op.Status,
 		&op.Error, &op.SubmittedAt, &op.StartedAt, &op.CompletedAt,
 	); err != nil {

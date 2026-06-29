@@ -772,19 +772,26 @@ func (x *DeleteResponse) GetMessage() string {
 }
 
 type Operation struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	ParentId      string                 `protobuf:"bytes,2,opt,name=parent_id,json=parentId,proto3" json:"parent_id,omitempty"` // empty for top-level ops; populated in Phase 4
-	Type          string                 `protobuf:"bytes,3,opt,name=type,proto3" json:"type,omitempty"`                         // "apply" | "delete"
-	ApiVersion    string                 `protobuf:"bytes,4,opt,name=api_version,json=apiVersion,proto3" json:"api_version,omitempty"`
-	Kind          string                 `protobuf:"bytes,5,opt,name=kind,proto3" json:"kind,omitempty"`
-	ResourceName  string                 `protobuf:"bytes,6,opt,name=resource_name,json=resourceName,proto3" json:"resource_name,omitempty"`
-	Status        string                 `protobuf:"bytes,7,opt,name=status,proto3" json:"status,omitempty"`                               // pending | running | succeeded | failed | interrupted
-	Error         string                 `protobuf:"bytes,8,opt,name=error,proto3" json:"error,omitempty"`                                 // populated on failed/interrupted
-	SubmittedAt   string                 `protobuf:"bytes,9,opt,name=submitted_at,json=submittedAt,proto3" json:"submitted_at,omitempty"`  // RFC3339
-	StartedAt     string                 `protobuf:"bytes,10,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`       // empty until claimed
-	CompletedAt   string                 `protobuf:"bytes,11,opt,name=completed_at,json=completedAt,proto3" json:"completed_at,omitempty"` // empty until terminal
-	Result        *Resource              `protobuf:"bytes,12,opt,name=result,proto3" json:"result,omitempty"`                              // populated on succeeded apply
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Id           string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	ParentId     string                 `protobuf:"bytes,2,opt,name=parent_id,json=parentId,proto3" json:"parent_id,omitempty"` // empty for top-level ops; populated for child rows
+	Type         string                 `protobuf:"bytes,3,opt,name=type,proto3" json:"type,omitempty"`                         // "apply" | "delete" | "step"
+	ApiVersion   string                 `protobuf:"bytes,4,opt,name=api_version,json=apiVersion,proto3" json:"api_version,omitempty"`
+	Kind         string                 `protobuf:"bytes,5,opt,name=kind,proto3" json:"kind,omitempty"`
+	ResourceName string                 `protobuf:"bytes,6,opt,name=resource_name,json=resourceName,proto3" json:"resource_name,omitempty"`
+	Status       string                 `protobuf:"bytes,7,opt,name=status,proto3" json:"status,omitempty"`                               // pending | running | succeeded | failed | interrupted
+	Error        string                 `protobuf:"bytes,8,opt,name=error,proto3" json:"error,omitempty"`                                 // populated on failed/interrupted
+	SubmittedAt  string                 `protobuf:"bytes,9,opt,name=submitted_at,json=submittedAt,proto3" json:"submitted_at,omitempty"`  // RFC3339
+	StartedAt    string                 `protobuf:"bytes,10,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`       // empty until claimed
+	CompletedAt  string                 `protobuf:"bytes,11,opt,name=completed_at,json=completedAt,proto3" json:"completed_at,omitempty"` // empty until terminal
+	Result       *Resource              `protobuf:"bytes,12,opt,name=result,proto3" json:"result,omitempty"`                              // populated on succeeded apply
+	// Phase 4.5: human-readable label for sub-step ops (e.g. "install-k3s").
+	// Empty for top-level apply/delete unless explicitly set.
+	Label string `protobuf:"bytes,13,opt,name=label,proto3" json:"label,omitempty"`
+	// Phase 4.5: child operations for composite resources. Populated only when
+	// GetOperation is called with include_children=true (omitted from List
+	// responses to keep them cheap).
+	Children      []*Operation `protobuf:"bytes,14,rep,name=children,proto3" json:"children,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -903,11 +910,28 @@ func (x *Operation) GetResult() *Resource {
 	return nil
 }
 
+func (x *Operation) GetLabel() string {
+	if x != nil {
+		return x.Label
+	}
+	return ""
+}
+
+func (x *Operation) GetChildren() []*Operation {
+	if x != nil {
+		return x.Children
+	}
+	return nil
+}
+
 type GetOperationRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// Phase 4.5: include child operations in the response. Children are
+	// ordered oldest first. List responses never include children.
+	IncludeChildren bool `protobuf:"varint,2,opt,name=include_children,json=includeChildren,proto3" json:"include_children,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *GetOperationRequest) Reset() {
@@ -945,6 +969,13 @@ func (x *GetOperationRequest) GetId() string {
 		return x.Id
 	}
 	return ""
+}
+
+func (x *GetOperationRequest) GetIncludeChildren() bool {
+	if x != nil {
+		return x.IncludeChildren
+	}
+	return false
 }
 
 type ListOperationsRequest struct {
@@ -1131,7 +1162,7 @@ const file_api_proto_rawDesc = "" +
 	"\x04name\x18\x03 \x01(\tR\x04name\"M\n" +
 	"\x0eDeleteResponse\x12!\n" +
 	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xe7\x02\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xb0\x03\n" +
 	"\tOperation\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\tparent_id\x18\x02 \x01(\tR\bparentId\x12\x12\n" +
@@ -1147,9 +1178,12 @@ const file_api_proto_rawDesc = "" +
 	"started_at\x18\n" +
 	" \x01(\tR\tstartedAt\x12!\n" +
 	"\fcompleted_at\x18\v \x01(\tR\vcompletedAt\x12,\n" +
-	"\x06result\x18\f \x01(\v2\x14.openctl.v1.ResourceR\x06result\"%\n" +
+	"\x06result\x18\f \x01(\v2\x14.openctl.v1.ResourceR\x06result\x12\x14\n" +
+	"\x05label\x18\r \x01(\tR\x05label\x121\n" +
+	"\bchildren\x18\x0e \x03(\v2\x15.openctl.v1.OperationR\bchildren\"P\n" +
 	"\x13GetOperationRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"\x9f\x01\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12)\n" +
+	"\x10include_children\x18\x02 \x01(\bR\x0fincludeChildren\"\x9f\x01\n" +
 	"\x15ListOperationsRequest\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12\x1f\n" +
 	"\vapi_version\x18\x02 \x01(\tR\n" +
@@ -1218,26 +1252,27 @@ var file_api_proto_depIdxs = []int32{
 	2,  // 7: openctl.v1.GetResponse.resource:type_name -> openctl.v1.Resource
 	2,  // 8: openctl.v1.ListResponse.resources:type_name -> openctl.v1.Resource
 	2,  // 9: openctl.v1.Operation.result:type_name -> openctl.v1.Resource
-	13, // 10: openctl.v1.ListOperationsResponse.operations:type_name -> openctl.v1.Operation
-	0,  // 11: openctl.v1.PingService.Ping:input_type -> openctl.v1.PingRequest
-	5,  // 12: openctl.v1.ResourceService.Apply:input_type -> openctl.v1.ApplyRequest
-	7,  // 13: openctl.v1.ResourceService.Get:input_type -> openctl.v1.GetRequest
-	9,  // 14: openctl.v1.ResourceService.List:input_type -> openctl.v1.ListRequest
-	11, // 15: openctl.v1.ResourceService.Delete:input_type -> openctl.v1.DeleteRequest
-	14, // 16: openctl.v1.OperationService.GetOperation:input_type -> openctl.v1.GetOperationRequest
-	15, // 17: openctl.v1.OperationService.ListOperations:input_type -> openctl.v1.ListOperationsRequest
-	1,  // 18: openctl.v1.PingService.Ping:output_type -> openctl.v1.PingResponse
-	6,  // 19: openctl.v1.ResourceService.Apply:output_type -> openctl.v1.ApplyResponse
-	8,  // 20: openctl.v1.ResourceService.Get:output_type -> openctl.v1.GetResponse
-	10, // 21: openctl.v1.ResourceService.List:output_type -> openctl.v1.ListResponse
-	12, // 22: openctl.v1.ResourceService.Delete:output_type -> openctl.v1.DeleteResponse
-	13, // 23: openctl.v1.OperationService.GetOperation:output_type -> openctl.v1.Operation
-	16, // 24: openctl.v1.OperationService.ListOperations:output_type -> openctl.v1.ListOperationsResponse
-	18, // [18:25] is the sub-list for method output_type
-	11, // [11:18] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	13, // 10: openctl.v1.Operation.children:type_name -> openctl.v1.Operation
+	13, // 11: openctl.v1.ListOperationsResponse.operations:type_name -> openctl.v1.Operation
+	0,  // 12: openctl.v1.PingService.Ping:input_type -> openctl.v1.PingRequest
+	5,  // 13: openctl.v1.ResourceService.Apply:input_type -> openctl.v1.ApplyRequest
+	7,  // 14: openctl.v1.ResourceService.Get:input_type -> openctl.v1.GetRequest
+	9,  // 15: openctl.v1.ResourceService.List:input_type -> openctl.v1.ListRequest
+	11, // 16: openctl.v1.ResourceService.Delete:input_type -> openctl.v1.DeleteRequest
+	14, // 17: openctl.v1.OperationService.GetOperation:input_type -> openctl.v1.GetOperationRequest
+	15, // 18: openctl.v1.OperationService.ListOperations:input_type -> openctl.v1.ListOperationsRequest
+	1,  // 19: openctl.v1.PingService.Ping:output_type -> openctl.v1.PingResponse
+	6,  // 20: openctl.v1.ResourceService.Apply:output_type -> openctl.v1.ApplyResponse
+	8,  // 21: openctl.v1.ResourceService.Get:output_type -> openctl.v1.GetResponse
+	10, // 22: openctl.v1.ResourceService.List:output_type -> openctl.v1.ListResponse
+	12, // 23: openctl.v1.ResourceService.Delete:output_type -> openctl.v1.DeleteResponse
+	13, // 24: openctl.v1.OperationService.GetOperation:output_type -> openctl.v1.Operation
+	16, // 25: openctl.v1.OperationService.ListOperations:output_type -> openctl.v1.ListOperationsResponse
+	19, // [19:26] is the sub-list for method output_type
+	12, // [12:19] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_api_proto_init() }

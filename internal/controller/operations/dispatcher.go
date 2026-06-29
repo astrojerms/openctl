@@ -135,6 +135,11 @@ func (d *Dispatcher) execute(ctx context.Context, op *Operation) {
 		return
 	}
 
+	// Inject a recorder so composite-resource providers (Cluster) can record
+	// per-VM and per-step child ops under this parent. Atomic providers
+	// (VirtualMachine) never call it, so this is a no-op for them.
+	ctx = WithRecorder(ctx, StoreRecorder{Store: d.store}, op.ID)
+
 	switch op.Type {
 	case TypeApply:
 		var manifest protocol.Resource

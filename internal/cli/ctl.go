@@ -134,7 +134,8 @@ func newCtlOpCommand() *cobra.Command {
 }
 
 func newCtlOpGetCommand() *cobra.Command {
-	return &cobra.Command{
+	var noChildren bool
+	cmd := &cobra.Command{
 		Use:   "get <op-id>",
 		Short: "Get an operation by ID",
 		Args:  cobra.ExactArgs(1),
@@ -145,13 +146,18 @@ func newCtlOpGetCommand() *cobra.Command {
 			}
 			defer func() { _ = conn.Close() }()
 			ctx := metadata.AppendToOutgoingContext(cmd.Context(), "authorization", "Bearer "+token)
-			op, err := apiv1.NewOperationServiceClient(conn).GetOperation(ctx, &apiv1.GetOperationRequest{Id: args[0]})
+			op, err := apiv1.NewOperationServiceClient(conn).GetOperation(ctx, &apiv1.GetOperationRequest{
+				Id:              args[0],
+				IncludeChildren: !noChildren,
+			})
 			if err != nil {
 				return err
 			}
 			return printOp(op)
 		},
 	}
+	cmd.Flags().BoolVar(&noChildren, "no-children", false, "skip fetching child operations")
+	return cmd
 }
 
 func newCtlOpListCommand() *cobra.Command {

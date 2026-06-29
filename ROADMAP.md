@@ -45,9 +45,9 @@ phases, and 4.5 / 5.x meaningfully improve the UI's UX. See
 
 ### Followups (pending)
 
-- [ ] **Phase 4.5** — Parent-child operation rows (Cluster apply splits
-      into per-VM + k3s-install + agent-install children). Unlocks
-      richer op UI in U3/U7.
+- [x] **Phase 4.5** — Parent-child operation rows (descriptive child
+      ops: per-VM apply + k3s-install rows under the parent). True
+      suspending-dispatcher orchestration deferred to arch Phase 9-10.
 - [ ] **Phase 4.5** — QGA-based IP discovery (lift the
       `spec.network.staticIPs.*` requirement in the controller path).
 - [ ] **Phase 5.x** — Cluster apply count-up (add nodes to a live

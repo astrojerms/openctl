@@ -269,11 +269,18 @@ stays unchanged — it's called from in-process Go now instead of via exec.
       NotFound vs. existing state, Delete cascades to fake VM provider,
       Delete on missing is idempotent); resource-handler integration
       test for the FailedPrecondition path on owned-resource delete.
-- [ ] Phase 4.5 followup: split cluster apply into parent + child ops
-      (one row per VM apply + one for k3s install + one for agent
-      install). Today everything runs as one op; surfacing the steps
-      individually needs the operations layer to model parent_id +
-      child progress aggregation.
+- [x] Phase 4.5 followup: split cluster apply into parent + child ops.
+      Each per-VM apply + the InstallK3s call now write a row to the
+      operations table with `parent_id` set to the cluster op. `op get
+      <id> --include-children` (default on for the CLI) returns the
+      child rows. Implemented as **descriptive child ops** — the rows
+      are real persisted operations but the parent's provider executes
+      them in-process rather than each child being independently
+      claimed/dispatched. That keeps the suspending-scheduler complexity
+      out of v1 while still unlocking the substep visibility Phase U7
+      needs. A "true" parent-child orchestration (each child claimable,
+      retryable in isolation, parent suspends until children complete)
+      is the architectural Phase 9-10 typed-task-IR work.
 - [ ] Phase 4.5 followup: QGA-based IP discovery in the controller
       path (current path requires `spec.network.staticIPs.{startIP,
       gateway,netmask}`).

@@ -21,6 +21,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/openctl/openctl/internal/controller/operations"
 	"github.com/openctl/openctl/internal/controller/providers"
 	k3scluster "github.com/openctl/openctl/pkg/k3s/cluster"
 	k3sresources "github.com/openctl/openctl/pkg/k3s/resources"
@@ -135,25 +136,37 @@ func (p *Provider) Apply(ctx context.Context, manifest *protocol.Resource) (*pro
 	creator := k3scluster.NewCreator(name, spec, p.config)
 	dispatches := creator.GenerateDispatchRequests()
 
+	rec := operations.RecorderFrom(ctx)
+
 	// Apply each VM via the in-process VM provider. Phase 4 runs them
-	// sequentially in this single op; Phase 4.5 may parallelize via the
-	// child-ops mechanism.
+	// sequentially in this single op; Phase 4.5 surfaces each as a child
+	// op row so the UI/CLI can show per-VM progress. Parallelism is a
+	// separate followup.
 	for _, d := range dispatches {
-		if _, err := p.vms.Apply(ctx, d.Manifest); err != nil {
-			return nil, fmt.Errorf("apply VM %s: %w", d.Manifest.Metadata.Name, err)
+		vmManifest := d.Manifest
+		if err := runChildVMApply(ctx, rec, vmManifest, p.vms); err != nil {
+			return nil, err
 		}
 	}
 
 	// Install k3s + agent. cluster.InstallK3s does the SSH heavy lifting
-	// + cert generation + verification.
-	result, err := creator.InstallK3s(staticIPs)
+	// + cert generation + verification — surfaced as one child step op
+	// since splitting the per-node SSH work into separate rows would
+	// require restructuring InstallK3s itself.
+	result, err := runChildStep(ctx, rec, name, "install-k3s",
+		"Install k3s + openctl-k3s-agent on all nodes",
+		func() (any, error) { return creator.InstallK3s(staticIPs) })
 	if err != nil {
 		return nil, fmt.Errorf("install k3s: %w", err)
+	}
+	installResult, _ := result.(*k3scluster.InstallResult)
+	if installResult == nil {
+		return nil, fmt.Errorf("install k3s: nil result")
 	}
 
 	// Persist state file (legacy YAML location for now; the controller may
 	// migrate this to its DB in a later phase).
-	state, err := p.saveState(name, manifest, spec, result, staticIPs)
+	state, err := p.saveState(name, manifest, spec, installResult, staticIPs)
 	if err != nil {
 		return nil, fmt.Errorf("save state: %w", err)
 	}
@@ -210,15 +223,14 @@ func (p *Provider) applyExisting(ctx context.Context, manifest *protocol.Resourc
 	// Execute removals. Note: no kubectl drain (homelab assumption — workloads
 	// tolerate node loss). Workers go first, then CPs, so we drop schedulable
 	// capacity before touching apiserver replicas.
+	rec := operations.RecorderFrom(ctx)
 	for _, w := range plan.removeWorkers {
-		if err := p.vms.Delete(ctx, "VirtualMachine", w); err != nil &&
-			!strings.Contains(err.Error(), "not found") {
+		if err := runChildVMDelete(ctx, rec, w, p.vms); err != nil {
 			return nil, fmt.Errorf("delete worker %s: %w", w, err)
 		}
 	}
 	for _, cp := range plan.removeCPs {
-		if err := p.vms.Delete(ctx, "VirtualMachine", cp); err != nil &&
-			!strings.Contains(err.Error(), "not found") {
+		if err := runChildVMDelete(ctx, rec, cp, p.vms); err != nil {
 			return nil, fmt.Errorf("delete control-plane %s: %w", cp, err)
 		}
 	}
