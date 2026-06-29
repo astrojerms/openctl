@@ -138,10 +138,16 @@ export interface ValidateResponse {
   errors?: string[];
 }
 
+export interface GetFormSchemaResponse {
+  json?: string;
+}
+
 export const schemas = {
   list: () => api.get<ListSchemasResponse>('/v1/schemas'),
   validate: (resource: Resource | Partial<Resource>) =>
     api.post<ValidateResponse>('/v1/schemas:validate', { resource }),
+  getForm: (apiVersion: string, kind: string) =>
+    api.post<GetFormSchemaResponse>('/v1/schemas:getForm', { apiVersion, kind }),
 };
 
 // --- Resources -----------------------------------------------------------

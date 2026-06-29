@@ -391,6 +391,20 @@ CUE. AWS-console-shape.
 
 **Sub-phases:**
 
+- [x] **U5.2** — Svelte form renderer with live YAML preview. The
+      edit pane gets a three-way view toggle: Form / Editor / Diff.
+      Form view loads the U5.1 Field tree via `schemas.getForm(av, kind)`,
+      seeds state from the currently-applied manifest via
+      `fromManifest`, and renders a recursive `FormField.svelte` that
+      dispatches on `field.type`: text input (string), number input
+      with min/max/step (int/number), checkbox (bool), recursive
+      object/array, freeform textarea (any), greyed-out tile
+      (unsupported). Array fields get add/remove row controls; const
+      fields render read-only. Edits in the form drive the same `text`
+      state the editor uses, so Validate + DryRunApply preview + Apply
+      keep working unchanged. The right pane shows the live-generated
+      YAML manifest. `scrubEmpty` drops empty optional fields from the
+      generated manifest so the preview stays clean.
 - [x] **U5.1** — Form schema Go package + `SchemaService.GetFormSchema`
       RPC. `internal/schema/form` walks a CUE value into a typed
       `Field` tree (strings/ints/numbers/bools/objects/arrays/any/
@@ -415,16 +429,16 @@ CUE. AWS-console-shape.
       patterns + enums + free disjunctions deferred to U5.3 (emit
       `unsupported` leaves for now).
 - [x] `SchemaService.GetFormSchema(kind)` RPC returns the form schema.
-- [ ] Form renderer in Svelte: stepped sections (AWS-style "step 1:
-      compute, step 2: network, step 3: review"), inline validation
-      from the form schema constraints, sensible defaults pulled from
-      CUE defaults.
-- [ ] Live preview pane: the manifest the form is currently generating,
+- [x] Form renderer in Svelte: recursive `FormField.svelte` with
+      sensible defaults from CUE defaults. Stepped sections deferred
+      to U5.3; current renderer is a single scrollable form.
+- [x] Live preview pane: the manifest the form is currently generating,
       rendered as YAML, updates as you type.
-- [ ] Toggle between form view and CUE editor view (same underlying
-      manifest). Switching from CUE → form parses; if the CUE has
-      hand-edits the form can't represent, the toggle is disabled with
-      a tooltip showing the offending fields.
+- [x] Toggle between form view and CUE editor view (same underlying
+      manifest, three-way: Form / Editor / Diff). Switching Editor →
+      Form re-seeds state from the parsed YAML. Detecting
+      non-roundtrippable hand-edits and disabling the toggle ships in
+      U5.4.
 - [ ] Review-before-apply screen showing the diff (via `DryRunApply`)
       and the same destructive gates as U4.
 - [ ] Tests: form-schema bridge unit tests covering every CUE construct
