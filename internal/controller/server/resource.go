@@ -183,6 +183,93 @@ func (h *resourceHandler) Get(ctx context.Context, req *apiv1.GetRequest) (*apiv
 	return resp, nil
 }
 
+// DryRunApply previews what an Apply would do without enqueuing an op or
+// touching any provider state. Runs the same schema validation the Apply
+// path runs (errors surface in the response, NOT as an RPC error — the
+// editor wants to see them inline), computes spec-level drift against
+// the currently-applied manifest, and asks any DryRunner-capable provider
+// for the per-child action list + required-gate set.
+func (h *resourceHandler) DryRunApply(ctx context.Context, req *apiv1.DryRunApplyRequest) (*apiv1.DryRunApplyResponse, error) {
+	if req.GetResource() == nil {
+		return nil, status.Error(codes.InvalidArgument, "resource is required")
+	}
+	manifest := protoToResource(req.GetResource())
+
+	resp := &apiv1.DryRunApplyResponse{}
+
+	// Schema validation: surface inline so the editor can mark them.
+	if err := schema.Validate(manifest); err != nil {
+		resp.ValidationErrors = []string{err.Error()}
+		resp.Summary = "schema validation failed"
+		return resp, nil
+	}
+	if manifest.Metadata.Name == "" {
+		resp.ValidationErrors = []string{"metadata.name is required"}
+		resp.Summary = "metadata.name is required"
+		return resp, nil
+	}
+
+	p, err := h.registry.For(manifest.APIVersion)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
+	// Spec-level diff vs the last applied manifest. Empty when this would
+	// be the first apply.
+	if h.manifests != nil {
+		desired, _, lerr := h.manifests.LoadWithTime(ctx,
+			manifest.APIVersion, manifest.Kind, manifest.Metadata.Name)
+		if lerr != nil {
+			return nil, status.Errorf(codes.Internal, "load applied manifest: %v", lerr)
+		}
+		if desired != nil {
+			resp.Diff = computeDrift(desired.Spec, manifest.Spec)
+		}
+	}
+
+	// Provider-side plan for composites. Atomic providers don't implement
+	// DryRunner; the spec-diff above is all the editor gets.
+	if dr, ok := p.(providers.DryRunner); ok {
+		plan, derr := dr.DryRun(ctx, manifest)
+		if derr != nil {
+			return nil, status.Errorf(codes.Internal, "dry-run: %v", derr)
+		}
+		if plan != nil {
+			for _, c := range plan.Children {
+				resp.Children = append(resp.Children, &apiv1.ChildAction{
+					Verb: c.Verb, Kind: c.Kind, Name: c.Name, Detail: c.Detail,
+				})
+			}
+			resp.RequiredGates = append(resp.RequiredGates, plan.RequiredGates...)
+			if plan.Summary != "" {
+				resp.Summary = plan.Summary
+			}
+		}
+	}
+
+	if resp.Summary == "" {
+		resp.Summary = summarizeDryRun(resp)
+	}
+
+	return resp, nil
+}
+
+// summarizeDryRun builds a default one-line summary when the provider
+// didn't supply one. Used for atomic providers: "no-op" when nothing
+// would change, "would update N field(s)" otherwise.
+func summarizeDryRun(r *apiv1.DryRunApplyResponse) string {
+	if len(r.GetDiff()) == 0 && len(r.GetChildren()) == 0 {
+		return "no-op"
+	}
+	if len(r.GetDiff()) > 0 {
+		if len(r.GetDiff()) == 1 {
+			return "would update 1 field"
+		}
+		return fmt.Sprintf("would update %d fields", len(r.GetDiff()))
+	}
+	return ""
+}
+
 func (h *resourceHandler) List(ctx context.Context, req *apiv1.ListRequest) (*apiv1.ListResponse, error) {
 	p, err := h.registry.For(req.GetApiVersion())
 	if err != nil {

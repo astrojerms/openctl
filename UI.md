@@ -291,24 +291,6 @@ a deletion commit. With remote configured, see the commit reach origin.
 - [x] Tests: unit-level Vitest covers stream/router/format. Playwright
       headless-Chrome e2e deferred — see U3.5 sub-phase note for
       reasoning.
-- [ ] Layout shell: left nav grouped by `apiVersion/kind` with resource
-      counts; main pane; bottom drawer for op history.
-- [ ] Resource list per kind: name, drift badge (count of drifted
-      keys), health badge, last-applied timestamp. Click → detail.
-- [ ] Resource detail (read-only): applied manifest pane, observed
-      state pane, drift diff (reuses existing `drift` field), owner
-      ref, children tree if any.
-- [ ] Operations drawer: live tailing via `WatchOperations`. Click an
-      op → side panel with full detail, error message, link to its
-      resource.
-- [ ] Git status indicator in the chrome (clean/dirty/ahead-of-remote
-      from `RepoService.GetStatus`). Manual "Push now" button.
-- [ ] Live updates throughout — never poll. All lists/details subscribe
-      to `Watch` streams; the UI shouldn't need a refresh button.
-- [ ] Tests: component tests for list, detail, op drawer; an
-      end-to-end test that spins the controller, opens the UI in
-      headless Chrome, applies via CLI, asserts the UI reflects within
-      2s.
 
 **Verifiable:** `make ui && openctl-controller serve` →
 `http://localhost:9444/ui/` shows the console. Apply a VM via CLI; see
@@ -319,10 +301,24 @@ in <2s.
 
 ### Phase U4: CUE / manifest editor
 
-**Status:** not started
+**Status:** in progress.
 
 **Goal:** "kubectl edit" in a browser, with live validation against the
 real schema.
+
+**Sub-phases:**
+
+- [x] **U4.1** — `ResourceService.DryRunApply` RPC server-side. Optional
+      `providers.DryRunner` interface lets composite providers expose
+      per-child verbs (`create`/`destroy`/`respec`/`no-op`) and required
+      destructive gates (`allow_destructive`, `i_know_this_breaks_the_cluster`).
+      Atomic providers don't implement it; the handler still returns the
+      spec-level diff against the persisted applied manifest. Schema
+      validation errors surface inline in `validation_errors` (not as
+      RPC errors) so the editor can mark them without a second roundtrip.
+      k3s `Cluster` provider wired up — reuses `computeChangePlan` +
+      `computeSpecRespecs` + `catastrophicReason` so the gates fire on
+      the same conditions Apply would.
 
 **Deliverables:**
 
@@ -338,7 +334,7 @@ real schema.
       `ResourceService.DryRunApply` RPC to learn which gates apply);
       submit → live op progress inline.
 - [ ] Cancel/discard reverts the editor to the applied manifest.
-- [ ] New `DryRunApply` RPC on the controller: runs the same change-plan
+- [x] New `DryRunApply` RPC on the controller: runs the same change-plan
       logic as Apply (`computeChangePlan`, `catastrophicReason`)
       without actually applying. Returns the diff and the list of
       required gates. Used by both the editor and the form view.
