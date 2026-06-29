@@ -18,9 +18,10 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
-UI Phase U5 (typed form editor) underway. U5.1 (CUE-AST → form-schema
-bridge + GetFormSchema RPC) shipped; next sub-phase is U5.2 (Svelte
-form renderer with live YAML preview + view toggle).
+UI Phase U5 (typed form editor) underway. U5.1 (CUE → form-schema
+bridge) and U5.2 (Svelte form renderer + live YAML preview + three-way
+view toggle) shipped; next sub-phase is U5.3 (advanced field types:
+enums, patterns, disjunctions, key/value maps, stepped sections).
 
 ## Suggested next order
 
@@ -182,8 +183,11 @@ committing to a phase.
             tree; `SchemaService.GetFormSchema` RPC ships it as
             JSON-in-string. Handles primitives, objects, arrays,
             optional+required, defaults, number bounds, const literals.
-      - [ ] **U5.2** — Svelte form renderer with live YAML preview +
-            view toggle.
+      - [x] **U5.2** — Svelte form renderer (`FormField.svelte`,
+            recursive); three-way view toggle (Form / Editor / Diff);
+            live YAML preview alongside the form; form edits drive
+            the same `text` state as the editor so Validate +
+            DryRunApply preview + Apply keep working unchanged.
       - [ ] **U5.3** — Advanced field types (enums, patterns,
             disjunctions, key/value maps) + stepped sections.
       - [ ] **U5.4** — Form ↔ CUE round-trip + disable form when manifest

@@ -8,8 +8,10 @@
   import { ops as opsStore } from '../lib/ops';
   import type { OperationRow } from '../lib/watch';
   import { routeHref, navigate } from '../lib/router';
+  import { fromManifest, scrubEmpty, type FormField as FF } from '../lib/formSchema';
   import MonacoEditor from '../components/MonacoEditor.svelte';
   import MonacoDiffEditor from '../components/MonacoDiffEditor.svelte';
+  import FormField from '../components/FormField.svelte';
 
   export let apiVersion: string;
   export let kind: string;
@@ -40,10 +42,24 @@
   let applyError = '';
   let liveOpId = '';
 
-  // View toggle: 'edit' shows the Monaco editor (default), 'diff' shows
-  // the side-by-side diff of applied (baseline) vs current (text). Diff
-  // is read-only by design — for review, not editing.
-  let view: 'edit' | 'diff' = 'edit';
+  // View toggle: 'form' is the typed-form view (U5.2), 'edit' is the
+  // Monaco editor (default), 'diff' is the read-only side-by-side diff.
+  // Form and edit share the same `text` state — typing in either
+  // updates the other via the parse+stringify round-trip below.
+  let view: 'form' | 'edit' | 'diff' = 'edit';
+
+  // Form schema lazy-loaded once on mount; null while fetching, and
+  // also when the controller has no schema for this kind (form tab
+  // stays disabled in that case).
+  let formSchema: FF | null = null;
+  let formSchemaError = '';
+  let formState: unknown = null;
+  // Suppress one round-trip when the user edits the form: form edit →
+  // formState changes → derived YAML updates → text changes → preview
+  // schedules. We don't want the resulting `text` change to re-seed
+  // formState from itself (re-fromManifest would clobber in-progress
+  // typing).
+  let formDriving = false;
 
   $: void load(apiVersion, kind, resourceName);
 
@@ -65,6 +81,7 @@
       }
       text = baseline;
       schedulePreview();
+      void loadFormSchema(av, k);
     } catch (err) {
       if (err instanceof UnauthorizedError) return;
       loadError = err instanceof Error ? err.message : String(err);
@@ -73,8 +90,53 @@
     }
   }
 
+  async function loadFormSchema(av: string, k: string) {
+    formSchema = null;
+    formSchemaError = '';
+    try {
+      const resp = await schemas.getForm(av, k);
+      if (!resp.json) return;
+      formSchema = JSON.parse(resp.json) as FF;
+      reseedFormState();
+    } catch (err) {
+      // 404 = no schema for this kind — silently disable the Form tab.
+      if (err instanceof Error && err.message.includes('404')) return;
+      if (err instanceof UnauthorizedError) return;
+      formSchemaError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  // Rebuild form state from the current text. Used on initial load and
+  // whenever the user switches Form → Editor → Form so the form
+  // reflects edits made in the editor view.
+  function reseedFormState() {
+    if (!formSchema) return;
+    const parsed = parseYAML(text);
+    formState = fromManifest(formSchema, parsed.doc);
+  }
+
+  function onFormChange(detail: unknown) {
+    if (!formSchema) return;
+    formState = detail;
+    // Form drives the text: serialise the scrubbed state back to YAML
+    // and feed it through the same change path the editor uses.
+    formDriving = true;
+    try {
+      const scrubbed = scrubEmpty(formSchema, formState) as Record<string, unknown>;
+      text = resourceToYAML(scrubbed as unknown as import('../lib/api').Resource);
+      schedulePreview();
+    } finally {
+      formDriving = false;
+    }
+  }
+
   function onChange(e: CustomEvent<string>) {
     text = e.detail;
+    if (!formDriving && formSchema && view === 'form') {
+      // Shouldn't usually fire — editor is hidden when view is 'form'
+      // — but if it does, keep form in sync.
+      reseedFormState();
+    }
     // Any edit invalidates a successful in-progress apply view — drop
     // back to preview mode. (We don't cancel an in-flight Apply RPC;
     // the user's edit can't change the server-side outcome at that
@@ -219,6 +281,10 @@
   // gets disabled.
   $: if (!dirty && view === 'diff') view = 'edit';
 
+  // Re-seed the form whenever the user enters the Form tab, so edits
+  // made in the editor view show up.
+  $: if (view === 'form' && formSchema && !formDriving) reseedFormState();
+
   // Live op row (when an Apply is in flight) drives the inline progress
   // banner. Driven off the shell-wide ops store so we don't open a
   // second WatchOperations.
@@ -321,6 +387,14 @@
     <div class="view-toggle" role="tablist" aria-label="View">
       <button
         role="tab"
+        aria-selected={view === 'form'}
+        class:active={view === 'form'}
+        on:click={() => (view = 'form')}
+        disabled={!formSchema}
+        title={!formSchema ? (formSchemaError || 'No form schema for this kind') : ''}
+      >Form</button>
+      <button
+        role="tab"
         aria-selected={view === 'edit'}
         class:active={view === 'edit'}
         on:click={() => (view = 'edit')}
@@ -335,8 +409,16 @@
       >Diff vs applied</button>
     </div>
 
-    <div class="editor-wrap">
-      {#if view === 'edit'}
+    <div class="editor-wrap" class:form-view={view === 'form'}>
+      {#if view === 'form' && formSchema}
+        <div class="form-pane">
+          <FormField field={formSchema} value={formState} on:change={(e) => onFormChange(e.detail)} />
+        </div>
+        <div class="form-preview">
+          <h4>Manifest</h4>
+          <pre>{text}</pre>
+        </div>
+      {:else if view === 'edit'}
         <MonacoEditor value={text} on:change={onChange} {markers} disabled={applying} />
       {:else}
         <MonacoDiffEditor original={baseline} modified={text} />
@@ -527,6 +609,53 @@
   }
   .editor-wrap :global(.wrapper) {
     flex: 1;
+  }
+  .editor-wrap.form-view {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 1rem;
+    align-items: stretch;
+  }
+  .form-pane {
+    overflow-y: auto;
+    padding: 1rem 1.25rem;
+    background: rgba(127, 127, 127, 0.04);
+    border: 1px solid rgba(127, 127, 127, 0.18);
+    border-radius: 6px;
+    max-height: 70vh;
+  }
+  .form-preview {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid rgba(127, 127, 127, 0.18);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .form-preview h4 {
+    margin: 0;
+    padding: 0.5rem 0.9rem;
+    font-size: 0.75rem;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    background: rgba(127, 127, 127, 0.08);
+    border-bottom: 1px solid rgba(127, 127, 127, 0.15);
+  }
+  .form-preview pre {
+    margin: 0;
+    padding: 0.75rem 1rem;
+    flex: 1;
+    overflow: auto;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    background: rgba(0, 0, 0, 0.18);
+    color: inherit;
+  }
+  @media (prefers-color-scheme: light) {
+    .form-preview pre {
+      background: #f8f8f8;
+    }
   }
   .diag {
     background: rgba(248, 81, 73, 0.06);
