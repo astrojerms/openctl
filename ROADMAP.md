@@ -18,13 +18,9 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
-Nothing actively in progress. UI Phase U4 fully shipped (U4.1–U4.4):
-DryRunApply RPC + DryRunner provider hook, Monaco editor + Validate,
-inline Apply panel with preview + destructive-gate checkboxes + live
-op progress, Monaco diff view vs applied. Suggested next item per the
-ROADMAP order: UI Phase U5 (typed form editor; needs the CUE-AST →
-form-schema bridge). Arch Phase 8 (K3sNode as first-class resource)
-also unblocks the deferred composite-children tree on detail.
+UI Phase U5 (typed form editor) underway. U5.1 (CUE-AST → form-schema
+bridge + GetFormSchema RPC) shipped; next sub-phase is U5.2 (Svelte
+form renderer with live YAML preview + view toggle).
 
 ## Suggested next order
 
@@ -179,9 +175,19 @@ committing to a phase.
             ("Editor" / "Diff vs applied"); read-only; shares the
             lazy Monaco bundle. Closes Phase U4.
       - [ ] **U4.4** — Side-by-side diff view (Monaco diff editor).
-- [ ] **Phase U5** — Typed form editor (CUE-AST → form-schema bridge,
+- [~] **Phase U5** — Typed form editor (CUE-AST → form-schema bridge,
       AWS-console stepped sections, live manifest preview, view
       toggle).
+      - [x] **U5.1** — `internal/schema/form` walks CUE → typed Field
+            tree; `SchemaService.GetFormSchema` RPC ships it as
+            JSON-in-string. Handles primitives, objects, arrays,
+            optional+required, defaults, number bounds, const literals.
+      - [ ] **U5.2** — Svelte form renderer with live YAML preview +
+            view toggle.
+      - [ ] **U5.3** — Advanced field types (enums, patterns,
+            disjunctions, key/value maps) + stepped sections.
+      - [ ] **U5.4** — Form ↔ CUE round-trip + disable form when manifest
+            has hand-edits the form can't represent.
 - [ ] **Phase U6** — Composite resource UX (Cluster parent + read-only
       children tree, aggregated badges, per-child verbs in apply
       preview, DAG view gated on arch Phase 8).

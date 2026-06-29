@@ -357,6 +357,13 @@ service SchemaService {
   rpc Validate(ValidateRequest) returns (ValidateResponse) {
     option (google.api.http) = { post: "/v1/schemas:validate" body: "*" };
   }
+  // GetFormSchema returns a UI-renderable form-schema tree derived from
+  // the CUE schema for (apiVersion, kind). The shape is intentionally
+  // generic JSON so the controller's wire format doesn't leak CUE types
+  // into the browser. UI Phase U5.1.
+  rpc GetFormSchema(GetFormSchemaRequest) returns (GetFormSchemaResponse) {
+    option (google.api.http) = { post: "/v1/schemas:getForm" body: "*" };
+  }
 }
 
 message ListSchemasRequest {}
@@ -396,6 +403,22 @@ message ValidateResponse {
   // one human-readable diagnostic. No structured location info yet — CUE
   // doesn't surface it cleanly through Validate; future enhancement.
   repeated string errors = 1;
+}
+
+message GetFormSchemaRequest {
+  string api_version = 1;
+  string kind = 2;
+}
+
+// GetFormSchemaResponse carries the form-schema tree as an opaque JSON
+// document so the controller doesn't need a recursive proto. The browser
+// parses it as a Field tree (see ui/src/lib/form.ts) and dispatches on
+// the `type` tag at each node.
+message GetFormSchemaResponse {
+  // JSON-encoded Field tree, see internal/schema/form.Field. Empty when
+  // no schema is registered for (apiVersion, kind) — the RPC returns
+  // NotFound in that case rather than empty JSON.
+  string json = 1;
 }
 
 message WatchOperationsRequest {

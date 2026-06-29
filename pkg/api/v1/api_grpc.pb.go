@@ -869,9 +869,10 @@ var SessionService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	SchemaService_ListSchemas_FullMethodName = "/openctl.v1.SchemaService/ListSchemas"
-	SchemaService_GetSchema_FullMethodName   = "/openctl.v1.SchemaService/GetSchema"
-	SchemaService_Validate_FullMethodName    = "/openctl.v1.SchemaService/Validate"
+	SchemaService_ListSchemas_FullMethodName   = "/openctl.v1.SchemaService/ListSchemas"
+	SchemaService_GetSchema_FullMethodName     = "/openctl.v1.SchemaService/GetSchema"
+	SchemaService_Validate_FullMethodName      = "/openctl.v1.SchemaService/Validate"
+	SchemaService_GetFormSchema_FullMethodName = "/openctl.v1.SchemaService/GetFormSchema"
 )
 
 // SchemaServiceClient is the client API for SchemaService service.
@@ -886,6 +887,11 @@ type SchemaServiceClient interface {
 	ListSchemas(ctx context.Context, in *ListSchemasRequest, opts ...grpc.CallOption) (*ListSchemasResponse, error)
 	GetSchema(ctx context.Context, in *GetSchemaRequest, opts ...grpc.CallOption) (*GetSchemaResponse, error)
 	Validate(ctx context.Context, in *ValidateRequest, opts ...grpc.CallOption) (*ValidateResponse, error)
+	// GetFormSchema returns a UI-renderable form-schema tree derived from
+	// the CUE schema for (apiVersion, kind). The shape is intentionally
+	// generic JSON so the controller's wire format doesn't leak CUE types
+	// into the browser. UI Phase U5.1.
+	GetFormSchema(ctx context.Context, in *GetFormSchemaRequest, opts ...grpc.CallOption) (*GetFormSchemaResponse, error)
 }
 
 type schemaServiceClient struct {
@@ -926,6 +932,16 @@ func (c *schemaServiceClient) Validate(ctx context.Context, in *ValidateRequest,
 	return out, nil
 }
 
+func (c *schemaServiceClient) GetFormSchema(ctx context.Context, in *GetFormSchemaRequest, opts ...grpc.CallOption) (*GetFormSchemaResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetFormSchemaResponse)
+	err := c.cc.Invoke(ctx, SchemaService_GetFormSchema_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SchemaServiceServer is the server API for SchemaService service.
 // All implementations must embed UnimplementedSchemaServiceServer
 // for forward compatibility.
@@ -938,6 +954,11 @@ type SchemaServiceServer interface {
 	ListSchemas(context.Context, *ListSchemasRequest) (*ListSchemasResponse, error)
 	GetSchema(context.Context, *GetSchemaRequest) (*GetSchemaResponse, error)
 	Validate(context.Context, *ValidateRequest) (*ValidateResponse, error)
+	// GetFormSchema returns a UI-renderable form-schema tree derived from
+	// the CUE schema for (apiVersion, kind). The shape is intentionally
+	// generic JSON so the controller's wire format doesn't leak CUE types
+	// into the browser. UI Phase U5.1.
+	GetFormSchema(context.Context, *GetFormSchemaRequest) (*GetFormSchemaResponse, error)
 	mustEmbedUnimplementedSchemaServiceServer()
 }
 
@@ -956,6 +977,9 @@ func (UnimplementedSchemaServiceServer) GetSchema(context.Context, *GetSchemaReq
 }
 func (UnimplementedSchemaServiceServer) Validate(context.Context, *ValidateRequest) (*ValidateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Validate not implemented")
+}
+func (UnimplementedSchemaServiceServer) GetFormSchema(context.Context, *GetFormSchemaRequest) (*GetFormSchemaResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetFormSchema not implemented")
 }
 func (UnimplementedSchemaServiceServer) mustEmbedUnimplementedSchemaServiceServer() {}
 func (UnimplementedSchemaServiceServer) testEmbeddedByValue()                       {}
@@ -1032,6 +1056,24 @@ func _SchemaService_Validate_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SchemaService_GetFormSchema_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetFormSchemaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchemaServiceServer).GetFormSchema(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchemaService_GetFormSchema_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchemaServiceServer).GetFormSchema(ctx, req.(*GetFormSchemaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SchemaService_ServiceDesc is the grpc.ServiceDesc for SchemaService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1050,6 +1092,10 @@ var SchemaService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Validate",
 			Handler:    _SchemaService_Validate_Handler,
+		},
+		{
+			MethodName: "GetFormSchema",
+			Handler:    _SchemaService_GetFormSchema_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
