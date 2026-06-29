@@ -319,6 +319,19 @@ real schema.
       k3s `Cluster` provider wired up — reuses `computeChangePlan` +
       `computeSpecRespecs` + `catastrophicReason` so the gates fire on
       the same conditions Apply would.
+- [x] **U4.3** — Apply panel inline in the edit pane. One debounce
+      fires Validate + DryRunApply in parallel; the preview pane lists
+      the spec diff (current → will become), per-child verbs
+      (create/destroy/respec/no-op with colour-coded pills), and the
+      provider's summary. Required gates render as labelled checkboxes
+      in an amber-bordered "destructive change" card; Apply stays
+      disabled until every required gate is checked and there's a real
+      change to make. On Apply, the request includes the gate flags
+      and returns an op_id; we tail the existing shell-wide ops store
+      (no double WatchOperations) and surface a coloured op card —
+      pending/running/succeeded/failed/interrupted. On succeeded we
+      navigate back to detail after a 600 ms green flash; on failed
+      the apply card surfaces the error.
 - [x] **U4.2** — Monaco editor wired into a new `/edit/...` route.
       Lazy-loaded — the editor + YAML language ship in their own chunks
       that only download on first /edit visit; list/detail/home stay
@@ -341,11 +354,11 @@ real schema.
       Errors render as Monaco markers with hover detail.
 - [ ] Side-by-side diff vs. currently-applied manifest (Monaco's diff
       editor).
-- [ ] Apply panel: destructive/i-know checkboxes that surface
+- [x] Apply panel: destructive/i-know checkboxes that surface
       conditionally based on what the change requires (UI calls a new
       `ResourceService.DryRunApply` RPC to learn which gates apply);
       submit → live op progress inline.
-- [ ] Cancel/discard reverts the editor to the applied manifest.
+- [x] Cancel/discard reverts the editor to the applied manifest.
 - [x] New `DryRunApply` RPC on the controller: runs the same change-plan
       logic as Apply (`computeChangePlan`, `catastrophicReason`)
       without actually applying. Returns the diff and the list of
