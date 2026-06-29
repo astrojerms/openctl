@@ -201,3 +201,58 @@ function isEmpty(v: unknown): boolean {
   if (typeof v === 'object') return Object.keys(v as object).length === 0;
   return false;
 }
+
+// extraKeys returns dotted paths in `data` that the schema can't model.
+// Used by the Edit pane to decide whether the Form view tab should be
+// enabled: if a manifest carries unknown keys, the form would silently
+// drop them on save, so we disable the toggle with a tooltip listing
+// the offending paths.
+//
+// Walks object fields by name and array/map values by recursion.
+// Schema branches that swallow anything (`any`, `unsupported`,
+// `object` with no fields list) short-circuit — those paths can't have
+// "extras" because nothing in the schema is more specific.
+export function extraKeys(f: FormField, data: unknown, prefix: string[] = []): string[] {
+  if (data === undefined || data === null) return [];
+
+  switch (f.type) {
+    case 'object': {
+      if (typeof data !== 'object' || Array.isArray(data)) return [];
+      const obj = data as Record<string, unknown>;
+      const known = new Set((f.fields ?? []).map((c) => c.name).filter(Boolean) as string[]);
+      const out: string[] = [];
+      for (const [k, v] of Object.entries(obj)) {
+        if (!known.has(k)) {
+          out.push([...prefix, k].join('.'));
+          continue;
+        }
+        const child = (f.fields ?? []).find((c) => c.name === k);
+        if (child) out.push(...extraKeys(child, v, [...prefix, k]));
+      }
+      return out;
+    }
+    case 'array': {
+      if (!Array.isArray(data) || !f.items) return [];
+      const out: string[] = [];
+      for (let i = 0; i < data.length; i++) {
+        out.push(...extraKeys(f.items, data[i], [...prefix, String(i)]));
+      }
+      return out;
+    }
+    case 'map': {
+      if (typeof data !== 'object' || Array.isArray(data) || !f.valueType) return [];
+      const obj = data as Record<string, unknown>;
+      const out: string[] = [];
+      for (const [k, v] of Object.entries(obj)) {
+        out.push(...extraKeys(f.valueType, v, [...prefix, k]));
+      }
+      return out;
+    }
+    case 'any':
+    case 'unsupported':
+      // Schema accepts anything here — no path is "extra".
+      return [];
+    default:
+      return [];
+  }
+}

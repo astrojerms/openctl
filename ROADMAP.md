@@ -18,11 +18,14 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
-UI Phase U5 (typed form editor) underway. U5.1–U5.3 shipped — CUE →
-form-schema bridge, Svelte form renderer + live YAML preview + 3-way
-toggle, advanced field types (enums, regex patterns, key/value maps).
-Next sub-phase is U5.4 (form ↔ CUE round-trip detection; disable Form
-view when manifest has hand-edits the form can't represent).
+Nothing actively in progress. UI Phase U5 fully shipped (U5.1–U5.4):
+CUE → form-schema bridge + GetFormSchema RPC, Svelte form renderer +
+live YAML preview + 3-way view toggle, advanced field types (enums,
+patterns, key/value maps), Form ↔ CUE round-trip detection. Next per
+ROADMAP order: UI Phase U6 (composite resource UX — cluster parent +
+children tree, aggregated badges, per-child verbs in apply preview;
+some of this is gated on arch Phase 8 K3sNode), or arch Phase 8
+itself.
 
 ## Suggested next order
 
@@ -177,7 +180,7 @@ committing to a phase.
             ("Editor" / "Diff vs applied"); read-only; shares the
             lazy Monaco bundle. Closes Phase U4.
       - [ ] **U4.4** — Side-by-side diff view (Monaco diff editor).
-- [~] **Phase U5** — Typed form editor (CUE-AST → form-schema bridge,
+- [x] **Phase U5** — Typed form editor (CUE-AST → form-schema bridge,
       AWS-console stepped sections, live manifest preview, view
       toggle).
       - [x] **U5.1** — `internal/schema/form` walks CUE → typed Field
@@ -196,6 +199,11 @@ committing to a phase.
             add-row editor). Non-literal disjunctions still emit
             `unsupported`; stepped sections deferred until a real
             schema demands them.
+      - [x] **U5.4** — `extraKeys` walks the form schema vs the parsed
+            YAML to find non-roundtrippable paths; Form tab disabled
+            with offending-keys tooltip when the editor carries
+            anything the form would drop. View auto-snaps to Editor
+            when an unknown key appears while on Form. Closes Phase U5.
       - [ ] **U5.4** — Form ↔ CUE round-trip + disable form when manifest
             has hand-edits the form can't represent.
 - [ ] **Phase U6** — Composite resource UX (Cluster parent + read-only

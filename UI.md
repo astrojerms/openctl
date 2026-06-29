@@ -384,13 +384,23 @@ to scale workers down surfaces the `--allow-destructive` checkbox.
 
 ### Phase U5: Typed form editor
 
-**Status:** in progress.
+**Status:** complete.
 
 **Goal:** form-driven creation/editing for users who don't want to write
 CUE. AWS-console-shape.
 
 **Sub-phases:**
 
+- [x] **U5.4** — Form ↔ CUE round-trip detection. `extraKeys(schema,
+      data)` walks the form schema and parsed YAML to find dotted paths
+      `data` carries that the schema can't represent (unknown keys
+      inside objects, unknown fields inside array items). When the
+      list is non-empty the Form view tab is disabled with a tooltip
+      listing up to 5 offending paths; if the user is already on Form
+      and an external edit introduces an unknown key, the view
+      auto-snaps to Editor so the form can't silently drop it. Map
+      keys are intentionally NOT flagged — `{[string]: T}` accepts
+      anything by design. Closes Phase U5.
 - [x] **U5.3** — Advanced field types. CUE walker detects:
       string-literal disjunctions (`"a" | "b" | "c"` → `enum` field
       array; renderer shows a `<select>`), regex constraints
@@ -449,9 +459,9 @@ CUE. AWS-console-shape.
       rendered as YAML, updates as you type.
 - [x] Toggle between form view and CUE editor view (same underlying
       manifest, three-way: Form / Editor / Diff). Switching Editor →
-      Form re-seeds state from the parsed YAML. Detecting
-      non-roundtrippable hand-edits and disabling the toggle ships in
-      U5.4.
+      Form re-seeds state from the parsed YAML. Non-roundtrippable
+      hand-edits disable the Form tab with a tooltip listing the
+      offending paths (U5.4).
 - [ ] Review-before-apply screen showing the diff (via `DryRunApply`)
       and the same destructive gates as U4.
 - [ ] Tests: form-schema bridge unit tests covering every CUE construct

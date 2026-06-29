@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fromManifest, initialValue, scrubEmpty, type FormField } from './formSchema';
+import { extraKeys, fromManifest, initialValue, scrubEmpty, type FormField } from './formSchema';
 
 const cluster: FormField = {
   type: 'object',
@@ -125,6 +125,70 @@ describe('maps', () => {
       labels: { keep: 'x', empty: '', '': 'orphan' },
     }) as Record<string, unknown>;
     expect(v.labels).toEqual({ keep: 'x' });
+  });
+});
+
+describe('extraKeys', () => {
+  const schema: FormField = {
+    type: 'object',
+    fields: [
+      { name: 'apiVersion', type: 'string' },
+      { name: 'kind', type: 'string' },
+      {
+        name: 'metadata',
+        type: 'object',
+        fields: [
+          { name: 'name', type: 'string' },
+          { name: 'labels', type: 'map', optional: true, valueType: { type: 'string' } },
+        ],
+      },
+      {
+        name: 'spec',
+        type: 'object',
+        fields: [
+          { name: 'count', type: 'int' },
+          {
+            name: 'workers',
+            type: 'array',
+            optional: true,
+            items: {
+              type: 'object',
+              fields: [{ name: 'name', type: 'string' }],
+            },
+          },
+        ],
+      },
+    ],
+  };
+
+  it('returns no extras for a manifest that matches the schema', () => {
+    const data = {
+      apiVersion: 'k3s.openctl.io/v1',
+      kind: 'Cluster',
+      metadata: { name: 'dev', labels: { env: 'prod' } },
+      spec: { count: 1, workers: [{ name: 'a' }] },
+    };
+    expect(extraKeys(schema, data)).toEqual([]);
+  });
+
+  it('reports unknown top-level keys', () => {
+    const data = { spec: { count: 1 }, extras: 'huh' };
+    expect(extraKeys(schema, data)).toContain('extras');
+  });
+
+  it('reports unknown nested keys with dotted path', () => {
+    const data = { spec: { count: 1, mystery: 7 } };
+    expect(extraKeys(schema, data)).toEqual(['spec.mystery']);
+  });
+
+  it('reports unknown keys inside array items', () => {
+    const data = { spec: { count: 1, workers: [{ name: 'a', size: 'L' }] } };
+    expect(extraKeys(schema, data)).toEqual(['spec.workers.0.size']);
+  });
+
+  it('does not flag map values as extras (keys are intrinsic to the type)', () => {
+    const data = { metadata: { name: 'dev', labels: { whatever: 'x' } } };
+    expect(extraKeys(schema, data)).toEqual([]);
   });
 });
 
