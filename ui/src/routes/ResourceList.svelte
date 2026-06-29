@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { resources, type Resource } from '../lib/api';
+  import { onDestroy } from 'svelte';
+  import { resources, UnauthorizedError, type Resource } from '../lib/api';
+  import { watchResources } from '../lib/watch';
   import { statusBadge } from '../lib/format';
   import { routeHref } from '../lib/router';
 
@@ -11,23 +13,88 @@
   let loading = true;
   let error = '';
 
-  // Re-fetch whenever the user navigates to a different kind. Reactive
-  // re-run: when apiVersion/kind change, run load().
-  $: void load(apiVersion, kind);
+  let activeController: AbortController | null = null;
+  let watching = '';
 
-  async function load(av: string, k: string) {
+  $: void switchTo(apiVersion, kind);
+
+  async function switchTo(av: string, k: string) {
+    const target = `${av}/${k}`;
+    if (target === watching) return;
+    watching = target;
+    activeController?.abort();
+    activeController = new AbortController();
     loading = true;
     error = '';
+    rows = [];
+
+    // Initial List then live Watch. List populates immediately even for
+    // empty kinds (so loading clears); Watch then merges in deltas. The
+    // initial Watch snapshot (one ADDED per existing resource) is
+    // idempotent against the List rows because mergeRow upserts by name.
     try {
       const resp = await resources.list(av, k);
-      rows = resp.resources ?? [];
+      rows = (resp.resources ?? []).slice().sort((a, b) =>
+        a.metadata.name.localeCompare(b.metadata.name),
+      );
+      loading = false;
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       error = err instanceof Error ? err.message : String(err);
-      rows = [];
-    } finally {
       loading = false;
     }
+    void run(av, k, activeController.signal);
   }
+
+  async function run(av: string, k: string, signal: AbortSignal) {
+    let backoffMs = 1000;
+    while (!signal.aborted) {
+      try {
+        await watchResources(av, k, undefined, applyEvent, { signal });
+        backoffMs = 1000;
+      } catch (err) {
+        if (signal.aborted) return;
+        if (err instanceof UnauthorizedError) return;
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        error = err instanceof Error ? err.message : String(err);
+        backoffMs = Math.min(backoffMs * 2, 15_000);
+      }
+      await new Promise((r) => setTimeout(r, backoffMs));
+    }
+  }
+
+  function applyEvent(e: { type: string; resource: Resource }) {
+    // Clear any stream-level error once events flow again.
+    error = '';
+    const incoming = e.resource;
+    rows = mergeRow(rows, e.type, incoming);
+  }
+
+  function mergeRow(
+    list: Resource[],
+    type: string,
+    incoming: Resource,
+  ): Resource[] {
+    const idx = list.findIndex((r) => r.metadata.name === incoming.metadata.name);
+    if (type === 'DELETED') {
+      if (idx < 0) return list;
+      const next = list.slice();
+      next.splice(idx, 1);
+      return next;
+    }
+    if (idx >= 0) {
+      const next = list.slice();
+      next[idx] = incoming;
+      return next;
+    }
+    return [...list, incoming].sort((a, b) =>
+      a.metadata.name.localeCompare(b.metadata.name),
+    );
+  }
+
+  onDestroy(() => {
+    activeController?.abort();
+  });
 </script>
 
 <section>

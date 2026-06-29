@@ -18,10 +18,10 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
-UI Phase U3 (browser UI shell) underway. U3.1 (scaffold + login), U3.2
-(layout shell + resource list), and U3.3 (resource detail pane with
-applied-vs-observed) shipped; next sub-phase is U3.4 (ops drawer + live
-Watch streams).
+UI Phase U3 (browser UI shell) underway. U3.1–U3.4 shipped — scaffold +
+login, layout + list, detail pane, live Watch streams + ops drawer.
+Next sub-phase is U3.5 (git status indicator + Push now + Watch-driven
+catalogue counts + e2e tests).
 
 ## Suggested next order
 
@@ -140,6 +140,12 @@ committing to a phase.
             response gains `applied` + `applied_at`. Owner-ref +
             composite children tree deferred (needs proto relationship
             surface, lands with arch Phase 8).
+      - [x] **U3.4** — Live Watch streams + ops drawer. fetch +
+            ReadableStream bridge over grpc-gateway's ndjson; ResourceList
+            and Detail subscribe to ResourceService.Watch; collapsible
+            bottom drawer subscribes to OperationService.WatchOperations
+            with the last 200 ops, in-flight count, and per-op links.
+            Reconnect-with-backoff on transient errors.
       - [ ] **U3.4** — ops drawer + live Watch streams.
       - [ ] **U3.5** — git status indicator + Push now + e2e tests.
 - [ ] **Phase U4** — CUE/manifest editor (Monaco-based, server-side

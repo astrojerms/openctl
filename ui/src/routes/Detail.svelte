@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { resources, type GetResourceResponse } from '../lib/api';
+  import { onDestroy } from 'svelte';
+  import { resources, UnauthorizedError, type GetResourceResponse } from '../lib/api';
+  import { watchResources } from '../lib/watch';
   import { statusBadge } from '../lib/format';
   import { routeHref } from '../lib/router';
 
@@ -11,21 +13,61 @@
   let loading = true;
   let error = '';
 
-  // Reactive re-fetch on route change.
-  $: void load(apiVersion, kind, resourceName);
+  let controller: AbortController | null = null;
+  let watching = '';
 
-  async function load(av: string, k: string, n: string) {
+  // Reactive re-fetch + re-subscribe on route change.
+  $: void switchTo(apiVersion, kind, resourceName);
+
+  async function switchTo(av: string, k: string, n: string) {
+    const target = `${av}/${k}/${n}`;
+    if (target === watching) return;
+    watching = target;
+    controller?.abort();
+    controller = new AbortController();
+    data = null;
     loading = true;
     error = '';
-    data = null;
+    await load(av, k, n);
+    void subscribe(av, k, n, controller.signal);
+  }
+
+  async function load(av: string, k: string, n: string) {
     try {
       data = await resources.get(av, k, n);
+      error = '';
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     } finally {
       loading = false;
     }
   }
+
+  async function subscribe(av: string, k: string, n: string, signal: AbortSignal) {
+    // Single-resource Watch — any event triggers a re-Get so the applied
+    // manifest + drift come along, not just the observed state Watch
+    // carries. Cheap: one extra RPC per change to this one resource.
+    let backoffMs = 1000;
+    while (!signal.aborted) {
+      try {
+        await watchResources(av, k, n, () => {
+          void load(av, k, n);
+        }, { signal });
+        backoffMs = 1000;
+      } catch (err) {
+        if (signal.aborted) return;
+        if (err instanceof UnauthorizedError) return;
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        // Stale-cache fallback: surface the error but keep showing
+        // whatever we last fetched successfully.
+        error = err instanceof Error ? err.message : String(err);
+        backoffMs = Math.min(backoffMs * 2, 15_000);
+      }
+      await new Promise((r) => setTimeout(r, backoffMs));
+    }
+  }
+
+  onDestroy(() => controller?.abort());
 
   // Pretty-print JSON for the desired/observed panes. The proto wire
   // format is JSON-on-the-fence anyway (grpc-gateway), and the editor

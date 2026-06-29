@@ -1,11 +1,13 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import type { WhoAmIResponse } from '../lib/api';
   import { logout } from '../lib/auth';
   import { route } from '../lib/router';
   import { catalogue, catalogueError, refreshCatalogue, type KindEntry } from '../lib/catalogue';
   import { routeHref } from '../lib/router';
+  import { startOpsWatcher, stopOpsWatcher } from '../lib/ops';
   import Nav from '../components/Nav.svelte';
+  import OpsDrawer from '../components/OpsDrawer.svelte';
   import HomePane from './HomePane.svelte';
   import ResourceList from './ResourceList.svelte';
   import Detail from './Detail.svelte';
@@ -16,6 +18,11 @@
 
   onMount(() => {
     void refreshCatalogue();
+    startOpsWatcher();
+  });
+
+  onDestroy(() => {
+    stopOpsWatcher();
   });
 
   async function doLogout() {
@@ -78,6 +85,8 @@
   </main>
 </div>
 
+<OpsDrawer />
+
 <style>
   header {
     display: flex;
@@ -115,6 +124,9 @@
   }
   main {
     padding: 1.5rem 2rem;
+    /* Reserve room for the fixed-bottom OpsDrawer handle (collapsed
+       height) so it doesn't cover the last row of content. */
+    padding-bottom: 4rem;
     overflow-x: auto;
   }
   .err {
