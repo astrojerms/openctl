@@ -301,7 +301,7 @@ in <2s.
 
 ### Phase U4: CUE / manifest editor
 
-**Status:** in progress.
+**Status:** complete.
 
 **Goal:** "kubectl edit" in a browser, with live validation against the
 real schema.
@@ -319,6 +319,14 @@ real schema.
       k3s `Cluster` provider wired up — reuses `computeChangePlan` +
       `computeSpecRespecs` + `catastrophicReason` so the gates fire on
       the same conditions Apply would.
+- [x] **U4.4** — Monaco diff view. Tab toggle in the edit pane
+      ("Editor" / "Diff vs applied"). Diff is read-only and uses
+      Monaco's `createDiffEditor` with the applied manifest on the left
+      and the current edited text on the right. Tab is disabled when
+      there are no unsaved changes and auto-snaps back to Editor view
+      if the user reverts to baseline while on Diff. Shares the lazy
+      Monaco bundle with U4.2 (no extra download cost). Closes UI
+      Phase U4.
 - [x] **U4.3** — Apply panel inline in the edit pane. One debounce
       fires Validate + DryRunApply in parallel; the preview pane lists
       the spec diff (current → will become), per-child verbs
@@ -352,7 +360,7 @@ real schema.
       raw CUE, add a custom grammar).
 - [x] Debounced server-side validation via `SchemaService.Validate`.
       Errors render as Monaco markers with hover detail.
-- [ ] Side-by-side diff vs. currently-applied manifest (Monaco's diff
+- [x] Side-by-side diff vs. currently-applied manifest (Monaco's diff
       editor).
 - [x] Apply panel: destructive/i-know checkboxes that surface
       conditionally based on what the change requires (UI calls a new

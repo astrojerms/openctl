@@ -9,6 +9,7 @@
   import type { OperationRow } from '../lib/watch';
   import { routeHref, navigate } from '../lib/router';
   import MonacoEditor from '../components/MonacoEditor.svelte';
+  import MonacoDiffEditor from '../components/MonacoDiffEditor.svelte';
 
   export let apiVersion: string;
   export let kind: string;
@@ -38,6 +39,11 @@
   let applying = false;
   let applyError = '';
   let liveOpId = '';
+
+  // View toggle: 'edit' shows the Monaco editor (default), 'diff' shows
+  // the side-by-side diff of applied (baseline) vs current (text). Diff
+  // is read-only by design — for review, not editing.
+  let view: 'edit' | 'diff' = 'edit';
 
   $: void load(apiVersion, kind, resourceName);
 
@@ -208,6 +214,10 @@
     !gatesSatisfied;
 
   $: dirty = text !== baseline;
+  // If the user reverts back to matching baseline while on the diff
+  // view, snap back to editor — the diff would be empty and the tab
+  // gets disabled.
+  $: if (!dirty && view === 'diff') view = 'edit';
 
   // Live op row (when an Apply is in flight) drives the inline progress
   // banner. Driven off the shell-wide ops store so we don't open a
@@ -308,8 +318,29 @@
   {:else if loadError}
     <p class="err">{loadError}</p>
   {:else}
+    <div class="view-toggle" role="tablist" aria-label="View">
+      <button
+        role="tab"
+        aria-selected={view === 'edit'}
+        class:active={view === 'edit'}
+        on:click={() => (view = 'edit')}
+      >Editor</button>
+      <button
+        role="tab"
+        aria-selected={view === 'diff'}
+        class:active={view === 'diff'}
+        on:click={() => (view = 'diff')}
+        disabled={!dirty}
+        title={!dirty ? 'No changes to diff against the applied manifest' : ''}
+      >Diff vs applied</button>
+    </div>
+
     <div class="editor-wrap">
-      <MonacoEditor value={text} on:change={onChange} {markers} disabled={applying} />
+      {#if view === 'edit'}
+        <MonacoEditor value={text} on:change={onChange} {markers} disabled={applying} />
+      {:else}
+        <MonacoDiffEditor original={baseline} modified={text} />
+      {/if}
     </div>
 
     {#if applyError}
@@ -462,6 +493,33 @@
   }
   .primary:disabled {
     opacity: 0.5;
+  }
+  .view-toggle {
+    display: inline-flex;
+    background: rgba(127, 127, 127, 0.1);
+    border-radius: 6px;
+    padding: 2px;
+    align-self: flex-start;
+  }
+  .view-toggle button {
+    background: transparent;
+    border: none;
+    padding: 0.25em 0.9em;
+    font-size: 0.8rem;
+    color: #aaa;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .view-toggle button:hover:not(:disabled) {
+    color: #fff;
+  }
+  .view-toggle button.active {
+    background: #4a8ef0;
+    color: white;
+  }
+  .view-toggle button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
   .editor-wrap {
     min-height: 24rem;
