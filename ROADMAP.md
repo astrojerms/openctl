@@ -18,9 +18,8 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
-Nothing actively in progress. `feat/controller` is 3 commits ahead of
-origin (Phases 4–6 unpushed) and has `docs/target-architecture.html`
-untracked.
+`feat/u2-disk-manifests` — UI Phase U2.1 complete; U2.2 (git layer)
+queued on top.
 
 ## Suggested next order
 
@@ -107,9 +106,15 @@ committing to a phase.
       with sha256-stored session tokens). HTTP gateway listens on
       127.0.0.1:9445 alongside gRPC on 9444; UI placeholder page until
       Vite build lands. No frontend code yet.
-- [ ] **Phase U2** — Manifest store on disk + git sync (controller
-      materializes desired state to `~/.openctl/manifests/`, optional
-      git auto-commit and remote push, `RepoService` RPC).
+- [~] **Phase U2** — Manifest store on disk + git sync.
+      - [x] **U2.1** — Disk mirror (controller materializes desired state
+            to `~/.openctl/manifests/<apiVersion>/<kind>/<name>.yaml`
+            after every successful apply, removes on delete; atomic write
+            via temp+rename; startup reconciliation re-materializes
+            missing files, logs orphans without deleting; config schema
+            in `manifests:` block).
+      - [ ] **U2.2** — Git integration (init/add/commit, push modes,
+            `RepoService` RPC).
 - [ ] **Phase U3** — UI shell + read-only views (Vite+Svelte skeleton,
       list/detail/op-history with live Watch streams, git status
       indicator).

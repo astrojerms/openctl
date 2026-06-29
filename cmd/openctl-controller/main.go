@@ -131,7 +131,25 @@ func runServe(args []string) error {
 		log.Printf("marked %d previously-running operation(s) as interrupted", n)
 	}
 	manifestStore := manifests.New(db)
-	dispatcher := operations.NewDispatcher(opStore, registry, manifestStore, 0)
+
+	// UI Phase U2.1: optionally mirror the controller's desired-state to a
+	// directory on disk so users (and git) can see the applied config. The
+	// SQLite store is canonical; the disk tree is a materialized projection.
+	// `sink` becomes the dispatcher's ManifestSink — either the bare store
+	// or the DiskMirror wrapping it.
+	var sink operations.ManifestSink = manifestStore
+	if cfg, err := config.Load(); err == nil {
+		mirror, mErr := buildDiskMirror(ctx, manifestStore, cfg)
+		if mErr != nil {
+			return fmt.Errorf("init disk mirror: %w", mErr)
+		}
+		if mirror != nil {
+			sink = mirror
+			log.Printf("  manifests:   %s", mirror.Root())
+		}
+	}
+
+	dispatcher := operations.NewDispatcher(opStore, registry, sink, 0)
 	dispatcher.Start(ctx)
 	defer dispatcher.Stop()
 
@@ -210,6 +228,63 @@ func defaultDir() string {
 		return "./openctl-controller"
 	}
 	return filepath.Join(home, ".openctl", "controller")
+}
+
+// buildDiskMirror resolves the manifest-mirror root from config (defaulting
+// to ~/.openctl/manifests) and returns a wrapped Store ready for the
+// dispatcher. Returns nil if the user explicitly disables the mirror via
+// `manifests: { dir: "" }` in their config — the bare store still gets
+// used in that case.
+//
+// Runs a startup reconciliation so files that vanished while the controller
+// was down (e.g. user wiped ~/.openctl/manifests/) get re-materialized
+// before the dispatcher resumes. Orphan files (no matching SQLite row) are
+// logged but left alone.
+func buildDiskMirror(ctx context.Context, store *manifests.Store, cfg *config.Config) (*manifests.DiskMirror, error) {
+	root, err := resolveManifestDir(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if root == "" {
+		return nil, nil
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return nil, fmt.Errorf("create manifest dir: %w", err)
+	}
+	mirror := manifests.NewDiskMirror(store, root)
+	report, err := mirror.Reconcile(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("reconcile manifest dir: %w", err)
+	}
+	for _, ref := range report.MissingOnDisk {
+		log.Printf("  manifests:   re-materialized missing file for %s/%s", ref.Kind, ref.Name)
+	}
+	for _, rel := range report.OrphansOnDisk {
+		log.Printf("  manifests:   orphan file (no applied_manifests row): %s", rel)
+	}
+	return mirror, nil
+}
+
+// resolveManifestDir returns the absolute path the disk mirror should write
+// into. A nil config or empty `manifests:` block falls back to
+// ~/.openctl/manifests. Returns "" only when the user explicitly opts out
+// with `manifests: { dir: "" }` *and* the manifests block is present (we
+// can't tell "absent" from "present-empty" with YAML; the convention is
+// "if you wrote `manifests:` at all, you wanted the default unless you
+// also set dir to something else").
+func resolveManifestDir(cfg *config.Config) (string, error) {
+	dir := ""
+	if cfg != nil && cfg.Manifests != nil {
+		dir = cfg.Manifests.Dir
+	}
+	if dir == "" {
+		paths, err := config.GetPaths()
+		if err != nil {
+			return "", err
+		}
+		return paths.ManifestsDir, nil
+	}
+	return config.ExpandPath(dir)
 }
 
 // buildRegistry constructs the Provider registry from ~/.openctl/config.yaml.

@@ -150,21 +150,27 @@ requests use without re-auth.
 
 ### Phase U2: Manifest store on disk + git sync
 
-**Status:** not started
+**Status:** in progress — U2.1 complete, U2.2 next.
 
 **Goal:** materialize the controller's desired state to disk so it's
 visible to users outside the UI, with optional git tracking.
 
 **Deliverables:**
 
-- [ ] `internal/controller/manifests/diskstore.go`: wraps the existing
+- [x] `internal/controller/manifests/disk.go`: wraps the existing
       manifests Store with a "write to disk on commit" side-effect.
       Files go to `<manifest-dir>/<apiVersion>/<kind>/<name>.yaml`
-      (apiVersion path-escaped). Atomic write via temp + rename.
-- [ ] Dispatcher integration: on apply success, write the manifest;
+      (apiVersion's `/` becomes a nested directory; names path-scrubbed
+      so hostile inputs can't escape the root). Atomic write via temp +
+      rename. Hook-point lets U2.2 plug git in without disk.go knowing
+      about git.
+- [x] Dispatcher integration: on apply success, write the manifest;
       on delete success, remove the file. On startup, reconcile disk
-      against `applied_manifests` (warn on divergence; never delete
-      files the user might have committed).
+      against `applied_manifests` — missing-on-disk rows get
+      re-materialized; orphan files (no applied_manifests row) are
+      logged but never deleted (user may have committed them).
+- [x] Config schema (partial): `manifests: { dir }` lives now; the
+      `git:` sub-block parses but is unused until U2.2.
 - [ ] Git integration (`internal/controller/manifests/git.go`):
       `git init` on first start when enabled, `git add` + `git commit`
       after every materialize/delete with a structured commit message
@@ -177,11 +183,10 @@ visible to users outside the UI, with optional git tracking.
 - [ ] `RepoService` proto: `GetStatus()` (clean/dirty/ahead/behind),
       `Push()`, `Pull()` (advisory — does NOT trigger reapply in v1).
       Wired into the controller; UI consumes in U3.
-- [ ] Config schema: `manifests: { dir, git: { enabled, remote,
-      pushMode, branch } }` in `~/.openctl/config.yaml`.
-- [ ] Tests: round-trip materialize/delete, atomic write under crash
-      injection, git commit message format, remote push retry logic,
-      startup reconciliation behavior.
+- [x] Tests (U2.1 scope): round-trip materialize/delete, atomic
+      overwrite (no leftover .tmp files), path-traversal scrubbing,
+      startup reconciliation behavior (re-materialize missing, leave
+      orphans). U2.2 will add git tests.
 
 **Verifiable:** apply a VM via CLI, see `~/.openctl/manifests/proxmox.openctl.io/v1/VirtualMachine/foo.yaml`
 appear with a matching git commit. Delete the VM, see the file gone and
