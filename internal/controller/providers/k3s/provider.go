@@ -175,9 +175,10 @@ func (p *Provider) Apply(ctx context.Context, manifest *protocol.Resource) (*pro
 
 // applyExisting handles re-apply of a Cluster that already has state. It
 // computes the structural diff vs. the new manifest, enforces the
-// destructive/catastrophic guardrails, and converges the child set. Adding
-// nodes to a live cluster is the Phase 5.x followup; today applyExisting
-// errors out if the manifest implies any add.
+// destructive/catastrophic guardrails, and converges the child set —
+// removals via VM delete (Phase 5) and additions via the Joiner
+// (Phase 5.x count-up). In-place spec changes to existing children
+// (cpu/memory/disk) are still out of scope (see CONTROLLER.md 5.x followup).
 func (p *Provider) applyExisting(ctx context.Context, manifest *protocol.Resource, name string, spec *k3sresources.ClusterSpec) (*protocol.Resource, error) {
 	current, _ := readChildren(name)
 	plan := computeChangePlan(name, spec, current)
@@ -187,12 +188,6 @@ func (p *Provider) applyExisting(ctx context.Context, manifest *protocol.Resourc
 		// changes to children, e.g. cpu/memory, are out of scope for
 		// Phase 5 — see the deferred 5.6 followup in CONTROLLER.md.)
 		return p.loadState(name)
-	}
-
-	// Adds against a live cluster need join machinery we haven't built yet.
-	// Reject with a clear "tear down + re-apply" pointer.
-	if len(plan.addCPs)+len(plan.addWorkers) > 0 {
-		return nil, fmt.Errorf("scaling up an existing cluster is not yet supported in this controller (would add %v); tear down and re-apply, or wait for the Phase 5.x followup that adds live-cluster join", append(plan.addCPs, plan.addWorkers...))
 	}
 
 	allowDestructive := manifest.Metadata.Annotations[annotAllowDestructive] == "true"
@@ -220,10 +215,11 @@ func (p *Provider) applyExisting(ctx context.Context, manifest *protocol.Resourc
 		return nil, fmt.Errorf("catastrophic: %s; pass --i-know-this-breaks-the-cluster to override", reason)
 	}
 
+	rec := operations.RecorderFrom(ctx)
+
 	// Execute removals. Note: no kubectl drain (homelab assumption — workloads
 	// tolerate node loss). Workers go first, then CPs, so we drop schedulable
 	// capacity before touching apiserver replicas.
-	rec := operations.RecorderFrom(ctx)
 	for _, w := range plan.removeWorkers {
 		if err := runChildVMDelete(ctx, rec, w, p.vms); err != nil {
 			return nil, fmt.Errorf("delete worker %s: %w", w, err)
@@ -235,9 +231,8 @@ func (p *Provider) applyExisting(ctx context.Context, manifest *protocol.Resourc
 		}
 	}
 
-	// Update state: rewrite the children list to reflect what's left, and
-	// replace the saved spec with the new manifest's spec so future Gets
-	// compare against current intent.
+	// Compose the converged children set: keep survivors of any removes,
+	// then append additions after the join succeeds.
 	keep := make([]childRef, 0, len(current))
 	removed := toSet(append(plan.removeCPs, plan.removeWorkers...))
 	for _, c := range current {
@@ -245,7 +240,24 @@ func (p *Provider) applyExisting(ctx context.Context, manifest *protocol.Resourc
 			keep = append(keep, c)
 		}
 	}
-	if err := p.rewriteState(name, manifest, keep); err != nil {
+
+	// Phase 5.x count-up: add new nodes against the live cluster.
+	addedEndpoints := map[string]string{}
+	if len(plan.addCPs)+len(plan.addWorkers) > 0 {
+		joinEndpoints, err := p.applyCountUp(ctx, rec, name, spec, plan, current, removed)
+		if err != nil {
+			return nil, err
+		}
+		addedEndpoints = joinEndpoints
+		for _, n := range plan.addCPs {
+			keep = append(keep, childRef{Provider: "proxmox", Kind: "VirtualMachine", Name: n})
+		}
+		for _, n := range plan.addWorkers {
+			keep = append(keep, childRef{Provider: "proxmox", Kind: "VirtualMachine", Name: n})
+		}
+	}
+
+	if err := p.rewriteState(name, manifest, keep, addedEndpoints, removed); err != nil {
 		return nil, fmt.Errorf("rewrite state: %w", err)
 	}
 	return p.loadState(name)
@@ -433,10 +445,12 @@ func (p *Provider) loadState(name string) (*protocol.Resource, error) {
 }
 
 // rewriteState updates the saved state file to reflect a converged child
-// set. It preserves the existing status/outputs (the cluster is still up,
-// just smaller) and replaces the spec with the new manifest's spec so
-// future Gets diff against the user's current intent.
-func (p *Provider) rewriteState(name string, manifest *protocol.Resource, keep []childRef) error {
+// set. Preserves the existing status/outputs (the cluster is still up)
+// and replaces the spec with the new manifest's spec so future Gets diff
+// against the user's current intent. addEndpoints carries node→IP entries
+// from a count-up to merge into status.outputs.agent.endpoints;
+// removedNames carries names to drop from the same map. Both may be nil.
+func (p *Provider) rewriteState(name string, manifest *protocol.Resource, keep []childRef, addEndpoints map[string]string, removedNames map[string]bool) error {
 	dir, err := stateDir()
 	if err != nil {
 		return err
@@ -464,11 +478,44 @@ func (p *Provider) rewriteState(name string, manifest *protocol.Resource, keep [
 	if md, ok := doc["metadata"].(map[string]any); ok {
 		md["updatedAt"] = time.Now().UTC().Format(time.RFC3339)
 	}
+	if len(addEndpoints) > 0 || len(removedNames) > 0 {
+		updateAgentEndpoints(doc, addEndpoints, removedNames)
+	}
 	out, err := yaml.Marshal(doc)
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(path, out, 0o600)
+}
+
+// updateAgentEndpoints merges add/remove diffs into the saved state's
+// status.outputs.agent.endpoints map. Used by count-up + count-down to
+// keep the agent endpoints in sync with the surviving children list.
+// The endpoints map keys are node names; values are IP strings.
+func updateAgentEndpoints(doc map[string]any, add map[string]string, remove map[string]bool) {
+	status, ok := doc["status"].(map[string]any)
+	if !ok {
+		return
+	}
+	outputs, ok := status["outputs"].(map[string]any)
+	if !ok {
+		return
+	}
+	agent, ok := outputs["agent"].(map[string]any)
+	if !ok {
+		return
+	}
+	endpoints, ok := agent["endpoints"].(map[string]any)
+	if !ok {
+		endpoints = map[string]any{}
+	}
+	for name := range remove {
+		delete(endpoints, name)
+	}
+	for name, ip := range add {
+		endpoints[name] = ip
+	}
+	agent["endpoints"] = endpoints
 }
 
 // childRef matches the YAML shape used by the legacy state files.

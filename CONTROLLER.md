@@ -337,12 +337,18 @@ destructive guardrails enforced.
       round-trip/overwrite/delete; Cluster Get count synthesis;
       apply-existing tests for no-op, scale-down-needs-flag, scale-down-
       with-flag, catastrophic-needs-i-know-flag, scale-up-not-supported.
-- [ ] Phase 5.x followup: Cluster apply count-up (adding nodes to a live
-      cluster). Needs join machinery in `pkg/k3s/cluster` (read existing
-      token from first CP via SSH, run install on new nodes, install the
-      agent against the existing per-cluster CA bundle). Apply currently
-      errors with a "tear down + re-apply" pointer when a count-up is
-      requested.
+- [x] Phase 5.x followup: Cluster apply count-up (adding nodes to a live
+      cluster). New `Joiner` in `pkg/k3s/cluster` mirrors `Creator`:
+      reads the join token from a surviving CP via SSH, runs the k3s
+      install on each new node (server-join for new CPs, agent install
+      for new workers), lays down the openctl-k3s-agent using
+      newly-minted server certs against the existing per-cluster CA
+      bundle. `MintServerCerts` on the certs Bundle extends an existing
+      bundle without rotating the CA so existing agents keep trusting
+      it. State file's `status.outputs.agent.endpoints` map is updated
+      in-place. Pure adds are non-destructive (no flag needed); mixed
+      apply (down + up) still requires `--allow-destructive` for the
+      remove side.
 - [ ] Phase 5.x followup: spec changes to existing children with
       `--allow-destructive` (destroy + recreate of a node whose
       cpu/memory/disk changed). Deferred during Phase 5 scoping because

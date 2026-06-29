@@ -100,6 +100,66 @@ func GenerateBundle(clusterName string, nodes []NodeIdentity) (*Bundle, error) {
 	}, nil
 }
 
+// MintServerCerts extends an existing Bundle with server certs for new
+// nodes, signed by the bundle's existing CA. Used by the count-up path
+// when adding nodes to a live cluster: the cluster's CA must stay the same
+// so existing agents keep trusting it. The returned bundle is the same
+// pointer with ServerCerts populated for the new nodes; the caller can
+// re-persist it via WriteTo.
+//
+// Returns an error if the bundle's CA cert or key fails to parse, if any
+// node has an invalid IP, or if leaf-cert generation fails. Existing
+// ServerCerts entries are left intact.
+func (b *Bundle) MintServerCerts(nodes []NodeIdentity) error {
+	if len(nodes) == 0 {
+		return nil
+	}
+	caCert, err := parseCertPEM(b.CACertPEM)
+	if err != nil {
+		return fmt.Errorf("parse CA cert: %w", err)
+	}
+	caKey, err := parseKeyPEM(b.CAKeyPEM)
+	if err != nil {
+		return fmt.Errorf("parse CA key: %w", err)
+	}
+	if b.ServerCerts == nil {
+		b.ServerCerts = make(map[string]ServerCert, len(nodes))
+	}
+	for _, n := range nodes {
+		ip := net.ParseIP(n.IP)
+		if ip == nil {
+			return fmt.Errorf("node %q has invalid IP %q", n.Name, n.IP)
+		}
+		certPEM, keyPEM, err := generateLeaf(caCert, caKey, leafSpec{
+			commonName:   n.Name,
+			dnsNames:     []string{n.Name},
+			ipAddresses:  []net.IP{ip},
+			extKeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		})
+		if err != nil {
+			return fmt.Errorf("mint server cert for %s: %w", n.Name, err)
+		}
+		b.ServerCerts[n.Name] = ServerCert{CertPEM: certPEM, KeyPEM: keyPEM}
+	}
+	return nil
+}
+
+func parseCertPEM(certPEM []byte) (*x509.Certificate, error) {
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		return nil, fmt.Errorf("no PEM block found")
+	}
+	return x509.ParseCertificate(block.Bytes)
+}
+
+func parseKeyPEM(keyPEM []byte) (*ecdsa.PrivateKey, error) {
+	block, _ := pem.Decode(keyPEM)
+	if block == nil {
+		return nil, fmt.Errorf("no PEM block found")
+	}
+	return x509.ParseECPrivateKey(block.Bytes)
+}
+
 // WriteTo persists CA + client cert to dir; per-node server certs to
 // dir/<node>-server.{pem,key}. Files are mode 0600.
 func (b *Bundle) WriteTo(dir string) error {

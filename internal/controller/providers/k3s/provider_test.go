@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/openctl/openctl/internal/controller/operations"
 	"github.com/openctl/openctl/internal/controller/providers"
+	k3sresources "github.com/openctl/openctl/pkg/k3s/resources"
 	"github.com/openctl/openctl/pkg/protocol"
 )
 
@@ -523,9 +525,45 @@ children:
 	}
 }
 
-func TestApplyExistingScaleUpNotYetSupported(t *testing.T) {
+func TestApplyExistingScaleUpRequiresBundleDir(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	// State carries agent endpoints (so the surviving-CP IP lookup
+	// succeeds) but no bundle dir alongside it — simulates state from a
+	// cluster created by something other than the controller.
+	writeClusterState(t, home, "dev", `apiVersion: k3s.openctl.io/v1
+kind: Cluster
+metadata:
+  name: dev
+spec: {}
+status:
+  outputs:
+    agent:
+      endpoints:
+        dev-cp-0: 192.168.1.100
+children:
+  - provider: proxmox
+    kind: VirtualMachine
+    name: dev-cp-0
+  - provider: proxmox
+    kind: VirtualMachine
+    name: dev-worker-0
+`)
+	vms := &fakeVMs{}
+	p := New(&protocol.ProviderConfig{}, vms)
+	_, err := p.Apply(context.Background(), scaleDownManifest(2))
+	if err == nil {
+		t.Fatal("count-up without an existing bundle dir should error clearly")
+	}
+	if !strings.Contains(err.Error(), "bundle dir") {
+		t.Errorf("expected bundle-dir error, got: %v", err)
+	}
+}
+
+func TestApplyExistingScaleUpRequiresSurvivingCPEndpoint(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// No agent endpoints in state — can't learn the surviving CP's IP.
 	writeClusterState(t, home, "dev", `apiVersion: k3s.openctl.io/v1
 kind: Cluster
 metadata:
@@ -541,10 +579,32 @@ children:
 `)
 	vms := &fakeVMs{}
 	p := New(&protocol.ProviderConfig{}, vms)
-	// Manifest asks for 2 workers; state has 1. Phase 5 doesn't yet
-	// support adding nodes to a live cluster.
 	_, err := p.Apply(context.Background(), scaleDownManifest(2))
 	if err == nil {
-		t.Fatal("scale-up should error until Phase 5.x followup ships")
+		t.Fatal("count-up without surviving-CP endpoint should error clearly")
+	}
+	if !strings.Contains(err.Error(), "no IP for surviving CP") {
+		t.Errorf("expected surviving-CP error, got: %v", err)
+	}
+}
+
+func TestComputeChangePlanDetectsAdds(t *testing.T) {
+	// Sanity that the count-up branch fires for "1 worker → 2 workers".
+	spec, err := k3sresources.ParseClusterSpec(scaleDownManifest(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := computeChangePlan("dev", spec, []childRef{
+		{Provider: "proxmox", Kind: "VirtualMachine", Name: "dev-cp-0"},
+		{Provider: "proxmox", Kind: "VirtualMachine", Name: "dev-worker-0"},
+	})
+	if !plan.hasChanges() {
+		t.Fatal("expected changes")
+	}
+	if len(plan.addWorkers) != 1 || plan.addWorkers[0] != "dev-worker-1" {
+		t.Errorf("addWorkers = %v, want [dev-worker-1]", plan.addWorkers)
+	}
+	if len(plan.removeWorkers) != 0 || len(plan.removeCPs) != 0 {
+		t.Errorf("plan unexpectedly has removes: %+v", plan)
 	}
 }

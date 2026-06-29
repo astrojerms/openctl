@@ -67,6 +67,106 @@ func TestServerCertHasNodeIPAsSAN(t *testing.T) {
 	}
 }
 
+func TestMintServerCertsExtendsExistingBundleWithSameCA(t *testing.T) {
+	// Create an initial cluster with one CP.
+	b, err := GenerateBundle("dev", []NodeIdentity{{Name: "dev-cp-0", IP: "192.168.1.50"}})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	originalCA := append([]byte(nil), b.CACertPEM...)
+
+	// Round-trip through disk to simulate the count-up flow.
+	dir := t.TempDir()
+	if err := b.WriteTo(dir); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadBundle(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Mint certs for two new nodes against the loaded bundle.
+	newNodes := []NodeIdentity{
+		{Name: "dev-worker-0", IP: "192.168.1.51"},
+		{Name: "dev-worker-1", IP: "192.168.1.52"},
+	}
+	if err := loaded.MintServerCerts(newNodes); err != nil {
+		t.Fatalf("MintServerCerts: %v", err)
+	}
+
+	// Original CP cert still there.
+	if _, ok := loaded.ServerCerts["dev-cp-0"]; !ok {
+		t.Error("original dev-cp-0 server cert lost during mint")
+	}
+	// New nodes minted.
+	for _, n := range newNodes {
+		if _, ok := loaded.ServerCerts[n.Name]; !ok {
+			t.Errorf("server cert missing for %s", n.Name)
+		}
+	}
+
+	// CA unchanged — bytes equal — agents on existing nodes still trust the bundle.
+	if string(loaded.CACertPEM) != string(originalCA) {
+		t.Error("CA cert bytes changed after MintServerCerts; existing agents would lose trust")
+	}
+
+	// New cert chains to the existing CA.
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(originalCA) {
+		t.Fatal("append CA")
+	}
+	block, _ := pem.Decode(loaded.ServerCerts["dev-worker-0"].CertPEM)
+	if block == nil {
+		t.Fatal("decode new cert")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cert.Verify(x509.VerifyOptions{
+		Roots:     pool,
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}); err != nil {
+		t.Errorf("new server cert failed to verify against original CA: %v", err)
+	}
+
+	// New cert carries the new node's IP as a SAN.
+	want := net.ParseIP("192.168.1.51")
+	found := false
+	for _, ip := range cert.IPAddresses {
+		if ip.Equal(want) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("new server cert missing IP SAN %s; got %v", want, cert.IPAddresses)
+	}
+}
+
+func TestMintServerCertsNoOpOnEmptyList(t *testing.T) {
+	b, err := GenerateBundle("dev", []NodeIdentity{{Name: "n1", IP: "10.0.0.1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.MintServerCerts(nil); err != nil {
+		t.Errorf("MintServerCerts(nil) should be no-op, got %v", err)
+	}
+	if len(b.ServerCerts) != 1 {
+		t.Errorf("ServerCerts changed on no-op mint: %v", b.ServerCerts)
+	}
+}
+
+func TestMintServerCertsErrorsOnBadIP(t *testing.T) {
+	b, err := GenerateBundle("dev", []NodeIdentity{{Name: "n1", IP: "10.0.0.1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = b.MintServerCerts([]NodeIdentity{{Name: "bad", IP: "not-an-ip"}})
+	if err == nil {
+		t.Error("MintServerCerts with invalid IP should error")
+	}
+}
+
 func TestClientAndServerCertsChainToCA(t *testing.T) {
 	b, err := GenerateBundle("dev", []NodeIdentity{{Name: "n1", IP: "10.0.0.5"}})
 	if err != nil {

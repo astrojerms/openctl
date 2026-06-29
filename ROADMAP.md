@@ -50,8 +50,9 @@ phases, and 4.5 / 5.x meaningfully improve the UI's UX. See
       suspending-dispatcher orchestration deferred to arch Phase 9-10.
 - [ ] **Phase 4.5** — QGA-based IP discovery (lift the
       `spec.network.staticIPs.*` requirement in the controller path).
-- [ ] **Phase 5.x** — Cluster apply count-up (add nodes to a live
-      cluster; needs join machinery in `pkg/k3s/cluster`).
+- [x] **Phase 5.x** — Cluster apply count-up (new `Joiner` adds nodes
+      to a live cluster, extending the existing CA bundle without
+      rotating it).
 - [ ] **Phase 5.x** — In-place spec changes on existing children
       (destroy+recreate of a node whose cpu/memory/disk changed).
 
