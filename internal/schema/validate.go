@@ -87,6 +87,9 @@ func SchemaSelector(apiVersion, kind string) (pkg, def string, ok bool) {
 		if kind == "VirtualMachine" {
 			return "proxmox", "#VirtualMachine", true
 		}
+		if kind == "ProxmoxNode" {
+			return "proxmox", "#ProxmoxNode", true
+		}
 	case "k3s":
 		if kind == "Cluster" {
 			return "k3s", "#Cluster", true

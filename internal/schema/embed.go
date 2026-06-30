@@ -34,6 +34,12 @@ func Registry() []Info {
 			FileName:   "proxmox/vm.cue",
 		},
 		{
+			APIVersion: "proxmox.openctl.io/v1",
+			Kind:       "ProxmoxNode",
+			Provider:   "proxmox",
+			FileName:   "proxmox/node.cue",
+		},
+		{
 			APIVersion: "k3s.openctl.io/v1",
 			Kind:       "Cluster",
 			Provider:   "k3s",
