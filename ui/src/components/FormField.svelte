@@ -129,40 +129,38 @@
       {@const obj = (typeof value === 'object' && value && !Array.isArray(value)) ? value : {}}
       {@const childValue = (obj as Record<string, unknown>)[child.name ?? '']}
       {@const collapsed = isCollapsible(child, childValue)}
-      <div class="row" class:row-collapsed={collapsed}>
-        <span class="row-label">
-          {child.name}{#if !child.optional}<span class="req" aria-label="required">*</span>{/if}
-        </span>
-        <div class="row-value">
-          {#if collapsed}
+      {@const removable = child.optional && !collapsed && (child.type === 'object' || child.type === 'array' || child.type === 'map')}
+      <div class="row">
+        <div class="row-head">
+          <span class="row-label">
+            {child.name}{#if !child.optional}<span class="req" aria-label="required">*</span>{/if}
+          </span>
+          {#if removable}
             <button
               type="button"
-              class="add-opt"
-              title={child.description ?? ''}
-              on:click={() => setObjectKey(child.name ?? '', initialValue(child))}
-            >+ {child.name}</button>
-            {#if child.description}
-              <p class="desc small">{child.description}</p>
-            {/if}
-          {:else}
-            <Self
-              field={child}
-              value={childValue}
-              depth={depth + 1}
-              on:change={(e) => setObjectKey(child.name ?? '', e.detail)}
-            />
-            {#if child.description && child.type !== 'object'}
-              <p class="desc small">{child.description}</p>
-            {/if}
+              class="row-clear"
+              title="Remove {child.name}"
+              on:click={() => unsetObjectKey(child.name ?? '')}
+            >×</button>
           {/if}
         </div>
-        {#if child.optional && !collapsed && (child.type === 'object' || child.type === 'array' || child.type === 'map')}
+        {#if child.description && (collapsed || child.type !== 'object')}
+          <p class="desc small">{child.description}</p>
+        {/if}
+        {#if collapsed}
           <button
             type="button"
-            class="row-clear"
-            title="Remove {child.name}"
-            on:click={() => unsetObjectKey(child.name ?? '')}
-          >×</button>
+            class="add-opt"
+            title={child.description ?? ''}
+            on:click={() => setObjectKey(child.name ?? '', initialValue(child))}
+          >+ {child.name}</button>
+        {:else}
+          <Self
+            field={child}
+            value={childValue}
+            depth={depth + 1}
+            on:change={(e) => setObjectKey(child.name ?? '', e.detail)}
+          />
         {/if}
       </div>
     {/each}
@@ -273,26 +271,29 @@
   .object {
     display: flex;
     flex-direction: column;
-    gap: 0.6rem;
+    gap: 0.85rem;
+    min-width: 0;
   }
-  /* Nested object indent via inline padding-left from --depth, set
-     on the wrapper. CSS-only nested-selector .object .object doesn't
-     work because each :host .object is a separate root in Svelte. */
+  /* Subtle left border for nested objects. Indent is intentionally
+     small (0.6rem) so deep nesting still leaves usable input width. */
   :global(.object .object) {
     border-left: 1px solid rgba(127, 127, 127, 0.15);
-    padding-left: 0.75rem;
+    padding-left: 0.6rem;
     margin-top: 0.3rem;
   }
   .row {
-    display: grid;
-    grid-template-columns: 10rem 1fr auto;
-    align-items: start;
-    gap: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    min-width: 0;
   }
-  .row-collapsed {
+  .row-head {
+    display: flex;
     align-items: center;
+    gap: 0.4rem;
   }
   .add-opt {
+    align-self: flex-start;
     background: transparent;
     border: 1px dashed rgba(127, 127, 127, 0.4);
     color: #aaa;
@@ -310,14 +311,13 @@
     background: transparent;
     border: 1px solid transparent;
     color: #888;
-    width: 1.6rem;
-    height: 1.6rem;
+    width: 1.4rem;
+    height: 1.4rem;
     padding: 0;
     border-radius: 4px;
     cursor: pointer;
     font-size: 1rem;
     line-height: 1;
-    align-self: flex-start;
   }
   .row-clear:hover {
     color: #ff8980;
@@ -326,15 +326,11 @@
   .row-label {
     font-size: 0.85rem;
     color: #aaa;
-    padding-top: 0.4rem;
     font-family: ui-monospace, SFMono-Regular, monospace;
   }
   .req {
     color: #ff8980;
     margin-left: 0.2em;
-  }
-  .row-value {
-    min-width: 0;
   }
   .desc {
     color: #888;
@@ -343,7 +339,6 @@
   }
   .small {
     font-size: 0.75rem;
-    margin-top: 0.2rem;
   }
   input[type='text'],
   input[type='number'],

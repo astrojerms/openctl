@@ -842,7 +842,7 @@
   }
   .editor-wrap.form-view {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
     gap: 1rem;
     align-items: stretch;
   }
