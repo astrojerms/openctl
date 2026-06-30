@@ -156,6 +156,18 @@ func (h *resourceHandler) Get(ctx context.Context, req *apiv1.GetRequest) (*apiv
 		}
 		return nil, status.Errorf(codes.Internal, "get: %v", err)
 	}
+	// Managed-only filter: hide resources that openctl never applied (and
+	// aren't promoted by being a child of something it did apply). Observed-
+	// only kinds bypass this. Returns NotFound so a stale UI link looks the
+	// same as an actual NotFound — there's no in-between "exists but hidden"
+	// state to expose.
+	managed, err := h.isManaged(ctx, req.GetApiVersion(), req.GetKind(), req.GetName(), nil, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "managed check: %v", err)
+	}
+	if !managed {
+		return nil, status.Errorf(codes.NotFound, "%s %q not found", req.GetKind(), req.GetName())
+	}
 	out, err := resourceToProto(r)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "encode: %v", err)
@@ -315,8 +327,19 @@ func (h *resourceHandler) List(ctx context.Context, req *apiv1.ListRequest) (*ap
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "list: %v", err)
 	}
+	appliedNames, ownerCache, err := h.managedScope(ctx, req.GetApiVersion(), req.GetKind())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "managed scope: %v", err)
+	}
 	out := make([]*apiv1.Resource, 0, len(rs))
 	for _, r := range rs {
+		managed, mErr := h.isManaged(ctx, r.APIVersion, r.Kind, r.Metadata.Name, appliedNames, ownerCache)
+		if mErr != nil {
+			return nil, status.Errorf(codes.Internal, "managed check: %v", mErr)
+		}
+		if !managed {
+			continue
+		}
 		pr, err := resourceToProto(r)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "encode: %v", err)
@@ -328,6 +351,78 @@ func (h *resourceHandler) List(ctx context.Context, req *apiv1.ListRequest) (*ap
 		out = append(out, pr)
 	}
 	return &apiv1.ListResponse{Resources: out}, nil
+}
+
+// managedScope prepares the inputs for a batch of isManaged checks over a
+// single List call: one DB round-trip to pull the applied names for the
+// listed (apiVersion, kind), and an empty cache for parent-owner lookups
+// that isManaged populates as it walks the result set. Returns (nil, nil,
+// nil) when manifests aren't wired (test mode); isManaged treats nil maps
+// as "no filtering".
+func (h *resourceHandler) managedScope(ctx context.Context, apiVersion, kind string) (map[string]bool, map[string]bool, error) {
+	if h.manifests == nil {
+		return nil, nil, nil
+	}
+	names, err := h.manifests.ListNames(ctx, apiVersion, kind)
+	if err != nil {
+		return nil, nil, err
+	}
+	return names, map[string]bool{}, nil
+}
+
+// isManaged reports whether the controller should surface (apiVersion, kind,
+// name) to clients. A resource is managed if any of:
+//   - the manifests store isn't wired (test mode — no filtering)
+//   - the kind is observed-only (e.g. ProxmoxNode discovered from the API)
+//   - the name appears in applied_manifests for its kind
+//   - its owner appears in applied_manifests (children inherit visibility
+//     so the k3s cluster's member VMs aren't hidden even though the
+//     dispatcher records only the parent Cluster's manifest)
+//
+// appliedNames/ownerCache are batch-call optimizations from managedScope;
+// pass nil for one-shot checks (Get/Watch-by-name) — the function falls
+// back to a per-call DB lookup.
+func (h *resourceHandler) isManaged(ctx context.Context, apiVersion, kind, name string, appliedNames, ownerCache map[string]bool) (bool, error) {
+	if h.manifests == nil {
+		return true, nil
+	}
+	if h.registry.IsObservedOnly(apiVersion, kind) {
+		return true, nil
+	}
+	if appliedNames != nil {
+		if appliedNames[name] {
+			return true, nil
+		}
+	} else {
+		desired, err := h.manifests.Load(ctx, apiVersion, kind, name)
+		if err != nil {
+			return false, err
+		}
+		if desired != nil {
+			return true, nil
+		}
+	}
+	// Owner promotion: the k3s provider's child VMs aren't directly written
+	// to applied_manifests, so check whether their owner is.
+	owner, ok := h.registry.OwnerRefOf(kind, name)
+	if !ok {
+		return false, nil
+	}
+	cacheKey := owner.APIVersion + "/" + owner.Kind + "/" + owner.Name
+	if ownerCache != nil {
+		if v, hit := ownerCache[cacheKey]; hit {
+			return v, nil
+		}
+	}
+	desired, err := h.manifests.Load(ctx, owner.APIVersion, owner.Kind, owner.Name)
+	if err != nil {
+		return false, err
+	}
+	managed := desired != nil
+	if ownerCache != nil {
+		ownerCache[cacheKey] = managed
+	}
+	return managed, nil
 }
 
 // attachDrift looks up the resource's persisted manifest and populates

@@ -176,6 +176,29 @@ func (s *Store) ListAll(ctx context.Context) ([]Ref, error) {
 	return out, rows.Err()
 }
 
+// ListNames returns the set of resource names that have an applied manifest
+// for (apiVersion, kind). Cheap: doesn't decode spec/metadata. Used by the
+// managed-only filter in ResourceService.List so observed-but-unmanaged
+// resources are hidden in one DB round-trip per List call.
+func (s *Store) ListNames(ctx context.Context, apiVersion, kind string) (map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT name FROM applied_manifests WHERE api_version = ? AND kind = ?`,
+		apiVersion, kind)
+	if err != nil {
+		return nil, fmt.Errorf("list names: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]bool{}
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return nil, err
+		}
+		out[n] = true
+	}
+	return out, rows.Err()
+}
+
 // Delete removes the row for a resource. Idempotent — delete on missing
 // returns nil, matching the provider Delete contract.
 func (s *Store) Delete(ctx context.Context, apiVersion, kind, name string) error {
