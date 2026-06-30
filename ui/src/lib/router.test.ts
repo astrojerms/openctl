@@ -23,6 +23,16 @@ describe('routeHref', () => {
     ).toBe('#/k/k3s.openctl.io/v1/Cluster/dev%20cluster');
   });
 
+  it('uses /new as the create suffix', () => {
+    expect(
+      routeHref({
+        name: 'create',
+        apiVersion: 'proxmox.openctl.io/v1',
+        kind: 'VirtualMachine',
+      }),
+    ).toBe('#/k/proxmox.openctl.io/v1/VirtualMachine/new');
+  });
+
   it('suffixes /edit on edit routes', () => {
     expect(
       routeHref({

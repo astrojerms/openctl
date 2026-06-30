@@ -104,6 +104,7 @@
       <p class="path">{provider} · {apiVersion}</p>
     </div>
     <span class="badge-count">{rows.length}</span>
+    <a class="new-btn" href={routeHref({ name: 'create', apiVersion, kind })}>+ New {kind}</a>
   </header>
 
   {#if loading}
@@ -111,8 +112,8 @@
   {:else if error}
     <p class="err">{error}</p>
   {:else if rows.length === 0}
-    <p class="muted">No resources of this kind. Apply one via CLI:
-      <code>openctl ctl apply -f manifest.yaml</code></p>
+    <p class="muted">No resources of this kind yet — click <strong>+ New {kind}</strong> above,
+      or apply one via CLI: <code>openctl ctl apply -f manifest.yaml</code></p>
   {:else}
     <table>
       <thead>
@@ -179,6 +180,18 @@
     padding: 0.1em 0.7em;
     border-radius: 999px;
     font-size: 0.85rem;
+  }
+  .new-btn {
+    background: #4a8ef0;
+    color: white;
+    padding: 0.4em 0.9em;
+    border-radius: 6px;
+    text-decoration: none;
+    font-size: 0.85rem;
+    font-weight: 500;
+  }
+  .new-btn:hover {
+    background: #3a7eda;
   }
   .muted {
     color: #888;

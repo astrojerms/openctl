@@ -47,6 +47,7 @@
 
   $: activeKindKey =
     $route.name === 'list' || $route.name === 'detail'
+      || $route.name === 'create' || $route.name === 'edit'
       ? `${$route.apiVersion}/${$route.kind}`
       : '';
 </script>
@@ -87,6 +88,11 @@
         apiVersion={$route.apiVersion}
         kind={$route.kind}
         resourceName={$route.resourceName}
+      />
+    {:else if $route.name === 'create'}
+      <Edit
+        apiVersion={$route.apiVersion}
+        kind={$route.kind}
       />
     {:else}
       <Edit
