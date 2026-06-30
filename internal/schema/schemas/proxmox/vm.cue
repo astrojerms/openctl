@@ -9,15 +9,129 @@ import "openctl.io/schemas/base"
 }
 
 #VMSpec: {
-	node:        string
-	template?:   {name?: string, vmid?: int}
-	cloudImage?: {url: string, storage: string, ...}
-	image?:      {storage: string, file: string, ...}
-	cpu?:        {cores: int & >=1 | *2, sockets?: int}
-	memory?:     {size: int & >=512}
-	disks?:      [...{name: string, storage: string, size: string}]
-	networks?:   [...{name: string, bridge: string | *"vmbr0", model?: string}]
-	cloudInit?:  {user?: string, sshKeys?: [...string], ipConfig?: _}
-	agent?:      {enabled: bool}
+	// Proxmox node (host) the VM lives on, e.g. "pve1".
+	node: string
+
+	// Source for VM creation: pick exactly one of template, cloudImage, or image.
+	// Clones from a Proxmox template by name or vmid.
+	template?: {
+		// Template name in Proxmox (preferred over vmid).
+		name?: string
+		// Template vmid; used when the name isn't unique.
+		vmid?: int
+	}
+	// Downloads a cloud image URL and provisions a reusable template
+	// behind the scenes, then clones it. The template-name is generated
+	// from the URL unless overridden.
+	cloudImage?: {
+		// HTTP(S) URL of the cloud image (e.g. an Ubuntu .img).
+		url: string
+		// Proxmox storage that will host the downloaded image and template VM disk.
+		storage: string
+		// Optional checksum to verify the download (e.g. "sha256:abc123").
+		checksum?: string
+		// Override the auto-generated template name (otherwise derived from URL).
+		templateName?: string
+		// Where to place cloned VM disks. Defaults to storage.
+		diskStorage?: string
+	}
+	// Imports an existing disk image from Proxmox storage.
+	image?: {
+		// Storage that contains the source image.
+		storage: string
+		// Image filename, or full volume ID like "local:import/image.qcow2".
+		file: string
+		// Storage content type. Use "import" for downloaded cloud images.
+		contentType?: "images" | "iso" | "import"
+		// Source disk format if not inferable from extension.
+		format?: "qcow2" | "raw" | "vmdk"
+		// Storage to import the disk into. Defaults to source storage.
+		targetStorage?: string
+		// Format to convert to during import.
+		targetFormat?: "qcow2" | "raw"
+	}
+
+	// CPU configuration. Total vCPUs = cores * sockets.
+	cpu?: {
+		// Cores per socket.
+		cores: int & >=1 | *2
+		// Number of CPU sockets exposed to the guest.
+		sockets?: int & >=1 | *1
+	}
+	// Memory size in MiB.
+	memory?: {
+		// Allocated RAM in MiB (minimum 512).
+		size: int & >=512
+	}
+
+	// Linux guest kernel/OS hint; "l26" covers modern Linux. Windows uses
+	// the win* values.
+	osType?: "l24" | "l26" | "other" | "wxp" | "w2k" | "w2k3" | "w2k8" | "wvista" | "win7" | "win8" | "win10" | "win11" | "solaris"
+	// Firmware. ovmf (UEFI) is needed for secure boot / GPT-only guests;
+	// seabios is the traditional BIOS.
+	bios?: "seabios" | "ovmf"
+	// Virtual machine type. q35 is recommended for modern guests with
+	// PCIe; pc/i440fx is the legacy default.
+	machine?: "pc" | "q35" | "i440fx"
+
+	// QEMU guest agent. Enabling needs qemu-guest-agent installed in the
+	// guest; openctl uses it for IP detection.
+	agent?: {
+		// Whether QEMU guest agent is enabled.
+		enabled: bool | *false
+	}
+
+	// Disks to attach. Names are Proxmox bus-slot strings (e.g. "scsi0",
+	// "virtio0"). For cloned VMs, listing a disk with size= resizes it.
+	disks?: [...{
+		// Bus and slot, e.g. "scsi0" or "virtio0".
+		name: string
+		// Proxmox storage ID (e.g. "local-lvm", "nfs-vmstore").
+		storage: string
+		// Target disk size with unit suffix, e.g. "50G", "1T".
+		size: string
+	}]
+
+	// Network interfaces. Names are Proxmox-style "net0", "net1", ...
+	networks?: [...{
+		// Interface name, e.g. "net0".
+		name: string
+		// Proxmox bridge to attach to.
+		bridge: string | *"vmbr0"
+		// NIC model. virtio is fastest; e1000 is most-compatible for old guests.
+		model?: "virtio" | "e1000" | "rtl8139" | "vmxnet3" | "e1000e"
+		// VLAN tag (1-4094). Untagged when omitted.
+		vlan?: int & >=1 & <=4094
+		// Whether the Proxmox firewall is enabled on this NIC.
+		firewall?: bool | *false
+		// Optional MAC address override. Proxmox auto-assigns when empty.
+		macAddress?: string
+	}]
+
+	// Cloud-init configuration injected at first boot. Requires the guest
+	// to be a cloud-init image.
+	cloudInit?: {
+		// Default user created in the guest.
+		user?: string
+		// Initial password (plaintext on the wire to Proxmox — prefer SSH keys).
+		password?: string
+		// SSH public keys for the default user.
+		sshKeys?: [...string]
+		// DNS search domain (e.g. "lan").
+		searchDomain?: string
+		// DNS resolver addresses to write to /etc/resolv.conf.
+		nameservers?: [...string]
+		// Per-interface IP configuration. Key is the interface name (e.g.
+		// "net0"). Use "dhcp" as ip to request DHCP, or "<addr>/<cidr>"
+		// for static with optional gateway.
+		ipConfig?: {[string]: {
+			// IP address with CIDR (e.g. "192.168.1.10/24"), or "dhcp".
+			ip: string
+			// Default gateway. Required for static IPs that need outbound routing.
+			gateway?: string
+		}}
+	}
+
+	// Whether to power the VM on after creation.
 	startOnCreate?: bool | *true
 }
