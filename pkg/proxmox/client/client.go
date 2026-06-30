@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 )
@@ -357,6 +359,79 @@ func (c *Client) ConfigureVM(node string, vmid int, params map[string]any) error
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/config", node, vmid)
 	_, err := c.put(path, params)
 	return err
+}
+
+// GetVMConfigRaw returns the full VM config as a generic map. Unlike
+// GetVMConfig (which uses a struct that only models a fixed subset of
+// keys), this surfaces all disk and network slots that the VM actually
+// has — necessary when merging flags into an arbitrary disk entry.
+func (c *Client) GetVMConfigRaw(node string, vmid int) (map[string]any, error) {
+	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/config", node, vmid)
+	resp, err := c.get(path)
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse VM config: %w", err)
+	}
+	return result.Data, nil
+}
+
+// SetDiskOptions merges the given key=value options into the existing
+// disk config string for `disk` (e.g. "scsi0") on the VM. Preserves the
+// volume reference and any existing options not overridden. No-op when
+// opts is empty.
+func (c *Client) SetDiskOptions(node string, vmid int, disk string, opts map[string]string) error {
+	if len(opts) == 0 {
+		return nil
+	}
+	cfg, err := c.GetVMConfigRaw(node, vmid)
+	if err != nil {
+		return fmt.Errorf("read VM %d config: %w", vmid, err)
+	}
+	raw, ok := cfg[disk].(string)
+	if !ok || raw == "" {
+		return fmt.Errorf("disk %q not found in VM %d config", disk, vmid)
+	}
+	merged := MergeDiskOptions(raw, opts)
+	if merged == raw {
+		return nil
+	}
+	return c.ConfigureVM(node, vmid, map[string]any{disk: merged})
+}
+
+// MergeDiskOptions merges `overrides` into an existing Proxmox disk
+// config string. The volume reference (first comma-separated token) is
+// preserved verbatim; remaining tokens are parsed as k=v pairs and the
+// overrides win. Output keys are sorted for stable diffs.
+func MergeDiskOptions(existing string, overrides map[string]string) string {
+	parts := strings.Split(existing, ",")
+	if len(parts) == 0 {
+		return existing
+	}
+	volref := parts[0]
+	merged := make(map[string]string, len(parts)+len(overrides))
+	for _, p := range parts[1:] {
+		kv := strings.SplitN(p, "=", 2)
+		if len(kv) == 2 {
+			merged[kv[0]] = kv[1]
+		}
+	}
+	maps.Copy(merged, overrides)
+	keys := make([]string, 0, len(merged))
+	for k := range merged {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]string, 0, len(keys)+1)
+	out = append(out, volref)
+	for _, k := range keys {
+		out = append(out, fmt.Sprintf("%s=%s", k, merged[k]))
+	}
+	return strings.Join(out, ",")
 }
 
 // ResizeVMDisk resizes a VM disk

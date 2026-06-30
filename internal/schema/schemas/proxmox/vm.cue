@@ -82,14 +82,32 @@ import "openctl.io/schemas/base"
 	}
 
 	// Disks to attach. Names are Proxmox bus-slot strings (e.g. "scsi0",
-	// "virtio0"). For cloned VMs, listing a disk with size= resizes it.
+	// "virtio0"). For cloned VMs, listing a disk with size= resizes it
+	// and applies any flags below to the existing disk config.
 	disks?: [...{
-		// Bus and slot, e.g. "scsi0" or "virtio0".
+		// Bus and slot, e.g. "scsi0" or "virtio0". Bus is parsed from the
+		// prefix; common buses are scsi (recommended for cloud images),
+		// virtio (fastest), sata, and ide.
 		name: string
 		// Proxmox storage ID (e.g. "local-lvm", "nfs-vmstore").
 		storage: string
 		// Target disk size with unit suffix, e.g. "50G", "1T".
 		size: string
+		// Advertise the disk as an SSD to the guest. Lets the OS issue
+		// TRIM and pick SSD-friendly schedulers.
+		ssd?: bool | *false
+		// Enable TRIM/UNMAP passthrough so freed blocks are reclaimed
+		// in the underlying storage (zfs/lvm-thin).
+		discard?: bool | *false
+		// Run this disk's I/O on its own thread. Improves throughput
+		// on virtio-scsi-single and virtio with multi-disk VMs.
+		iothread?: bool | *false
+		// Include this disk in vzdump backups. Defaults to Proxmox's
+		// own default (true). Set false to skip a scratch disk.
+		backup?: bool
+		// Cache mode. Proxmox default is "none" (safest). "writeback"
+		// is fastest but risks data loss on host crash.
+		cache?: "none" | "writethrough" | "writeback" | "unsafe" | "directsync"
 	}]
 
 	// Network interfaces. Names are Proxmox-style "net0", "net1", ...

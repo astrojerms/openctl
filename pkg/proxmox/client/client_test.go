@@ -457,6 +457,100 @@ func TestResizeVMDisk(t *testing.T) {
 	}
 }
 
+func TestMergeDiskOptions(t *testing.T) {
+	cases := []struct {
+		name      string
+		existing  string
+		overrides map[string]string
+		want      string
+	}{
+		{
+			"adds flags to bare volref",
+			"local-lvm:vm-100-disk-0",
+			map[string]string{"ssd": "1", "discard": "on"},
+			"local-lvm:vm-100-disk-0,discard=on,ssd=1",
+		},
+		{
+			"preserves size and merges new flags",
+			"local-lvm:vm-100-disk-0,size=32G",
+			map[string]string{"iothread": "1"},
+			"local-lvm:vm-100-disk-0,iothread=1,size=32G",
+		},
+		{
+			"overrides existing flag value",
+			"local-lvm:vm-100-disk-0,cache=none,size=32G",
+			map[string]string{"cache": "writeback"},
+			"local-lvm:vm-100-disk-0,cache=writeback,size=32G",
+		},
+		{
+			"empty overrides leaves string structurally equal",
+			"local-lvm:vm-100-disk-0,size=32G,ssd=1",
+			map[string]string{},
+			"local-lvm:vm-100-disk-0,size=32G,ssd=1",
+		},
+	}
+	for _, tc := range cases {
+		got := MergeDiskOptions(tc.existing, tc.overrides)
+		if got != tc.want {
+			t.Errorf("%s:\n  got  %q\n  want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestSetDiskOptions(t *testing.T) {
+	var configPUT map[string]string
+	server := mockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api2/json/nodes/pve1/qemu/100/config" && r.Method == "GET":
+			json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"scsi0": "local-lvm:vm-100-disk-0,size=32G",
+				},
+			})
+		case r.URL.Path == "/api2/json/nodes/pve1/qemu/100/config" && r.Method == "PUT":
+			_ = r.ParseForm()
+			configPUT = map[string]string{}
+			for k, v := range r.Form {
+				if len(v) > 0 {
+					configPUT[k] = v[0]
+				}
+			}
+			json.NewEncoder(w).Encode(map[string]any{"data": nil})
+		}
+	})
+	defer server.Close()
+
+	c := New(server.URL, "test", "test")
+	c.httpClient = server.Client()
+
+	err := c.SetDiskOptions("pve1", 100, "scsi0", map[string]string{"ssd": "1", "discard": "on"})
+	if err != nil {
+		t.Fatalf("SetDiskOptions: %v", err)
+	}
+	want := "local-lvm:vm-100-disk-0,discard=on,size=32G,ssd=1"
+	if configPUT["scsi0"] != want {
+		t.Errorf("PUT scsi0 = %q, want %q", configPUT["scsi0"], want)
+	}
+}
+
+func TestSetDiskOptions_NoOp(t *testing.T) {
+	// Empty opts should not hit the API at all — important for the
+	// hot path where most disks won't carry flags.
+	called := false
+	server := mockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	})
+	defer server.Close()
+	c := New(server.URL, "test", "test")
+	c.httpClient = server.Client()
+	if err := c.SetDiskOptions("pve1", 100, "scsi0", nil); err != nil {
+		t.Fatalf("SetDiskOptions nil opts: %v", err)
+	}
+	if called {
+		t.Error("SetDiskOptions with nil opts should not call the API")
+	}
+}
+
 func TestGetStorageInfo(t *testing.T) {
 	server := mockServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api2/json/storage/local-lvm" {
