@@ -47,6 +47,54 @@ func New(endpoint, tokenID, tokenSecret string) *Client {
 	}
 }
 
+// Node represents a Proxmox cluster member as returned by /api2/json/nodes.
+// All capacity numbers are bytes; CPU is fractional usage (0..1) over MaxCPU
+// total cores.
+type Node struct {
+	Node    string  `json:"node"`
+	Status  string  `json:"status"`
+	CPU     float64 `json:"cpu"`
+	MaxCPU  int     `json:"maxcpu"`
+	Mem     int64   `json:"mem"`
+	MaxMem  int64   `json:"maxmem"`
+	Disk    int64   `json:"disk"`
+	MaxDisk int64   `json:"maxdisk"`
+	Uptime  int64   `json:"uptime"`
+	Level   string  `json:"level"`
+}
+
+// ListNodes returns all cluster members with their observed status and
+// capacity. Used by the ProxmoxNode resource — atomic providers that only
+// need node names (e.g. ListVMs's fan-out) use the lighter listNodes().
+func (c *Client) ListNodes() ([]*Node, error) {
+	resp, err := c.get("/api2/json/nodes")
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Data []*Node `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse nodes: %w", err)
+	}
+	return result.Data, nil
+}
+
+// GetNode returns a single cluster member by name, or an error if no node
+// with that name exists.
+func (c *Client) GetNode(name string) (*Node, error) {
+	nodes, err := c.ListNodes()
+	if err != nil {
+		return nil, err
+	}
+	for _, n := range nodes {
+		if n.Node == name {
+			return n, nil
+		}
+	}
+	return nil, fmt.Errorf("node %q not found", name)
+}
+
 // VM represents a Proxmox VM
 type VM struct {
 	VMID      int     `json:"vmid"`
@@ -570,26 +618,15 @@ func (c *Client) getTaskStatus(node, upid string) (string, error) {
 }
 
 func (c *Client) listNodes() ([]string, error) {
-	resp, err := c.get("/api2/json/nodes")
+	nodes, err := c.ListNodes()
 	if err != nil {
 		return nil, err
 	}
-
-	var result struct {
-		Data []struct {
-			Node string `json:"node"`
-		} `json:"data"`
+	names := make([]string, len(nodes))
+	for i, n := range nodes {
+		names[i] = n.Node
 	}
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse nodes: %w", err)
-	}
-
-	nodes := make([]string, len(result.Data))
-	for i, n := range result.Data {
-		nodes[i] = n.Node
-	}
-
-	return nodes, nil
+	return names, nil
 }
 
 func (c *Client) listNodeVMs(node string) ([]*VM, error) {

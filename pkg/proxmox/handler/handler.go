@@ -40,6 +40,8 @@ func (h *Handler) Handle(req *protocol.Request) (*protocol.Response, error) {
 		return h.handleVM(req)
 	case "Template":
 		return h.handleTemplate(req)
+	case "ProxmoxNode":
+		return h.handleNode(req)
 	default:
 		return &protocol.Response{
 			Status: protocol.StatusError,
@@ -72,6 +74,49 @@ func (h *Handler) handleVM(req *protocol.Request) (*protocol.Response, error) {
 			},
 		}, nil
 	}
+}
+
+func (h *Handler) handleNode(req *protocol.Request) (*protocol.Response, error) {
+	switch req.Action {
+	case protocol.ActionList:
+		return h.listProxmoxNodes()
+	case protocol.ActionGet:
+		return h.getProxmoxNode(req.ResourceName)
+	default:
+		return &protocol.Response{
+			Status: protocol.StatusError,
+			Error: &protocol.Error{
+				Code:    protocol.ErrorCodeInvalidRequest,
+				Message: fmt.Sprintf("action %s not supported for ProxmoxNode (observed-only)", req.Action),
+			},
+		}, nil
+	}
+}
+
+func (h *Handler) listProxmoxNodes() (*protocol.Response, error) {
+	nodes, err := h.client.ListNodes()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*protocol.Resource, 0, len(nodes))
+	for _, n := range nodes {
+		out = append(out, resources.NodeToResource(n))
+	}
+	return &protocol.Response{Status: protocol.StatusSuccess, Resources: out}, nil
+}
+
+func (h *Handler) getProxmoxNode(name string) (*protocol.Response, error) {
+	n, err := h.client.GetNode(name)
+	if err != nil {
+		return &protocol.Response{
+			Status: protocol.StatusError,
+			Error: &protocol.Error{
+				Code:    protocol.ErrorCodeNotFound,
+				Message: err.Error(),
+			},
+		}, nil
+	}
+	return &protocol.Response{Status: protocol.StatusSuccess, Resource: resources.NodeToResource(n)}, nil
 }
 
 func (h *Handler) handleTemplate(req *protocol.Request) (*protocol.Response, error) {

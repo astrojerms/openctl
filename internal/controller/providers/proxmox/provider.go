@@ -19,6 +19,7 @@ import (
 const (
 	providerName = "proxmox"
 	kindVM       = "VirtualMachine"
+	kindNode     = "ProxmoxNode"
 )
 
 // Config holds the per-provider configuration the controller passes through.
@@ -38,11 +39,15 @@ func New(cfg *Config) *Provider {
 }
 
 func (p *Provider) Name() string    { return providerName }
-func (p *Provider) Kinds() []string { return []string{kindVM} }
+func (p *Provider) Kinds() []string { return []string{kindVM, kindNode} }
 
 // Apply creates a VM if missing; otherwise returns the observed state
-// without mutating (per the no-op-on-existing rule).
+// without mutating (per the no-op-on-existing rule). ProxmoxNode is
+// observed-only and rejects Apply.
 func (p *Provider) Apply(_ context.Context, manifest *protocol.Resource) (*protocol.Resource, error) {
+	if manifest.Kind == kindNode {
+		return nil, fmt.Errorf("%s is observed-only; cannot be applied", kindNode)
+	}
 	if err := requireKindVM(manifest.Kind); err != nil {
 		return nil, err
 	}
@@ -62,11 +67,11 @@ func (p *Provider) Apply(_ context.Context, manifest *protocol.Resource) (*proto
 	return resp.Resource, nil
 }
 
-// Get returns the current observed state of a VM. Returns providers.NotFound
-// when Proxmox has no VM with the given name, so the gRPC layer can map to
-// codes.NotFound.
+// Get returns the current observed state of a VM or ProxmoxNode. Returns
+// providers.NotFound when Proxmox has no resource with the given name, so
+// the gRPC layer can map to codes.NotFound.
 func (p *Provider) Get(_ context.Context, kind, name string) (*protocol.Resource, error) {
-	if err := requireKindVM(kind); err != nil {
+	if err := requireKnownKind(kind); err != nil {
 		return nil, err
 	}
 	resp, err := p.handler.Handle(&protocol.Request{
@@ -87,9 +92,9 @@ func (p *Provider) Get(_ context.Context, kind, name string) (*protocol.Resource
 	return resp.Resource, nil
 }
 
-// List returns all observed VMs.
+// List returns all observed resources of the given kind.
 func (p *Provider) List(_ context.Context, kind string) ([]*protocol.Resource, error) {
-	if err := requireKindVM(kind); err != nil {
+	if err := requireKnownKind(kind); err != nil {
 		return nil, err
 	}
 	resp, err := p.handler.Handle(&protocol.Request{
@@ -107,7 +112,11 @@ func (p *Provider) List(_ context.Context, kind string) ([]*protocol.Resource, e
 }
 
 // Delete removes a VM. Idempotent — delete on a missing VM returns nil.
+// ProxmoxNode is observed-only and rejects Delete.
 func (p *Provider) Delete(_ context.Context, kind, name string) error {
+	if kind == kindNode {
+		return fmt.Errorf("%s is observed-only; cannot be deleted", kindNode)
+	}
 	if err := requireKindVM(kind); err != nil {
 		return err
 	}
@@ -129,11 +138,47 @@ func (p *Provider) Delete(_ context.Context, kind, name string) error {
 	return nil
 }
 
-// requireKindVM rejects unknown kinds. Phase 2 only handles VirtualMachine;
-// later phases will accept Template etc.
+// ChildrenOf implements providers.ChildrenLister: returns the VirtualMachine
+// resources hosted on the named ProxmoxNode. Empty when kind isn't
+// ProxmoxNode, the node doesn't exist, or no VMs live there. Each ref
+// carries the proxmox apiVersion so callers can navigate directly.
+func (p *Provider) ChildrenOf(kind, name string) []providers.ResourceRef {
+	if kind != kindNode {
+		return nil
+	}
+	vms, err := p.List(context.Background(), kindVM)
+	if err != nil {
+		return nil
+	}
+	var out []providers.ResourceRef
+	for _, vm := range vms {
+		nodeName, _ := vm.Spec["node"].(string)
+		if nodeName != name {
+			continue
+		}
+		out = append(out, providers.ResourceRef{
+			APIVersion: "proxmox.openctl.io/v1",
+			Kind:       kindVM,
+			Name:       vm.Metadata.Name,
+		})
+	}
+	return out
+}
+
+// requireKindVM rejects anything that isn't VirtualMachine. Used by code
+// paths that only handle VMs (Apply for non-Node kinds, Delete).
 func requireKindVM(got string) error {
 	if got != kindVM {
-		return fmt.Errorf("proxmox provider does not handle kind %q (only %q in Phase 2)", got, kindVM)
+		return fmt.Errorf("proxmox provider does not handle kind %q for this operation (only %q)", got, kindVM)
+	}
+	return nil
+}
+
+// requireKnownKind rejects anything outside the provider's Kinds() set.
+// Used by read-only paths (Get, List) that serve both VMs and Nodes.
+func requireKnownKind(got string) error {
+	if got != kindVM && got != kindNode {
+		return fmt.Errorf("proxmox provider does not handle kind %q (only %q, %q)", got, kindVM, kindNode)
 	}
 	return nil
 }
