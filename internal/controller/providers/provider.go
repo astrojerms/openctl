@@ -8,6 +8,7 @@ package providers
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/openctl/openctl/pkg/protocol"
@@ -45,6 +46,15 @@ type ResourceRef struct {
 // nothing.
 type ChildrenLister interface {
 	ChildrenOf(kind, name string) []ResourceRef
+}
+
+// ObservedOnly is an optional provider capability. Kinds returned by
+// ObservedOnlyKinds() bypass the managed-only filter that ResourceService.List
+// / Get / Watch apply — i.e. they show up regardless of whether openctl ever
+// applied them. Used for kinds the controller discovers from the underlying
+// platform (Proxmox hosts via /api2/json/nodes) and can never own.
+type ObservedOnly interface {
+	ObservedOnlyKinds() []string
 }
 
 // DryRunner is an optional provider capability for previewing what an
@@ -210,6 +220,21 @@ func (r *Registry) ChildrenOf(kind, name string) []ResourceRef {
 		}
 	}
 	return out
+}
+
+// IsObservedOnly reports whether (apiVersion, kind) belongs to a provider
+// that declared the kind observed-only. False when no provider matches the
+// apiVersion or the provider doesn't implement ObservedOnly.
+func (r *Registry) IsObservedOnly(apiVersion, kind string) bool {
+	p, err := r.For(apiVersion)
+	if err != nil {
+		return false
+	}
+	oo, ok := p.(ObservedOnly)
+	if !ok {
+		return false
+	}
+	return slices.Contains(oo.ObservedOnlyKinds(), kind)
 }
 
 // providerAPIVersion returns the canonical apiVersion for a provider,

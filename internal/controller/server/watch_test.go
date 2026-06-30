@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	"github.com/openctl/openctl/internal/controller/manifests"
 	"github.com/openctl/openctl/internal/controller/providers"
 	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 	"github.com/openctl/openctl/pkg/protocol"
@@ -66,25 +67,40 @@ func (w *watchableProvider) remove(name string) {
 }
 
 func startWatchTestServer(t *testing.T, fake *watchableProvider) (string, string) {
+	addr, caPath, _ := startWatchTestServerWithManifests(t, fake)
+	return addr, caPath
+}
+
+// startWatchTestServerWithManifests returns the manifest store so watch
+// tests can pre-populate applied_manifests for the managed-only filter.
+// Watch fires DELETED for resources missing from applied_manifests, so
+// pre-existing observed resources need a corresponding row to be visible.
+func startWatchTestServerWithManifests(t *testing.T, fake *watchableProvider) (string, string, *manifests.Store) {
 	t.Helper()
 	reg := providers.NewRegistry()
 	reg.Register(fake)
-	addr, mat := startTestServer(t, reg)
-	return addr, mat.CACertPath
+	addr, mat, mstore := startTestServerWithManifests(t, reg)
+	return addr, mat.CACertPath, mstore
 }
 
 func TestResourceWatchEmitsSnapshotThenLiveAdds(t *testing.T) {
 	fake := newWatchableProvider()
-	addr, caPath := startWatchTestServer(t, fake)
+	addr, caPath, mstore := startWatchTestServerWithManifests(t, fake)
 	conn := dialTestServer(t, addr, caPath)
 	defer func() { _ = conn.Close() }()
 
-	// Pre-populate one VM so the snapshot phase emits it.
-	fake.preload(&protocol.Resource{
+	// Pre-populate one VM so the snapshot phase emits it. Both the provider
+	// (observed state) and applied_manifests (managed-only filter) need a
+	// record — the filter hides anything not in applied_manifests.
+	pre := &protocol.Resource{
 		APIVersion: "fake.openctl.io/v1",
 		Kind:       "FakeKind",
 		Metadata:   protocol.ResourceMetadata{Name: "pre-existing"},
-	})
+	}
+	fake.preload(pre)
+	if err := mstore.Save(context.Background(), pre); err != nil {
+		t.Fatalf("Save pre-existing: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -139,15 +155,19 @@ func TestResourceWatchEmitsSnapshotThenLiveAdds(t *testing.T) {
 
 func TestResourceWatchEmitsDeletedWhenResourceGone(t *testing.T) {
 	fake := newWatchableProvider()
-	addr, caPath := startWatchTestServer(t, fake)
+	addr, caPath, mstore := startWatchTestServerWithManifests(t, fake)
 	conn := dialTestServer(t, addr, caPath)
 	defer func() { _ = conn.Close() }()
 
 	// Pre-populate; then remove from the fake mid-stream.
-	fake.preload(&protocol.Resource{
+	pre := &protocol.Resource{
 		APIVersion: "fake.openctl.io/v1", Kind: "FakeKind",
 		Metadata: protocol.ResourceMetadata{Name: "transient"},
-	})
+	}
+	fake.preload(pre)
+	if err := mstore.Save(context.Background(), pre); err != nil {
+		t.Fatalf("Save transient: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

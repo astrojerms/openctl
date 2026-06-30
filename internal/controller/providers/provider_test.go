@@ -132,6 +132,38 @@ func TestRegistryChildrenOfAggregatesAcrossProviders(t *testing.T) {
 	}
 }
 
+// observedOnlyProvider extends fakeProvider with ObservedOnly. Lets the
+// registry test cover the IsObservedOnly lookup without needing the
+// proxmox provider's full surface.
+type observedOnlyProvider struct {
+	fakeProvider
+	observed []string
+}
+
+func (o *observedOnlyProvider) ObservedOnlyKinds() []string { return o.observed }
+
+func TestRegistryIsObservedOnly(t *testing.T) {
+	r := NewRegistry()
+	r.Register(&observedOnlyProvider{
+		fakeProvider: fakeProvider{name: "proxmox", kinds: []string{"VirtualMachine", "ProxmoxNode"}},
+		observed:     []string{"ProxmoxNode"},
+	})
+	r.Register(&fakeProvider{name: "atomic", kinds: []string{"Thing"}})
+
+	if !r.IsObservedOnly("proxmox.openctl.io/v1", "ProxmoxNode") {
+		t.Error("ProxmoxNode should be observed-only")
+	}
+	if r.IsObservedOnly("proxmox.openctl.io/v1", "VirtualMachine") {
+		t.Error("VirtualMachine should not be observed-only")
+	}
+	if r.IsObservedOnly("atomic.openctl.io/v1", "Thing") {
+		t.Error("provider without ObservedOnly should return false")
+	}
+	if r.IsObservedOnly("missing.openctl.io/v1", "Anything") {
+		t.Error("unknown apiVersion should return false, not panic")
+	}
+}
+
 func TestRegistryOwnerRefOfDerivesAPIVersionFromProvider(t *testing.T) {
 	r := NewRegistry()
 	r.Register(&relationshipProvider{

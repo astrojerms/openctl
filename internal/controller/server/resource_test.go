@@ -105,7 +105,11 @@ func startTestServerWithManifests(
 	t.Cleanup(func() { _ = db.Close() })
 	store := operations.New(db, 50)
 	manifestStore := manifests.New(db)
-	dispatcher := operations.NewDispatcher(store, registry, nil, 50*time.Millisecond)
+	// Wire the manifest store as the dispatcher's sink so production-path
+	// applies persist desired state. The managed-only filter relies on that
+	// — applies that don't reach applied_manifests would be hidden from
+	// subsequent List/Get/Watch.
+	dispatcher := operations.NewDispatcher(store, registry, manifestStore, 50*time.Millisecond)
 	dispatcher.Start(context.Background())
 	t.Cleanup(dispatcher.Stop)
 
@@ -320,9 +324,10 @@ func TestResourceServiceGetReturnsAppliedManifestAndDrift(t *testing.T) {
 	}
 }
 
-func TestResourceServiceGetWithoutAppliedManifest(t *testing.T) {
-	// Resource was created out-of-band — no manifest on file. Get should
-	// still return the observed state, with Applied unset and no drift.
+func TestResourceServiceGetReturnsNotFoundForUnmanaged(t *testing.T) {
+	// Resource was created out-of-band — observed in the provider but never
+	// applied through openctl. The managed-only filter hides it; Get must
+	// return NotFound so a stale UI link looks the same as a deleted one.
 	fake := &fakeProvider{
 		getReturn: &protocol.Resource{
 			APIVersion: "fake.openctl.io/v1",
@@ -339,22 +344,61 @@ func TestResourceServiceGetWithoutAppliedManifest(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	resp, err := apiv1.NewResourceServiceClient(conn).Get(ctx, &apiv1.GetRequest{
+	_, err := apiv1.NewResourceServiceClient(conn).Get(ctx, &apiv1.GetRequest{
 		ApiVersion: "fake.openctl.io/v1",
 		Kind:       "FakeKind",
 		Name:       "orphan",
 	})
+	if err == nil {
+		t.Fatal("Get on unmanaged resource: want NotFound, got nil error")
+	}
+	if got := status.Code(err); got != codes.NotFound {
+		t.Errorf("Get error code = %v, want NotFound", got)
+	}
+}
+
+func TestResourceServiceGetReturnsObservedWhenManagedButNoSpecDrift(t *testing.T) {
+	// Counterpart to the NotFound test above: when the resource IS in
+	// applied_manifests but observed state matches, Get returns the resource
+	// with Applied populated and no drift.
+	fake := &fakeProvider{
+		getReturn: &protocol.Resource{
+			APIVersion: "fake.openctl.io/v1",
+			Kind:       "FakeKind",
+			Metadata:   protocol.ResourceMetadata{Name: "managed"},
+			Spec:       map[string]any{"cpus": 2.0},
+		},
+	}
+	reg := providers.NewRegistry()
+	reg.Register(fake)
+	addr, mat, mstore := startTestServerWithManifests(t, reg)
+	conn := dialTestServer(t, addr, mat.CACertPath)
+	defer func() { _ = conn.Close() }()
+
+	if err := mstore.Save(context.Background(), &protocol.Resource{
+		APIVersion: "fake.openctl.io/v1",
+		Kind:       "FakeKind",
+		Metadata:   protocol.ResourceMetadata{Name: "managed"},
+		Spec:       map[string]any{"cpus": 2.0},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := apiv1.NewResourceServiceClient(conn).Get(ctx, &apiv1.GetRequest{
+		ApiVersion: "fake.openctl.io/v1",
+		Kind:       "FakeKind",
+		Name:       "managed",
+	})
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if resp.GetApplied() != nil {
-		t.Error("Applied should be nil when no manifest exists")
-	}
-	if resp.GetAppliedAt() != "" {
-		t.Errorf("AppliedAt = %q, want empty", resp.GetAppliedAt())
+	if resp.GetApplied() == nil {
+		t.Error("Applied should be populated for managed resource")
 	}
 	if len(resp.GetResource().GetDrift()) != 0 {
-		t.Errorf("drift = %+v, want empty", resp.GetResource().GetDrift())
+		t.Errorf("drift = %+v, want empty when observed matches applied", resp.GetResource().GetDrift())
 	}
 }
 
@@ -527,9 +571,22 @@ func TestResourceServiceListReturnsAll(t *testing.T) {
 	reg := providers.NewRegistry()
 	reg.Register(fake)
 
-	addr, mat := startTestServer(t, reg)
+	addr, mat, mstore := startTestServerWithManifests(t, reg)
 	conn := dialTestServer(t, addr, mat.CACertPath)
 	defer func() { _ = conn.Close() }()
+
+	// fakeProvider.List always returns observed resources "a" and "b".
+	// The managed-only filter requires both to be in applied_manifests
+	// for List to surface them.
+	for _, name := range []string{"a", "b"} {
+		if err := mstore.Save(context.Background(), &protocol.Resource{
+			APIVersion: "fake.openctl.io/v1",
+			Kind:       "FakeKind",
+			Metadata:   protocol.ResourceMetadata{Name: name},
+		}); err != nil {
+			t.Fatalf("Save %q: %v", name, err)
+		}
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -543,6 +600,38 @@ func TestResourceServiceListReturnsAll(t *testing.T) {
 	}
 	if len(resp.GetResources()) != 2 {
 		t.Errorf("got %d resources, want 2", len(resp.GetResources()))
+	}
+}
+
+func TestResourceServiceListFiltersUnmanaged(t *testing.T) {
+	// fakeProvider.List returns "a" and "b". Save only "a" — the filter
+	// should hide "b" since it was created out-of-band.
+	fake := &fakeProvider{}
+	reg := providers.NewRegistry()
+	reg.Register(fake)
+
+	addr, mat, mstore := startTestServerWithManifests(t, reg)
+	conn := dialTestServer(t, addr, mat.CACertPath)
+	defer func() { _ = conn.Close() }()
+
+	if err := mstore.Save(context.Background(), &protocol.Resource{
+		APIVersion: "fake.openctl.io/v1",
+		Kind:       "FakeKind",
+		Metadata:   protocol.ResourceMetadata{Name: "a"},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := apiv1.NewResourceServiceClient(conn).List(ctx, &apiv1.ListRequest{
+		ApiVersion: "fake.openctl.io/v1", Kind: "FakeKind",
+	})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(resp.GetResources()) != 1 || resp.GetResources()[0].GetMetadata().GetName() != "a" {
+		t.Errorf("List returned %v, want only [a]", resp.GetResources())
 	}
 }
 
@@ -689,9 +778,18 @@ func TestResourceServiceGetSurfacesChildren(t *testing.T) {
 	reg.Register(parent)
 	reg.Register(vm)
 
-	addr, mat := startTestServer(t, reg)
+	addr, mat, mstore := startTestServerWithManifests(t, reg)
 	conn := dialTestServer(t, addr, mat.CACertPath)
 	defer func() { _ = conn.Close() }()
+
+	// Cluster:dev must be in applied_manifests for the filter to surface it.
+	if err := mstore.Save(context.Background(), &protocol.Resource{
+		APIVersion: "k3s.openctl.io/v1",
+		Kind:       "Cluster",
+		Metadata:   protocol.ResourceMetadata{Name: "dev"},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -728,9 +826,19 @@ func TestResourceServiceGetSurfacesOwnerRefs(t *testing.T) {
 	reg.Register(parent)
 	reg.Register(vm)
 
-	addr, mat := startTestServer(t, reg)
+	addr, mat, mstore := startTestServerWithManifests(t, reg)
 	conn := dialTestServer(t, addr, mat.CACertPath)
 	defer func() { _ = conn.Close() }()
+
+	// Owner promotion: dev-cp-0 isn't applied directly, but its owner
+	// Cluster:dev is. The filter should treat the child as managed.
+	if err := mstore.Save(context.Background(), &protocol.Resource{
+		APIVersion: "k3s.openctl.io/v1",
+		Kind:       "Cluster",
+		Metadata:   protocol.ResourceMetadata{Name: "dev"},
+	}); err != nil {
+		t.Fatalf("Save owner: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

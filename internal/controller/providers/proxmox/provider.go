@@ -41,6 +41,11 @@ func New(cfg *Config) *Provider {
 func (p *Provider) Name() string    { return providerName }
 func (p *Provider) Kinds() []string { return []string{kindVM, kindNode} }
 
+// ObservedOnlyKinds implements providers.ObservedOnly: ProxmoxNode bypasses
+// the managed-only filter because openctl discovers Proxmox hosts from the
+// API rather than provisioning them — they can never be in applied_manifests.
+func (p *Provider) ObservedOnlyKinds() []string { return []string{kindNode} }
+
 // Apply creates a VM if missing; otherwise returns the observed state
 // without mutating (per the no-op-on-existing rule). ProxmoxNode is
 // observed-only and rejects Apply.

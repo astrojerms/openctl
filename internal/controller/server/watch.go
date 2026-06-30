@@ -111,7 +111,10 @@ func (h *resourceHandler) Watch(req *apiv1.WatchRequest, stream apiv1.ResourceSe
 // listForWatch returns the resources matching the watch filter — either
 // all resources of the kind, or a single named resource. Errors from
 // NotFound on a name-scoped watch are converted to "empty list" so the
-// watcher fires DELETED rather than terminating.
+// watcher fires DELETED rather than terminating. The managed-only filter
+// (List/Get parity) applies here too: unmanaged resources never appear in
+// the stream, so a Watch tail of an out-of-band resource looks identical
+// to a real NotFound.
 func (h *resourceHandler) listForWatch(ctx context.Context, apiVersion, kind, name string) ([]*protocol.Resource, error) {
 	p, err := h.registry.For(apiVersion)
 	if err != nil {
@@ -126,9 +129,34 @@ func (h *resourceHandler) listForWatch(ctx context.Context, apiVersion, kind, na
 		if r == nil {
 			return nil, nil
 		}
+		managed, mErr := h.isManaged(ctx, apiVersion, kind, name, nil, nil)
+		if mErr != nil {
+			return nil, mErr
+		}
+		if !managed {
+			return nil, nil
+		}
 		return []*protocol.Resource{r}, nil
 	}
-	return p.List(ctx, kind)
+	rs, err := p.List(ctx, kind)
+	if err != nil {
+		return nil, err
+	}
+	appliedNames, ownerCache, err := h.managedScope(ctx, apiVersion, kind)
+	if err != nil {
+		return nil, err
+	}
+	out := rs[:0]
+	for _, r := range rs {
+		managed, mErr := h.isManaged(ctx, r.APIVersion, r.Kind, r.Metadata.Name, appliedNames, ownerCache)
+		if mErr != nil {
+			return nil, mErr
+		}
+		if managed {
+			out = append(out, r)
+		}
+	}
+	return out, nil
 }
 
 // WatchOperations implements apiv1.OperationServiceServer. Poll-based,
