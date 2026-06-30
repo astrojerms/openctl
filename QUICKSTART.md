@@ -41,7 +41,7 @@ Phase 6.
 
 ```sh
 make build
-./build/openctl-controller install --local
+./bin/openctl-controller install --local
 ```
 
 This copies the controller into `~/Library/Application Support/openctl/bin/`,

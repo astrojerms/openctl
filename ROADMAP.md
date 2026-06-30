@@ -30,11 +30,10 @@ reconcile), and parked post-Phase-6 controller followups.
 
 ## Suggested next order
 
-`4.5 → 5.x → arch Phase 7 → U1 → U2 → U3 → U4 → U5 → U6 → U7`
-
-Tracks can interleave; the architectural Phase 7+ doesn't gate the UI
-phases, and 4.5 / 5.x meaningfully improve the UI's UX. See
-[UI.md](UI.md) § Dependencies summary for the hard prereqs.
+UI rollout (U1–U7), controller phases 1–6, controller followups 4.5 /
+5.x, and arch Phase 7 + scoped Phase 8 all shipped. No committed next
+phase; pick from "Future goals (parked)" or the parked controller
+followups below when there's appetite.
 
 ---
 
@@ -169,8 +168,6 @@ committing to a phase.
             Playwright headless-Chrome e2e explicitly deferred (~200MB
             of browsers + non-trivial CI is wrong tradeoff for a
             homelab project).
-      - [ ] **U3.4** — ops drawer + live Watch streams.
-      - [ ] **U3.5** — git status indicator + Push now + e2e tests.
 - [x] **Phase U4** — CUE/manifest editor (Monaco-based, server-side
       validation, diff view, `DryRunApply` RPC, destructive gates as
       checkboxes).
@@ -190,7 +187,6 @@ committing to a phase.
       - [x] **U4.4** — Monaco diff view. Tab toggle in the edit pane
             ("Editor" / "Diff vs applied"); read-only; shares the
             lazy Monaco bundle. Closes Phase U4.
-      - [ ] **U4.4** — Side-by-side diff view (Monaco diff editor).
 - [x] **Phase U5** — Typed form editor (CUE-AST → form-schema bridge,
       AWS-console stepped sections, live manifest preview, view
       toggle).
@@ -215,8 +211,6 @@ committing to a phase.
             with offending-keys tooltip when the editor carries
             anything the form would drop. View auto-snaps to Editor
             when an unknown key appears while on Form. Closes Phase U5.
-      - [ ] **U5.4** — Form ↔ CUE round-trip + disable form when manifest
-            has hand-edits the form can't represent.
 - [x] **Phase U6** — Composite resource UX. Detail.svelte fans out one
       Get per child to render per-row status + drift pills; an
       aggregated "N children · M drifted · K unhealthy" pill rides next
