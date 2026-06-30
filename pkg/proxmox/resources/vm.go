@@ -152,9 +152,44 @@ type MemorySpec struct {
 
 // DiskSpec defines disk configuration
 type DiskSpec struct {
-	Name    string `json:"name"`
-	Storage string `json:"storage"`
-	Size    string `json:"size"`
+	Name     string `json:"name"`
+	Storage  string `json:"storage"`
+	Size     string `json:"size"`
+	SSD      bool   `json:"ssd"`
+	Discard  bool   `json:"discard"`
+	IOThread bool   `json:"iothread"`
+	// Backup uses a pointer so absent (Proxmox default = on) is
+	// distinguishable from explicit false (opt out of backup).
+	Backup *bool  `json:"backup,omitempty"`
+	Cache  string `json:"cache"`
+}
+
+// Options returns the disk flag key=value pairs (e.g. ssd=1,discard=on)
+// suitable for merging into a Proxmox disk config string. Excludes the
+// volume reference and `size` — those are handled separately by the
+// resize/import paths.
+func (d *DiskSpec) Options() map[string]string {
+	opts := map[string]string{}
+	if d.SSD {
+		opts["ssd"] = "1"
+	}
+	if d.Discard {
+		opts["discard"] = "on"
+	}
+	if d.IOThread {
+		opts["iothread"] = "1"
+	}
+	if d.Backup != nil {
+		if *d.Backup {
+			opts["backup"] = "1"
+		} else {
+			opts["backup"] = "0"
+		}
+	}
+	if d.Cache != "" {
+		opts["cache"] = d.Cache
+	}
+	return opts
 }
 
 // NetworkSpec defines network configuration
@@ -296,6 +331,22 @@ func ParseVMSpec(r *protocol.Resource) (*VMSpec, error) {
 				}
 				if size, ok := disk["size"].(string); ok {
 					diskSpec.Size = size
+				}
+				if ssd, ok := disk["ssd"].(bool); ok {
+					diskSpec.SSD = ssd
+				}
+				if discard, ok := disk["discard"].(bool); ok {
+					diskSpec.Discard = discard
+				}
+				if iothread, ok := disk["iothread"].(bool); ok {
+					diskSpec.IOThread = iothread
+				}
+				if backup, ok := disk["backup"].(bool); ok {
+					b := backup
+					diskSpec.Backup = &b
+				}
+				if cache, ok := disk["cache"].(string); ok {
+					diskSpec.Cache = cache
 				}
 				spec.Disks = append(spec.Disks, diskSpec)
 			}

@@ -271,6 +271,11 @@ func (h *Handler) createVMFromTemplate(name, node string, spec *resources.VMSpec
 				return nil, fmt.Errorf("failed to resize disk %s: %w", disk.Name, err)
 			}
 		}
+		if opts := disk.Options(); len(opts) > 0 {
+			if err := h.client.SetDiskOptions(node, vmid, disk.Name, opts); err != nil {
+				return nil, fmt.Errorf("failed to set options on disk %s: %w", disk.Name, err)
+			}
+		}
 	}
 
 	// If cloud-init is configured, try to enable qemu-guest-agent via cicustom vendor data

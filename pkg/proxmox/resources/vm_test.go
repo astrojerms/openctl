@@ -719,6 +719,80 @@ func TestParseVMSpec_MultipleNetworks(t *testing.T) {
 	}
 }
 
+func TestParseVMSpec_DiskFlags(t *testing.T) {
+	resource := &protocol.Resource{
+		APIVersion: "proxmox.openctl.io/v1",
+		Kind:       "VirtualMachine",
+		Metadata:   protocol.ResourceMetadata{Name: "disk-flags-vm"},
+		Spec: map[string]any{
+			"disks": []any{
+				map[string]any{
+					"name":     "scsi0",
+					"storage":  "local-lvm",
+					"size":     "50G",
+					"ssd":      true,
+					"discard":  true,
+					"iothread": true,
+					"backup":   false,
+					"cache":    "writeback",
+				},
+			},
+		},
+	}
+	spec, err := ParseVMSpec(resource)
+	if err != nil {
+		t.Fatalf("ParseVMSpec failed: %v", err)
+	}
+	if len(spec.Disks) != 1 {
+		t.Fatalf("expected 1 disk, got %d", len(spec.Disks))
+	}
+	d := spec.Disks[0]
+	if !d.SSD || !d.Discard || !d.IOThread {
+		t.Errorf("expected ssd/discard/iothread all true, got ssd=%v discard=%v iothread=%v",
+			d.SSD, d.Discard, d.IOThread)
+	}
+	if d.Backup == nil || *d.Backup != false {
+		t.Errorf("expected backup=false (explicit), got %v", d.Backup)
+	}
+	if d.Cache != "writeback" {
+		t.Errorf("expected cache=writeback, got %s", d.Cache)
+	}
+}
+
+func TestDiskSpecOptions(t *testing.T) {
+	bTrue := true
+	bFalse := false
+	cases := []struct {
+		name string
+		in   DiskSpec
+		want map[string]string
+	}{
+		{"empty", DiskSpec{Name: "scsi0", Storage: "local", Size: "10G"}, map[string]string{}},
+		{
+			"all flags",
+			DiskSpec{SSD: true, Discard: true, IOThread: true, Backup: &bTrue, Cache: "none"},
+			map[string]string{"ssd": "1", "discard": "on", "iothread": "1", "backup": "1", "cache": "none"},
+		},
+		{
+			"explicit no-backup",
+			DiskSpec{Backup: &bFalse},
+			map[string]string{"backup": "0"},
+		},
+	}
+	for _, tc := range cases {
+		got := tc.in.Options()
+		if len(got) != len(tc.want) {
+			t.Errorf("%s: len = %d, want %d (got=%v want=%v)", tc.name, len(got), len(tc.want), got, tc.want)
+			continue
+		}
+		for k, v := range tc.want {
+			if got[k] != v {
+				t.Errorf("%s: opts[%q] = %q, want %q", tc.name, k, got[k], v)
+			}
+		}
+	}
+}
+
 func TestParseVMSpec_NetworkExtras(t *testing.T) {
 	resource := &protocol.Resource{
 		APIVersion: "proxmox.openctl.io/v1",
