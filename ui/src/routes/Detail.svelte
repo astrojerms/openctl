@@ -137,6 +137,39 @@
 
   $: state = data ? statusBadge(data.resource.status) : null;
 
+  // Manual reconcile: re-submit the stored manifest through the normal
+  // Apply path so the dispatcher pushes desired state over observed. The
+  // resulting op surfaces in the bottom drawer like any other apply, so
+  // there's no separate "reconcile op" type to add on the wire.
+  let reconciling = false;
+  let reconcileMsg = '';
+  let reconcileErr = '';
+
+  async function doReconcile() {
+    if (reconciling || !data?.applied) return;
+    reconciling = true;
+    reconcileMsg = '';
+    reconcileErr = '';
+    try {
+      const resp = await resources.apply({
+        resource: {
+          apiVersion: data.applied.apiVersion,
+          kind: data.applied.kind,
+          metadata: { name: data.applied.metadata?.name ?? resourceName },
+          spec: data.applied.spec as Record<string, unknown> | undefined,
+        },
+      });
+      reconcileMsg = resp.operationId
+        ? `Reconcile submitted (operation ${resp.operationId})`
+        : 'Reconcile submitted';
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return;
+      reconcileErr = err instanceof Error ? err.message : String(err);
+    } finally {
+      reconciling = false;
+    }
+  }
+
   // U6 aggregations: count children we've heard back from that are
   // drifted or in a non-good state. Reactive on childStates so the
   // numbers tick up as the fanout completes.
@@ -170,9 +203,27 @@
           {#if childUnhealthy > 0} · {childUnhealthy} unhealthy{/if}
         </span>
       {/if}
+      <button
+        type="button"
+        class="reconcile-btn"
+        disabled={reconciling || !data?.applied}
+        title={data?.applied
+          ? 'Re-apply the stored manifest to push desired state over observed'
+          : 'No applied manifest on file — nothing to reconcile from'}
+        on:click={doReconcile}
+      >
+        {reconciling ? 'Reconciling…' : 'Reconcile'}
+      </button>
       <a class="edit-btn" href={routeHref({ name: 'edit', apiVersion, kind, resourceName })}>Edit</a>
     </div>
   </header>
+
+  {#if reconcileMsg}
+    <p class="muted small reconcile-msg">{reconcileMsg}</p>
+  {/if}
+  {#if reconcileErr}
+    <p class="err small">{reconcileErr}</p>
+  {/if}
 
   {#if loading}
     <p class="muted">Loading…</p>
@@ -347,6 +398,26 @@
   }
   .edit-btn:hover {
     background: #3a7ee0;
+  }
+  .reconcile-btn {
+    background: transparent;
+    color: #4a8ef0;
+    border: 1px solid #4a8ef0;
+    padding: 0.4em 1em;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .reconcile-btn:hover:not(:disabled) {
+    background: rgba(74, 142, 240, 0.1);
+  }
+  .reconcile-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .reconcile-msg {
+    color: #4a8ef0;
   }
   .state {
     padding: 0.15em 0.7em;

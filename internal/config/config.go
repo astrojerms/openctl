@@ -16,6 +16,20 @@ type Config struct {
 	Providers  map[string]*Provider `yaml:"providers"`
 	Controller *Controller          `yaml:"controller,omitempty"`
 	Manifests  *Manifests           `yaml:"manifests,omitempty"`
+	Reconciler *Reconciler          `yaml:"reconciler,omitempty"`
+}
+
+// Reconciler configures the controller's periodic drift checker. When
+// nil/omitted the reconciler runs with built-in defaults (enabled,
+// 5-minute interval). Set Enabled=false to turn it off entirely.
+type Reconciler struct {
+	// Enabled toggles the background ticker. Defaults to true when the
+	// block is present; omit the whole `reconciler:` section for default
+	// behavior. Use Enabled=false explicitly to disable.
+	Enabled *bool `yaml:"enabled,omitempty"`
+	// Interval is the time between reconcile passes (e.g. "5m", "30s").
+	// Defaults to 5m when empty.
+	Interval string `yaml:"interval,omitempty"`
 }
 
 // Manifests configures the controller's on-disk manifest mirror — the

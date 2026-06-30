@@ -22,6 +22,7 @@ import (
 	"github.com/openctl/openctl/internal/controller/providers"
 	k3sprovider "github.com/openctl/openctl/internal/controller/providers/k3s"
 	pmprovider "github.com/openctl/openctl/internal/controller/providers/proxmox"
+	"github.com/openctl/openctl/internal/controller/reconciler"
 	"github.com/openctl/openctl/internal/controller/server"
 	"github.com/openctl/openctl/internal/controller/storage"
 	tlspkg "github.com/openctl/openctl/internal/controller/tls"
@@ -176,6 +177,19 @@ func runServe(args []string) error {
 	dispatcher.Start(ctx)
 	defer dispatcher.Stop()
 
+	// Periodic drift reconciler. Disabled only when the config explicitly
+	// sets `reconciler.enabled: false`. Logs drift transitions; never
+	// auto-remediates — the user clicks Reconcile in the UI to push
+	// desired back over observed.
+	rec, recStarted := buildReconciler(registry, manifestStore)
+	if rec != nil {
+		rec.Start(ctx)
+		defer rec.Stop()
+		log.Printf("  reconciler:  enabled (interval=%s)", recStarted)
+	} else {
+		log.Printf("  reconciler:  disabled (config: reconciler.enabled=false)")
+	}
+
 	sessionStore := auth.NewSessionStore(db)
 
 	opts := server.Options{
@@ -253,6 +267,31 @@ func defaultDir() string {
 		return "./openctl-controller"
 	}
 	return filepath.Join(home, ".openctl", "controller")
+}
+
+// buildReconciler returns a started-or-skipped reconciler based on
+// config.Reconciler. Defaults to enabled with the package default
+// interval when the block is omitted. Returns (nil, "") when the user
+// explicitly set `enabled: false` so main.go can log that state.
+func buildReconciler(reg *providers.Registry, mstore *manifests.Store) (*reconciler.Reconciler, time.Duration) {
+	cfg, err := config.Load()
+	if err != nil || cfg == nil || cfg.Reconciler == nil {
+		// No config block: defaults (enabled, DefaultInterval).
+		return reconciler.New(reg, mstore, 0), reconciler.DefaultInterval
+	}
+	r := cfg.Reconciler
+	if r.Enabled != nil && !*r.Enabled {
+		return nil, 0
+	}
+	interval := reconciler.DefaultInterval
+	if r.Interval != "" {
+		if parsed, perr := time.ParseDuration(r.Interval); perr == nil {
+			interval = parsed
+		} else {
+			log.Printf("config: reconciler.interval %q invalid, using default %s", r.Interval, interval)
+		}
+	}
+	return reconciler.New(reg, mstore, interval), interval
 }
 
 // buildGitRepo initializes a git repo over the disk mirror when config has
