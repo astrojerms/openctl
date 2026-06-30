@@ -8,14 +8,24 @@
   import { ops as opsStore } from '../lib/ops';
   import type { OperationRow } from '../lib/watch';
   import { routeHref, navigate } from '../lib/router';
-  import { extraKeys, fromManifest, scrubEmpty, type FormField as FF } from '../lib/formSchema';
+  import { extraKeys, fromManifest, initialValue, scrubEmpty, type FormField as FF } from '../lib/formSchema';
   import MonacoEditor from '../components/MonacoEditor.svelte';
   import MonacoDiffEditor from '../components/MonacoDiffEditor.svelte';
   import FormField from '../components/FormField.svelte';
 
   export let apiVersion: string;
   export let kind: string;
-  export let resourceName: string;
+  // Empty string = create mode (no existing resource to fetch). Edit
+  // mode requires a non-empty name. The Shell route dispatch and the
+  // routeHref builder keep these two cases distinct.
+  export let resourceName = '';
+
+  $: isCreate = resourceName === '';
+
+  // Captured at submit time in create mode so the success-handoff knows
+  // where to navigate after the op succeeds — `resourceName` is empty
+  // until then.
+  let createdName = '';
 
   let baseline = '';
   let text = '';
@@ -85,7 +95,19 @@
     loadError = '';
     ownerRefs = [];
     retryFromOpId = '';
+    createdName = '';
     try {
+      if (n === '') {
+        // Create mode: no remote fetch, no baseline. Seed the editor with
+        // a minimal manifest stub; loadFormSchema below will replace it
+        // with a schema-driven seed once the schema arrives, but only if
+        // the user hasn't started typing.
+        baseline = '';
+        text = seedManifest(av, k);
+        schedulePreview();
+        void loadFormSchema(av, k);
+        return;
+      }
       const r = await resources.get(av, k, n);
       const applied = r.applied;
       if (applied) {
@@ -143,6 +165,22 @@
       const resp = await schemas.getForm(av, k);
       if (!resp.json) return;
       formSchema = JSON.parse(resp.json) as FF;
+      // Create mode: upgrade the stub seed to the schema's defaults if
+      // the user hasn't touched it yet. We compare against the stub —
+      // any divergence means typing has begun and we leave it alone.
+      if (isCreate && text === seedManifest(av, k)) {
+        const specField = (formSchema.fields ?? []).find((f) => f.name === 'spec')
+          ?? { type: 'object' as const };
+        const seededSpec = scrubEmpty(specField, initialValue(specField));
+        const merged = {
+          apiVersion: av,
+          kind: k,
+          metadata: { name: '' },
+          spec: seededSpec as Record<string, unknown> | undefined,
+        };
+        text = resourceToYAML(merged as unknown as import('../lib/api').Resource);
+        schedulePreview();
+      }
       reseedFormState();
     } catch (err) {
       // 404 = no schema for this kind — silently disable the Form tab.
@@ -150,6 +188,14 @@
       if (err instanceof UnauthorizedError) return;
       formSchemaError = err instanceof Error ? err.message : String(err);
     }
+  }
+
+  // seedManifest returns a minimal placeholder manifest used as the
+  // initial editor text in create mode before the form schema arrives.
+  // Kept tiny on purpose — once loadFormSchema runs we replace it with
+  // a richer schema-driven seed (defaults + required fields).
+  function seedManifest(av: string, k: string): string {
+    return `apiVersion: ${av}\nkind: ${k}\nmetadata:\n  name: ""\nspec: {}\n`;
   }
 
   // Rebuild form state from the current text. Used on initial load and
@@ -257,11 +303,12 @@
     applying = true;
     applyError = '';
     try {
+      const submitName = parsed.doc.metadata?.name ?? '';
       const resp = await resources.apply({
         resource: {
           apiVersion: parsed.doc.apiVersion,
           kind: parsed.doc.kind,
-          metadata: { name: parsed.doc.metadata?.name ?? '' },
+          metadata: { name: submitName },
           spec: parsed.doc.spec as Record<string, unknown> | undefined,
         },
         allowDestructive: checkedGates['allow_destructive'] ?? false,
@@ -274,6 +321,9 @@
         // manifest. Real applied-state catches up via the ops store +
         // Watch when the dispatcher writes back.
         baseline = text;
+        // Create mode: remember the submitted name so the success
+        // handoff can navigate to the detail page.
+        if (isCreate) createdName = submitName;
       }
     } catch (err) {
       if (err instanceof UnauthorizedError) return;
@@ -302,6 +352,10 @@
   }
 
   function back() {
+    if (isCreate) {
+      navigate({ name: 'list', apiVersion, kind });
+      return;
+    }
     navigate({ name: 'detail', apiVersion, kind, resourceName });
   }
 
@@ -328,6 +382,9 @@
   // view, snap back to editor — the diff would be empty and the tab
   // gets disabled.
   $: if (!dirty && view === 'diff') view = 'edit';
+  // Create mode has no baseline to diff against — the tab would just
+  // mirror the editor. Force it off if the user lands there somehow.
+  $: if (isCreate && view === 'diff') view = 'edit';
 
   // Re-seed the form whenever the user enters the Form tab, so edits
   // made in the editor view show up.
@@ -359,7 +416,10 @@
     // Brief pause so the user sees the green flash, then jump to detail.
     setTimeout(() => {
       if (liveOpId && liveOp?.status === 'succeeded') {
-        navigate({ name: 'detail', apiVersion, kind, resourceName });
+        const target = isCreate ? createdName : resourceName;
+        if (target) {
+          navigate({ name: 'detail', apiVersion, kind, resourceName: target });
+        }
       }
     }, 600);
   }
@@ -423,7 +483,9 @@
     }
     if (parseError) return 'Fix YAML parse error before applying';
     if (validateErrors.length > 0) return 'Fix validation errors before applying';
-    if (!hasChange) return 'No changes to apply';
+    if (!hasChange) {
+      return isCreate ? 'Add a metadata.name and spec fields' : 'No changes to apply';
+    }
     if (!gatesSatisfied) return 'Check the destructive-change confirmations above';
     return '';
   }
@@ -434,31 +496,37 @@
     <div>
       <p class="crumbs">
         <a href={routeHref({ name: 'list', apiVersion, kind })}>{kind}</a>
-        <span> · </span>
-        <a href={routeHref({ name: 'detail', apiVersion, kind, resourceName })}>{resourceName}</a>
+        {#if !isCreate}
+          <span> · </span>
+          <a href={routeHref({ name: 'detail', apiVersion, kind, resourceName })}>{resourceName}</a>
+        {/if}
       </p>
-      <h2>Edit {resourceName}</h2>
+      <h2>{isCreate ? `New ${kind}` : `Edit ${resourceName}`}</h2>
     </div>
     <div class="actions">
-      <span class="state" class:dirty>{dirty ? 'unsaved changes' : 'no changes'}</span>
+      {#if !isCreate}
+        <span class="state" class:dirty>{dirty ? 'unsaved changes' : 'no changes'}</span>
+      {/if}
       {#if previewing}
         <span class="state state-busy">previewing…</span>
       {/if}
-      <button on:click={discard} disabled={!dirty || applying}>Discard</button>
-      <button on:click={back} disabled={applying}>Back</button>
+      {#if !isCreate}
+        <button on:click={discard} disabled={!dirty || applying}>Discard</button>
+      {/if}
+      <button on:click={back} disabled={applying}>{isCreate ? 'Cancel' : 'Back'}</button>
       <button
         class="primary"
         disabled={applyBlocked}
         on:click={doApply}
         title={applyBlocked && plan ? applyBlockReason() : ''}
       >
-        {applying ? 'Submitting…' : 'Apply'}
+        {applying ? 'Submitting…' : isCreate ? 'Create' : 'Apply'}
       </button>
     </div>
   </header>
 
   {#if loading}
-    <p class="muted">Loading manifest…</p>
+    <p class="muted">{isCreate ? 'Preparing…' : 'Loading manifest…'}</p>
   {:else if loadError}
     <p class="err">{loadError}</p>
   {:else}
@@ -504,14 +572,16 @@
         class:active={view === 'edit'}
         on:click={() => (view = 'edit')}
       >Editor</button>
-      <button
-        role="tab"
-        aria-selected={view === 'diff'}
-        class:active={view === 'diff'}
-        on:click={() => (view = 'diff')}
-        disabled={!dirty}
-        title={!dirty ? 'No changes to diff against the applied manifest' : ''}
-      >Diff vs applied</button>
+      {#if !isCreate}
+        <button
+          role="tab"
+          aria-selected={view === 'diff'}
+          class:active={view === 'diff'}
+          on:click={() => (view = 'diff')}
+          disabled={!dirty}
+          title={!dirty ? 'No changes to diff against the applied manifest' : ''}
+        >Diff vs applied</button>
+      {/if}
     </div>
 
     <div class="editor-wrap" class:form-view={view === 'form'}>
