@@ -27,6 +27,12 @@
   // until then.
   let createdName = '';
 
+  // Existing resource names for this kind (create mode only). Filled on
+  // load and used to warn + block when the user types a name that's
+  // already in use — without this, Apply silently upserts instead of
+  // creating, which violates the Create intent.
+  let existingNames = new Set<string>();
+
   let baseline = '';
   let text = '';
   let loading = true;
@@ -104,8 +110,10 @@
         // the user hasn't started typing.
         baseline = '';
         text = seedManifest(av, k);
+        existingNames = new Set();
         schedulePreview();
         void loadFormSchema(av, k);
+        void loadExistingNames(av, k);
         return;
       }
       const r = await resources.get(av, k, n);
@@ -196,6 +204,23 @@
   // a richer schema-driven seed (defaults + required fields).
   function seedManifest(av: string, k: string): string {
     return `apiVersion: ${av}\nkind: ${k}\nmetadata:\n  name: ""\nspec: {}\n`;
+  }
+
+  // loadExistingNames fetches the names of resources of this kind so
+  // the create flow can warn on collision. Best-effort: an error here
+  // (controller down, perms) just leaves the set empty — the apply RPC
+  // will still surface real failures.
+  async function loadExistingNames(av: string, k: string) {
+    try {
+      const resp = await resources.list(av, k);
+      existingNames = new Set((resp.resources ?? []).map((r) => r.metadata.name));
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return;
+      // Don't block the create flow on a list failure — surface in
+      // console for debugging but keep the form usable.
+      // eslint-disable-next-line no-console
+      console.warn('loadExistingNames failed', err);
+    }
   }
 
   // Rebuild form state from the current text. Used on initial load and
@@ -368,6 +393,19 @@
     (plan.children ?? []).some((c) => c.verb !== 'no-op')
   );
   $: ownedByAnother = ownerRefs.length > 0;
+
+  // Name in the current manifest, used by the create-mode collision
+  // check. Parsing on every keystroke is cheap (small docs); we don't
+  // want to wait for the debounced preview because the warning should
+  // appear immediately as the user types.
+  $: currentName = (() => {
+    if (!text) return '';
+    const p = parseYAML(text);
+    if (p.error) return '';
+    return p.doc?.metadata?.name ?? '';
+  })();
+  $: nameCollision = isCreate && currentName !== '' && existingNames.has(currentName);
+
   $: applyBlocked =
     applying ||
     ownedByAnother ||
@@ -375,7 +413,8 @@
     validateErrors.length > 0 ||
     !plan ||
     !hasChange ||
-    !gatesSatisfied;
+    !gatesSatisfied ||
+    nameCollision;
 
   $: dirty = text !== baseline;
   // If the user reverts back to matching baseline while on the diff
@@ -483,6 +522,9 @@
     }
     if (parseError) return 'Fix YAML parse error before applying';
     if (validateErrors.length > 0) return 'Fix validation errors before applying';
+    if (nameCollision) {
+      return `A ${kind} named "${currentName}" already exists — pick a different name or Edit the existing one.`;
+    }
     if (!hasChange) {
       return isCreate ? 'Add a metadata.name and spec fields' : 'No changes to apply';
     }
@@ -534,6 +576,14 @@
       <article class="retry-block">
         Pre-filled from operation
         <code class="mono">{retryFromOpId.slice(0, 12)}</code> — review the manifest before re-applying.
+      </article>
+    {/if}
+    {#if nameCollision}
+      <article class="collision-block">
+        <strong>Name already in use.</strong>
+        A {kind} named <code class="mono">{currentName}</code> already exists. Pick a different
+        name to create a new one, or
+        <a href={routeHref({ name: 'edit', apiVersion, kind, resourceName: currentName })}>edit the existing {kind} →</a>
       </article>
     {/if}
     {#if ownedByAnother}
@@ -908,6 +958,27 @@
     padding: 0.05em 0.4em;
     border-radius: 3px;
     margin: 0 0.3em;
+  }
+  .collision-block {
+    background: rgba(248, 81, 73, 0.08);
+    border-left: 3px solid #ff8980;
+    border-radius: 6px;
+    padding: 0.65rem 1rem;
+    font-size: 0.88rem;
+  }
+  .collision-block code {
+    background: rgba(0, 0, 0, 0.2);
+    padding: 0.05em 0.4em;
+    border-radius: 3px;
+    margin: 0 0.3em;
+  }
+  .collision-block a {
+    color: #6ea8ff;
+    text-decoration: none;
+    margin-left: 0.4em;
+  }
+  .collision-block a:hover {
+    text-decoration: underline;
   }
   .preview-head {
     display: flex;

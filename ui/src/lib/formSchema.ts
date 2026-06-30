@@ -194,7 +194,12 @@ export function scrubEmpty(f: FormField, value: unknown): unknown {
   }
 }
 
-function isEmpty(v: unknown): boolean {
+// isEmpty matches the rules scrubEmpty uses to decide what to drop:
+// undefined/null, empty strings, empty arrays, and empty objects all
+// count as empty. Exported so the form renderer can decide whether to
+// show a composite field as a collapsed "+ <name>" affordance or as
+// the expanded sub-form.
+export function isEmpty(v: unknown): boolean {
   if (v === undefined || v === null) return true;
   if (typeof v === 'string') return v === '';
   if (Array.isArray(v)) return v.length === 0;

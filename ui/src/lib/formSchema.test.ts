@@ -1,5 +1,30 @@
 import { describe, expect, it } from 'vitest';
-import { extraKeys, fromManifest, initialValue, scrubEmpty, type FormField } from './formSchema';
+import { extraKeys, fromManifest, initialValue, isEmpty, scrubEmpty, type FormField } from './formSchema';
+
+describe('isEmpty', () => {
+  it('treats undefined and null as empty', () => {
+    expect(isEmpty(undefined)).toBe(true);
+    expect(isEmpty(null)).toBe(true);
+  });
+  it('treats empty strings as empty', () => {
+    expect(isEmpty('')).toBe(true);
+    expect(isEmpty('x')).toBe(false);
+  });
+  it('treats empty arrays as empty', () => {
+    expect(isEmpty([])).toBe(true);
+    expect(isEmpty([0])).toBe(false);
+  });
+  it('treats empty objects as empty', () => {
+    expect(isEmpty({})).toBe(true);
+    expect(isEmpty({ a: 1 })).toBe(false);
+  });
+  it('treats numbers and booleans as non-empty', () => {
+    // These are valid scalars; collapse logic only looks at composite
+    // emptiness, so scalars shouldn't read as "empty".
+    expect(isEmpty(0)).toBe(false);
+    expect(isEmpty(false)).toBe(false);
+  });
+});
 
 const cluster: FormField = {
   type: 'object',

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import type { FormField } from '../lib/formSchema';
-  import { initialValue } from '../lib/formSchema';
+  import { initialValue, isEmpty } from '../lib/formSchema';
   import Self from './FormField.svelte';
 
   // The field schema and its current value. Value is `unknown` here
@@ -26,6 +26,26 @@
       : {};
     obj[key] = v;
     set(obj);
+  }
+
+  // unsetObjectKey deletes the key from the parent so scrubEmpty drops
+  // it from the rendered YAML. Used by the collapse "×" affordance on
+  // optional composite fields.
+  function unsetObjectKey(key: string) {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return;
+    const obj = { ...(value as Record<string, unknown>) };
+    delete obj[key];
+    set(obj);
+  }
+
+  // isCollapsible answers: should this child render as a "+ add"
+  // button instead of the full sub-form? Yes when it's optional, the
+  // type is composite (the cost of rendering is high and the user
+  // probably hasn't decided to use it), AND no value is set yet.
+  function isCollapsible(child: FormField, childValue: unknown): boolean {
+    if (!child.optional) return false;
+    if (child.type !== 'object' && child.type !== 'array' && child.type !== 'map') return false;
+    return isEmpty(childValue);
   }
 
   function setArrayIndex(idx: number, v: unknown) {
@@ -108,21 +128,42 @@
     {#each field.fields ?? [] as child (child.name)}
       {@const obj = (typeof value === 'object' && value && !Array.isArray(value)) ? value : {}}
       {@const childValue = (obj as Record<string, unknown>)[child.name ?? '']}
-      <div class="row">
+      {@const collapsed = isCollapsible(child, childValue)}
+      <div class="row" class:row-collapsed={collapsed}>
         <span class="row-label">
           {child.name}{#if !child.optional}<span class="req" aria-label="required">*</span>{/if}
         </span>
         <div class="row-value">
-          <Self
-            field={child}
-            value={childValue}
-            depth={depth + 1}
-            on:change={(e) => setObjectKey(child.name ?? '', e.detail)}
-          />
-          {#if child.description && child.type !== 'object'}
-            <p class="desc small">{child.description}</p>
+          {#if collapsed}
+            <button
+              type="button"
+              class="add-opt"
+              title={child.description ?? ''}
+              on:click={() => setObjectKey(child.name ?? '', initialValue(child))}
+            >+ {child.name}</button>
+            {#if child.description}
+              <p class="desc small">{child.description}</p>
+            {/if}
+          {:else}
+            <Self
+              field={child}
+              value={childValue}
+              depth={depth + 1}
+              on:change={(e) => setObjectKey(child.name ?? '', e.detail)}
+            />
+            {#if child.description && child.type !== 'object'}
+              <p class="desc small">{child.description}</p>
+            {/if}
           {/if}
         </div>
+        {#if child.optional && !collapsed && (child.type === 'object' || child.type === 'array' || child.type === 'map')}
+          <button
+            type="button"
+            class="row-clear"
+            title="Remove {child.name}"
+            on:click={() => unsetObjectKey(child.name ?? '')}
+          >×</button>
+        {/if}
       </div>
     {/each}
   </div>
@@ -244,9 +285,43 @@
   }
   .row {
     display: grid;
-    grid-template-columns: 10rem 1fr;
+    grid-template-columns: 10rem 1fr auto;
     align-items: start;
     gap: 0.75rem;
+  }
+  .row-collapsed {
+    align-items: center;
+  }
+  .add-opt {
+    background: transparent;
+    border: 1px dashed rgba(127, 127, 127, 0.4);
+    color: #aaa;
+    padding: 0.3em 0.8em;
+    font-size: 0.85rem;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .add-opt:hover {
+    border-style: solid;
+    border-color: #6ea8ff;
+    color: #6ea8ff;
+  }
+  .row-clear {
+    background: transparent;
+    border: 1px solid transparent;
+    color: #888;
+    width: 1.6rem;
+    height: 1.6rem;
+    padding: 0;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    align-self: flex-start;
+  }
+  .row-clear:hover {
+    color: #ff8980;
+    border-color: rgba(255, 137, 128, 0.4);
   }
   .row-label {
     font-size: 0.85rem;
