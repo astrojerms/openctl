@@ -64,6 +64,40 @@ func TestBuildForKindReturnsClusterForm(t *testing.T) {
 	if user.Default != "ubuntu" {
 		t.Errorf("ssh.user default = %v, want \"ubuntu\"", user.Default)
 	}
+
+	// controlPlane.size is now a structured object (was FieldAny before
+	// #NodeSize). Its memoryMB should carry the >=512 bound.
+	cpSize := cpFields["size"]
+	if cpSize.Type != FieldObject {
+		t.Errorf("controlPlane.size type = %s, want object (#NodeSize)", cpSize.Type)
+	}
+	cpSizeFields := byName(cpSize.Fields)
+	mem := cpSizeFields["memoryMB"]
+	if mem.Min == nil || *mem.Min != 512 {
+		t.Errorf("controlPlane.size.memoryMB min = %v, want 512", mem.Min)
+	}
+
+	// workers[].count has Min 1.
+	workerItem := byName(workers.Items.Fields)
+	workerCount := workerItem["count"]
+	if workerCount.Min == nil || *workerCount.Min != 1 {
+		t.Errorf("workers[].count min = %v, want 1", workerCount.Min)
+	}
+
+	// network.dhcp defaults to true.
+	network := specFields["network"]
+	if network.Type != FieldObject {
+		t.Fatalf("network type = %s, want object", network.Type)
+	}
+	dhcp := byName(network.Fields)["dhcp"]
+	if dhcp.Default != true {
+		t.Errorf("network.dhcp default = %v, want true", dhcp.Default)
+	}
+
+	// Docs propagate from CUE comments.
+	if specFields["compute"].Description == "" {
+		t.Error("compute should have a description from CUE comments")
+	}
 }
 
 func TestBuildForKindReturnsVMForm(t *testing.T) {
