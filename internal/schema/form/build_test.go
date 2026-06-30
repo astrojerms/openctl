@@ -66,6 +66,68 @@ func TestBuildForKindReturnsClusterForm(t *testing.T) {
 	}
 }
 
+func TestBuildForKindReturnsVMForm(t *testing.T) {
+	f, ok, err := BuildForKind("proxmox.openctl.io/v1", "VirtualMachine")
+	if err != nil {
+		t.Fatalf("BuildForKind: %v", err)
+	}
+	if !ok {
+		t.Fatal("BuildForKind ok=false; expected VirtualMachine schema to be present")
+	}
+	top := byName(f.Fields)
+	spec := top["spec"]
+	specFields := byName(spec.Fields)
+
+	// osType is a documented enum.
+	osType := specFields["osType"]
+	if osType.Type != FieldString {
+		t.Errorf("osType type = %s, want string", osType.Type)
+	}
+	if len(osType.Enum) == 0 {
+		t.Error("osType should have enum entries")
+	}
+	// Description comes from CUE docs (// ...).
+	if osType.Description == "" {
+		t.Error("osType should have a description from CUE comments")
+	}
+
+	// bios enum.
+	bios := specFields["bios"]
+	if len(bios.Enum) != 2 || bios.Enum[0] != "seabios" || bios.Enum[1] != "ovmf" {
+		t.Errorf("bios enum = %v, want [seabios ovmf]", bios.Enum)
+	}
+
+	// cpu.sockets has default 1.
+	cpu := specFields["cpu"]
+	cpuFields := byName(cpu.Fields)
+	sockets := cpuFields["sockets"]
+	if sockets.Default != int64(1) && sockets.Default != 1 && sockets.Default != float64(1) {
+		t.Errorf("sockets default = %v (%T), want 1", sockets.Default, sockets.Default)
+	}
+
+	// networks[].vlan has bounds 1..4094.
+	networks := specFields["networks"]
+	if networks.Items == nil {
+		t.Fatal("networks.items is nil")
+	}
+	netFields := byName(networks.Items.Fields)
+	vlan := netFields["vlan"]
+	if vlan.Min == nil || *vlan.Min != 1 {
+		t.Errorf("vlan min = %v, want 1", vlan.Min)
+	}
+	if vlan.Max == nil || *vlan.Max != 4094 {
+		t.Errorf("vlan max = %v, want 4094", vlan.Max)
+	}
+
+	// cloudInit.ipConfig is a map of string→object.
+	ci := specFields["cloudInit"]
+	ciFields := byName(ci.Fields)
+	ipConfig := ciFields["ipConfig"]
+	if ipConfig.Type != FieldMap {
+		t.Errorf("ipConfig type = %s, want map", ipConfig.Type)
+	}
+}
+
 func TestBuildForKindUnknownReturnsNotFound(t *testing.T) {
 	_, ok, err := BuildForKind("unknown.openctl.io/v1", "Bogus")
 	if err != nil {

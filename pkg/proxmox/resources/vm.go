@@ -159,17 +159,22 @@ type DiskSpec struct {
 
 // NetworkSpec defines network configuration
 type NetworkSpec struct {
-	Name   string `json:"name"`
-	Bridge string `json:"bridge"`
-	Model  string `json:"model"`
+	Name       string `json:"name"`
+	Bridge     string `json:"bridge"`
+	Model      string `json:"model"`
+	VLAN       int    `json:"vlan"`
+	Firewall   bool   `json:"firewall"`
+	MACAddress string `json:"macAddress"`
 }
 
 // CloudInitSpec defines cloud-init configuration
 type CloudInitSpec struct {
-	User     string              `json:"user"`
-	Password string              `json:"password"`
-	SSHKeys  []string            `json:"sshKeys"`
-	IPConfig map[string]IPConfig `json:"ipConfig"`
+	User         string              `json:"user"`
+	Password     string              `json:"password"`
+	SSHKeys      []string            `json:"sshKeys"`
+	SearchDomain string              `json:"searchDomain"`
+	Nameservers  []string            `json:"nameservers"`
+	IPConfig     map[string]IPConfig `json:"ipConfig"`
 }
 
 // IPConfig defines IP configuration
@@ -310,6 +315,15 @@ func ParseVMSpec(r *protocol.Resource) (*VMSpec, error) {
 				if model, ok := net["model"].(string); ok {
 					netSpec.Model = model
 				}
+				if vlan, ok := net["vlan"].(float64); ok {
+					netSpec.VLAN = int(vlan)
+				}
+				if firewall, ok := net["firewall"].(bool); ok {
+					netSpec.Firewall = firewall
+				}
+				if mac, ok := net["macAddress"].(string); ok {
+					netSpec.MACAddress = mac
+				}
 				spec.Networks = append(spec.Networks, netSpec)
 			}
 		}
@@ -329,6 +343,16 @@ func ParseVMSpec(r *protocol.Resource) (*VMSpec, error) {
 			for _, k := range sshKeys {
 				if key, ok := k.(string); ok {
 					spec.CloudInit.SSHKeys = append(spec.CloudInit.SSHKeys, key)
+				}
+			}
+		}
+		if sd, ok := ci["searchDomain"].(string); ok {
+			spec.CloudInit.SearchDomain = sd
+		}
+		if ns, ok := ci["nameservers"].([]any); ok {
+			for _, s := range ns {
+				if server, ok := s.(string); ok {
+					spec.CloudInit.Nameservers = append(spec.CloudInit.Nameservers, server)
 				}
 			}
 		}
@@ -386,7 +410,19 @@ func (s *VMSpec) ToProxmoxConfig() map[string]any {
 		if model == "" {
 			model = "virtio"
 		}
-		params[net.Name] = fmt.Sprintf("%s,bridge=%s", model, net.Bridge)
+		// Proxmox format: <model>[=<mac>],bridge=<br>[,tag=<n>][,firewall=1]
+		head := model
+		if net.MACAddress != "" {
+			head = fmt.Sprintf("%s=%s", model, net.MACAddress)
+		}
+		val := fmt.Sprintf("%s,bridge=%s", head, net.Bridge)
+		if net.VLAN > 0 {
+			val += fmt.Sprintf(",tag=%d", net.VLAN)
+		}
+		if net.Firewall {
+			val += ",firewall=1"
+		}
+		params[net.Name] = val
 	}
 
 	if s.CloudInit != nil {
@@ -403,6 +439,13 @@ func (s *VMSpec) ToProxmoxConfig() map[string]any {
 			encoded := url.QueryEscape(strings.Join(s.CloudInit.SSHKeys, "\n"))
 			encoded = strings.ReplaceAll(encoded, "+", "%20")
 			params["sshkeys"] = encoded
+		}
+		if s.CloudInit.SearchDomain != "" {
+			params["searchdomain"] = s.CloudInit.SearchDomain
+		}
+		if len(s.CloudInit.Nameservers) > 0 {
+			// Proxmox `nameserver` is space-separated.
+			params["nameserver"] = strings.Join(s.CloudInit.Nameservers, " ")
 		}
 
 		for iface, cfg := range s.CloudInit.IPConfig {

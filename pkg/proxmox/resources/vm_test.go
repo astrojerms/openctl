@@ -719,6 +719,104 @@ func TestParseVMSpec_MultipleNetworks(t *testing.T) {
 	}
 }
 
+func TestParseVMSpec_NetworkExtras(t *testing.T) {
+	resource := &protocol.Resource{
+		APIVersion: "proxmox.openctl.io/v1",
+		Kind:       "VirtualMachine",
+		Metadata:   protocol.ResourceMetadata{Name: "net-extras-vm"},
+		Spec: map[string]any{
+			"networks": []any{
+				map[string]any{
+					"name":       "net0",
+					"bridge":     "vmbr0",
+					"model":      "virtio",
+					"vlan":       float64(42),
+					"firewall":   true,
+					"macAddress": "BC:24:11:AA:BB:CC",
+				},
+			},
+		},
+	}
+
+	spec, err := ParseVMSpec(resource)
+	if err != nil {
+		t.Fatalf("ParseVMSpec failed: %v", err)
+	}
+	if len(spec.Networks) != 1 {
+		t.Fatalf("expected 1 network, got %d", len(spec.Networks))
+	}
+	n := spec.Networks[0]
+	if n.VLAN != 42 {
+		t.Errorf("expected vlan=42, got %d", n.VLAN)
+	}
+	if !n.Firewall {
+		t.Errorf("expected firewall=true")
+	}
+	if n.MACAddress != "BC:24:11:AA:BB:CC" {
+		t.Errorf("expected macAddress=BC:24:11:AA:BB:CC, got %s", n.MACAddress)
+	}
+}
+
+func TestVMSpec_ToProxmoxConfig_NetworkExtras(t *testing.T) {
+	spec := &VMSpec{
+		Networks: []NetworkSpec{
+			{Name: "net0", Bridge: "vmbr0", Model: "virtio", VLAN: 100, Firewall: true},
+			{Name: "net1", Bridge: "vmbr1", Model: "virtio", MACAddress: "BC:24:11:DE:AD:BE"},
+		},
+	}
+	params := spec.ToProxmoxConfig()
+	if params["net0"] != "virtio,bridge=vmbr0,tag=100,firewall=1" {
+		t.Errorf("expected net0=virtio,bridge=vmbr0,tag=100,firewall=1, got %v", params["net0"])
+	}
+	if params["net1"] != "virtio=BC:24:11:DE:AD:BE,bridge=vmbr1" {
+		t.Errorf("expected net1 with embedded MAC, got %v", params["net1"])
+	}
+}
+
+func TestParseVMSpec_CloudInitDNS(t *testing.T) {
+	resource := &protocol.Resource{
+		APIVersion: "proxmox.openctl.io/v1",
+		Kind:       "VirtualMachine",
+		Metadata:   protocol.ResourceMetadata{Name: "dns-vm"},
+		Spec: map[string]any{
+			"cloudInit": map[string]any{
+				"searchDomain": "lan",
+				"nameservers":  []any{"1.1.1.1", "9.9.9.9"},
+			},
+		},
+	}
+	spec, err := ParseVMSpec(resource)
+	if err != nil {
+		t.Fatalf("ParseVMSpec failed: %v", err)
+	}
+	if spec.CloudInit == nil {
+		t.Fatal("expected cloudInit set")
+	}
+	if spec.CloudInit.SearchDomain != "lan" {
+		t.Errorf("expected searchDomain=lan, got %s", spec.CloudInit.SearchDomain)
+	}
+	if len(spec.CloudInit.Nameservers) != 2 || spec.CloudInit.Nameservers[0] != "1.1.1.1" {
+		t.Errorf("expected nameservers=[1.1.1.1 9.9.9.9], got %v", spec.CloudInit.Nameservers)
+	}
+}
+
+func TestVMSpec_ToProxmoxConfig_CloudInitDNS(t *testing.T) {
+	spec := &VMSpec{
+		CloudInit: &CloudInitSpec{
+			SearchDomain: "lan",
+			Nameservers:  []string{"1.1.1.1", "9.9.9.9"},
+		},
+	}
+	params := spec.ToProxmoxConfig()
+	if params["searchdomain"] != "lan" {
+		t.Errorf("expected searchdomain=lan, got %v", params["searchdomain"])
+	}
+	// Proxmox `nameserver` is space-separated.
+	if params["nameserver"] != "1.1.1.1 9.9.9.9" {
+		t.Errorf("expected nameserver=\"1.1.1.1 9.9.9.9\", got %v", params["nameserver"])
+	}
+}
+
 func TestParseVMSpec_MultipleDisks(t *testing.T) {
 	resource := &protocol.Resource{
 		APIVersion: "proxmox.openctl.io/v1",
