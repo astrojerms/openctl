@@ -362,6 +362,8 @@ When phases or followups land, move them up out of "pending" into their
 detail doc's marked-complete section, then leave a one-line entry here
 with the commit hash for at-a-glance history. Trim to the last 10.
 
+- `a39fb61` — U8.11: provider-populated dropdowns via CUE
+  `@options` attribute; VM.spec.node → ProxmoxNode.
 - `5da3e02` — U8.10 fix: optional composites now open properly
   (empty `{}`/`[]` no longer collapse back to `+` button).
 - `c64a09a` — U8.9: vertical form-row layout + wider form pane.
