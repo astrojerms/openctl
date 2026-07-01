@@ -18,22 +18,30 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
-Nothing actively in progress. Phase U8 (post-U7 polish) is complete
-— U8.1 through U8.21 all shipped. UI is now genuinely usable for
-authoring, editing, deleting, and operating on VMs and Clusters
-end-to-end.
+- **[PR #1: dispatcher refactor](https://github.com/astrojerms/openctl/pull/1)**
+  — Cluster.Apply's initial-create path now fans out through
+  `Plan()` + `ChildDispatcher`; each VM / K3sNode / AgentInstall
+  goes through the standard resolve/cache/save pipeline.
+  Includes 4 end-to-end integration tests exercising the real
+  dispatcher (fan-out, ref-chain between children, per-child
+  cache, child-failure propagation). Blocked on real-cluster
+  validation before merge.
 
 ## Suggested next order
 
-Post-U8 sprint delivered: templates, kubeconfig/console, auto-
-remediation, provider credential UI, two-way GitOps. Remaining
-candidates for the next round:
+Full arch Phase 8 (steps 1–5 + dispatcher refactor) closed out
+this session. Remaining candidates for the next round:
 
-- **Full Phase 8** — K3sNode as a first-class resource, Cluster as
-  composer, wire-level `ResourceRef` primitives. Biggest single
-  architectural lift; unblocks refs-cache and cross-resource DAG
-  work. Broken into 5 concrete pieces in the phase section
-  below; first PR is the ResourceRef primitive + resolver alone.
+- **Validate PR #1 on real hardware**, then merge — this unblocks
+  everything below.
+- **UI DAG view for composite resources** — `Detail.svelte` for a
+  Cluster (or any composite) renders the parent + children as a
+  graph rather than the current flat children list. Now that
+  Plan output + child ownership labels + child ops rows all
+  exist, this is a frontend job. Broken out as Phase U9 below.
+- **Retire `applyExisting`** — migrate count-up / respec / delete
+  to the Plan-driven model; delete ~600 lines of imperative code
+  in `pkg/k3s/cluster/create.go`. Depends on PR #1 validated.
 - **Multi-user auth** — OIDC + RBAC (from "Future goals").
 - **User-authored CUE templates** — extend templates from Go-only
   compiled-in to loading `~/.openctl/templates/*.cue`. Feasible
@@ -319,8 +327,8 @@ committing to any of these.
       and blocks Apply with a banner pointing to the owner ("Edit X
       instead →"). Apply preview's child verbs link to each child's
       detail page (except for `create` verbs whose target doesn't exist
-      yet). DAG view remains gated on a future arch Phase 8 lift
-      (target-architecture HTML).
+      yet). DAG view broken out as its own phase (Phase U9) now
+      that arch Phase 8 has landed the plumbing.
 - [x] **Phase U7** — Op orchestration polish. CancelOperation RPC +
       new StatusCancelled status (pending-only first pass; running ops
       still need cooperative cancellation in providers, parked).
@@ -454,6 +462,36 @@ Punch list (unstarted, prioritized):
       spans the full width underneath, indented with a subtle
       left-border rail. Fixes the awkward alignment on things like
       `cloudInit.ipConfig`.
+
+### Phase U9 — Composite DAG visualization (pending)
+
+Now that arch Phase 8 has landed the plumbing (Plan output, child
+owner labels, per-child ops rows via the dispatcher refactor),
+Detail for composite resources can render a real graph instead of
+the current flat children list. Rough breakdown — refine when
+picking up:
+
+- [ ] **U9.1** — Server-side DAG endpoint. Reuse `providers.Planner`
+      output plus the `applied_manifests` store to synthesize a
+      `{nodes, edges}` graph for a given composite resource. Edges
+      come from `$ref` sources parsed out of each child's saved
+      spec; node status comes from each child's current op /
+      applied manifest state. New RPC on `ResourceService`
+      (`GetChildrenGraph` or similar) so the UI doesn't have to
+      re-implement ref parsing.
+- [ ] **U9.2** — Svelte graph renderer in Detail. Pick a small
+      DAG-layout library (dagre-d3, elkjs, or hand-rolled since
+      the graphs are tiny — 5–15 nodes typical). Node = kind +
+      name + status pill; edge = ref direction + resolved value on
+      hover. Click a node to navigate to its Detail.
+- [ ] **U9.3** — Live status via existing Watch stream. Overlay
+      each node's ops state (pending / running / failed / cached)
+      so a mid-apply cluster shows which phase is in flight. Ties
+      into the ops drawer for click-through to the underlying op.
+- [ ] **U9.4** — Fallback for observed-only + unmanaged parents
+      (Proxmox nodes with children not authored via openctl). Nodes
+      that have no applied manifest render dim / with a "read
+      only" badge; edges are absent since no `$ref` metadata exists.
 
 ---
 
