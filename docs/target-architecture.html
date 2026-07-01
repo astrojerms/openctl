@@ -194,8 +194,16 @@
 <header>
   <h1>openctl: target architecture</h1>
   <p class="subtitle">A DAG-shaped controller, Build Systems à la Carte at heart, Crossplane without a Kubernetes cluster.</p>
-  <p class="meta">Design discussion captured 2026-05-25 · Phases 1–6 shipped · Phases 7–10 proposed</p>
+  <p class="meta">Design discussion captured 2026-05-25 · Phases 1–6 shipped · Phases 7–10 proposed (see status update below)</p>
 </header>
+
+<div class="callout" style="border-color: #d97706; background: #fef3c7; color: #7c2d12;">
+  <p class="callout-label" style="color: #92400e;">Status update — plan has evolved since original writing</p>
+  <p><strong>Phase 7 shipped</strong> as the per-resource verifying-trace cache (skip <code>provider.Apply</code> when manifest hash matches last success). The wire-level <code>ResourceRef</code> / <code>conditions</code> / <code>recovery</code> pieces of the original Phase 7 design are still target.</p>
+  <p><strong>Phase 8 partially shipped</strong> as the owner-ref / children plumbing (Registry.ChildrenOf, OwnerRefOf, ChildrenLister interface, Metadata.OwnerRefs). The full lift — K3sNode as first-class resource + AgentInstall + Cluster.Plan refactor + spec-level ResourceRefs — remains deferred.</p>
+  <p><strong>Phases 9 and 10 have been rescoped.</strong> The original Phase 9 (verifying-trace rebuilder) is mostly delivered by Phase 7 already; the refs_hash extension it also promised depends on the full Phase 8 spec-level ResourceRef primitives. Standalone Phase 9 has nothing to bite on. Phase 10's periodic drift check is delivered by U8.3 (a UI-phase reconciler feature); the remaining delta is auto-remediation — a focused feature, not a phase. Both have been replaced in ROADMAP.md with smaller, non-numbered feature entries: <em>refs-cache extension</em> (blocked on full Phase 8) and <em>opt-in auto-remediation</em>.</p>
+  <p>This section is preserved as the original design rationale. See <code>ROADMAP.md</code> for what's actually queued.</p>
+</div>
 
 <nav class="toc">
   <p class="toc-title">Contents</p>
