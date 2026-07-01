@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -186,11 +187,33 @@ func runServe(args []string) error {
 	defer dispatcher.Stop()
 
 	// Periodic drift reconciler. Disabled only when the config explicitly
-	// sets `reconciler.enabled: false`. Logs drift transitions; never
-	// auto-remediates — the user clicks Reconcile in the UI to push
-	// desired back over observed.
+	// sets `reconciler.enabled: false`. Default behavior: logs drift
+	// transitions; auto-remediate only fires on resources annotated with
+	// openctl.io/autoReconcile=true (opt-in per resource).
 	rec, recStarted := buildReconciler(registry, manifestStore)
 	if rec != nil {
+		// Auto-apply hook: submit an Apply op the same way the
+		// resource handler does, tagged with source="auto-reconcile"
+		// so the op history shows why it fired.
+		rec.WithAutoApply(func(ctx context.Context, desired *protocol.Resource) error {
+			mJSON, err := json.Marshal(desired)
+			if err != nil {
+				return fmt.Errorf("encode manifest: %w", err)
+			}
+			_, err = opStore.Submit(ctx, &operations.Operation{
+				Type:         operations.TypeApply,
+				APIVersion:   desired.APIVersion,
+				Kind:         desired.Kind,
+				ResourceName: desired.Metadata.Name,
+				ManifestJSON: string(mJSON),
+				Source:       manifests.SourceAutoReconcile,
+			})
+			if err != nil {
+				return err
+			}
+			dispatcher.Notify()
+			return nil
+		})
 		rec.Start(ctx)
 		defer rec.Stop()
 		log.Printf("  reconciler:  enabled (interval=%s)", recStarted)

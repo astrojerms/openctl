@@ -2,6 +2,7 @@ package reconciler
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -175,6 +176,98 @@ func TestReconcilerTracksDriftTransitions(t *testing.T) {
 	rec.ReconcileOnce(context.Background())
 	if rec.driftState["fake.openctl.io/v1/FakeKind/x"] {
 		t.Error("expected clean state after convergence")
+	}
+}
+
+func TestReconcilerAutoRemediatesAnnotatedResource(t *testing.T) {
+	store := newTestStore(t)
+	prov := newStubProvider()
+	reg := providers.NewRegistry()
+	reg.Register(prov)
+
+	// Two resources: one annotated for auto-reconcile, one not.
+	// Both drift; only the annotated one should trigger apply.
+	if err := store.Save(context.Background(), &protocol.Resource{
+		APIVersion: "fake.openctl.io/v1",
+		Kind:       "FakeKind",
+		Metadata: protocol.ResourceMetadata{
+			Name:        "auto",
+			Annotations: map[string]string{"openctl.io/autoReconcile": "true"},
+		},
+		Spec: map[string]any{"cpus": 2.0},
+	}); err != nil {
+		t.Fatalf("Save auto: %v", err)
+	}
+	if err := store.Save(context.Background(), &protocol.Resource{
+		APIVersion: "fake.openctl.io/v1",
+		Kind:       "FakeKind",
+		Metadata:   protocol.ResourceMetadata{Name: "manual"},
+		Spec:       map[string]any{"cpus": 2.0},
+	}); err != nil {
+		t.Fatalf("Save manual: %v", err)
+	}
+	// Both drift.
+	for _, name := range []string{"auto", "manual"} {
+		prov.set("FakeKind", name, &protocol.Resource{
+			APIVersion: "fake.openctl.io/v1",
+			Kind:       "FakeKind",
+			Metadata:   protocol.ResourceMetadata{Name: name},
+			Spec:       map[string]any{"cpus": 4.0}, // observed differs
+		})
+	}
+
+	var mu sync.Mutex
+	var applied []string
+	rec := New(reg, store, 0).WithAutoApply(func(_ context.Context, d *protocol.Resource) error {
+		mu.Lock()
+		defer mu.Unlock()
+		applied = append(applied, d.Metadata.Name)
+		return nil
+	})
+	rec.ReconcileOnce(context.Background())
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(applied) != 1 || applied[0] != "auto" {
+		t.Errorf("applied = %v, want [auto] only", applied)
+	}
+}
+
+func TestReconcilerAutoApplyBackoffOnFailure(t *testing.T) {
+	store := newTestStore(t)
+	prov := newStubProvider()
+	reg := providers.NewRegistry()
+	reg.Register(prov)
+
+	if err := store.Save(context.Background(), &protocol.Resource{
+		APIVersion: "fake.openctl.io/v1",
+		Kind:       "FakeKind",
+		Metadata: protocol.ResourceMetadata{
+			Name:        "flaky",
+			Annotations: map[string]string{"openctl.io/autoReconcile": "true"},
+		},
+		Spec: map[string]any{"cpus": 2.0},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	prov.set("FakeKind", "flaky", &protocol.Resource{
+		APIVersion: "fake.openctl.io/v1",
+		Kind:       "FakeKind",
+		Metadata:   protocol.ResourceMetadata{Name: "flaky"},
+		Spec:       map[string]any{"cpus": 4.0},
+	})
+
+	var calls int
+	rec := New(reg, store, 0).WithAutoApply(func(_ context.Context, _ *protocol.Resource) error {
+		calls++
+		return errors.New("simulated apply failure")
+	})
+	// First tick: apply attempted, fails → backoff scheduled.
+	rec.ReconcileOnce(context.Background())
+	// Second tick immediately after: still in backoff, apply skipped.
+	rec.ReconcileOnce(context.Background())
+	if calls != 1 {
+		t.Errorf("apply calls = %d, want 1 (second tick should be backed off)", calls)
 	}
 }
 
