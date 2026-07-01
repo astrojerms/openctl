@@ -18,22 +18,21 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
-Nothing actively in progress. Arch Phase 8 (scoped) + U3.3-deferred +
-U6 + U7 all shipped this session. The UI rollout (U1–U7) is complete:
-composite-resource UX, op orchestration polish (CancelOperation RPC +
-StatusCancelled, retry/re-apply with manifest preload, source +
-since/until filters, substep checklist on the ops drawer). Optional
-remaining tracks: the full target-architecture Phase 8 (K3sNode as
-first-class resource + Cluster.Plan refactor + wire-level refs), arch
-Phase 9 (verifying-trace rebuilder), arch Phase 10 (continuous
-reconcile), and parked post-Phase-6 controller followups.
+Post-U7 UI polish track (**Phase U8**, see below) actively shipping —
+schema depth, form ergonomics, and a Create flow. Managed-only filter
++ periodic reconciler landed on the controller side. Everything the
+official phase plan calls "done" is still done; U8 is the punch list
+that surfaced from actually using the UI to author resources.
 
 ## Suggested next order
 
-UI rollout (U1–U7), controller phases 1–6, controller followups 4.5 /
-5.x, and arch Phase 7 + scoped Phase 8 all shipped. No committed next
-phase; pick from "Future goals (parked)" or the parked controller
-followups below when there's appetite.
+U8 punch list (see "UI post-U7 polish"), then any of: full arch Phase
+8 (K3sNode as first-class resource + Cluster.Plan refactor + wire-
+level refs), arch Phase 9 (verifying-trace rebuilder), arch Phase 10
+(continuous reconcile), or a runtime-actions track (start/stop/console
+buttons on VM detail, kubeconfig download on Cluster detail) which
+would close the biggest "AWS-console-for-homelab" gap identified in
+U8.
 
 ---
 
@@ -233,6 +232,93 @@ committing to a phase.
       substep checklist driven by include_children on
       WatchOperations.
 
+### Phase U8 — Post-U7 polish (in flight)
+
+Not a pre-planned phase; the punch list that emerged from actually
+using the UI to author resources. Focus: turn "the editor works" into
+"authoring a VM/Cluster is genuinely pleasant."
+
+Shipped this session:
+
+- [x] **U8.1** — ProxmoxNode as a first-class observed-only kind
+      (`e7b8605` filter + `2f59e2c` node kind). Providers can now
+      declare `ObservedOnlyKinds` so infrastructure discovered from the
+      provider API (never applied) shows up in Get/List/Watch alongside
+      user-managed resources.
+- [x] **U8.2** — Managed-only filter on Get/List/Watch. Resources not
+      in `applied_manifests` (unless observed-only or owned by an
+      applied parent) are hidden from the API surface, matching the
+      "openctl ignores out-of-band resources" direction.
+- [x] **U8.3** — Periodic drift reconciler (`35820d3`). Background loop
+      re-checks every managed resource on a configurable interval,
+      logging drift transitions. Manual "Reconcile" button on the
+      Detail page re-applies the stored manifest on demand.
+- [x] **U8.4** — VirtualMachine schema expansion (`cb61619`). Docs,
+      defaults, enums (osType/bios/machine/network model), bounded
+      numbers (vlan 1..4094), and new fields wired through Go:
+      `networks[].vlan/firewall/macAddress`, `cloudInit.searchDomain/
+      nameservers`.
+- [x] **U8.5** — Per-disk Proxmox flag knobs (`527c13b`). Schema +
+      Go wiring for `disks[].ssd/discard/iothread/backup/cache` via
+      new `SetDiskOptions` client helper that merges flags into the
+      existing disk config string.
+- [x] **U8.6** — k3s Cluster schema expansion (`2cc8a18`). Same
+      docs/defaults/enums treatment. Introduces `#NodeSize` so size
+      overrides render as structured number inputs instead of
+      FieldAny freeform boxes.
+- [x] **U8.7** — Create flow (`86bf57e`). New `/new` route reuses
+      Edit.svelte in create mode; schema-driven seeded manifest;
+      "+ New &lt;Kind&gt;" button on ResourceList.
+- [x] **U8.8** — Create polish (`4db4927`). Optional composite fields
+      collapse to `+ &lt;name&gt;` buttons until clicked; inline name-
+      collision check against existing resource list.
+- [x] **U8.9** — Form layout fix (`c64a09a`). Vertical row layout
+      (label above input) so deep nested paths aren't crushed by the
+      10rem-label-per-level grid; form pane widened to 2fr/1fr vs the
+      manifest preview.
+- [x] **U8.10** — Fix optional-composite expand (`5da3e02`). Empty
+      `{}` and `[]` no longer count as "unset" for collapse purposes —
+      previously fields with no required children (cloudInit,
+      sshKeys, etc.) were stuck permanently collapsed.
+
+Punch list (unstarted, prioritized):
+
+- [ ] **U8.11** — Provider-populated dropdowns. Runtime data
+      (ProxmoxNode names, storages, bridges, k3s templates) resolved
+      as select-from-list fields instead of free-text. Needs a schema
+      convention (e.g. CUE `@options(kind="X")` attribute), a
+      Field.OptionsSource on the walker output, an in-UI cache of
+      referenced kind lists, and renderer support. First slice:
+      `spec.node` → ProxmoxNode on VirtualMachine.
+- [ ] **U8.12** — Runtime actions on resources. Start/Stop/Reboot/
+      Console for VMs; kubeconfig download / kubectl-proxy console
+      for Clusters. Biggest single "AWS-console-for-homelab" gap:
+      you can author but can't operate. Needs provider action methods,
+      new op verbs (or a separate action RPC), and UI buttons on the
+      detail page.
+- [ ] **U8.13** — Discriminated-union picker for VM image source
+      (`template | cloudImage | image`). Today they're three separate
+      "+" buttons with no hint they're exclusive. Schema convention
+      + form walker + a radio-then-form renderer.
+- [ ] **U8.14** — Direct delete from list/detail with confirmation.
+      Today the only path is Edit → clear spec → apply, or the CLI.
+- [ ] **U8.15** — Per-field validation error highlighting. Errors
+      currently pile up in a bottom panel with dotted paths; pinning
+      each error to its row would close the gap to "real form."
+- [ ] **U8.16** — List sort/filter/search. Fine at 5 rows, painful
+      at 50.
+- [ ] **U8.17** — Live progress on the detail page. Ops drawer tails
+      globally; detail doesn't inline the current op for that
+      resource.
+- [ ] **U8.18** — Better create defaults. `metadata.name` placeholder
+      like `vm-&lt;random&gt;` beats an empty required field.
+- [ ] **U8.19** — Copy/download YAML on detail.
+- [ ] **U8.20** — Manifest-preview toggle in the form view (some
+      users won't want it eating a third of the pane).
+- [ ] **U8.21** — Map-of-objects rendering (`cloudInit.ipConfig`).
+      Works but the key input aligns awkwardly with the middle of
+      the nested object subtree.
+
 ---
 
 ## Future goals (parked)
@@ -273,11 +359,17 @@ When phases or followups land, move them up out of "pending" into their
 detail doc's marked-complete section, then leave a one-line entry here
 with the commit hash for at-a-glance history. Trim to the last 10.
 
-- `30c8036` — Phase 6: macOS LaunchAgent install/uninstall.
-- `98636a7` — Phase 5: drift surfacing + declarative scale-down.
-- `9db1144` — Phase 4: k3s Cluster provider compiled in.
-- `bc24de0` — Phase 3: async operations with persistence.
-- `2101107` — Phase 2: proxmox VirtualMachine provider.
-- `383cae5` — Phase 1: scaffold persistent reconciler.
-- `f19aefd` — k3s per-node agent for out-of-band cluster operations.
-- `aa0f235` — CUE configuration support (Phase 1 of CUE rollout).
+- `5da3e02` — U8.10 fix: optional composites now open properly
+  (empty `{}`/`[]` no longer collapse back to `+` button).
+- `c64a09a` — U8.9: vertical form-row layout + wider form pane.
+- `4db4927` — U8.8: create polish — collapsed optional sections +
+  name-collision check.
+- `86bf57e` — U8.7: Create flow via /new route reusing Edit.svelte.
+- `2cc8a18` — U8.6: k3s Cluster schema expansion + `#NodeSize`.
+- `527c13b` — U8.5: per-disk Proxmox flag knobs (ssd/discard/
+  iothread/backup/cache).
+- `cb61619` — U8.4: VirtualMachine schema expansion (docs, defaults,
+  enums, network/cloudInit extras).
+- `35820d3` — U8.3: periodic drift reconciler + manual Reconcile.
+- `e7b8605` — U8.2: managed-only filter on Get/List/Watch.
+- `2f59e2c` — U8.1: ProxmoxNode as first-class observed-only kind.
