@@ -11,6 +11,10 @@
   // include apiVersion in the CUE attribute.
   import type { Readable } from 'svelte/store';
   const apiVersionCtx = getContext<Readable<string> | undefined>('resourceAPIVersionStore');
+  // Per-path field errors published by Edit.runPreview. Parent object
+  // rows look this up for each child to decide whether to add the
+  // error rail; individual fields don't consume it themselves.
+  const fieldErrorsCtx = getContext<Readable<Record<string, string>> | undefined>('resourceFieldErrorsStore');
 
   // The field schema and its current value. Value is `unknown` here
   // because every Field can carry a different shape; downstream the
@@ -20,6 +24,10 @@
   // Depth controls indent for nested objects. The root container in
   // the form renderer passes depth=0.
   export let depth: number = 0;
+  // Dotted path from the root of the resource, extended by parents as
+  // they recurse. Empty at the root. Used to look up field-specific
+  // validation errors from context.
+  export let path: string = '';
 
   const dispatch = createEventDispatcher<{ change: unknown }>();
 
@@ -249,6 +257,7 @@
                 field={picked}
                 value={pickedValue}
                 depth={depth + 1}
+                path={path ? `${path}.${item.selected}` : item.selected}
                 on:change={(e) => setObjectKey(item.selected, e.detail)}
               />
             {/if}
@@ -259,7 +268,9 @@
         {@const childValue = item.childValue}
         {@const collapsed = isCollapsible(child, childValue)}
         {@const removable = child.optional && !collapsed && (child.type === 'object' || child.type === 'array' || child.type === 'map')}
-        <div class="row">
+        {@const childPath = child.name ? (path ? `${path}.${child.name}` : child.name) : path}
+        {@const childErr = (fieldErrorsCtx && childPath ? ($fieldErrorsCtx as Record<string, string>)[childPath] : '') ?? ''}
+        <div class="row" class:row-error={childErr !== ''}>
           <div class="row-head">
             <span class="row-label">
               {child.name}{#if !child.optional}<span class="req" aria-label="required">*</span>{/if}
@@ -288,8 +299,12 @@
               field={child}
               value={childValue}
               depth={depth + 1}
+              path={childPath}
               on:change={(e) => setObjectKey(child.name ?? '', e.detail)}
             />
+          {/if}
+          {#if childErr}
+            <p class="field-err">{childErr}</p>
           {/if}
         </div>
       {/if}
@@ -305,6 +320,7 @@
               field={field.items ?? { type: 'any' }}
               value={value[i]}
               depth={depth + 1}
+              path={path ? `${path}.${i}` : `${i}`}
               on:change={(e) => setArrayIndex(i, e.detail)}
             />
           </div>
@@ -333,6 +349,7 @@
               field={field.valueType ?? { type: 'string' }}
               value={v}
               depth={depth + 1}
+              path={path ? `${path}.${k}` : k}
               on:change={(e) => setMapValue(k, e.detail)}
             />
           </div>
@@ -525,6 +542,22 @@
   .row-clear:hover {
     color: #ff8980;
     border-color: rgba(255, 137, 128, 0.4);
+  }
+  /* Rows with a schema violation get a soft red left-border rail and
+     an inline message below the input. Highlight is intentionally
+     mild so the form doesn't flash on every keystroke during a
+     multi-field edit. */
+  .row-error {
+    border-left: 2px solid rgba(255, 137, 128, 0.5);
+    padding-left: 0.5rem;
+    margin-left: -0.5rem;
+  }
+  .field-err {
+    color: #ff8980;
+    font-size: 0.75rem;
+    margin: 0.1rem 0 0;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    white-space: pre-wrap;
   }
   .row-label {
     font-size: 0.85rem;

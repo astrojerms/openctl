@@ -206,6 +206,14 @@ export interface DryRunApplyResponse {
   requiredGates?: string[];
   validationErrors?: string[];
   summary?: string;
+  // Path-attributed schema violations for inline highlighting in the
+  // form editor. Same set as validationErrors, but structured.
+  fieldErrors?: FieldError[];
+}
+
+export interface FieldError {
+  path?: string;
+  message?: string;
 }
 
 export interface GetResourceResponse {
