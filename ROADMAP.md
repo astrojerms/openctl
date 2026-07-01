@@ -332,8 +332,11 @@ Punch list (unstarted, prioritized):
       pending/running op matching this resource; on terminal
       transition (op moves out of pending/running) auto-refetches
       so the observed state catches up promptly.
-- [ ] **U8.18** — Better create defaults. `metadata.name` placeholder
-      like `vm-&lt;random&gt;` beats an empty required field.
+- [x] **U8.18** — Better create defaults. The seed manifest now
+      pre-fills `metadata.name` with a kind-derived suggestion
+      (`vm-a3b2`, `cluster-x9k1`, etc). Users can accept or type
+      over. The suggestion is stable per-Edit-instance so the
+      schema-upgrade path can still equality-check the stub.
 - [ ] **U8.19** — Copy/download YAML on detail.
 - [ ] **U8.20** — Manifest-preview toggle in the form view (some
       users won't want it eating a third of the pane).
