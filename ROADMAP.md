@@ -337,7 +337,11 @@ Punch list (unstarted, prioritized):
       (`vm-a3b2`, `cluster-x9k1`, etc). Users can accept or type
       over. The suggestion is stable per-Edit-instance so the
       schema-upgrade path can still equality-check the stub.
-- [ ] **U8.19** — Copy/download YAML on detail.
+- [x] **U8.19** — Copy/download YAML on detail. Two small buttons
+      in the Desired manifest card head: Copy YAML (clipboard) and
+      Download (as `<kind>-<name>.yaml`). Falls back to the observed
+      resource for observed-only kinds that have no applied
+      manifest.
 - [ ] **U8.20** — Manifest-preview toggle in the form view (some
       users won't want it eating a third of the pane).
 - [ ] **U8.21** — Map-of-objects rendering (`cloudInit.ipConfig`).
