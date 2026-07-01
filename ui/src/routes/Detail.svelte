@@ -5,6 +5,7 @@
   import { statusBadge, type StatusBadge } from '../lib/format';
   import { routeHref, navigate } from '../lib/router';
   import { ops as opsStore } from '../lib/ops';
+  import { resourceToYAML } from '../lib/yaml';
 
   export let apiVersion: string;
   export let kind: string;
@@ -296,6 +297,45 @@
     }
   }
 
+  // U8.19: YAML actions. Copy / download the applied manifest (falls
+  // back to the observed resource shape when no applied manifest is
+  // on file — usually observed-only kinds like ProxmoxNode).
+  let copyMsg = '';
+  function manifestYAML(): string {
+    if (!data) return '';
+    const source = data.applied ?? data.resource;
+    return resourceToYAML({
+      apiVersion: source.apiVersion,
+      kind: source.kind,
+      metadata: source.metadata,
+      spec: source.spec,
+    });
+  }
+  async function copyYAML() {
+    const y = manifestYAML();
+    if (!y) return;
+    try {
+      await navigator.clipboard.writeText(y);
+      copyMsg = 'Copied.';
+      setTimeout(() => (copyMsg = ''), 1500);
+    } catch (err) {
+      copyMsg = `Copy failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+  function downloadYAML() {
+    const y = manifestYAML();
+    if (!y) return;
+    const blob = new Blob([y], { type: 'application/x-yaml' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${kind.toLowerCase()}-${resourceName}.yaml`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
   // U6 aggregations: count children we've heard back from that are
   // drifted or in a non-good state. Reactive on childStates so the
   // numbers tick up as the fanout completes.
@@ -432,7 +472,18 @@
 
     <div class="grid">
       <article class="card">
-        <h3>Desired manifest</h3>
+        <div class="card-head">
+          <h3>Desired manifest</h3>
+          <div class="card-actions">
+            <button type="button" class="mini-btn" on:click={copyYAML} title="Copy YAML to clipboard">
+              Copy YAML
+            </button>
+            <button type="button" class="mini-btn" on:click={downloadYAML} title="Download as .yaml file">
+              Download
+            </button>
+            {#if copyMsg}<span class="muted small">{copyMsg}</span>{/if}
+          </div>
+        </div>
         {#if data.applied}
           <pre>{pretty({
               apiVersion: data.applied.apiVersion,
@@ -656,6 +707,34 @@
     margin-left: auto;
     color: #888;
     font-size: 0.75rem;
+  }
+  .card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.5rem;
+  }
+  .card-head h3 {
+    margin: 0;
+  }
+  .card-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .mini-btn {
+    background: transparent;
+    color: #aaa;
+    border: 1px solid rgba(127, 127, 127, 0.3);
+    padding: 0.2em 0.7em;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+  .mini-btn:hover {
+    color: #fff;
+    background: rgba(127, 127, 127, 0.12);
   }
   .state {
     padding: 0.15em 0.7em;
