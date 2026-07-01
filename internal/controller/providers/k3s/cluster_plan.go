@@ -2,6 +2,7 @@ package k3s
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/openctl/openctl/internal/controller/providers"
@@ -85,7 +86,55 @@ func (p *Provider) Plan(_ context.Context, manifest *protocol.Resource) (*provid
 		children = append(children, buildAgentInstallManifest(clusterName, nodeName, nodeIPs[nodeName], spec))
 	}
 
+	// Normalize every child's Spec through JSON round-trip. When
+	// Plan returns these to a ChildDispatcher that runs in-process
+	// (no wire protocol), Go's static types leak: `[]string` stays
+	// `[]string`, `[]map[string]any` stays `[]map[string]any`, etc.
+	// Downstream parsers (proxmox.ParseVMSpec, refs.Resolver, ...)
+	// do `.([]any)` and `.(map[string]any)` assertions that silently
+	// fail on those static types, dropping the field.
+	//
+	// This bit us on the homelab validation: the plan's VM manifest
+	// carried `cloudInit.sshKeys = []string{...}` and
+	// `disks = []map[string]any{...}`. ParseVMSpec's `[]any` type
+	// assertions failed, so both were dropped. The cloned VM kept
+	// the template's baked-in RSA key (SSH auth failed) and the
+	// template's base disk size (apt install ran out of space).
+	// Networks had the same shape and were similarly ignored.
+	//
+	// Round-tripping through JSON collapses every typed collection
+	// to its `any`-flavored equivalent, matching what the standard
+	// wire path (gRPC / disk mirror) produces. One normalization at
+	// emission fixes every field of this shape at once, present and
+	// future.
+	for _, c := range children {
+		if err := normalizeSpec(c); err != nil {
+			return nil, fmt.Errorf("normalize plan child %s/%s: %w", c.Kind, c.Metadata.Name, err)
+		}
+	}
+
 	return &providers.PlanResult{Children: children}, nil
+}
+
+// normalizeSpec JSON-round-trips r.Spec so all typed collections
+// (`[]string`, `[]map[string]any`, custom structs) become the
+// `map[string]any` / `[]any` shapes downstream parsers expect. Only
+// meaningful when the manifest travels in-process — the wire path
+// already does this via proto marshaling.
+func normalizeSpec(r *protocol.Resource) error {
+	if r == nil || r.Spec == nil {
+		return nil
+	}
+	data, err := json.Marshal(r.Spec)
+	if err != nil {
+		return err
+	}
+	var normalized map[string]any
+	if err := json.Unmarshal(data, &normalized); err != nil {
+		return err
+	}
+	r.Spec = normalized
+	return nil
 }
 
 func sizeForNode(i, cpCount int, spec *k3sresources.ClusterSpec) k3sresources.DefaultSizeSpec {
