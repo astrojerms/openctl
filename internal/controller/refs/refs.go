@@ -202,12 +202,12 @@ func walkPath(r *protocol.Resource, path string) (any, error) {
 		if r.Status == nil {
 			return nil, fmt.Errorf("resource has no status")
 		}
-		current = map[string]any(r.Status)
+		current = r.Status
 	case "spec":
 		if r.Spec == nil {
 			return nil, fmt.Errorf("resource has no spec")
 		}
-		current = map[string]any(r.Spec)
+		current = r.Spec
 	default:
 		return nil, fmt.Errorf("path must start with 'status' or 'spec' (got %q)", parts[0])
 	}

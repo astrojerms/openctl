@@ -73,11 +73,8 @@ func walk(path string, desired, observed any, out *[]*apiv1.DriftEntry) {
 			})
 			// Continue walking the overlap so per-element drift surfaces too.
 		}
-		overlap := len(d)
-		if len(o) < overlap {
-			overlap = len(o)
-		}
-		for i := 0; i < overlap; i++ {
+		overlap := min(len(o), len(d))
+		for i := range overlap {
 			walk(fmt.Sprintf("%s[%d]", path, i), d[i], o[i], out)
 		}
 

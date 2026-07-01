@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -36,10 +37,8 @@ func sourceFromContext(ctx context.Context) string {
 	if !ok {
 		return manifests.SourceCLI
 	}
-	for _, v := range md.Get(sourceMetadataKey) {
-		if v == manifests.SourceUI {
-			return manifests.SourceUI
-		}
+	if slices.Contains(md.Get(sourceMetadataKey), manifests.SourceUI) {
+		return manifests.SourceUI
 	}
 	return manifests.SourceCLI
 }

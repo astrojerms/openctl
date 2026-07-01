@@ -73,10 +73,7 @@ func UbuntuServerVM() *Template {
 			if !ok {
 				return nil, fmt.Errorf("unknown size %q", size)
 			}
-			diskGB := getInt(p, params, "diskGB")
-			if diskGB < 8 {
-				diskGB = 8
-			}
+			diskGB := max(getInt(p, params, "diskGB"), 8)
 			storage := getString(p, params, "storage")
 			return &protocol.Resource{
 				APIVersion: "proxmox.openctl.io/v1",

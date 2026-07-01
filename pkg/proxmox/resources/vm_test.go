@@ -3,8 +3,8 @@ package resources
 import (
 	"testing"
 
-	"github.com/openctl/openctl/pkg/proxmox/client"
 	"github.com/openctl/openctl/pkg/protocol"
+	"github.com/openctl/openctl/pkg/proxmox/client"
 )
 
 func TestVMToResource(t *testing.T) {

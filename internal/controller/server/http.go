@@ -295,16 +295,16 @@ func (r *loginRecorder) flush() {
 // double-decoding). Returns "" if not found.
 func extractJSONString(body, name string) string {
 	needle := `"` + name + `":"`
-	i := strings.Index(body, needle)
-	if i < 0 {
+	_, after, ok := strings.Cut(body, needle)
+	if !ok {
 		return ""
 	}
-	rest := body[i+len(needle):]
-	end := strings.IndexByte(rest, '"')
-	if end < 0 {
+	rest := after
+	before0, _, ok0 := strings.Cut(rest, "\"")
+	if !ok0 {
 		return ""
 	}
-	return rest[:end]
+	return before0
 }
 
 // ServeHTTPGateway is the top-level helper main.go calls. Spins up an

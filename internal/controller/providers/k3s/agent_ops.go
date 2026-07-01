@@ -337,4 +337,3 @@ func removeAgentInstallState(name string) error {
 	}
 	return nil
 }
-

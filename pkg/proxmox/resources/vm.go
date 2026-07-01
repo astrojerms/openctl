@@ -5,8 +5,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/openctl/openctl/pkg/proxmox/client"
 	"github.com/openctl/openctl/pkg/protocol"
+	"github.com/openctl/openctl/pkg/proxmox/client"
 )
 
 // VMToResource converts a Proxmox VM to a protocol Resource

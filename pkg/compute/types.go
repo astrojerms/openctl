@@ -5,7 +5,7 @@ type InstanceSpec struct {
 	Name     string            `json:"name"`
 	Image    ImageSpec         `json:"image"`
 	Size     SizeSpec          `json:"size"`
-	Network  NetworkSpec       `json:"network,omitempty"`
+	Network  NetworkSpec       `json:"network"`
 	SSHKeys  []string          `json:"sshKeys,omitempty"`
 	UserData string            `json:"userData,omitempty"`
 	Labels   map[string]string `json:"labels,omitempty"`

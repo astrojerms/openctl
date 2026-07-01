@@ -41,7 +41,7 @@ const (
 )
 
 // Field describes a single editable field in the form. Maps 1:1 onto the
-// FormField TypeScript interface; serialised as JSON.
+// FormField TypeScript interface; serialized as JSON.
 type Field struct {
 	// Name is the field key in the parent object. Empty at the root.
 	Name string `json:"name,omitempty"`
@@ -129,7 +129,7 @@ func walk(v cue.Value, optional bool) Field {
 	f := Field{Optional: optional}
 	if def, ok := v.Default(); ok {
 		// The default value is itself a CUE value; render as Go-side any
-		// for JSON serialisation. Use Decode on the concrete default,
+		// for JSON serialization. Use Decode on the concrete default,
 		// not on v — decoding v would unify with the constraints.
 		var dec any
 		if err := def.Decode(&dec); err == nil {

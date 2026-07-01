@@ -64,7 +64,7 @@ func distro() string {
 		return ""
 	}
 	var name, version string
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		switch {
 		case strings.HasPrefix(line, "NAME="):
 			name = strings.Trim(strings.TrimPrefix(line, "NAME="), `"`)
@@ -86,7 +86,7 @@ func k3sVersion() string {
 	if err != nil {
 		return ""
 	}
-	line := strings.SplitN(string(out), "\n", 2)[0]
+	line, _, _ := strings.Cut(string(out), "\n")
 	parts := strings.Fields(line)
 	if len(parts) >= 3 {
 		return parts[2]

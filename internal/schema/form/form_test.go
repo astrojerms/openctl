@@ -8,7 +8,7 @@ import (
 
 // build is a tiny test helper: compile a CUE source snippet and run
 // the walker over its root. Keeps the tests focused on observable
-// behaviour rather than CUE setup boilerplate. (Tests that need to
+// behavior rather than CUE setup boilerplate. (Tests that need to
 // look up a named definition can switch to LookupPath inline.)
 func build(t *testing.T, src string) Field {
 	t.Helper()

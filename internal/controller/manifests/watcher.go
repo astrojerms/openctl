@@ -1,6 +1,7 @@
 package manifests
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -229,14 +230,16 @@ func (w *Watcher) matchesStored(ctx context.Context, r *protocol.Resource) (bool
 	if err != nil {
 		return false, err
 	}
-	return string(a) == string(b), nil
+	return bytes.Equal(a, b), nil
 }
 
 // parsePathHint extracts (apiVersion, kind, name) from a mirror-shaped
 // path: root/<apiVersion-domain>/<version>/<Kind>/<name>.yaml. The
 // disk mirror splits apiVersion's "/" into two directories, so the
 // relative path is 4 segments: e.g.
-//   proxmox.openctl.io/v1/VirtualMachine/foo.yaml
+//
+//	proxmox.openctl.io/v1/VirtualMachine/foo.yaml
+//
 // Falls back to false when the layout doesn't match — user-added
 // scratch files or non-manifest content just get ignored.
 func parsePathHint(root, path string) (apiVersion, kind, name string, ok bool) {

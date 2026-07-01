@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/openctl/openctl/pkg/proxmox/handler"
 	"github.com/openctl/openctl/pkg/protocol"
+	"github.com/openctl/openctl/pkg/proxmox/handler"
 )
 
 func main() {

@@ -55,14 +55,8 @@ func SmallK3sCluster() *Template {
 			// doesn't currently expose it). Discarded for now.
 			_ = getString(p, params, "node")
 			storage := getString(p, params, "storage")
-			cpCount := getInt(p, params, "controlPlaneCount")
-			if cpCount < 1 {
-				cpCount = 1
-			}
-			workers := getInt(p, params, "workerCount")
-			if workers < 0 {
-				workers = 0
-			}
+			cpCount := max(getInt(p, params, "controlPlaneCount"), 1)
+			workers := max(getInt(p, params, "workerCount"), 0)
 			return &protocol.Resource{
 				APIVersion: "k3s.openctl.io/v1",
 				Kind:       "Cluster",
@@ -117,4 +111,3 @@ func SmallK3sCluster() *Template {
 		},
 	}
 }
-

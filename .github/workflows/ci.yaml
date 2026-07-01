@@ -7,7 +7,11 @@ on:
     branches: [main]
 
 env:
-  GO_VERSION: "1.21"
+  # Modules declare `go 1.25.0`; setup-go auto-downloads that toolchain
+  # if it's newer than this baseline, but golangci-lint is compiled
+  # against setup-go's version, so bumping to 1.25 keeps the linter
+  # in sync with what it's parsing.
+  GO_VERSION: "1.25"
 
 jobs:
   build:
@@ -64,25 +68,23 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
+      # Install golangci-lint via `go install` so it's built with the
+      # same Go toolchain that setup-go installed. The
+      # golangci/golangci-lint-action's cached "latest" binary was built
+      # against an older Go than what the module targets (go 1.25.0),
+      # producing "the Go language version used to build golangci-lint
+      # is lower than the targeted Go version" errors.
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+
       - name: Run golangci-lint (root)
-        uses: golangci/golangci-lint-action@v4
-        with:
-          version: latest
-          working-directory: .
+        run: golangci-lint run ./...
 
       - name: Run golangci-lint (proxmox plugin)
-        uses: golangci/golangci-lint-action@v4
-        with:
-          version: latest
-          working-directory: plugins/proxmox
-          args: --config=../../.golangci.yml
+        run: cd plugins/proxmox && golangci-lint run --config=../../.golangci.yml ./...
 
       - name: Run golangci-lint (k3s plugin)
-        uses: golangci/golangci-lint-action@v4
-        with:
-          version: latest
-          working-directory: plugins/k3s
-          args: --config=../../.golangci.yml
+        run: cd plugins/k3s && golangci-lint run --config=../../.golangci.yml ./...
 
   vet:
     name: Vet & Staticcheck
@@ -158,9 +160,13 @@ jobs:
       - name: Install modernize
         run: go install golang.org/x/tools/go/analysis/passes/modernize/cmd/modernize@latest
 
+      # Filter generated .pb.go files: modernize reports interface{}
+      # → any suggestions on them, but its own -fix pass skips
+      # `Code generated` files, so we can't act on the report.
+      # Excluding here matches what `make modernize` produces.
       - name: Run modernize (root)
         run: |
-          OUTPUT=$(modernize ./... 2>&1) || true
+          OUTPUT=$(modernize ./... 2>&1 | grep -v '\.pb\.go:' || true)
           if [ -n "$OUTPUT" ]; then
             echo "Modernize suggestions found:"
             echo "$OUTPUT"
@@ -172,7 +178,7 @@ jobs:
       - name: Run modernize (proxmox plugin)
         run: |
           cd plugins/proxmox
-          OUTPUT=$(modernize ./... 2>&1) || true
+          OUTPUT=$(modernize ./... 2>&1 | grep -v '\.pb\.go:' || true)
           if [ -n "$OUTPUT" ]; then
             echo "Modernize suggestions found in proxmox plugin:"
             echo "$OUTPUT"
@@ -184,7 +190,7 @@ jobs:
       - name: Run modernize (k3s plugin)
         run: |
           cd plugins/k3s
-          OUTPUT=$(modernize ./... 2>&1) || true
+          OUTPUT=$(modernize ./... 2>&1 | grep -v '\.pb\.go:' || true)
           if [ -n "$OUTPUT" ]; then
             echo "Modernize suggestions found in k3s plugin:"
             echo "$OUTPUT"

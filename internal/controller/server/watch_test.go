@@ -115,9 +115,7 @@ func TestResourceWatchEmitsSnapshotThenLiveAdds(t *testing.T) {
 
 	events := make(chan *apiv1.WatchEvent, 16)
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for {
 			ev, err := stream.Recv()
 			if err != nil {
@@ -125,7 +123,7 @@ func TestResourceWatchEmitsSnapshotThenLiveAdds(t *testing.T) {
 			}
 			events <- ev
 		}
-	}()
+	})
 
 	// First event(s): snapshot of pre-existing.
 	got := mustReadEvent(t, events, 2*time.Second)

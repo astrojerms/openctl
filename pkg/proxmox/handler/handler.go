@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openctl/openctl/pkg/protocol"
 	"github.com/openctl/openctl/pkg/proxmox/client"
 	"github.com/openctl/openctl/pkg/proxmox/resources"
-	"github.com/openctl/openctl/pkg/protocol"
 )
 
 var debugEnabled = os.Getenv("OPENCTL_DEBUG") != ""

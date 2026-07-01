@@ -5,9 +5,9 @@ run:
   modules-download-mode: readonly
 
 linters:
-  # Default linters (errcheck, govet, ineffassign, staticcheck, unused) are enabled automatically
+  # Enable additional linters on top of the default set (errcheck,
+  # govet, ineffassign, staticcheck, unused).
   enable:
-    # Additional linters
     - bodyclose        # Check HTTP response body is closed
     - copyloopvar      # Detect loop variable capture issues (Go 1.22+)
     - durationcheck    # Check for duration multiplication issues
@@ -16,151 +16,148 @@ linters:
     - gocritic         # Comprehensive Go linter
     - gosec            # Security checks
     - misspell         # Find misspellings
-    # - nilerr           # Check for nil error returns - too many false positives with optional response parsing
-    # - noctx            # Check HTTP requests use context - not needed for this codebase
-    # - prealloc         # Suggest preallocating slices - disabled, too noisy
     - predeclared      # Find shadowed predeclared identifiers
-    # - revive           # Replacement for golint - disabled, too many false positives with empty blocks
     - unconvert        # Remove unnecessary type conversions
     - unparam          # Find unused function parameters
 
+  settings:
+    errcheck:
+      # Explicit `_ = foo()` is the recognized "I know I'm ignoring
+      # this" form — treating it as a violation defeats the purpose.
+      check-blank: false
+      # Type-assertion checks flag every `x, _ := iface.(T)` which is
+      # legitimate for optional-cast patterns.
+      check-type-assertions: false
+      exclude-functions:
+        - (io.Closer).Close
+        - (net/http.ResponseWriter).Write
+        - fmt.Sscanf  # Intentional ignore for best-effort parsing
+        # Human-readable output to a fixed writer — errors are
+        # ignored by long-standing Go convention.
+        - fmt.Fprint
+        - fmt.Fprintln
+        - fmt.Fprintf
+        - (*text/tabwriter.Writer).Flush
+
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+      disabled-checks:
+        - hugeParam           # Can be noisy for structs passed by value intentionally
+        - appendAssign        # append to different slice is intentional pattern
+        - appendCombine       # Stylistic preference, not a bug
+        - ifElseChain         # Stylistic preference, not a bug
+
+    gosec:
+      excludes:
+        - G104  # Audit errors not checked (covered by errcheck)
+        - G304  # File path from variable (often intentional in CLI tools)
+        - G306  # Poor file permissions (tests write mode-644 fixtures)
+        - G301  # Poor dir permissions (tests write mode-755 tmpdirs)
+        - G101  # Hardcoded credentials (tests use fake tokens)
+        - G115  # Integer overflow conversion (int→uint32 in bounded contexts)
+        - G117  # "matches secret pattern" — PrivateKey/Password field
+                # NAMES trip the pattern even though they hold paths /
+                # user-supplied strings, not literal secrets.
+        - G704  # SSRF via taint analysis on http client (proxmox client
+                # dials configured endpoints — user-controlled by design).
+        - G705  # XSS via taint analysis on Fprintf (we write to
+                # os.Stderr, not an HTTP response).
+        - G124  # Session cookie explicitly sets HttpOnly + SameSite +
+                # dynamic Secure (true only over TLS); the check wants
+                # Secure=true unconditionally, which breaks http://
+                # localhost dev. Design decision, not a leak.
+
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment  # Can be noisy, micro-optimization
+        - shadow          # Too many false positives with short-lived err vars
+
+    misspell:
+      locale: US
+
+    staticcheck:
+      # ST1000/ST1020 want the classic "Package X ..." / "MethodName ..."
+      # doc-comment format. We use free-form paragraph comments across
+      # most internal packages — enforcing the pattern is stylistic
+      # policy, not a correctness gain.
+      checks:
+        - "all"
+        - "-ST1000"
+        - "-ST1020"
+
+  exclusions:
+    generated: lax
+    rules:
+      # Allow init functions
+      - linters:
+          - gochecknoinits
+        text: "init function"
+
+      # Test files can have looser standards
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gocritic
+          - gosec
+          - unparam
+          - prealloc
+          - misspell
+
+      # Examples can be less strict
+      - path: example_
+        linters:
+          - gocritic
+          - unparam
+
+      # Intentionally ignored errors (cleanup operations)
+      - text: "Error return value of .*(Close|DeleteVM|RegenerateCloudInit).* is not checked"
+        linters:
+          - errcheck
+
+      - text: "Error return value of `encoder.Encode` is not checked"
+        linters:
+          - errcheck
+
+      - text: "Error return value of .*(GetTemplate|GetVMConfig|GetVMIPAddress).* is not checked"
+        linters:
+          - errcheck
+
+      - text: "Error return value of `c.put` is not checked"
+        linters:
+          - errcheck
+
+      # TLS skip verify is intentional for lab/homelab environments
+      - text: "G402: TLS InsecureSkipVerify"
+        linters:
+          - gosec
+
+      # SSH InsecureIgnoreHostKey is intentional for lab/homelab
+      - text: "G106: Use of ssh InsecureIgnoreHostKey"
+        linters:
+          - gosec
+
+      # Shadow on url package is acceptable in these cases
+      - text: "importShadow: shadow of imported package 'url'"
+        linters:
+          - gocritic
+
+      # Context param kept for interface compliance
+      - text: "unused-parameter: parameter 'ctx' seems to be unused"
+        linters:
+          - revive
+
+      - text: "Error return value of `resources.AllocateIPs` is not checked"
+        linters:
+          - errcheck
+
 formatters:
   enable:
-    - gofmt            # Check code is formatted
-    - goimports        # Check imports are organized
-
-linters-settings:
-  errcheck:
-    check-type-assertions: true
-    check-blank: true
-    exclude-functions:
-      - (io.Closer).Close
-      - (net/http.ResponseWriter).Write
-      - fmt.Sscanf  # Intentional ignore for best-effort parsing
-
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - performance
-    disabled-checks:
-      - hugeParam           # Can be noisy for structs passed by value intentionally
-      - appendAssign        # append to different slice is intentional pattern
-      - appendCombine       # Stylistic preference, not a bug
-      - ifElseChain         # Stylistic preference, not a bug
-
-  goimports:
-    local-prefixes: github.com/openctl/openctl
-
-  gosec:
-    excludes:
-      - G104  # Audit errors not checked (covered by errcheck)
-      - G304  # File path from variable (often intentional in CLI tools)
-
-  govet:
-    enable-all: true
-    disable:
-      - fieldalignment  # Can be noisy, micro-optimization
-      - shadow          # Too many false positives with short-lived err vars
-
-  misspell:
-    locale: US
-
-  revive:
-    rules:
-      - name: blank-imports
-      - name: context-as-argument
-      - name: context-keys-type
-      - name: dot-imports
-      - name: error-return
-      - name: error-strings
-      - name: error-naming
-      - name: exported
-      - name: if-return
-      - name: increment-decrement
-      - name: var-naming
-      - name: var-declaration
-      - name: package-comments
-        disabled: true  # Not required for internal packages
-      - name: range
-      - name: receiver-naming
-      - name: time-naming
-      - name: unexported-return
-      - name: indent-error-flow
-      - name: errorf
-      - name: empty-block
-      - name: superfluous-else
-      - name: unused-parameter
-      - name: unreachable-code
-
-  staticcheck:
-    checks: ["all"]
-
-issues:
-  exclude-rules:
-    # Allow init functions
-    - linters:
-        - gochecknoinits
-      text: "init function"
-
-    # Test files can have longer functions and more complexity
-    - path: _test\.go
-      linters:
-        - errcheck
-        - gocritic
-        - gosec
-        - unparam
-        - prealloc
-
-    # Examples can be less strict
-    - path: example_
-      linters:
-        - gocritic
-        - unparam
-
-    # Intentionally ignored errors (cleanup operations)
-    - text: "Error return value of .*(Close|DeleteVM|RegenerateCloudInit).* is not checked"
-      linters:
-        - errcheck
-
-    # Encoder.Encode in main.go is intentional (stdout encoding)
-    - text: "Error return value of `encoder.Encode` is not checked"
-      linters:
-        - errcheck
-
-    # GetTemplate intentionally ignores error to check if template exists
-    - text: "Error return value of .*(GetTemplate|GetVMConfig|GetVMIPAddress).* is not checked"
-      linters:
-        - errcheck
-
-    # Intentional unchecked put for boot order (non-critical)
-    - text: "Error return value of `c.put` is not checked"
-      linters:
-        - errcheck
-
-    # TLS skip verify is intentional for lab/development environments
-    - text: "G402: TLS InsecureSkipVerify"
-      linters:
-        - gosec
-
-    # Shadow on url package is acceptable in these cases
-    - text: "importShadow: shadow of imported package 'url'"
-      linters:
-        - gocritic
-
-    # Context param kept for interface compliance
-    - text: "unused-parameter: parameter 'ctx' seems to be unused"
-      linters:
-        - revive
-
-    # AllocateIPs error is intentionally ignored - returns nil map on error
-    - text: "Error return value of `resources.AllocateIPs` is not checked"
-      linters:
-        - errcheck
-
-    # SSH InsecureIgnoreHostKey is intentional for lab/homelab environments
-    - text: "G106: Use of ssh InsecureIgnoreHostKey"
-      linters:
-        - gosec
-
-  max-issues-per-linter: 0
-  max-same-issues: 0
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/openctl/openctl

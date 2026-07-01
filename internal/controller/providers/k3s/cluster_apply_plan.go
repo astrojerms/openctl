@@ -20,14 +20,14 @@ import (
 // Cluster create. Dispatches Plan()-emitted children through the
 // dispatcher's inline pipeline in three phases:
 //
-//   1. VMs — dispatched via the ChildDispatcher so the proxmox provider
-//      creates each one and QGA populates status.ip asynchronously.
-//   2. K3sNodes — each polls its vmRef for status.ip (waitForVMIP),
-//      SSH-installs k3s, saves state file. The first CP's state carries
-//      status.nodeToken which subsequent K3sNodes resolve via $ref.
-//   3. AgentInstalls — after all K3sNodes finish, generate the cluster
-//      CA bundle from the observed node IPs, then dispatch each agent
-//      install. The bundle path matches what applyAgentInstall reads.
+//  1. VMs — dispatched via the ChildDispatcher so the proxmox provider
+//     creates each one and QGA populates status.ip asynchronously.
+//  2. K3sNodes — each polls its vmRef for status.ip (waitForVMIP),
+//     SSH-installs k3s, saves state file. The first CP's state carries
+//     status.nodeToken which subsequent K3sNodes resolve via $ref.
+//  3. AgentInstalls — after all K3sNodes finish, generate the cluster
+//     CA bundle from the observed node IPs, then dispatch each agent
+//     install. The bundle path matches what applyAgentInstall reads.
 //
 // After all children succeed, writes the legacy cluster state YAML so
 // applyExisting (count-up/respec/delete) keeps working unchanged.

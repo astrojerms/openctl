@@ -334,9 +334,7 @@ func (c *Client) CloneVM(node string, templateID int, name string, params map[st
 		"name":  name,
 		"full":  1,
 	}
-	for k, v := range params {
-		cloneParams[k] = v
-	}
+	maps.Copy(cloneParams, params)
 
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/clone", node, templateID)
 	resp, err := c.post(path, cloneParams)
@@ -485,7 +483,7 @@ func (c *Client) StopVM(node string, vmid int) (string, error) {
 
 // ShutdownVM triggers a graceful ACPI shutdown. Returns the task upid;
 // the guest may take time to comply. Requires qemu-guest-agent or an
-// OS that honours ACPI shutdown signals.
+// OS that honors ACPI shutdown signals.
 func (c *Client) ShutdownVM(node string, vmid int) (string, error) {
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/status/shutdown", node, vmid)
 	resp, err := c.post(path, nil)

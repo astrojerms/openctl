@@ -12,6 +12,7 @@ package templates
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/openctl/openctl/pkg/protocol"
@@ -191,12 +192,7 @@ func getInt(params map[string]any, defs []ParamDef, key string) int {
 }
 
 func contains(ss []string, s string) bool {
-	for _, x := range ss {
-		if x == s {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(ss, s)
 }
 
 // Default returns a registry with all built-in templates.
