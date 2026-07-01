@@ -91,6 +91,14 @@ type Field struct {
 	// apiVersion when absent.
 	OptionsSource *OptionsSource `json:"optionsSource,omitempty"`
 
+	// OneOfGroup, when set, marks this field as one alternative in a
+	// mutually-exclusive group of sibling fields. Populated from CUE
+	// `@oneOf(group="X")` attributes. The form renderer collapses all
+	// fields sharing a group into a single picker (radio) + a single
+	// sub-form for whichever alternative is selected. Only meaningful
+	// inside a struct — sibling fields at the same nesting level.
+	OneOfGroup string `json:"oneOfGroup,omitempty"`
+
 	// FieldUnsupported: human-readable reason.
 	Reason string `json:"reason,omitempty"`
 }
@@ -209,6 +217,13 @@ func walkStruct(v cue.Value) []Field {
 		// Unquoted() returns just the bare name so the form keys line
 		// up with the JSON/YAML manifest the user submits.
 		child.Name = iter.Selector().Unquoted()
+		// @oneOf(group="X") is read from the field's attributes; sibling
+		// fields sharing a group render as a single picker in the UI.
+		if attr := iter.Value().Attribute("oneOf"); attr.Err() == nil {
+			if g, ok, err := attr.Lookup(0, "group"); err == nil && ok {
+				child.OneOfGroup = g
+			}
+		}
 		out = append(out, child)
 	}
 	return out

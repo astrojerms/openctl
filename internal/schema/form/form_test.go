@@ -249,6 +249,25 @@ func TestWalkPlainObjectStaysObject(t *testing.T) {
 	}
 }
 
+func TestWalkOneOfAttribute(t *testing.T) {
+	src := `
+		template?: {name: string} @oneOf(group="image-source")
+		cloudImage?: {url: string} @oneOf(group="image-source")
+		image?: {file: string} @oneOf(group="image-source")
+		unrelated?: string
+	`
+	f := build(t, src)
+	by := byName(f.Fields)
+	for _, name := range []string{"template", "cloudImage", "image"} {
+		if by[name].OneOfGroup != "image-source" {
+			t.Errorf("%s.OneOfGroup = %q, want image-source", name, by[name].OneOfGroup)
+		}
+	}
+	if by["unrelated"].OneOfGroup != "" {
+		t.Errorf("unrelated.OneOfGroup = %q, want empty", by["unrelated"].OneOfGroup)
+	}
+}
+
 func TestWalkOptionsAttribute(t *testing.T) {
 	src := `
 		node: string @options(kind="ProxmoxNode")

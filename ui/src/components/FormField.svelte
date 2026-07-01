@@ -141,6 +141,57 @@
   $: optionsNames = optionsKey ? $optionsStore.data[optionsKey] ?? null : null;
   $: optionsError = optionsKey ? $optionsStore.errors[optionsKey] ?? '' : '';
 
+  // oneOf group support: preprocess field.fields into a render list
+  // that collapses each group of `@oneOf(group="X")`-tagged siblings
+  // into a single "picker" entry rendered at the position of the
+  // first-appearing member. Non-grouped fields pass through as-is.
+  type RenderItem =
+    | { kind: 'field'; child: FormField; childValue: unknown }
+    | { kind: 'group'; group: string; alternatives: FormField[]; selected: string };
+
+  $: renderList = (() => {
+    if (field.type !== 'object' || !field.fields) return [] as RenderItem[];
+    const obj = (typeof value === 'object' && value && !Array.isArray(value))
+      ? (value as Record<string, unknown>) : {};
+    const seen = new Set<string>();
+    const out: RenderItem[] = [];
+    for (const child of field.fields) {
+      if (child.oneOfGroup) {
+        if (seen.has(child.oneOfGroup)) continue;
+        seen.add(child.oneOfGroup);
+        const alts = field.fields.filter((c) => c.oneOfGroup === child.oneOfGroup);
+        // Selected = first alternative that has a value in the current
+        // object. Empty when nothing is chosen yet.
+        const selected = alts.find(
+          (a) => a.name && obj[a.name] !== undefined,
+        )?.name ?? '';
+        out.push({ kind: 'group', group: child.oneOfGroup, alternatives: alts, selected });
+      } else {
+        const childValue = child.name ? obj[child.name] : undefined;
+        out.push({ kind: 'field', child, childValue });
+      }
+    }
+    return out;
+  })();
+
+  // selectOneOf switches the picked alternative: unsets any previously
+  // selected sibling (deletes the key so scrubEmpty drops it), then
+  // seeds the newly-chosen field to its initialValue. Setting to ""
+  // clears the group entirely.
+  function selectOneOf(alternatives: FormField[], newName: string) {
+    const obj = (typeof value === 'object' && value && !Array.isArray(value))
+      ? { ...(value as Record<string, unknown>) }
+      : {};
+    for (const alt of alternatives) {
+      if (alt.name && alt.name !== newName) delete obj[alt.name];
+    }
+    if (newName) {
+      const picked = alternatives.find((a) => a.name === newName);
+      if (picked) obj[newName] = initialValue(picked);
+    }
+    set(obj);
+  }
+
   function addMapRow() {
     const m = (typeof value === 'object' && value && !Array.isArray(value))
       ? { ...(value as Record<string, unknown>) }
@@ -161,44 +212,87 @@
     {#if field.description}
       <p class="desc">{field.description}</p>
     {/if}
-    {#each field.fields ?? [] as child (child.name)}
-      {@const obj = (typeof value === 'object' && value && !Array.isArray(value)) ? value : {}}
-      {@const childValue = (obj as Record<string, unknown>)[child.name ?? '']}
-      {@const collapsed = isCollapsible(child, childValue)}
-      {@const removable = child.optional && !collapsed && (child.type === 'object' || child.type === 'array' || child.type === 'map')}
-      <div class="row">
-        <div class="row-head">
-          <span class="row-label">
-            {child.name}{#if !child.optional}<span class="req" aria-label="required">*</span>{/if}
-          </span>
-          {#if removable}
-            <button
-              type="button"
-              class="row-clear"
-              title="Remove {child.name}"
-              on:click={() => unsetObjectKey(child.name ?? '')}
-            >×</button>
+    {#each renderList as item (item.kind === 'group' ? `__group__${item.group}` : item.child.name)}
+      {#if item.kind === 'group'}
+        <div class="oneof-group">
+          <div class="oneof-picker" role="radiogroup" aria-label={item.group}>
+            {#each item.alternatives as alt}
+              <label class="oneof-choice" class:active={item.selected === alt.name}>
+                <input
+                  type="radio"
+                  name={`__oneof__${item.group}__${depth}`}
+                  value={alt.name}
+                  checked={item.selected === alt.name}
+                  on:change={() => selectOneOf(item.alternatives, alt.name ?? '')}
+                />
+                <span>{alt.name}</span>
+              </label>
+            {/each}
+            {#if item.selected}
+              <button
+                type="button"
+                class="oneof-clear"
+                title="Clear selection"
+                on:click={() => selectOneOf(item.alternatives, '')}
+              >clear</button>
+            {/if}
+          </div>
+          {#if item.selected}
+            {@const picked = item.alternatives.find((a) => a.name === item.selected)}
+            {@const obj = (typeof value === 'object' && value && !Array.isArray(value)) ? value : {}}
+            {@const pickedValue = (obj as Record<string, unknown>)[item.selected]}
+            {#if picked}
+              {#if picked.description}
+                <p class="desc small">{picked.description}</p>
+              {/if}
+              <Self
+                field={picked}
+                value={pickedValue}
+                depth={depth + 1}
+                on:change={(e) => setObjectKey(item.selected, e.detail)}
+              />
+            {/if}
           {/if}
         </div>
-        {#if child.description && (collapsed || child.type !== 'object')}
-          <p class="desc small">{child.description}</p>
-        {/if}
-        {#if collapsed}
-          <button
-            type="button"
-            class="add-opt"
-            title={child.description ?? ''}
-            on:click={() => setObjectKey(child.name ?? '', initialValue(child))}
-          >+ {child.name}</button>
-        {:else}
-          <Self
-            field={child}
-            value={childValue}
-            depth={depth + 1}
-            on:change={(e) => setObjectKey(child.name ?? '', e.detail)}
-          />
-        {/if}
-      </div>
+      {:else}
+        {@const child = item.child}
+        {@const childValue = item.childValue}
+        {@const collapsed = isCollapsible(child, childValue)}
+        {@const removable = child.optional && !collapsed && (child.type === 'object' || child.type === 'array' || child.type === 'map')}
+        <div class="row">
+          <div class="row-head">
+            <span class="row-label">
+              {child.name}{#if !child.optional}<span class="req" aria-label="required">*</span>{/if}
+            </span>
+            {#if removable}
+              <button
+                type="button"
+                class="row-clear"
+                title="Remove {child.name}"
+                on:click={() => unsetObjectKey(child.name ?? '')}
+              >×</button>
+            {/if}
+          </div>
+          {#if child.description && (collapsed || child.type !== 'object')}
+            <p class="desc small">{child.description}</p>
+          {/if}
+          {#if collapsed}
+            <button
+              type="button"
+              class="add-opt"
+              title={child.description ?? ''}
+              on:click={() => setObjectKey(child.name ?? '', initialValue(child))}
+            >+ {child.name}</button>
+          {:else}
+            <Self
+              field={child}
+              value={childValue}
+              depth={depth + 1}
+              on:change={(e) => setObjectKey(child.name ?? '', e.detail)}
+            />
+          {/if}
+        </div>
+      {/if}
     {/each}
   </div>
 {:else if field.type === 'array'}
@@ -354,6 +448,52 @@
     display: flex;
     align-items: center;
     gap: 0.4rem;
+  }
+  .oneof-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    padding: 0.6rem 0.75rem;
+    background: rgba(74, 142, 240, 0.05);
+    border-left: 2px solid rgba(74, 142, 240, 0.35);
+    border-radius: 4px;
+  }
+  .oneof-picker {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-items: center;
+  }
+  .oneof-choice {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.25em 0.7em;
+    border: 1px solid rgba(127, 127, 127, 0.25);
+    border-radius: 4px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    background: transparent;
+  }
+  .oneof-choice.active {
+    background: rgba(74, 142, 240, 0.15);
+    border-color: #4a8ef0;
+    color: #6ea8ff;
+  }
+  .oneof-choice input {
+    margin: 0;
+  }
+  .oneof-clear {
+    background: transparent;
+    border: none;
+    color: #888;
+    font-size: 0.75rem;
+    text-decoration: underline;
+    cursor: pointer;
+    padding: 0 0.35em;
+  }
+  .oneof-clear:hover {
+    color: #ff8980;
   }
   .add-opt {
     align-self: flex-start;
