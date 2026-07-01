@@ -18,6 +18,7 @@ import (
 	"github.com/openctl/openctl/internal/controller/manifests"
 	"github.com/openctl/openctl/internal/controller/operations"
 	"github.com/openctl/openctl/internal/controller/providers"
+	"github.com/openctl/openctl/internal/templates"
 	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 )
 
@@ -67,6 +68,10 @@ type Options struct {
 	// When set, RepoService.Push/Pull/GetStatus are fully functional; when
 	// nil, GetStatus still returns the dir but Push/Pull error.
 	Repo *manifests.Repo
+	// Templates is the parameterized-starter registry surfaced via
+	// TemplateService. May be nil — the service just returns empty
+	// lists in that case.
+	Templates *templates.Registry
 }
 
 // Server is the controller's gRPC server.
@@ -119,6 +124,11 @@ func New(opts Options) (*Server, error) {
 	if opts.DiskMirror != nil {
 		apiv1.RegisterRepoServiceServer(g, newRepoHandler(opts.DiskMirror, opts.Repo))
 	}
+	tmpls := opts.Templates
+	if tmpls == nil {
+		tmpls = templates.NewRegistry()
+	}
+	apiv1.RegisterTemplateServiceServer(g, newTemplateHandler(tmpls))
 
 	reflection.Register(g)
 

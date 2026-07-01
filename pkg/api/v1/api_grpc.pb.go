@@ -573,6 +573,194 @@ var ResourceService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	TemplateService_ListTemplates_FullMethodName  = "/openctl.v1.TemplateService/ListTemplates"
+	TemplateService_GetTemplate_FullMethodName    = "/openctl.v1.TemplateService/GetTemplate"
+	TemplateService_RenderTemplate_FullMethodName = "/openctl.v1.TemplateService/RenderTemplate"
+)
+
+// TemplateServiceClient is the client API for TemplateService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// TemplateService exposes parameterized starters — templates declare
+// a small set of user-fillable parameters and render into a full
+// Resource manifest. UI Phase U8+: sidebar "Templates" section, wizard
+// form, submit through the normal Apply pipeline.
+type TemplateServiceClient interface {
+	ListTemplates(ctx context.Context, in *ListTemplatesRequest, opts ...grpc.CallOption) (*ListTemplatesResponse, error)
+	GetTemplate(ctx context.Context, in *GetTemplateRequest, opts ...grpc.CallOption) (*GetTemplateResponse, error)
+	RenderTemplate(ctx context.Context, in *RenderTemplateRequest, opts ...grpc.CallOption) (*RenderTemplateResponse, error)
+}
+
+type templateServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewTemplateServiceClient(cc grpc.ClientConnInterface) TemplateServiceClient {
+	return &templateServiceClient{cc}
+}
+
+func (c *templateServiceClient) ListTemplates(ctx context.Context, in *ListTemplatesRequest, opts ...grpc.CallOption) (*ListTemplatesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListTemplatesResponse)
+	err := c.cc.Invoke(ctx, TemplateService_ListTemplates_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *templateServiceClient) GetTemplate(ctx context.Context, in *GetTemplateRequest, opts ...grpc.CallOption) (*GetTemplateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetTemplateResponse)
+	err := c.cc.Invoke(ctx, TemplateService_GetTemplate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *templateServiceClient) RenderTemplate(ctx context.Context, in *RenderTemplateRequest, opts ...grpc.CallOption) (*RenderTemplateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RenderTemplateResponse)
+	err := c.cc.Invoke(ctx, TemplateService_RenderTemplate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// TemplateServiceServer is the server API for TemplateService service.
+// All implementations must embed UnimplementedTemplateServiceServer
+// for forward compatibility.
+//
+// TemplateService exposes parameterized starters — templates declare
+// a small set of user-fillable parameters and render into a full
+// Resource manifest. UI Phase U8+: sidebar "Templates" section, wizard
+// form, submit through the normal Apply pipeline.
+type TemplateServiceServer interface {
+	ListTemplates(context.Context, *ListTemplatesRequest) (*ListTemplatesResponse, error)
+	GetTemplate(context.Context, *GetTemplateRequest) (*GetTemplateResponse, error)
+	RenderTemplate(context.Context, *RenderTemplateRequest) (*RenderTemplateResponse, error)
+	mustEmbedUnimplementedTemplateServiceServer()
+}
+
+// UnimplementedTemplateServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedTemplateServiceServer struct{}
+
+func (UnimplementedTemplateServiceServer) ListTemplates(context.Context, *ListTemplatesRequest) (*ListTemplatesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListTemplates not implemented")
+}
+func (UnimplementedTemplateServiceServer) GetTemplate(context.Context, *GetTemplateRequest) (*GetTemplateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetTemplate not implemented")
+}
+func (UnimplementedTemplateServiceServer) RenderTemplate(context.Context, *RenderTemplateRequest) (*RenderTemplateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RenderTemplate not implemented")
+}
+func (UnimplementedTemplateServiceServer) mustEmbedUnimplementedTemplateServiceServer() {}
+func (UnimplementedTemplateServiceServer) testEmbeddedByValue()                         {}
+
+// UnsafeTemplateServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to TemplateServiceServer will
+// result in compilation errors.
+type UnsafeTemplateServiceServer interface {
+	mustEmbedUnimplementedTemplateServiceServer()
+}
+
+func RegisterTemplateServiceServer(s grpc.ServiceRegistrar, srv TemplateServiceServer) {
+	// If the following call panics, it indicates UnimplementedTemplateServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&TemplateService_ServiceDesc, srv)
+}
+
+func _TemplateService_ListTemplates_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTemplatesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TemplateServiceServer).ListTemplates(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TemplateService_ListTemplates_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TemplateServiceServer).ListTemplates(ctx, req.(*ListTemplatesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TemplateService_GetTemplate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetTemplateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TemplateServiceServer).GetTemplate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TemplateService_GetTemplate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TemplateServiceServer).GetTemplate(ctx, req.(*GetTemplateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TemplateService_RenderTemplate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenderTemplateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TemplateServiceServer).RenderTemplate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TemplateService_RenderTemplate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TemplateServiceServer).RenderTemplate(ctx, req.(*RenderTemplateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// TemplateService_ServiceDesc is the grpc.ServiceDesc for TemplateService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var TemplateService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "openctl.v1.TemplateService",
+	HandlerType: (*TemplateServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ListTemplates",
+			Handler:    _TemplateService_ListTemplates_Handler,
+		},
+		{
+			MethodName: "GetTemplate",
+			Handler:    _TemplateService_GetTemplate_Handler,
+		},
+		{
+			MethodName: "RenderTemplate",
+			Handler:    _TemplateService_RenderTemplate_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "api.proto",
+}
+
+const (
 	OperationService_GetOperation_FullMethodName    = "/openctl.v1.OperationService/GetOperation"
 	OperationService_ListOperations_FullMethodName  = "/openctl.v1.OperationService/ListOperations"
 	OperationService_WatchOperations_FullMethodName = "/openctl.v1.OperationService/WatchOperations"

@@ -17,6 +17,8 @@
   import ResourceList from './ResourceList.svelte';
   import Detail from './Detail.svelte';
   import Edit from './Edit.svelte';
+  import Templates from './Templates.svelte';
+  import TemplateWizard from './TemplateWizard.svelte';
 
   export let me: WhoAmIResponse;
 
@@ -80,6 +82,11 @@
 
 <div class="shell">
   <aside>
+    <a
+      class="sidebar-link"
+      class:active={$route.name === 'templates' || $route.name === 'template'}
+      href={routeHref({ name: 'templates' })}
+    >Templates</a>
     {#if $catalogueError}
       <p class="err">{$catalogueError}</p>
     {/if}
@@ -89,6 +96,10 @@
   <main>
     {#if $route.name === 'home'}
       <HomePane />
+    {:else if $route.name === 'templates'}
+      <Templates />
+    {:else if $route.name === 'template'}
+      <TemplateWizard template={$route.template} />
     {:else if $route.name === 'list'}
       {@const entry = byKey.get(`${$route.apiVersion}/${$route.kind}`)}
       <ResourceList
@@ -163,6 +174,26 @@
     border-right: 1px solid #2a2a2a;
     padding: 1rem 0.75rem;
     overflow-y: auto;
+  }
+  .sidebar-link {
+    display: block;
+    padding: 0.4rem 0.75rem;
+    margin-bottom: 0.75rem;
+    color: #ccc;
+    text-decoration: none;
+    font-size: 0.9rem;
+    font-weight: 500;
+    border-radius: 4px;
+    border: 1px solid rgba(127, 127, 127, 0.2);
+  }
+  .sidebar-link:hover {
+    background: rgba(127, 127, 127, 0.08);
+    color: #fff;
+  }
+  .sidebar-link.active {
+    background: rgba(74, 142, 240, 0.15);
+    color: #6ea8ff;
+    border-color: #4a8ef0;
   }
   main {
     padding: 1.5rem 2rem;
