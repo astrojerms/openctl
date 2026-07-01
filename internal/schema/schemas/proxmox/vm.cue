@@ -9,8 +9,10 @@ import "openctl.io/schemas/base"
 }
 
 #VMSpec: {
-	// Proxmox node (host) the VM lives on, e.g. "pve1".
-	node: string
+	// Proxmox node (host) the VM lives on, e.g. "pve1". The UI resolves
+	// this against the ProxmoxNode kind (observed from the Proxmox API)
+	// and renders a dropdown of available nodes.
+	node: string @options(kind="ProxmoxNode")
 
 	// Source for VM creation: pick exactly one of template, cloudImage, or image.
 	// Clones from a Proxmox template by name or vmid.

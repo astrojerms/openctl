@@ -283,13 +283,16 @@ Shipped this session:
 
 Punch list (unstarted, prioritized):
 
-- [ ] **U8.11** — Provider-populated dropdowns. Runtime data
-      (ProxmoxNode names, storages, bridges, k3s templates) resolved
-      as select-from-list fields instead of free-text. Needs a schema
-      convention (e.g. CUE `@options(kind="X")` attribute), a
-      Field.OptionsSource on the walker output, an in-UI cache of
-      referenced kind lists, and renderer support. First slice:
-      `spec.node` → ProxmoxNode on VirtualMachine.
+- [x] **U8.11** — Provider-populated dropdowns (first slice).
+      CUE `@options(kind="X" [, apiVersion="Y"])` attribute; form
+      walker emits Field.OptionsSource; new `ui/src/lib/options.ts`
+      lazy-caches resource-name lists keyed by (apiVersion, kind);
+      FormField renders a select when a resolved options list is
+      available. Wired for `VirtualMachine.spec.node` →
+      ProxmoxNode. Storage / bridge / dependent dropdowns (e.g.
+      storages on the selected node) still pending — needs a
+      field-to-field dependency convention that this MVP doesn't
+      model.
 - [ ] **U8.12** — Runtime actions on resources. Start/Stop/Reboot/
       Console for VMs; kubeconfig download / kubectl-proxy console
       for Clusters. Biggest single "AWS-console-for-homelab" gap:

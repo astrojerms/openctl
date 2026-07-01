@@ -249,6 +249,41 @@ func TestWalkPlainObjectStaysObject(t *testing.T) {
 	}
 }
 
+func TestWalkOptionsAttribute(t *testing.T) {
+	src := `
+		node: string @options(kind="ProxmoxNode")
+		bridge: string @options(kind="Bridge", apiVersion="proxmox.openctl.io/v1")
+		plain: string
+	`
+	f := build(t, src)
+	by := byName(f.Fields)
+
+	// kind-only form: OptionsSource populated, APIVersion left empty
+	// (UI defaults to the containing resource's apiVersion).
+	node := by["node"]
+	if node.OptionsSource == nil {
+		t.Fatal("node.OptionsSource is nil; want populated")
+	}
+	if node.OptionsSource.Kind != "ProxmoxNode" {
+		t.Errorf("node kind = %q, want ProxmoxNode", node.OptionsSource.Kind)
+	}
+	if node.OptionsSource.APIVersion != "" {
+		t.Errorf("node apiVersion = %q, want empty (defaulted by UI)", node.OptionsSource.APIVersion)
+	}
+
+	// Explicit apiVersion is preserved.
+	bridge := by["bridge"]
+	if bridge.OptionsSource == nil || bridge.OptionsSource.APIVersion != "proxmox.openctl.io/v1" {
+		t.Errorf("bridge OptionsSource = %+v, want APIVersion=proxmox.openctl.io/v1", bridge.OptionsSource)
+	}
+
+	// Fields with no @options attribute stay unannotated.
+	plain := by["plain"]
+	if plain.OptionsSource != nil {
+		t.Errorf("plain.OptionsSource = %+v, want nil", plain.OptionsSource)
+	}
+}
+
 func TestWalkTopAndAny(t *testing.T) {
 	// CUE `_` collapses to TopKind — render as the "any" escape hatch.
 	src := `
