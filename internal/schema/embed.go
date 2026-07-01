@@ -45,6 +45,12 @@ func Registry() []Info {
 			Provider:   "k3s",
 			FileName:   "k3s/cluster.cue",
 		},
+		{
+			APIVersion: "k3s.openctl.io/v1",
+			Kind:       "K3sNode",
+			Provider:   "k3s",
+			FileName:   "k3s/node.cue",
+		},
 	}
 }
 

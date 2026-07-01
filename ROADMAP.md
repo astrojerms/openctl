@@ -117,24 +117,41 @@ evolved.
          accurate). Unresolvable refs → op fails with a specific
          "ref X/Y/Z: not found" message; DryRun surfaces it as a
          validation error rather than a 500.
-      2. [ ] **K3sNode resource + provider.** New kind that owns
-         one k3s install on one node. Apply = install (or re-
-         install) k3s given a Ref to the underlying VM and a Ref
-         to the parent Cluster for the join token. Delete =
-         uninstall + drain.
+      2. [x] **K3sNode resource + provider.** New kind that owns
+         one k3s install on one node. `spec.vmRef` (whole-resource
+         `#Ref` to a VM) + `spec.role` (server|agent) + `spec.joinFrom`
+         + `spec.joinURLFrom` (for non-first nodes; resolve to another
+         K3sNode's `status.nodeToken` / `status.vmIP`). Provider
+         SSHes to the resolved VM IP, runs the appropriate k3s
+         install command, captures nodeToken from the server (so
+         later K3sNodes can resolve joinFrom refs against it), and
+         saves the first server's kubeconfig at the standard path
+         (so the existing get-kubeconfig action works for
+         standalone K3sNode installs). State persisted at
+         `~/.openctl/state/k3s-nodes/<name>.yaml`. Test coverage:
+         parsing + install-command shape + state round-trip (7
+         tests). Ships standalone-useful — users can author
+         K3sNode manifests directly without going through the
+         composite Cluster orchestration.
       3. [ ] **AgentInstall as sibling.** Analogous — one
          openctl-k3s-agent install per node, Ref'd to the VM.
-      4. [ ] **Cluster.Plan refactor.** Cluster stops installing
-         k3s directly; Plan(manifest) returns K3sNode +
-         AgentInstall + VM child manifests with Refs wiring them
-         together. Dispatcher runs the resulting DAG via existing
-         parent_id ops. This is what makes scale-up "just add
-         nodes to the manifest."
+         Not yet split out; the existing Cluster provider still
+         handles agent installs inline.
+      4. [ ] **Cluster.Plan refactor.** Biggest remaining piece.
+         Cluster provider stops installing k3s directly;
+         Plan(manifest) returns K3sNode + AgentInstall + VM child
+         manifests with Refs wiring them together. The dispatcher
+         runs the resulting DAG via existing parent_id ops — this
+         is what makes scale-up "just add nodes to the manifest."
+         Requires a coordinated refactor of ~600 lines in the
+         Cluster provider and matching test overhaul; deferred to
+         a focused day+.
       5. [ ] **Verifying-cache refs_hash extension.** Once specs
-         carry Refs, extend the Phase 7 verifying-trace cache
-         with refs_hash so cross-resource dependency changes
-         trigger rebuilds. Moves the parked "refs-cache
-         extension" item to shippable.
+         carry Refs (they do — step 1) AND providers consume
+         resolved Refs across a stable relationship (step 4),
+         extend the Phase 7 verifying-trace cache with refs_hash
+         so cross-resource dependency changes trigger rebuilds.
+         Depends on step 4 shipping first.
 
 ### Rescoped from Phase 9 / 10
 

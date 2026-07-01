@@ -80,8 +80,9 @@ func TestProviderName(t *testing.T) {
 	if p.Name() != "k3s" {
 		t.Errorf("Name = %q, want k3s", p.Name())
 	}
-	if len(p.Kinds()) != 1 || p.Kinds()[0] != "Cluster" {
-		t.Errorf("Kinds = %v, want [Cluster]", p.Kinds())
+	kinds := p.Kinds()
+	if len(kinds) != 2 || kinds[0] != "Cluster" || kinds[1] != "K3sNode" {
+		t.Errorf("Kinds = %v, want [Cluster K3sNode]", kinds)
 	}
 }
 

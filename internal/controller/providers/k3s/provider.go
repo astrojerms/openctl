@@ -57,7 +57,7 @@ func New(cfg *protocol.ProviderConfig, vms VMApplier) *Provider {
 }
 
 func (p *Provider) Name() string    { return providerName }
-func (p *Provider) Kinds() []string { return []string{kindCluster} }
+func (p *Provider) Kinds() []string { return []string{kindCluster, kindK3sNode} }
 
 // Actions implements providers.Actioner. Cluster supports one
 // runtime action today: get-kubeconfig, which returns the stored
@@ -179,6 +179,9 @@ const (
 // each node reports its IP. QGA polling requires qemu-guest-agent installed
 // in the VM template; without it the poll times out with a clear message.
 func (p *Provider) Apply(ctx context.Context, manifest *protocol.Resource) (*protocol.Resource, error) {
+	if manifest.Kind == kindK3sNode {
+		return p.applyK3sNode(ctx, manifest)
+	}
 	if err := requireKindCluster(manifest.Kind); err != nil {
 		return nil, err
 	}
@@ -387,7 +390,10 @@ func (p *Provider) applyExisting(ctx context.Context, manifest *protocol.Resourc
 	return p.loadState(name)
 }
 
-func (p *Provider) Get(_ context.Context, kind, name string) (*protocol.Resource, error) {
+func (p *Provider) Get(ctx context.Context, kind, name string) (*protocol.Resource, error) {
+	if kind == kindK3sNode {
+		return p.getK3sNode(ctx, name)
+	}
 	if err := requireKindCluster(kind); err != nil {
 		return nil, err
 	}
@@ -458,7 +464,10 @@ func applyObservedCounts(r *protocol.Resource, clusterName string, children []ch
 	}
 }
 
-func (p *Provider) List(_ context.Context, kind string) ([]*protocol.Resource, error) {
+func (p *Provider) List(ctx context.Context, kind string) ([]*protocol.Resource, error) {
+	if kind == kindK3sNode {
+		return p.listK3sNodes(ctx)
+	}
 	if err := requireKindCluster(kind); err != nil {
 		return nil, err
 	}
@@ -491,6 +500,9 @@ func (p *Provider) List(_ context.Context, kind string) ([]*protocol.Resource, e
 // Delete tears down a cluster: deletes child VMs via the VM provider, then
 // removes the local state. Idempotent on missing cluster.
 func (p *Provider) Delete(ctx context.Context, kind, name string) error {
+	if kind == kindK3sNode {
+		return p.deleteK3sNode(ctx, name)
+	}
 	if err := requireKindCluster(kind); err != nil {
 		return err
 	}

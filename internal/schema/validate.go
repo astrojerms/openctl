@@ -165,6 +165,9 @@ func SchemaSelector(apiVersion, kind string) (pkg, def string, ok bool) {
 		if kind == "Cluster" {
 			return "k3s", "#Cluster", true
 		}
+		if kind == "K3sNode" {
+			return "k3s", "#K3sNode", true
+		}
 	}
 	return "", "", false
 }
