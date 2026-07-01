@@ -105,11 +105,36 @@ evolved.
       Resource proto, Registry.ChildrenOf + OwnerRefOf helpers, k3s
       Cluster implements ChildrenLister so Get/List/Watch return its
       VM children, child resources surface their owning Cluster via
-      Metadata.OwnerRefs. Unblocks UI U3.3 deferred + U6. The full
-      Phase 8 (K3sNode as first-class resource + AgentInstall +
-      Cluster.Plan refactor + wire-level `ResourceRef` primitives)
-      remains deferred — a separate architectural lift to be planned
-      when the UI flushes out demand for it.
+      Metadata.OwnerRefs. Unblocks UI U3.3 deferred + U6.
+- [ ] **Arch Phase 8 (full)** — genuinely multi-session
+      architectural lift. Not attempted in the U8 sprint. Concrete
+      pieces, roughly ordered:
+      1. **ResourceRef as spec-level primitive.** Convention for
+         embedding typed refs in `spec` (e.g. a JSON object
+         `{ $ref: { apiVersion, kind, name } }`). Server-side
+         resolver walks the spec pre-Apply, calls provider.Get on
+         each ref, substitutes the resolved value. Caller-side CUE
+         helper `#Ref` for authoring.
+      2. **K3sNode resource + provider.** New kind that owns one k3s
+         install on one node. Apply = install (or re-install) k3s
+         given a Ref to the underlying VM and a Ref to the parent
+         Cluster for the join token. Delete = uninstall + drain.
+      3. **AgentInstall as sibling.** Analogous — one openctl-k3s-
+         agent install per node, Ref'd to the VM.
+      4. **Cluster.Plan refactor.** Cluster stops installing k3s
+         directly; Plan(manifest) returns K3sNode + AgentInstall +
+         VM child manifests with Refs wiring them together. The
+         dispatcher runs the resulting DAG via existing parent_id
+         ops. This is what makes scale-up "just add nodes to the
+         manifest."
+      5. **Verifying-cache refs_hash extension.** Once specs carry
+         Refs, extend the Phase 7 verifying-trace cache with
+         refs_hash so cross-resource dependency changes trigger
+         rebuilds. (Moves the parked "refs-cache extension" item
+         above to shippable.)
+      Owner: someone with a clear day+ of focus. Suggested first PR
+      is step 1 alone (ResourceRef primitive + resolver) since it
+      unblocks 2-5 and is testable in isolation.
 
 ### Rescoped from Phase 9 / 10
 
@@ -409,10 +434,15 @@ phase plan when ready to commit.
       in) and `small-k3s-cluster` (k3s with static-IP networking).
       Each created resource is stamped with the
       `openctl.io/template: <name>` annotation for provenance.
-- [ ] **Two-way GitOps** — file edits in the manifest dir trigger
-      reconciler reapply. Needs conflict resolution between UI edits
-      and file edits, `inotify`/`fsnotify` watch, and a "GitOps mode"
-      toggle. Big enough to be its own track.
+- [x] **Two-way GitOps** — fsnotify watcher on the manifest mirror
+      dir. On file change, parse + compare against applied_manifests
+      + Apply if different (comparison guarantees loop-safety: our
+      own DiskMirror writes trigger fsnotify events, but the content
+      matches the store so we skip). File removals optionally submit
+      Delete ops (opt-in via `deleteOnRemove: true`). Ops are tagged
+      source="gitops" so the audit trail is honest. Opt-in via
+      `manifests.gitops.enabled: true`. Debounces rapid successive
+      writes (500ms) to handle editor truncate+write patterns.
 - [ ] **Multi-user auth** — OIDC integration, named sessions, RBAC on
       `ResourceService`. Cookie/session layer from U1 is the
       foundation.

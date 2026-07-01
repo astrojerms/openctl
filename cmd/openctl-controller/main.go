@@ -186,6 +186,61 @@ func runServe(args []string) error {
 	dispatcher.Start(ctx)
 	defer dispatcher.Stop()
 
+	// Two-way GitOps: fsnotify watcher on the mirror dir. File edits
+	// become Apply ops tagged source="gitops". Opt-in (config
+	// manifests.gitops.enabled: true) — default remains one-way
+	// mirror. Requires the disk mirror to be configured; without
+	// it there's no directory to watch.
+	if diskMirror != nil {
+		if cfg2, err := config.Load(); err == nil && cfg2 != nil &&
+			cfg2.Manifests != nil && cfg2.Manifests.GitOps != nil &&
+			cfg2.Manifests.GitOps.Enabled {
+			applyFn := func(ctx context.Context, r *protocol.Resource) error {
+				mJSON, err := json.Marshal(r)
+				if err != nil {
+					return fmt.Errorf("encode manifest: %w", err)
+				}
+				_, err = opStore.Submit(ctx, &operations.Operation{
+					Type:         operations.TypeApply,
+					APIVersion:   r.APIVersion,
+					Kind:         r.Kind,
+					ResourceName: r.Metadata.Name,
+					ManifestJSON: string(mJSON),
+					Source:       manifests.SourceGitOps,
+				})
+				if err != nil {
+					return err
+				}
+				dispatcher.Notify()
+				return nil
+			}
+			var deleteFn manifests.GitOpsDeleteFunc
+			if cfg2.Manifests.GitOps.DeleteOnRemove {
+				deleteFn = func(ctx context.Context, av, kind, name string) error {
+					_, err := opStore.Submit(ctx, &operations.Operation{
+						Type:         operations.TypeDelete,
+						APIVersion:   av,
+						Kind:         kind,
+						ResourceName: name,
+						Source:       manifests.SourceGitOps,
+					})
+					if err != nil {
+						return err
+					}
+					dispatcher.Notify()
+					return nil
+				}
+			}
+			gitOpsWatcher := manifests.NewWatcher(diskMirror.Root(), manifestStore, applyFn, deleteFn)
+			if err := gitOpsWatcher.Start(ctx); err != nil {
+				log.Printf("  gitops:      failed to start watcher: %v", err)
+			} else {
+				defer gitOpsWatcher.Stop()
+				log.Printf("  gitops:      enabled (deleteOnRemove=%v)", cfg2.Manifests.GitOps.DeleteOnRemove)
+			}
+		}
+	}
+
 	// Periodic drift reconciler. Disabled only when the config explicitly
 	// sets `reconciler.enabled: false`. Default behavior: logs drift
 	// transitions; auto-remediate only fires on resources annotated with
