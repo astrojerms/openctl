@@ -396,6 +396,11 @@ When phases or followups land, move them up out of "pending" into their
 detail doc's marked-complete section, then leave a one-line entry here
 with the commit hash for at-a-glance history. Trim to the last 10.
 
+- (pending) — fix: shutdown hang on Ctrl-C. Root ctx now cancels
+  on SIGINT/SIGTERM (signal.NotifyContext) so subsystems exit;
+  server.StopWithTimeout(3s) falls back to force Stop() when
+  GracefulStop would otherwise wait indefinitely for UI Watch
+  streams.
 - `0651d6a` — U8.20: manifest-preview toggle in form view.
 - `0e9b693` — U8.19: Copy/Download YAML buttons on Detail.
 - `b6e5642` — U8.18: pre-fill metadata.name with a suggestion

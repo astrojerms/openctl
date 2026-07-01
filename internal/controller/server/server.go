@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -130,9 +131,33 @@ func (s *Server) ServeListener(ln net.Listener) error {
 	return s.grpc.Serve(ln)
 }
 
-// Stop gracefully stops the server, draining in-flight RPCs.
+// Stop gracefully stops the server, draining in-flight RPCs. Blocks
+// until every active RPC (including long-running Watch streams) has
+// returned. If clients don't disconnect their streams, this waits
+// forever — callers that need a bounded shutdown should use
+// StopWithTimeout instead.
 func (s *Server) Stop() {
 	s.grpc.GracefulStop()
+}
+
+// StopWithTimeout is like Stop but caps the graceful drain. If the
+// timeout elapses before every stream ends, falls back to grpc.Stop
+// (force-close) so shutdown always completes. Suitable for CLI
+// `serve` — UI Watch streams stay open indefinitely, so GracefulStop
+// on its own would hang forever on Ctrl-C.
+func (s *Server) StopWithTimeout(d time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		s.grpc.GracefulStop()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return
+	case <-time.After(d):
+		s.grpc.Stop()
+		<-done
+	}
 }
 
 // pingHandler is the trivial implementation of PingService used to verify
