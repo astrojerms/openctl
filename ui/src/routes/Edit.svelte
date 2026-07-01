@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, setContext } from 'svelte';
+  import { writable } from 'svelte/store';
   import {
     resources, schemas, operations as opsApi, UnauthorizedError,
     type DryRunApplyResponse,
@@ -21,6 +22,16 @@
   export let resourceName = '';
 
   $: isCreate = resourceName === '';
+
+  // Expose apiVersion via context so nested FormField instances can
+  // resolve @options(kind="X") without an explicit apiVersion by
+  // defaulting to the containing resource's provider. setContext must
+  // fire during init, so we register a writable store once and update
+  // it reactively as the apiVersion prop changes (route navigation
+  // between kinds).
+  const apiVersionCtx = writable(apiVersion);
+  setContext('resourceAPIVersionStore', apiVersionCtx);
+  $: apiVersionCtx.set(apiVersion);
 
   // Captured at submit time in create mode so the success-handoff knows
   // where to navigate after the op succeeds — `resourceName` is empty

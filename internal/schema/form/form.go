@@ -84,8 +84,24 @@ type Field struct {
 	// the pattern attribute + a live validity check.
 	Pattern string `json:"pattern,omitempty"`
 
+	// FieldString + `@options(kind="X" [, apiVersion="Y"])` attribute:
+	// the renderer replaces the text input with a dropdown populated
+	// from the names of resources of the referenced kind. apiVersion
+	// is optional — the UI defaults it to the containing resource's
+	// apiVersion when absent.
+	OptionsSource *OptionsSource `json:"optionsSource,omitempty"`
+
 	// FieldUnsupported: human-readable reason.
 	Reason string `json:"reason,omitempty"`
+}
+
+// OptionsSource declares that a string field's value should be one of
+// the names of resources of a specific kind. Emitted for CUE fields
+// annotated with `@options(kind="X" [, apiVersion="Y"])`. The UI
+// resolves the list at render time and renders a select input.
+type OptionsSource struct {
+	Kind       string `json:"kind"`
+	APIVersion string `json:"apiVersion,omitempty"`
 }
 
 // FromValue walks the given CUE value and produces a Field tree. The
@@ -156,6 +172,9 @@ func walk(v cue.Value, optional bool) Field {
 		}
 		if p, ok := regexPattern(v); ok {
 			f.Pattern = p
+		}
+		if os, ok := optionsSource(v); ok {
+			f.OptionsSource = os
 		}
 	case cue.IntKind:
 		f.Type = FieldInt
@@ -291,6 +310,27 @@ func stringEnum(v cue.Value) ([]string, bool) {
 		out = append(out, s)
 	}
 	return out, true
+}
+
+// optionsSource extracts the `@options(kind="X" [, apiVersion="Y"])`
+// attribute if present on the field. Returns ok=false when the field
+// has no @options attribute or when the required `kind` key is missing
+// — we treat malformed attributes as "not annotated" rather than an
+// error so a typo doesn't fail schema loading.
+func optionsSource(v cue.Value) (*OptionsSource, bool) {
+	attr := v.Attribute("options")
+	if attr.Err() != nil {
+		return nil, false
+	}
+	kind, ok, err := attr.Lookup(0, "kind")
+	if err != nil || !ok || kind == "" {
+		return nil, false
+	}
+	os := &OptionsSource{Kind: kind}
+	if apiV, ok, err := attr.Lookup(0, "apiVersion"); err == nil && ok {
+		os.APIVersion = apiV
+	}
+	return os, true
 }
 
 // regexPattern detects the CUE pattern `=~"regex"` and returns the

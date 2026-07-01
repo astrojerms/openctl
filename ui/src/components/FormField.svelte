@@ -1,8 +1,16 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, getContext } from 'svelte';
   import type { FormField } from '../lib/formSchema';
   import { initialValue } from '../lib/formSchema';
+  import { ensureOptions, optionsStore } from '../lib/options';
   import Self from './FormField.svelte';
+
+  // Set by Edit.svelte so @options(kind="X") without an explicit
+  // apiVersion resolves against the containing resource's provider.
+  // Empty when the context isn't set — cross-provider refs must then
+  // include apiVersion in the CUE attribute.
+  import type { Readable } from 'svelte/store';
+  const apiVersionCtx = getContext<Readable<string> | undefined>('resourceAPIVersionStore');
 
   // The field schema and its current value. Value is `unknown` here
   // because every Field can carry a different shape; downstream the
@@ -111,6 +119,28 @@
     delete m[key];
     set(m);
   }
+  // Resolve @options into a concrete (apiVersion, kind) pair. Returns
+  // null when the field isn't annotated or when kind-only is used
+  // outside a resource context (rare — Edit sets the context on mount).
+  $: containingAV = apiVersionCtx ? $apiVersionCtx : '';
+  $: optionsRef = (() => {
+    const src = field.optionsSource;
+    if (!src) return null;
+    const av = src.apiVersion || containingAV;
+    if (!av) return null;
+    return { apiVersion: av, kind: src.kind };
+  })();
+
+  // Kick off the fetch as soon as we know the ref. Idempotent — the
+  // store dedupes concurrent callers per (apiVersion, kind).
+  $: if (optionsRef) void ensureOptions(optionsRef.apiVersion, optionsRef.kind);
+
+  // Reactive lookup of the current names list. Reads from the store so
+  // that when the fetch resolves, this field re-renders.
+  $: optionsKey = optionsRef ? `${optionsRef.apiVersion}/${optionsRef.kind}` : '';
+  $: optionsNames = optionsKey ? $optionsStore.data[optionsKey] ?? null : null;
+  $: optionsError = optionsKey ? $optionsStore.errors[optionsKey] ?? '' : '';
+
   function addMapRow() {
     const m = (typeof value === 'object' && value && !Array.isArray(value))
       ? { ...(value as Record<string, unknown>) }
@@ -221,6 +251,33 @@
   </div>
 {:else if field.const !== undefined}
   <input class="const" type="text" value={String(field.const)} readonly tabindex="-1" />
+{:else if field.type === 'string' && optionsRef}
+  <select
+    value={value as string ?? ''}
+    disabled={optionsNames === null && !optionsError}
+    on:change={(e) => set((e.currentTarget as HTMLSelectElement).value)}
+  >
+    {#if optionsNames === null && !optionsError}
+      <option value="">Loading {optionsRef.kind}…</option>
+    {:else if optionsError}
+      <option value="">Couldn't load {optionsRef.kind} list</option>
+    {:else if optionsNames?.length === 0}
+      <option value="">No {optionsRef.kind} available</option>
+    {:else}
+      {#if field.optional || value === '' || value === undefined || value === null}
+        <option value="">— pick a {optionsRef.kind} —</option>
+      {/if}
+      {#each optionsNames ?? [] as name}
+        <option value={name}>{name}</option>
+      {/each}
+      <!-- Preserve a value that isn't in the fetched list (e.g. a
+           node that got renamed/removed) so the form doesn't silently
+           drop it on save. -->
+      {#if value && optionsNames && !optionsNames.includes(value as string)}
+        <option value={value as string}>{value} (not found)</option>
+      {/if}
+    {/if}
+  </select>
 {:else if field.type === 'string' && field.enum && field.enum.length > 0}
   <select
     value={value as string ?? ''}

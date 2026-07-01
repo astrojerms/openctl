@@ -34,6 +34,11 @@ export interface FormField {
   enum?: string[];
   // string + regex constraint → HTML pattern attribute.
   pattern?: string;
+  // string + `@options(kind="X" [, apiVersion="Y"])` attribute →
+  // dropdown populated from the names of resources of that kind.
+  // apiVersion is optional; when absent the UI defaults it to the
+  // containing resource's apiVersion.
+  optionsSource?: { kind: string; apiVersion?: string };
   reason?: string;
 }
 
