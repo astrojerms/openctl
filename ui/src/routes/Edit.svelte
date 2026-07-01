@@ -194,6 +194,7 @@
       // Create mode: upgrade the stub seed to the schema's defaults if
       // the user hasn't touched it yet. We compare against the stub —
       // any divergence means typing has begun and we leave it alone.
+      // The name suggestion carries over so the field isn't blank.
       if (isCreate && text === seedManifest(av, k)) {
         const specField = (formSchema.fields ?? []).find((f) => f.name === 'spec')
           ?? { type: 'object' as const };
@@ -201,7 +202,7 @@
         const merged = {
           apiVersion: av,
           kind: k,
-          metadata: { name: '' },
+          metadata: { name: suggestName(k) },
           spec: seededSpec as Record<string, unknown> | undefined,
         };
         text = resourceToYAML(merged as unknown as import('../lib/api').Resource);
@@ -220,8 +221,44 @@
   // initial editor text in create mode before the form schema arrives.
   // Kept tiny on purpose — once loadFormSchema runs we replace it with
   // a richer schema-driven seed (defaults + required fields).
+  //
+  // metadata.name is pre-filled with a kind-derived suggestion (e.g.
+  // "vm-a3b2") so the field isn't blank when the form opens — users
+  // can accept the suggestion or type over it. The suggestion is
+  // stable per-render so the schema-upgrade path can equality-check
+  // against the same seed.
   function seedManifest(av: string, k: string): string {
-    return `apiVersion: ${av}\nkind: ${k}\nmetadata:\n  name: ""\nspec: {}\n`;
+    return `apiVersion: ${av}\nkind: ${k}\nmetadata:\n  name: ${suggestName(k)}\nspec: {}\n`;
+  }
+
+  // Stable per-Edit-instance name suggestion. Generated once on mount
+  // so the seedManifest string doesn't churn on every render (which
+  // would defeat the "did the user edit?" equality check in the
+  // schema-upgrade path).
+  const suggestedName = generateSuggestedName();
+  function suggestName(k: string): string {
+    const prefix = kindPrefix(k);
+    return `${prefix}-${suggestedName}`;
+  }
+
+  function kindPrefix(k: string): string {
+    switch (k) {
+      case 'VirtualMachine': return 'vm';
+      case 'Cluster': return 'cluster';
+      default: return k.toLowerCase().slice(0, 12);
+    }
+  }
+
+  function generateSuggestedName(): string {
+    // Four random lowercase-alphanumeric characters — enough for
+    // uniqueness at homelab scale (26^4 == 456k names per kind) and
+    // short enough to be memorable / disposable if the user overrides.
+    const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    let out = '';
+    for (let i = 0; i < 4; i++) {
+      out += alphabet[Math.floor(Math.random() * alphabet.length)];
+    }
+    return out;
   }
 
   // loadExistingNames fetches the names of resources of this kind so
