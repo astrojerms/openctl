@@ -25,16 +25,22 @@ end-to-end.
 
 ## Suggested next order
 
-Pick from:
-- Full **arch Phase 8** (K3sNode as first-class resource + Cluster
-  .Plan refactor + wire-level refs).
-- **Arch Phase 9** (verifying-trace rebuilder).
-- **Arch Phase 10** (continuous reconcile — auto-remediate drift
-  instead of just logging).
+Pick from (ordered by pitch-strength, not commitment):
+
+- **Templates** — parameterized starters that render to full
+  manifests (proposed feature; see "Future goals"). Would change
+  the product story from "nice YAML editor" to "click one button
+  and get a working homelab VM."
 - **Cluster kubeconfig / VM console** — the piece of runtime
   actions U8.12 parked because it needs a different modality
   (file download / websocket) than the fire-and-forget action RPC.
+- **Opt-in auto-remediation** — small feature that closes the loop
+  on the drift reconciler (see the Phase 9/10 rescope above).
 - **Provider credential editing UI** (from "Future goals").
+- **Full Phase 8** — K3sNode as a first-class resource, Cluster as
+  composer, wire-level `ResourceRef` primitives. Biggest single
+  architectural lift; unblocks refs-cache and cross-resource DAG
+  work.
 - **Two-way GitOps** (from "Future goals").
 
 ---
@@ -84,32 +90,57 @@ Pick from:
 ## Target architecture — docs/target-architecture.html
 
 Speculative roadmap from the BSALC / Crossplane / BuildKit discussion.
-Sketch only; no committed deliverables yet. Phases as written in the
-HTML doc:
+The HTML doc is the long-form design; this section tracks what's been
+delivered and what remains, and notes where the original plan has
+evolved.
 
 - [x] **Arch Phase 7** — Verifying-trace cache (per-resource v1: skip
       provider.Apply when manifest hash matches last success; calls
       provider.Get to populate result and marks op with a "cached"
       label). Parent-hash-aware (children's hashes folded into the
-      parent hash) deferred until composite ops are reified in arch
-      Phase 9-10.
+      parent hash) deferred until composite ops are reified.
 - [~] **Arch Phase 8 (scoped)** — Owner-ref / children plumbing on the
       Resource proto, Registry.ChildrenOf + OwnerRefOf helpers, k3s
       Cluster implements ChildrenLister so Get/List/Watch return its
       VM children, child resources surface their owning Cluster via
       Metadata.OwnerRefs. Unblocks UI U3.3 deferred + U6. The full
       Phase 8 (K3sNode as first-class resource + AgentInstall +
-      Cluster.Plan refactor + wire-level refs) remains deferred — a
-      separate architectural lift to be planned when the UI flushes
-      out demand for it.
-- [ ] **Arch Phase 9** — Typed task IR (frontend/IR/executor split,
-      BuildKit-LLB-shape). Frontends: YAML, CUE, programmatic Go.
-- [ ] **Arch Phase 10** — Full DAG scheduler with parallel execution
-      of independent nodes, content-addressed cache for pure
-      sub-operations (cert bundles, cloud-init, IP allocation).
+      Cluster.Plan refactor + wire-level `ResourceRef` primitives)
+      remains deferred — a separate architectural lift to be planned
+      when the UI flushes out demand for it.
+
+### Rescoped from Phase 9 / 10
+
+Original Phases 9 (verifying-trace rebuilder) and 10 (continuous
+reconcile) don't survive contact with what actually shipped and how
+the tool ended up being used. Reasons:
+
+- Phase 9's *per-resource* verifying cache is Phase 7, already done.
+  The remaining refs_hash extension depends on Phase 7 the design
+  doc (spec-level ResourceRef primitives), which is deferred behind
+  the full Phase 8. Standalone Phase 9 has nothing to bite on.
+- Phase 10's core mechanism — periodic drift check with per-resource
+  state — is U8.3, already done. The delta is auto-remediation on
+  top, which is a focused feature, not a phase.
+
+Replaced with two smaller entries:
+
+- [ ] **Refs-cache extension** — if we ever build spec-level
+      `ResourceRef` (as part of the full Phase 8 lift), extend the
+      verifying-trace cache with a `refs_hash` column so cross-
+      resource dependency changes trigger correct rebuilds. Blocked
+      on full Phase 8 shipping.
+- [ ] **Opt-in auto-remediation** — opt-in per resource via
+      `openctl.io/autoReconcile: true` annotation; the existing
+      periodic reconciler (U8.3) enqueues an Apply of the stored
+      manifest when drift is detected on annotated resources. Adds
+      exponential-backoff throttling on repeated failure and stamps
+      "auto-reconcile" as the op source so the audit trail is honest
+      about why an apply fired. Default off — a homelab user turning
+      a VM off by hand shouldn't fight the controller.
 
 Open design questions captured in the HTML doc; revisit before
-committing to a phase.
+committing to any of these.
 
 ---
 
@@ -363,6 +394,18 @@ Punch list (unstarted, prioritized):
 Cross-cutting items that don't belong to a single track. Promote into a
 phase plan when ready to commit.
 
+- [ ] **Templates** — parameterized starters. A `#Template` CUE
+      definition declares a small set of user-fillable parameters
+      and unifies with a real resource kind (VirtualMachine,
+      Cluster) to produce the full manifest. Users pick a template
+      ("Ubuntu server VM", "Small k3s cluster"), fill in 3-6
+      fields, hit Create; the template's defaults handle the rest
+      (cloud image URL, scsi bus setup, cloud-init user, etc). Real
+      product story: "AWS-console-for-homelab" needs both the
+      expert editor we have AND click-once starters. Ships as new
+      `ListTemplates` / `GetTemplate` / `RenderTemplate` RPCs, a
+      sidebar section in the UI, and 2-3 embedded starters. See
+      design sketch in chat history for MVP details.
 - [ ] **Two-way GitOps** — file edits in the manifest dir trigger
       reconciler reapply. Needs conflict resolution between UI edits
       and file edits, `inotify`/`fsnotify` watch, and a "GitOps mode"
