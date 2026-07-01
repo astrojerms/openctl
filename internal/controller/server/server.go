@@ -129,6 +129,7 @@ func New(opts Options) (*Server, error) {
 		tmpls = templates.NewRegistry()
 	}
 	apiv1.RegisterTemplateServiceServer(g, newTemplateHandler(tmpls))
+	apiv1.RegisterConfigServiceServer(g, newConfigHandler())
 
 	reflection.Register(g)
 

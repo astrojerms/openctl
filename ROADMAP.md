@@ -416,9 +416,13 @@ phase plan when ready to commit.
 - [ ] **Multi-user auth** — OIDC integration, named sessions, RBAC on
       `ResourceService`. Cookie/session layer from U1 is the
       foundation.
-- [ ] **Provider credential editing** — surface
-      `~/.openctl/config.yaml` providers in the UI with secret-write
-      affordances. Currently read-only.
+- [x] **Provider credential editing** — new ConfigService RPCs
+      (ListProviders / UpsertProvider / DeleteProvider) that read/
+      write ~/.openctl/config.yaml. UI Providers page with add /
+      edit / delete forms. Scope covers the common one-context/one-
+      credential-per-provider case; secrets never leave the server
+      (has_secret bool + edit-with-blank-preserves semantics).
+      Multi-context configs still editable by hand.
 - [ ] **Cancel of `running` ops** — cooperative cancellation hooks in
       proxmox and k3s providers. U7 only does `pending` cancel.
 - [ ] **Client-side CUE WASM validation** — faster editor diagnostics

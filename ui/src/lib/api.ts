@@ -293,6 +293,33 @@ export interface RenderTemplateResponse {
   resource: Resource;
 }
 
+export interface ProviderEntry {
+  name: string;
+  endpoint?: string;
+  tokenId?: string;
+  hasSecret?: boolean;
+  usesSecretFile?: boolean;
+}
+
+export interface ListProvidersResponse {
+  providers?: ProviderEntry[];
+}
+
+export interface UpsertProviderRequest {
+  name: string;
+  endpoint: string;
+  tokenId: string;
+  tokenSecret?: string;
+}
+
+export const providersApi = {
+  list: () => api.get<ListProvidersResponse>('/v1/config/providers'),
+  upsert: (req: UpsertProviderRequest) =>
+    api.post<{ provider: ProviderEntry }>('/v1/config/providers', req),
+  delete: (name: string) =>
+    api.delete<Record<string, never>>('/v1/config/providers/' + encodeURIComponent(name)),
+};
+
 export const templates = {
   list: () => api.get<ListTemplatesResponse>('/v1/templates'),
   get: (name: string) =>
