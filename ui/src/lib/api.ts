@@ -237,6 +237,11 @@ export interface InvokeActionResponse {
   message?: string;
 }
 
+export interface DeleteResourceResponse {
+  operationId?: string;
+  message?: string;
+}
+
 export const resources = {
   list: (apiVersion: string, kind: string) =>
     api.post<ListResourcesResponse>('/v1/resources:list', { apiVersion, kind }),
@@ -251,6 +256,10 @@ export const resources = {
   invokeAction: (apiVersion: string, kind: string, resourceName: string, action: string) =>
     api.post<InvokeActionResponse>('/v1/resources:invokeAction', {
       apiVersion, kind, resourceName, action,
+    }),
+  delete: (apiVersion: string, kind: string, name: string) =>
+    api.post<DeleteResourceResponse>('/v1/resources:delete', {
+      apiVersion, kind, name,
     }),
 };
 
