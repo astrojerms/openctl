@@ -95,6 +95,54 @@
   onDestroy(() => {
     activeController?.abort();
   });
+
+  // U8.16: list controls — free-text filter + column sort. Applied
+  // client-side over the live `rows` snapshot, so the Watch stream
+  // still populates and the view stays consistent.
+  let filter = '';
+  type SortKey = 'name' | 'state' | 'drift';
+  type SortDir = 'asc' | 'desc';
+  let sortKey: SortKey = 'name';
+  let sortDir: SortDir = 'asc';
+
+  function toggleSort(k: SortKey) {
+    if (sortKey === k) {
+      sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      sortKey = k;
+      sortDir = 'asc';
+    }
+  }
+
+  function sortIndicator(k: SortKey): string {
+    if (sortKey !== k) return '';
+    return sortDir === 'asc' ? ' ▲' : ' ▼';
+  }
+
+  // Reactive filtered+sorted view. Rebuilds on any of {rows, filter,
+  // sortKey, sortDir} changing — cheap for the homelab-scale lists
+  // this UI is aimed at.
+  $: visibleRows = (() => {
+    const q = filter.trim().toLowerCase();
+    const matches = q === ''
+      ? rows.slice()
+      : rows.filter((r) => r.metadata.name.toLowerCase().includes(q));
+    const dir = sortDir === 'asc' ? 1 : -1;
+    matches.sort((a, b) => {
+      switch (sortKey) {
+        case 'name':
+          return a.metadata.name.localeCompare(b.metadata.name) * dir;
+        case 'state': {
+          const sa = statusBadge(a.status).label;
+          const sb2 = statusBadge(b.status).label;
+          return sa.localeCompare(sb2) * dir;
+        }
+        case 'drift':
+          return ((a.drift?.length ?? 0) - (b.drift?.length ?? 0)) * dir;
+      }
+    });
+    return matches;
+  })();
 </script>
 
 <section>
@@ -115,16 +163,42 @@
     <p class="muted">No resources of this kind yet — click <strong>+ New {kind}</strong> above,
       or apply one via CLI: <code>openctl ctl apply -f manifest.yaml</code></p>
   {:else}
+    <div class="list-controls">
+      <input
+        type="search"
+        placeholder="Filter by name…"
+        bind:value={filter}
+        class="filter-input"
+      />
+      {#if filter}
+        <span class="muted small">{visibleRows.length} of {rows.length}</span>
+      {/if}
+    </div>
+    {#if visibleRows.length === 0}
+      <p class="muted">No matches for "{filter}".</p>
+    {:else}
     <table>
       <thead>
         <tr>
-          <th>Name</th>
-          <th>State</th>
-          <th>Drift</th>
+          <th>
+            <button type="button" class="sort-th" on:click={() => toggleSort('name')}>
+              Name{sortIndicator('name')}
+            </button>
+          </th>
+          <th>
+            <button type="button" class="sort-th" on:click={() => toggleSort('state')}>
+              State{sortIndicator('state')}
+            </button>
+          </th>
+          <th>
+            <button type="button" class="sort-th" on:click={() => toggleSort('drift')}>
+              Drift{sortIndicator('drift')}
+            </button>
+          </th>
         </tr>
       </thead>
       <tbody>
-        {#each rows as r (r.metadata.name)}
+        {#each visibleRows as r (r.metadata.name)}
           {@const sb = statusBadge(r.status)}
           {@const driftN = r.drift?.length ?? 0}
           <tr>
@@ -149,6 +223,7 @@
         {/each}
       </tbody>
     </table>
+    {/if}
   {/if}
 </section>
 
@@ -192,6 +267,46 @@
   }
   .new-btn:hover {
     background: #3a7eda;
+  }
+  .list-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+  }
+  .filter-input {
+    flex: 0 0 20rem;
+    padding: 0.4em 0.7em;
+    background: rgba(0, 0, 0, 0.2);
+    color: inherit;
+    border: 1px solid rgba(127, 127, 127, 0.3);
+    border-radius: 6px;
+    font-size: 0.85rem;
+  }
+  @media (prefers-color-scheme: light) {
+    .filter-input {
+      background: #fff;
+      border-color: #ccc;
+    }
+  }
+  .small {
+    font-size: 0.8rem;
+  }
+  .sort-th {
+    background: transparent;
+    border: none;
+    color: inherit;
+    font: inherit;
+    padding: 0;
+    cursor: pointer;
+    font-weight: 600;
+    color: #888;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .sort-th:hover {
+    color: #ccc;
   }
   .muted {
     color: #888;

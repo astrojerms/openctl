@@ -323,8 +323,10 @@ Punch list (unstarted, prioritized):
       on a Svelte context; FormField adds a red left-border rail
       and inline message to the offending row. Bottom-panel error
       list stays as a fallback for path-less errors.
-- [ ] **U8.16** — List sort/filter/search. Fine at 5 rows, painful
-      at 50.
+- [x] **U8.16** — List sort/filter/search. Free-text filter box +
+      click-to-sort column headers (name / state / drift). Applied
+      client-side over the live Watch snapshot so the stream keeps
+      populating.
 - [ ] **U8.17** — Live progress on the detail page. Ops drawer tails
       globally; detail doesn't inline the current op for that
       resource.
