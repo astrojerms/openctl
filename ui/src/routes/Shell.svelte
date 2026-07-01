@@ -19,6 +19,7 @@
   import Edit from './Edit.svelte';
   import Templates from './Templates.svelte';
   import TemplateWizard from './TemplateWizard.svelte';
+  import Providers from './Providers.svelte';
 
   export let me: WhoAmIResponse;
 
@@ -87,6 +88,11 @@
       class:active={$route.name === 'templates' || $route.name === 'template'}
       href={routeHref({ name: 'templates' })}
     >Templates</a>
+    <a
+      class="sidebar-link"
+      class:active={$route.name === 'providers'}
+      href={routeHref({ name: 'providers' })}
+    >Providers</a>
     {#if $catalogueError}
       <p class="err">{$catalogueError}</p>
     {/if}
@@ -100,6 +106,8 @@
       <Templates />
     {:else if $route.name === 'template'}
       <TemplateWizard template={$route.template} />
+    {:else if $route.name === 'providers'}
+      <Providers />
     {:else if $route.name === 'list'}
       {@const entry = byKey.get(`${$route.apiVersion}/${$route.kind}`)}
       <ResourceList

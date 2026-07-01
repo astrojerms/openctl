@@ -314,6 +314,73 @@ message WatchEvent {
   Resource resource = 2;
 }
 
+// ConfigService reads and writes provider entries in
+// ~/.openctl/config.yaml. Scope: the common per-provider case (one
+// endpoint + one credential). Multi-context / secret-file editing is
+// deferred to a future extension.
+service ConfigService {
+  // ListProviders returns every configured provider with its default
+  // endpoint + tokenId. Token secrets are NEVER returned — the response
+  // reports has_secret and a bool for whether a secretFile is in use.
+  rpc ListProviders(ListProvidersRequest) returns (ListProvidersResponse) {
+    option (google.api.http) = { get: "/v1/config/providers" };
+  }
+
+  // UpsertProvider creates or updates a provider entry. The single-
+  // context + single-credential shape covers the common case. When
+  // token_secret is empty, the existing secret is preserved (letting
+  // the UI edit endpoint/tokenId without re-typing the secret).
+  rpc UpsertProvider(UpsertProviderRequest) returns (UpsertProviderResponse) {
+    option (google.api.http) = { post: "/v1/config/providers" body: "*" };
+  }
+
+  // DeleteProvider removes a provider entry entirely. Idempotent —
+  // deleting a missing provider succeeds.
+  rpc DeleteProvider(DeleteProviderRequest) returns (DeleteProviderResponse) {
+    option (google.api.http) = { delete: "/v1/config/providers/{name}" };
+  }
+}
+
+message ListProvidersRequest {}
+
+message ListProvidersResponse {
+  repeated ProviderEntry providers = 1;
+}
+
+message ProviderEntry {
+  string name = 1;
+  // Endpoint of the default context (e.g. Proxmox URL).
+  string endpoint = 2;
+  // TokenID of the default credential.
+  string token_id = 3;
+  // True when a token secret is on file (either inline or via
+  // tokenSecretFile). Never leaks the secret itself.
+  bool has_secret = 4;
+  // True when the secret is stored in a file (tokenSecretFile) rather
+  // than inline. Purely informational for the UI.
+  bool uses_secret_file = 5;
+}
+
+message UpsertProviderRequest {
+  string name = 1;
+  string endpoint = 2;
+  string token_id = 3;
+  // Empty preserves the existing secret. Non-empty replaces it inline
+  // (tokenSecret). Writing to tokenSecretFile is out of scope for the
+  // MVP — users who want file-backed secrets edit config.yaml directly.
+  string token_secret = 4;
+}
+
+message UpsertProviderResponse {
+  ProviderEntry provider = 1;
+}
+
+message DeleteProviderRequest {
+  string name = 1;
+}
+
+message DeleteProviderResponse {}
+
 // TemplateService exposes parameterized starters — templates declare
 // a small set of user-fillable parameters and render into a full
 // Resource manifest. UI Phase U8+: sidebar "Templates" section, wizard

@@ -211,3 +211,39 @@ func readSecretFile(path string) (string, error) {
 
 	return strings.TrimSpace(string(data)), nil
 }
+
+// Save writes the current in-memory config to the default path, atomically
+// via temp+rename so a crashing writer never leaves a truncated file. Mode
+// 0600 because provider credentials live here.
+func (c *Config) Save() error {
+	paths, err := GetPaths()
+	if err != nil {
+		return err
+	}
+	return c.SaveToFile(paths.ConfigFile)
+}
+
+// SaveToFile is Save with an explicit target — useful for tests that
+// exercise the round-trip against a temp file.
+func (c *Config) SaveToFile(path string) error {
+	data, err := yaml.Marshal(c)
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	if err := os.MkdirAll(dirOf(path), 0o700); err != nil {
+		return fmt.Errorf("mkdir config dir: %w", err)
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	return os.Rename(tmp, path)
+}
+
+func dirOf(p string) string {
+	i := strings.LastIndex(p, "/")
+	if i < 0 {
+		return "."
+	}
+	return p[:i]
+}

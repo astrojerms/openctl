@@ -573,6 +573,212 @@ var ResourceService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	ConfigService_ListProviders_FullMethodName  = "/openctl.v1.ConfigService/ListProviders"
+	ConfigService_UpsertProvider_FullMethodName = "/openctl.v1.ConfigService/UpsertProvider"
+	ConfigService_DeleteProvider_FullMethodName = "/openctl.v1.ConfigService/DeleteProvider"
+)
+
+// ConfigServiceClient is the client API for ConfigService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// ConfigService reads and writes provider entries in
+// ~/.openctl/config.yaml. Scope: the common per-provider case (one
+// endpoint + one credential). Multi-context / secret-file editing is
+// deferred to a future extension.
+type ConfigServiceClient interface {
+	// ListProviders returns every configured provider with its default
+	// endpoint + tokenId. Token secrets are NEVER returned — the response
+	// reports has_secret and a bool for whether a secretFile is in use.
+	ListProviders(ctx context.Context, in *ListProvidersRequest, opts ...grpc.CallOption) (*ListProvidersResponse, error)
+	// UpsertProvider creates or updates a provider entry. The single-
+	// context + single-credential shape covers the common case. When
+	// token_secret is empty, the existing secret is preserved (letting
+	// the UI edit endpoint/tokenId without re-typing the secret).
+	UpsertProvider(ctx context.Context, in *UpsertProviderRequest, opts ...grpc.CallOption) (*UpsertProviderResponse, error)
+	// DeleteProvider removes a provider entry entirely. Idempotent —
+	// deleting a missing provider succeeds.
+	DeleteProvider(ctx context.Context, in *DeleteProviderRequest, opts ...grpc.CallOption) (*DeleteProviderResponse, error)
+}
+
+type configServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewConfigServiceClient(cc grpc.ClientConnInterface) ConfigServiceClient {
+	return &configServiceClient{cc}
+}
+
+func (c *configServiceClient) ListProviders(ctx context.Context, in *ListProvidersRequest, opts ...grpc.CallOption) (*ListProvidersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListProvidersResponse)
+	err := c.cc.Invoke(ctx, ConfigService_ListProviders_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *configServiceClient) UpsertProvider(ctx context.Context, in *UpsertProviderRequest, opts ...grpc.CallOption) (*UpsertProviderResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpsertProviderResponse)
+	err := c.cc.Invoke(ctx, ConfigService_UpsertProvider_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *configServiceClient) DeleteProvider(ctx context.Context, in *DeleteProviderRequest, opts ...grpc.CallOption) (*DeleteProviderResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteProviderResponse)
+	err := c.cc.Invoke(ctx, ConfigService_DeleteProvider_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ConfigServiceServer is the server API for ConfigService service.
+// All implementations must embed UnimplementedConfigServiceServer
+// for forward compatibility.
+//
+// ConfigService reads and writes provider entries in
+// ~/.openctl/config.yaml. Scope: the common per-provider case (one
+// endpoint + one credential). Multi-context / secret-file editing is
+// deferred to a future extension.
+type ConfigServiceServer interface {
+	// ListProviders returns every configured provider with its default
+	// endpoint + tokenId. Token secrets are NEVER returned — the response
+	// reports has_secret and a bool for whether a secretFile is in use.
+	ListProviders(context.Context, *ListProvidersRequest) (*ListProvidersResponse, error)
+	// UpsertProvider creates or updates a provider entry. The single-
+	// context + single-credential shape covers the common case. When
+	// token_secret is empty, the existing secret is preserved (letting
+	// the UI edit endpoint/tokenId without re-typing the secret).
+	UpsertProvider(context.Context, *UpsertProviderRequest) (*UpsertProviderResponse, error)
+	// DeleteProvider removes a provider entry entirely. Idempotent —
+	// deleting a missing provider succeeds.
+	DeleteProvider(context.Context, *DeleteProviderRequest) (*DeleteProviderResponse, error)
+	mustEmbedUnimplementedConfigServiceServer()
+}
+
+// UnimplementedConfigServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedConfigServiceServer struct{}
+
+func (UnimplementedConfigServiceServer) ListProviders(context.Context, *ListProvidersRequest) (*ListProvidersResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListProviders not implemented")
+}
+func (UnimplementedConfigServiceServer) UpsertProvider(context.Context, *UpsertProviderRequest) (*UpsertProviderResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpsertProvider not implemented")
+}
+func (UnimplementedConfigServiceServer) DeleteProvider(context.Context, *DeleteProviderRequest) (*DeleteProviderResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteProvider not implemented")
+}
+func (UnimplementedConfigServiceServer) mustEmbedUnimplementedConfigServiceServer() {}
+func (UnimplementedConfigServiceServer) testEmbeddedByValue()                       {}
+
+// UnsafeConfigServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to ConfigServiceServer will
+// result in compilation errors.
+type UnsafeConfigServiceServer interface {
+	mustEmbedUnimplementedConfigServiceServer()
+}
+
+func RegisterConfigServiceServer(s grpc.ServiceRegistrar, srv ConfigServiceServer) {
+	// If the following call panics, it indicates UnimplementedConfigServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&ConfigService_ServiceDesc, srv)
+}
+
+func _ConfigService_ListProviders_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListProvidersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConfigServiceServer).ListProviders(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConfigService_ListProviders_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConfigServiceServer).ListProviders(ctx, req.(*ListProvidersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ConfigService_UpsertProvider_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpsertProviderRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConfigServiceServer).UpsertProvider(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConfigService_UpsertProvider_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConfigServiceServer).UpsertProvider(ctx, req.(*UpsertProviderRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ConfigService_DeleteProvider_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteProviderRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConfigServiceServer).DeleteProvider(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConfigService_DeleteProvider_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConfigServiceServer).DeleteProvider(ctx, req.(*DeleteProviderRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// ConfigService_ServiceDesc is the grpc.ServiceDesc for ConfigService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var ConfigService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "openctl.v1.ConfigService",
+	HandlerType: (*ConfigServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ListProviders",
+			Handler:    _ConfigService_ListProviders_Handler,
+		},
+		{
+			MethodName: "UpsertProvider",
+			Handler:    _ConfigService_UpsertProvider_Handler,
+		},
+		{
+			MethodName: "DeleteProvider",
+			Handler:    _ConfigService_DeleteProvider_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "api.proto",
+}
+
+const (
 	TemplateService_ListTemplates_FullMethodName  = "/openctl.v1.TemplateService/ListTemplates"
 	TemplateService_GetTemplate_FullMethodName    = "/openctl.v1.TemplateService/GetTemplate"
 	TemplateService_RenderTemplate_FullMethodName = "/openctl.v1.TemplateService/RenderTemplate"
