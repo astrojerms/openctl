@@ -1,7 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import type { FormField } from '../lib/formSchema';
-  import { initialValue, isEmpty } from '../lib/formSchema';
+  import { initialValue } from '../lib/formSchema';
   import Self from './FormField.svelte';
 
   // The field schema and its current value. Value is `unknown` here
@@ -39,13 +39,19 @@
   }
 
   // isCollapsible answers: should this child render as a "+ add"
-  // button instead of the full sub-form? Yes when it's optional, the
-  // type is composite (the cost of rendering is high and the user
-  // probably hasn't decided to use it), AND no value is set yet.
+  // button instead of the full sub-form? Yes when the field is optional,
+  // composite, AND the user hasn't opened it yet.
+  //
+  // "Unset" here is strictly undefined/null — NOT empty. An empty object
+  // ({}) or array ([]) means the user clicked "+ <name>" and is actively
+  // working on it; collapsing it back would trap them in a loop where
+  // the add button just re-fires setObjectKey({}) with no visible effect.
+  // Composite fields with no required children (like cloudInit) seed to
+  // {} on open, which is exactly the case that would loop.
   function isCollapsible(child: FormField, childValue: unknown): boolean {
     if (!child.optional) return false;
     if (child.type !== 'object' && child.type !== 'array' && child.type !== 'map') return false;
-    return isEmpty(childValue);
+    return childValue === undefined || childValue === null;
   }
 
   function setArrayIndex(idx: number, v: unknown) {
