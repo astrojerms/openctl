@@ -327,9 +327,11 @@ Punch list (unstarted, prioritized):
       click-to-sort column headers (name / state / drift). Applied
       client-side over the live Watch snapshot so the stream keeps
       populating.
-- [ ] **U8.17** — Live progress on the detail page. Ops drawer tails
-      globally; detail doesn't inline the current op for that
-      resource.
+- [x] **U8.17** — Live progress on the detail page. Subscribes to
+      the shared ops store and shows an inline banner for any
+      pending/running op matching this resource; on terminal
+      transition (op moves out of pending/running) auto-refetches
+      so the observed state catches up promptly.
 - [ ] **U8.18** — Better create defaults. `metadata.name` placeholder
       like `vm-&lt;random&gt;` beats an empty required field.
 - [ ] **U8.19** — Copy/download YAML on detail.
