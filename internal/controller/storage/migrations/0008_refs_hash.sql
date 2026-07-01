@@ -1,0 +1,16 @@
+-- Phase 8 step 5: refs_hash captures the hash of the *resolved* $ref
+-- values that fed the last successful apply. Complements input_hash
+-- (which now hashes the RAW manifest — the intent — preserving $ref
+-- markers instead of the values they resolved to).
+--
+-- Cache hit requires BOTH input_hash unchanged (intent hasn't drifted)
+-- AND refs_hash unchanged (no upstream ref target has updated).
+-- Without this, changing a VM's IP (which propagates through a
+-- K3sNode's vmRef) would silently continue to serve a stale cache
+-- because the raw manifest is byte-identical.
+--
+-- Nullable for backward compatibility with rows written before this
+-- migration: rows with NULL refs_hash always miss the cache (safe:
+-- one extra re-apply per pre-existing resource, then normal caching
+-- resumes).
+ALTER TABLE applied_manifests ADD COLUMN refs_hash TEXT;

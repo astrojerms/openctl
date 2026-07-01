@@ -105,7 +105,9 @@ evolved.
       VM children, child resources surface their owning Cluster via
       Metadata.OwnerRefs. Unblocks UI U3.3 deferred + U6.
 - [~] **Arch Phase 8 (full)** — genuinely multi-session
-      architectural lift. Step 1 shipped; 2–5 remain.
+      architectural lift. Steps 1–5 shipped as declarative +
+      cache primitives; the remaining piece is a dispatcher
+      refactor that consumes Cluster.Plan output as a DAG.
       1. [x] **ResourceRef as spec-level primitive.** CUE `#Ref`
          helper in base.cue authors `{$ref: {apiVersion, kind,
          name, field?}}` markers. Server-side resolver
@@ -133,25 +135,46 @@ evolved.
          tests). Ships standalone-useful — users can author
          K3sNode manifests directly without going through the
          composite Cluster orchestration.
-      3. [ ] **AgentInstall as sibling.** Analogous — one
-         openctl-k3s-agent install per node, Ref'd to the VM.
-         Not yet split out; the existing Cluster provider still
-         handles agent installs inline.
-      4. [ ] **Cluster.Plan refactor.** Biggest remaining piece.
-         Cluster provider stops installing k3s directly;
-         Plan(manifest) returns K3sNode + AgentInstall + VM child
-         manifests with Refs wiring them together. The dispatcher
-         runs the resulting DAG via existing parent_id ops — this
-         is what makes scale-up "just add nodes to the manifest."
-         Requires a coordinated refactor of ~600 lines in the
-         Cluster provider and matching test overhaul; deferred to
-         a focused day+.
-      5. [ ] **Verifying-cache refs_hash extension.** Once specs
-         carry Refs (they do — step 1) AND providers consume
-         resolved Refs across a stable relationship (step 4),
-         extend the Phase 7 verifying-trace cache with refs_hash
-         so cross-resource dependency changes trigger rebuilds.
-         Depends on step 4 shipping first.
+      3. [x] **AgentInstall as sibling.** One openctl-k3s-agent
+         install per node as a first-class resource. `spec.vmRef`
+         (`#Ref` to a VM) + `spec.clusterName` (names the existing
+         k3s Cluster whose CA bundle backs this install) + `spec.ssh`.
+         Provider loads the on-disk cert bundle from
+         `~/.openctl/state/k3s/<cluster>/`, mints a server cert for
+         the node if missing, SSH-installs the openctl-k3s-agent
+         binary via the existing bootstrap.Installer, persists state
+         at `~/.openctl/state/k3s-agent-installs/<name>.yaml`. Delete
+         best-effort uninstalls the service + drops config. Runs
+         alongside the Cluster's inline agent install today — a
+         future step will wire the Cluster's Plan output through
+         Apply, at which point the inline install goes away.
+      4. [x] **Cluster.Plan capability** *(scoped)*. Introduces
+         `providers.Planner` interface; k3s Cluster implements
+         `Plan()` which returns the VirtualMachine + K3sNode +
+         AgentInstall child manifests a Cluster expands to, with
+         `$ref` pointers linking them (K3sNode joinFrom pointing at
+         the first CP's status.nodeToken, AgentInstall vmRef pointing
+         at its VM, owner labels for attribution). 9 tests cover
+         single-CP, HA 3-CP, worker pools, static-IPs flow-through,
+         version + extraArgs propagation. **Dispatcher is not wired
+         to consume Plan output yet** — Cluster.Apply remains the
+         operative path. A future refactor swaps Apply for a DAG
+         over Plan children; that swap is the biggest remaining
+         piece and needs a real test cluster to validate against.
+      5. [x] **Verifying-cache refs_hash extension.** Two-dimensional
+         cache: `input_hash` (raw manifest — user intent) plus
+         `refs_hash` (resolved $ref values — upstream state).
+         Migration 0008 adds the column. Dispatcher now preserves
+         the raw manifest through resolve/apply (fixing a latent bug
+         where the stored `spec_json` held resolved values, losing
+         `$ref` markers), computes both hashes, and requires BOTH to
+         match for a cache hit. Otherwise the raw manifest looks
+         identical while an upstream VM's IP silently changes, and
+         we'd serve a stale cache. Store + DiskMirror gained
+         `SaveWithRefsHash` / `LoadHashes`; old `Save` / `LoadHash`
+         still work (they set/read empty refs_hash, which safely
+         forces a miss). Test coverage: unchanged target → cache
+         hit; changed target with same raw manifest → cache miss.
 
 ### Rescoped from Phase 9 / 10
 
@@ -169,11 +192,9 @@ the tool ended up being used. Reasons:
 
 Replaced with two smaller entries:
 
-- [ ] **Refs-cache extension** — if we ever build spec-level
-      `ResourceRef` (as part of the full Phase 8 lift), extend the
-      verifying-trace cache with a `refs_hash` column so cross-
-      resource dependency changes trigger correct rebuilds. Blocked
-      on full Phase 8 shipping.
+- [x] **Refs-cache extension** — Shipped as full-Phase-8 step 5;
+      see the checklist above. Two-dimensional verifying-trace
+      cache (input_hash + refs_hash), migration 0008.
 - [x] **Opt-in auto-remediation** — opt-in per resource via
       `openctl.io/autoReconcile: true` annotation. When drift is
       detected on an annotated resource, the reconciler enqueues an

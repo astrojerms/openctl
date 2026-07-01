@@ -97,6 +97,45 @@ const (
 	GateIKnowThisBreaks  = "i_know_this_breaks_the_cluster"
 )
 
+// Planner is an optional provider capability for composite resources that
+// want to expand into a set of child manifests instead of running an
+// imperative Apply. Phase 8 step 4: introduces the interface without
+// wiring it into the dispatcher — the k3s Cluster provider implements it
+// so a future dispatcher pass (or the `openctl plan` CLI) can materialize
+// the plan for a Cluster manifest.
+//
+// The returned manifests are self-contained: they carry $ref pointers to
+// each other (a K3sNode's joinFrom pointing at the first-server K3sNode,
+// an AgentInstall's vmRef pointing at its VirtualMachine, etc). A future
+// DAG-driven Apply will topologically sort them and run each through the
+// normal per-kind provider.Apply path.
+//
+// Providers that don't compose don't need to implement this. Cluster
+// providers that DO implement it MUST keep Apply working during the
+// transition — dispatcher wiring is opt-in and off by default in this
+// step.
+type Planner interface {
+	Plan(ctx context.Context, manifest *protocol.Resource) (*PlanResult, error)
+}
+
+// PlanResult is a list of child manifests a composite resource expands
+// into. Order isn't semantic; consumers should sort by $ref dependency.
+// Attribution / labels: each child manifest's metadata.labels carries
+// `openctl.io/owner-kind: <parent-kind>` and `openctl.io/owner-name:
+// <parent-name>` so the ownership check + children lister can find them
+// without a separate mapping.
+type PlanResult struct {
+	Children []*protocol.Resource
+}
+
+// Owner label keys the Planner uses to attribute plan children back to
+// their parent. Shared as constants so downstream consumers (dispatcher,
+// UI) agree on the key spelling.
+const (
+	LabelOwnerKind = "openctl.io/owner-kind"
+	LabelOwnerName = "openctl.io/owner-name"
+)
+
 // Actioner is an optional provider capability for runtime actions on
 // existing resources — start/stop/reboot for VMs, get-kubeconfig for
 // clusters, console URL for VMs, etc. Distinct from Apply/Delete
