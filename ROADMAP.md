@@ -394,18 +394,19 @@ Punch list (unstarted, prioritized):
 Cross-cutting items that don't belong to a single track. Promote into a
 phase plan when ready to commit.
 
-- [ ] **Templates** — parameterized starters. A `#Template` CUE
-      definition declares a small set of user-fillable parameters
-      and unifies with a real resource kind (VirtualMachine,
-      Cluster) to produce the full manifest. Users pick a template
-      ("Ubuntu server VM", "Small k3s cluster"), fill in 3-6
-      fields, hit Create; the template's defaults handle the rest
-      (cloud image URL, scsi bus setup, cloud-init user, etc). Real
-      product story: "AWS-console-for-homelab" needs both the
-      expert editor we have AND click-once starters. Ships as new
-      `ListTemplates` / `GetTemplate` / `RenderTemplate` RPCs, a
-      sidebar section in the UI, and 2-3 embedded starters. See
-      design sketch in chat history for MVP details.
+- [x] **Templates (MVP)** — parameterized starters. Go-defined
+      templates compiled in (deferred a CUE-templating engine for
+      user-authored templates as a future extension). New
+      `TemplateService` with ListTemplates / GetTemplate /
+      RenderTemplate RPCs. UI sidebar "Templates" link → picker
+      grid → wizard form with live rendered-manifest preview +
+      DryRunApply, submits through the normal Apply pipeline and
+      navigates to the new resource's detail page.
+      Two starters shipped: `ubuntu-server-vm` (Ubuntu 22.04 on
+      Proxmox with cloud-init, QEMU agent, cloud image URL baked
+      in) and `small-k3s-cluster` (k3s with static-IP networking).
+      Each created resource is stamped with the
+      `openctl.io/template: <name>` annotation for provenance.
 - [ ] **Two-way GitOps** — file edits in the manifest dir trigger
       reconciler reapply. Needs conflict resolution between UI edits
       and file edits, `inotify`/`fsnotify` watch, and a "GitOps mode"

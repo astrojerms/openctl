@@ -21,6 +21,8 @@ import { writable, type Writable } from 'svelte/store';
 
 export type Route =
   | { name: 'home' }
+  | { name: 'templates' }
+  | { name: 'template'; template: string }
   | { name: 'list'; apiVersion: string; kind: string }
   | { name: 'create'; apiVersion: string; kind: string }
   | { name: 'detail'; apiVersion: string; kind: string; resourceName: string }
@@ -31,6 +33,8 @@ function parse(hash: string): Route {
   if (!path) return { name: 'home' };
 
   const parts = path.split('/').map(decodeURIComponent);
+  if (parts[0] === 't' && parts.length === 1) return { name: 'templates' };
+  if (parts[0] === 't' && parts.length === 2) return { name: 'template', template: parts[1] };
   // ['k', '<encoded-apiVersion-half-1>', '<encoded-apiVersion-half-2>', '<kind>', '<name>?', 'edit'?]
   if (parts[0] === 'k' && parts.length >= 4) {
     // apiVersion is encoded as two segments because it has a single slash.
@@ -50,6 +54,8 @@ function parse(hash: string): Route {
 
 export function routeHref(route: Route): string {
   if (route.name === 'home') return '#/';
+  if (route.name === 'templates') return '#/t';
+  if (route.name === 'template') return '#/t/' + encodeURIComponent(route.template);
   const [g, v] = route.apiVersion.split('/');
   const base = `#/k/${encodeURIComponent(g)}/${encodeURIComponent(v)}/${encodeURIComponent(route.kind)}`;
   if (route.name === 'list') return base;

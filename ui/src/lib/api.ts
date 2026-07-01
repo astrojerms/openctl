@@ -254,6 +254,49 @@ export interface DeleteResourceResponse {
   message?: string;
 }
 
+export interface TemplateSummary {
+  name: string;
+  displayName: string;
+  description: string;
+  apiVersion: string;
+  kind: string;
+}
+
+export interface TemplateParameter {
+  name: string;
+  type: 'string' | 'int' | 'bool';
+  description?: string;
+  required?: boolean;
+  // JSON-encoded default value; parse before use.
+  defaultJson?: string;
+  enum?: string[];
+  optionsKind?: string;
+}
+
+export interface ListTemplatesResponse {
+  templates?: TemplateSummary[];
+}
+
+export interface GetTemplateResponse {
+  summary: TemplateSummary;
+  parameters?: TemplateParameter[];
+}
+
+export interface RenderTemplateResponse {
+  resource: Resource;
+}
+
+export const templates = {
+  list: () => api.get<ListTemplatesResponse>('/v1/templates'),
+  get: (name: string) =>
+    api.get<GetTemplateResponse>('/v1/templates/' + encodeURIComponent(name)),
+  render: (name: string, params: Record<string, unknown>) =>
+    api.post<RenderTemplateResponse>(
+      '/v1/templates/' + encodeURIComponent(name) + ':render',
+      { name, params },
+    ),
+};
+
 export const resources = {
   list: (apiVersion: string, kind: string) =>
     api.post<ListResourcesResponse>('/v1/resources:list', { apiVersion, kind }),

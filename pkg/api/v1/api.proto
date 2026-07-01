@@ -306,6 +306,76 @@ message WatchEvent {
   Resource resource = 2;
 }
 
+// TemplateService exposes parameterized starters — templates declare
+// a small set of user-fillable parameters and render into a full
+// Resource manifest. UI Phase U8+: sidebar "Templates" section, wizard
+// form, submit through the normal Apply pipeline.
+service TemplateService {
+  rpc ListTemplates(ListTemplatesRequest) returns (ListTemplatesResponse) {
+    option (google.api.http) = { get: "/v1/templates" };
+  }
+  rpc GetTemplate(GetTemplateRequest) returns (GetTemplateResponse) {
+    option (google.api.http) = { get: "/v1/templates/{name}" };
+  }
+  rpc RenderTemplate(RenderTemplateRequest) returns (RenderTemplateResponse) {
+    option (google.api.http) = { post: "/v1/templates/{name}:render" body: "*" };
+  }
+}
+
+message ListTemplatesRequest {}
+
+message ListTemplatesResponse {
+  repeated TemplateSummary templates = 1;
+}
+
+// TemplateSummary is the list-page projection. Enough to render a
+// picker card without loading parameter details.
+message TemplateSummary {
+  string name         = 1;  // wire id, kebab-case
+  string display_name = 2;
+  string description  = 3;
+  string api_version  = 4;  // apiVersion of the produced resource
+  string kind         = 5;  // kind of the produced resource
+}
+
+message GetTemplateRequest {
+  string name = 1;
+}
+
+message GetTemplateResponse {
+  TemplateSummary summary        = 1;
+  repeated TemplateParameter parameters = 2;
+}
+
+// TemplateParameter is one user-fillable input. Shape mirrors
+// schema/form.Field enough that the UI can render it with the same
+// FormField component used for editing manifests.
+message TemplateParameter {
+  string name         = 1;
+  string type         = 2;  // "string" | "int" | "bool"
+  string description  = 3;
+  bool   required     = 4;
+  // JSON-encoded default value, or empty when no default. Encoded to
+  // keep the type generic without a Struct wrapper.
+  string default_json = 5;
+  repeated string enum = 6;
+  // Options_kind, when non-empty, tells the UI to populate a
+  // dropdown from resources of the referenced kind — same mechanism
+  // as CUE @options on schema fields.
+  string options_kind = 7;
+}
+
+message RenderTemplateRequest {
+  string name = 1;
+  // Parameter values. Serialised as a Struct (JSON-like) so the client
+  // can pass strings, numbers, bools without type wrappers per param.
+  google.protobuf.Struct params = 2;
+}
+
+message RenderTemplateResponse {
+  Resource resource = 1;
+}
+
 // OperationService exposes the persisted operation log. Apply/Delete RPCs
 // return an operation_id immediately; clients call GetOperation to poll
 // until terminal status (succeeded, failed, interrupted).

@@ -92,6 +92,9 @@ func NewHTTPGateway(ctx context.Context, grpcAddr string, caCertPEM []byte, serv
 	if err := apiv1.RegisterRepoServiceHandler(ctx, gw, conn); err != nil {
 		return nil, err
 	}
+	if err := apiv1.RegisterTemplateServiceHandler(ctx, gw, conn); err != nil {
+		return nil, err
+	}
 
 	mux := http.NewServeMux()
 	// API surface — wrapped in cookie→bearer middleware, then Login-response

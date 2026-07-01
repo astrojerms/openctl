@@ -26,6 +26,7 @@ import (
 	"github.com/openctl/openctl/internal/controller/server"
 	"github.com/openctl/openctl/internal/controller/storage"
 	tlspkg "github.com/openctl/openctl/internal/controller/tls"
+	"github.com/openctl/openctl/internal/templates"
 	"github.com/openctl/openctl/pkg/protocol"
 )
 
@@ -210,6 +211,7 @@ func runServe(args []string) error {
 		Sessions:   sessionStore,
 		DiskMirror: diskMirror,
 		Repo:       gitRepo,
+		Templates:  templates.Default(),
 	}
 	if !*noAuth {
 		opts.Token = token
