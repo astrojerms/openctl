@@ -12,6 +12,7 @@ import (
 
 	"github.com/openctl/openctl/internal/controller/manifests"
 	"github.com/openctl/openctl/internal/controller/providers"
+	"github.com/openctl/openctl/internal/controller/refs"
 	"github.com/openctl/openctl/pkg/protocol"
 )
 
@@ -197,6 +198,22 @@ func (d *Dispatcher) execute(ctx context.Context, op *Operation) {
 		if err := json.Unmarshal([]byte(op.ManifestJSON), &manifest); err != nil {
 			_ = d.store.Complete(ctx, op.ID, StatusFailed, fmt.Sprintf("decode manifest: %v", err), "")
 			return
+		}
+		// Phase 8 step 1: resolve any ResourceRefs in the spec before
+		// handing to the provider. The stored manifest keeps the raw
+		// refs (for audit + re-apply-when-target-changes), but the
+		// provider sees resolved values so it doesn't have to know
+		// about the ref protocol. Errors here (e.g. ref target
+		// missing) fail the op — schedulers can retry after the
+		// referenced resource is ready.
+		if resolver := refs.New(d.registry); manifest.Spec != nil {
+			resolvedSpec, err := resolver.Resolve(ctx, manifest.Spec)
+			if err != nil {
+				_ = d.store.Complete(ctx, op.ID, StatusFailed,
+					fmt.Sprintf("resolve refs: %v", err), "")
+				return
+			}
+			manifest.Spec = resolvedSpec
 		}
 		// Verifying-trace cache: if the manifest's input hash matches what
 		// the previous successful apply stored, skip the provider call.

@@ -104,35 +104,37 @@ evolved.
       Cluster implements ChildrenLister so Get/List/Watch return its
       VM children, child resources surface their owning Cluster via
       Metadata.OwnerRefs. Unblocks UI U3.3 deferred + U6.
-- [ ] **Arch Phase 8 (full)** — genuinely multi-session
-      architectural lift. Not attempted in the U8 sprint. Concrete
-      pieces, roughly ordered:
-      1. **ResourceRef as spec-level primitive.** Convention for
-         embedding typed refs in `spec` (e.g. a JSON object
-         `{ $ref: { apiVersion, kind, name } }`). Server-side
-         resolver walks the spec pre-Apply, calls provider.Get on
-         each ref, substitutes the resolved value. Caller-side CUE
-         helper `#Ref` for authoring.
-      2. **K3sNode resource + provider.** New kind that owns one k3s
-         install on one node. Apply = install (or re-install) k3s
-         given a Ref to the underlying VM and a Ref to the parent
-         Cluster for the join token. Delete = uninstall + drain.
-      3. **AgentInstall as sibling.** Analogous — one openctl-k3s-
-         agent install per node, Ref'd to the VM.
-      4. **Cluster.Plan refactor.** Cluster stops installing k3s
-         directly; Plan(manifest) returns K3sNode + AgentInstall +
-         VM child manifests with Refs wiring them together. The
-         dispatcher runs the resulting DAG via existing parent_id
-         ops. This is what makes scale-up "just add nodes to the
-         manifest."
-      5. **Verifying-cache refs_hash extension.** Once specs carry
-         Refs, extend the Phase 7 verifying-trace cache with
-         refs_hash so cross-resource dependency changes trigger
-         rebuilds. (Moves the parked "refs-cache extension" item
-         above to shippable.)
-      Owner: someone with a clear day+ of focus. Suggested first PR
-      is step 1 alone (ResourceRef primitive + resolver) since it
-      unblocks 2-5 and is testable in isolation.
+- [~] **Arch Phase 8 (full)** — genuinely multi-session
+      architectural lift. Step 1 shipped; 2–5 remain.
+      1. [x] **ResourceRef as spec-level primitive.** CUE `#Ref`
+         helper in base.cue authors `{$ref: {apiVersion, kind,
+         name, field?}}` markers. Server-side resolver
+         (`internal/controller/refs`) walks specs pre-Apply,
+         calls Registry.Get on each ref, substitutes the value
+         (whole resource or dotted status/spec path). Wired into
+         dispatcher.execute (before provider.Apply so providers
+         see resolved values) and DryRunApply (so previews are
+         accurate). Unresolvable refs → op fails with a specific
+         "ref X/Y/Z: not found" message; DryRun surfaces it as a
+         validation error rather than a 500.
+      2. [ ] **K3sNode resource + provider.** New kind that owns
+         one k3s install on one node. Apply = install (or re-
+         install) k3s given a Ref to the underlying VM and a Ref
+         to the parent Cluster for the join token. Delete =
+         uninstall + drain.
+      3. [ ] **AgentInstall as sibling.** Analogous — one
+         openctl-k3s-agent install per node, Ref'd to the VM.
+      4. [ ] **Cluster.Plan refactor.** Cluster stops installing
+         k3s directly; Plan(manifest) returns K3sNode +
+         AgentInstall + VM child manifests with Refs wiring them
+         together. Dispatcher runs the resulting DAG via existing
+         parent_id ops. This is what makes scale-up "just add
+         nodes to the manifest."
+      5. [ ] **Verifying-cache refs_hash extension.** Once specs
+         carry Refs, extend the Phase 7 verifying-trace cache
+         with refs_hash so cross-resource dependency changes
+         trigger rebuilds. Moves the parked "refs-cache
+         extension" item to shippable.
 
 ### Rescoped from Phase 9 / 10
 
