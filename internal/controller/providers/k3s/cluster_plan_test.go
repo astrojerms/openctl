@@ -290,6 +290,79 @@ func TestPlan_DHCPClusterDoesNotBakeVMIP(t *testing.T) {
 	}
 }
 
+// TestPlan_ChildSpecsAreJSONShapedForDownstreamParsers: regression
+// guard for the silent-drop bug found on the homelab validation. The
+// Plan builds Spec values with typed Go collections
+// (`[]string`, `[]map[string]any`), but downstream parsers like
+// pkg/proxmox/resources.ParseVMSpec do `[]any` type assertions that
+// fail silently on those types when the manifest travels in-process
+// (no wire round-trip to normalize types).
+//
+// Symptoms when this regresses:
+//   - VM's cloudInit.sshKeys drops → clone keeps template's baked-in
+//     ssh key, controller SSH fails with `unable to authenticate`.
+//   - Disks drop → disk resize never runs, fresh boots hit "No space
+//     left on device" during package install.
+//   - Networks drop → bridge/model config falls back to template
+//     defaults.
+//
+// The Plan runs normalizeSpec() on every child before returning, so
+// this test asserts the child specs pass the shape assertions the
+// downstream parsers rely on.
+func TestPlan_ChildSpecsAreJSONShapedForDownstreamParsers(t *testing.T) {
+	m := clusterManifest("dev", func(r *protocol.Resource) {
+		net := r.Spec["network"].(map[string]any)
+		net["dhcp"] = false
+		net["staticIPs"] = map[string]any{
+			"startIP": "192.168.1.100",
+			"gateway": "192.168.1.1",
+			"netmask": "24",
+		}
+		// Non-empty publicKeys so we can assert sshKeys survives
+		// the round trip. Empty slice serializes to `null` in JSON
+		// which unmarshals to nil, defeating the shape check —
+		// same footgun as the imperative Cluster's empty-keys
+		// manifests avoiding this bug for years.
+		ssh := r.Spec["ssh"].(map[string]any)
+		ssh["publicKeys"] = []any{"ssh-ed25519 AAAA fake@test"}
+	})
+	children := planFor(t, m)
+
+	vm := findByKindName(children, "VirtualMachine", "dev-cp-0")
+	if vm == nil {
+		t.Fatal("dev-cp-0 VM missing from plan")
+	}
+
+	// cloudInit.sshKeys — parseVMSpec asserts `[]any`.
+	ci, ok := vm.Spec["cloudInit"].(map[string]any)
+	if !ok {
+		t.Fatalf("cloudInit not map[string]any: %T", vm.Spec["cloudInit"])
+	}
+	if _, ok := ci["sshKeys"].([]any); !ok {
+		t.Errorf("cloudInit.sshKeys must be []any (got %T) — otherwise parseVMSpec drops it and the VM inherits the template's baked-in key", ci["sshKeys"])
+	}
+	// disks — parseVMSpec asserts `[]any` at r.Spec["disks"].
+	if _, ok := vm.Spec["disks"].([]any); !ok {
+		t.Errorf("spec.disks must be []any (got %T) — otherwise parseVMSpec drops it and the disk resize is skipped", vm.Spec["disks"])
+	}
+	// networks — same shape.
+	if _, ok := vm.Spec["networks"].([]any); !ok {
+		t.Errorf("spec.networks must be []any (got %T) — otherwise parseVMSpec drops it and the VM keeps the template's default net0", vm.Spec["networks"])
+	}
+	// Extra sanity: each disk / network entry is `map[string]any`
+	// (not `map[string]string` or a struct that wandered through).
+	if disks, ok := vm.Spec["disks"].([]any); ok && len(disks) > 0 {
+		if _, ok := disks[0].(map[string]any); !ok {
+			t.Errorf("disks[0] must be map[string]any (got %T)", disks[0])
+		}
+	}
+	if nets, ok := vm.Spec["networks"].([]any); ok && len(nets) > 0 {
+		if _, ok := nets[0].(map[string]any); !ok {
+			t.Errorf("networks[0] must be map[string]any (got %T)", nets[0])
+		}
+	}
+}
+
 func TestPlan_RejectsNonClusterKind(t *testing.T) {
 	m := &protocol.Resource{
 		APIVersion: "k3s.openctl.io/v1",
