@@ -79,6 +79,43 @@ service ResourceService {
   rpc DryRunApply(DryRunApplyRequest) returns (DryRunApplyResponse) {
     option (google.api.http) = { post: "/v1/resources:dryRunApply" body: "*" };
   }
+
+  // ListActions returns the runtime action names supported by the
+  // responsible provider for (api_version, kind). Empty when the
+  // provider doesn't implement runtime actions. UI Phase U8.12:
+  // Detail.svelte calls this once per page load to build the action bar.
+  rpc ListActions(ListActionsRequest) returns (ListActionsResponse) {
+    option (google.api.http) = { post: "/v1/resources:listActions" body: "*" };
+  }
+
+  // InvokeAction runs a runtime action on an existing resource — start,
+  // stop, reboot, etc. Distinct from Apply: it doesn't change desired
+  // state, just operates on the live instance. Response.message is the
+  // provider's short human-readable success text (e.g. a Proxmox task
+  // UPID).
+  rpc InvokeAction(InvokeActionRequest) returns (InvokeActionResponse) {
+    option (google.api.http) = { post: "/v1/resources:invokeAction" body: "*" };
+  }
+}
+
+message ListActionsRequest {
+  string api_version = 1;
+  string kind = 2;
+}
+
+message ListActionsResponse {
+  repeated string actions = 1;
+}
+
+message InvokeActionRequest {
+  string api_version = 1;
+  string kind = 2;
+  string resource_name = 3;
+  string action = 4;
+}
+
+message InvokeActionResponse {
+  string message = 1;
 }
 
 message DryRunApplyRequest {

@@ -463,7 +463,9 @@ func (c *Client) StartVM(node string, vmid int) (string, error) {
 	return result.Data, nil
 }
 
-// StopVM stops a VM
+// StopVM stops a VM (hard poweroff — equivalent to pulling the plug).
+// Use ShutdownVM for a graceful ACPI shutdown when the guest is
+// cooperating.
 func (c *Client) StopVM(node string, vmid int) (string, error) {
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/status/stop", node, vmid)
 	resp, err := c.post(path, nil)
@@ -478,6 +480,41 @@ func (c *Client) StopVM(node string, vmid int) (string, error) {
 		return "", nil
 	}
 
+	return result.Data, nil
+}
+
+// ShutdownVM triggers a graceful ACPI shutdown. Returns the task upid;
+// the guest may take time to comply. Requires qemu-guest-agent or an
+// OS that honours ACPI shutdown signals.
+func (c *Client) ShutdownVM(node string, vmid int) (string, error) {
+	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/status/shutdown", node, vmid)
+	resp, err := c.post(path, nil)
+	if err != nil {
+		return "", err
+	}
+	var result struct {
+		Data string `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return "", nil
+	}
+	return result.Data, nil
+}
+
+// RebootVM triggers a graceful reboot via ACPI. Same guest requirements
+// as ShutdownVM.
+func (c *Client) RebootVM(node string, vmid int) (string, error) {
+	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/status/reboot", node, vmid)
+	resp, err := c.post(path, nil)
+	if err != nil {
+		return "", err
+	}
+	var result struct {
+		Data string `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return "", nil
+	}
 	return result.Data, nil
 }
 

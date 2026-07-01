@@ -293,12 +293,17 @@ Punch list (unstarted, prioritized):
       storages on the selected node) still pending — needs a
       field-to-field dependency convention that this MVP doesn't
       model.
-- [ ] **U8.12** — Runtime actions on resources. Start/Stop/Reboot/
-      Console for VMs; kubeconfig download / kubectl-proxy console
-      for Clusters. Biggest single "AWS-console-for-homelab" gap:
-      you can author but can't operate. Needs provider action methods,
-      new op verbs (or a separate action RPC), and UI buttons on the
-      detail page.
+- [x] **U8.12** — Runtime actions on resources (VM lifecycle first
+      slice). New optional `providers.Actioner` interface: providers
+      declare per-kind action lists and handle DoAction. Two new
+      RPCs on ResourceService: `ListActions` (used by Detail to
+      build the button bar) + `InvokeAction`. Proxmox VM supports
+      start / shutdown / stop / reboot; destructive actions (stop /
+      shutdown / reboot) prompt for confirmation. Detail auto-
+      refetches 800ms after invocation so status catches up
+      before Watch does. Cluster kubeconfig download + VM console
+      access still parked — different modality (file / websocket)
+      than the fire-and-forget action RPC covers.
 - [ ] **U8.13** — Discriminated-union picker for VM image source
       (`template | cloudImage | image`). Today they're three separate
       "+" buttons with no hint they're exclusive. Schema convention

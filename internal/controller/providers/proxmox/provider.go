@@ -46,6 +46,44 @@ func (p *Provider) Kinds() []string { return []string{kindVM, kindNode} }
 // API rather than provisioning them — they can never be in applied_manifests.
 func (p *Provider) ObservedOnlyKinds() []string { return []string{kindNode} }
 
+// Actions implements providers.Actioner. VirtualMachine supports the
+// standard power-lifecycle set; ProxmoxNode has no runtime actions
+// (nothing to do to a node from openctl short of Proxmox admin).
+func (p *Provider) Actions(kind string) []string {
+	if kind != kindVM {
+		return nil
+	}
+	// Ordering matters for the UI — buttons render in this order.
+	return []string{"start", "shutdown", "stop", "reboot"}
+}
+
+// DoAction implements providers.Actioner. Looks up the VM to get its
+// node+vmid, then dispatches to the appropriate client method. Returns
+// the Proxmox task UPID on success so the UI can surface it (e.g. for
+// linking to Proxmox's own task log).
+func (p *Provider) DoAction(_ context.Context, kind, name, action string) (string, error) {
+	if kind != kindVM {
+		return "", fmt.Errorf("no actions for kind %q", kind)
+	}
+	vm, err := p.handler.Client().GetVM(name)
+	if err != nil {
+		return "", fmt.Errorf("get VM %q: %w", name, err)
+	}
+	client := p.handler.Client()
+	switch action {
+	case "start":
+		return client.StartVM(vm.Node, vm.VMID)
+	case "stop":
+		return client.StopVM(vm.Node, vm.VMID)
+	case "shutdown":
+		return client.ShutdownVM(vm.Node, vm.VMID)
+	case "reboot":
+		return client.RebootVM(vm.Node, vm.VMID)
+	default:
+		return "", fmt.Errorf("unknown action %q", action)
+	}
+}
+
 // Apply creates a VM if missing; otherwise returns the observed state
 // without mutating (per the no-op-on-existing rule). ProxmoxNode is
 // observed-only and rejects Apply.

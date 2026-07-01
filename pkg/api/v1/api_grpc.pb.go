@@ -131,12 +131,14 @@ var PingService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	ResourceService_Apply_FullMethodName       = "/openctl.v1.ResourceService/Apply"
-	ResourceService_Get_FullMethodName         = "/openctl.v1.ResourceService/Get"
-	ResourceService_List_FullMethodName        = "/openctl.v1.ResourceService/List"
-	ResourceService_Delete_FullMethodName      = "/openctl.v1.ResourceService/Delete"
-	ResourceService_Watch_FullMethodName       = "/openctl.v1.ResourceService/Watch"
-	ResourceService_DryRunApply_FullMethodName = "/openctl.v1.ResourceService/DryRunApply"
+	ResourceService_Apply_FullMethodName        = "/openctl.v1.ResourceService/Apply"
+	ResourceService_Get_FullMethodName          = "/openctl.v1.ResourceService/Get"
+	ResourceService_List_FullMethodName         = "/openctl.v1.ResourceService/List"
+	ResourceService_Delete_FullMethodName       = "/openctl.v1.ResourceService/Delete"
+	ResourceService_Watch_FullMethodName        = "/openctl.v1.ResourceService/Watch"
+	ResourceService_DryRunApply_FullMethodName  = "/openctl.v1.ResourceService/DryRunApply"
+	ResourceService_ListActions_FullMethodName  = "/openctl.v1.ResourceService/ListActions"
+	ResourceService_InvokeAction_FullMethodName = "/openctl.v1.ResourceService/InvokeAction"
 )
 
 // ResourceServiceClient is the client API for ResourceService service.
@@ -175,6 +177,17 @@ type ResourceServiceClient interface {
 	// gates the user would need to check off. UI Phase U4.1: editor calls
 	// this on the debounce timer to power the "preview before apply" pane.
 	DryRunApply(ctx context.Context, in *DryRunApplyRequest, opts ...grpc.CallOption) (*DryRunApplyResponse, error)
+	// ListActions returns the runtime action names supported by the
+	// responsible provider for (api_version, kind). Empty when the
+	// provider doesn't implement runtime actions. UI Phase U8.12:
+	// Detail.svelte calls this once per page load to build the action bar.
+	ListActions(ctx context.Context, in *ListActionsRequest, opts ...grpc.CallOption) (*ListActionsResponse, error)
+	// InvokeAction runs a runtime action on an existing resource — start,
+	// stop, reboot, etc. Distinct from Apply: it doesn't change desired
+	// state, just operates on the live instance. Response.message is the
+	// provider's short human-readable success text (e.g. a Proxmox task
+	// UPID).
+	InvokeAction(ctx context.Context, in *InvokeActionRequest, opts ...grpc.CallOption) (*InvokeActionResponse, error)
 }
 
 type resourceServiceClient struct {
@@ -254,6 +267,26 @@ func (c *resourceServiceClient) DryRunApply(ctx context.Context, in *DryRunApply
 	return out, nil
 }
 
+func (c *resourceServiceClient) ListActions(ctx context.Context, in *ListActionsRequest, opts ...grpc.CallOption) (*ListActionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListActionsResponse)
+	err := c.cc.Invoke(ctx, ResourceService_ListActions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *resourceServiceClient) InvokeAction(ctx context.Context, in *InvokeActionRequest, opts ...grpc.CallOption) (*InvokeActionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InvokeActionResponse)
+	err := c.cc.Invoke(ctx, ResourceService_InvokeAction_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ResourceServiceServer is the server API for ResourceService service.
 // All implementations must embed UnimplementedResourceServiceServer
 // for forward compatibility.
@@ -290,6 +323,17 @@ type ResourceServiceServer interface {
 	// gates the user would need to check off. UI Phase U4.1: editor calls
 	// this on the debounce timer to power the "preview before apply" pane.
 	DryRunApply(context.Context, *DryRunApplyRequest) (*DryRunApplyResponse, error)
+	// ListActions returns the runtime action names supported by the
+	// responsible provider for (api_version, kind). Empty when the
+	// provider doesn't implement runtime actions. UI Phase U8.12:
+	// Detail.svelte calls this once per page load to build the action bar.
+	ListActions(context.Context, *ListActionsRequest) (*ListActionsResponse, error)
+	// InvokeAction runs a runtime action on an existing resource — start,
+	// stop, reboot, etc. Distinct from Apply: it doesn't change desired
+	// state, just operates on the live instance. Response.message is the
+	// provider's short human-readable success text (e.g. a Proxmox task
+	// UPID).
+	InvokeAction(context.Context, *InvokeActionRequest) (*InvokeActionResponse, error)
 	mustEmbedUnimplementedResourceServiceServer()
 }
 
@@ -317,6 +361,12 @@ func (UnimplementedResourceServiceServer) Watch(*WatchRequest, grpc.ServerStream
 }
 func (UnimplementedResourceServiceServer) DryRunApply(context.Context, *DryRunApplyRequest) (*DryRunApplyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DryRunApply not implemented")
+}
+func (UnimplementedResourceServiceServer) ListActions(context.Context, *ListActionsRequest) (*ListActionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListActions not implemented")
+}
+func (UnimplementedResourceServiceServer) InvokeAction(context.Context, *InvokeActionRequest) (*InvokeActionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method InvokeAction not implemented")
 }
 func (UnimplementedResourceServiceServer) mustEmbedUnimplementedResourceServiceServer() {}
 func (UnimplementedResourceServiceServer) testEmbeddedByValue()                         {}
@@ -440,6 +490,42 @@ func _ResourceService_DryRunApply_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ResourceService_ListActions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListActionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ResourceServiceServer).ListActions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ResourceService_ListActions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ResourceServiceServer).ListActions(ctx, req.(*ListActionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ResourceService_InvokeAction_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InvokeActionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ResourceServiceServer).InvokeAction(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ResourceService_InvokeAction_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ResourceServiceServer).InvokeAction(ctx, req.(*InvokeActionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ResourceService_ServiceDesc is the grpc.ServiceDesc for ResourceService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -466,6 +552,14 @@ var ResourceService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DryRunApply",
 			Handler:    _ResourceService_DryRunApply_Handler,
+		},
+		{
+			MethodName: "ListActions",
+			Handler:    _ResourceService_ListActions_Handler,
+		},
+		{
+			MethodName: "InvokeAction",
+			Handler:    _ResourceService_InvokeAction_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
