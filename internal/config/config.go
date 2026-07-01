@@ -37,7 +37,7 @@ type Reconciler struct {
 // apply, so users can see (and optionally git-track) what's deployed.
 //
 // Git fields are read in UI Phase U2.2; v1 of the disk mirror (U2.1) only
-// needs Dir.
+// needs Dir. GitOps enables two-way sync (file edits → Apply).
 type Manifests struct {
 	// Dir is the root directory for the materialized manifests. Defaults to
 	// ~/.openctl/manifests when empty. Tilde is expanded via ExpandPath.
@@ -45,6 +45,21 @@ type Manifests struct {
 	// Git configures optional git tracking of the manifest dir. nil = git
 	// integration off.
 	Git *ManifestsGit `yaml:"git,omitempty"`
+	// GitOps toggles two-way sync: when true, file edits in Dir are
+	// watched via fsnotify and applied back through the controller
+	// (Apply of the manifest, source="gitops"). Default off — one-way
+	// mirror is the default, and opt-in prevents surprise behavior.
+	GitOps *ManifestsGitOps `yaml:"gitops,omitempty"`
+}
+
+// ManifestsGitOps configures the fsnotify-driven file→apply loop.
+type ManifestsGitOps struct {
+	// Enabled turns on the watcher. Off unless explicitly true.
+	Enabled bool `yaml:"enabled"`
+	// DeleteOnRemove submits a Delete when a manifest file is removed
+	// from the mirror. Default false — most users prefer to move
+	// files around without triggering resource deletion.
+	DeleteOnRemove bool `yaml:"deleteOnRemove"`
 }
 
 // ManifestsGit configures git tracking of the manifest directory. When
