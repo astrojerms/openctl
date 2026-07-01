@@ -99,21 +99,34 @@ const (
 
 // Actioner is an optional provider capability for runtime actions on
 // existing resources — start/stop/reboot for VMs, get-kubeconfig for
-// clusters, etc. Distinct from Apply/Delete because these don't change
-// the desired state; they operate on the live resource. Providers that
-// don't expose any actions don't need to implement it.
+// clusters, console URL for VMs, etc. Distinct from Apply/Delete
+// because these don't change the desired state; they operate on the
+// live resource. Providers that don't expose any actions don't need
+// to implement it.
 type Actioner interface {
 	// Actions returns the action names this provider supports for the
-	// given kind, e.g. ["start", "stop", "reboot"] for VirtualMachine.
-	// Return an empty slice for kinds that have no actions.
+	// given kind. Return an empty slice for kinds that have no actions.
 	Actions(kind string) []string
 
-	// DoAction invokes the named action against a specific resource.
-	// Returns a short human-readable message on success (e.g. the
-	// underlying task id) or an error. Actions are synchronous today;
-	// long-running actions can queue their own ops via the provider's
-	// existing client when we grow into them.
-	DoAction(ctx context.Context, kind, name, action string) (string, error)
+	// DoAction invokes the named action against a specific resource
+	// and returns a structured result. Common shapes:
+	//   - Simple fire-and-forget (start/stop): Message = task upid.
+	//   - File-shaped (get-kubeconfig): DownloadContent + DownloadFilename.
+	//   - Link-shaped (console): URL to open externally.
+	// Only one of Message/URL/DownloadContent needs to be populated;
+	// the UI dispatches on which field is non-empty.
+	DoAction(ctx context.Context, kind, name, action string) (*ActionResult, error)
+}
+
+// ActionResult carries the structured output of a runtime action.
+// Providers populate whichever fields fit — message for short text,
+// url for external navigation, download_content+filename for file
+// payloads. Empty struct is legal ("action ran, nothing to show").
+type ActionResult struct {
+	Message          string
+	URL              string
+	DownloadContent  string
+	DownloadFilename string
 }
 
 // Provider implements operations for resources of a particular vendor
@@ -261,17 +274,17 @@ func (r *Registry) ActionsFor(apiVersion, kind string) []string {
 // Returns FailedPrecondition-flavored errors when the provider doesn't
 // implement Actioner or the action isn't in its supported list, so the
 // server layer can map cleanly to gRPC status codes.
-func (r *Registry) DoAction(ctx context.Context, apiVersion, kind, name, action string) (string, error) {
+func (r *Registry) DoAction(ctx context.Context, apiVersion, kind, name, action string) (*ActionResult, error) {
 	p, err := r.For(apiVersion)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	a, ok := p.(Actioner)
 	if !ok {
-		return "", fmt.Errorf("provider %q does not support runtime actions", p.Name())
+		return nil, fmt.Errorf("provider %q does not support runtime actions", p.Name())
 	}
 	if !slices.Contains(a.Actions(kind), action) {
-		return "", fmt.Errorf("action %q not supported for kind %q", action, kind)
+		return nil, fmt.Errorf("action %q not supported for kind %q", action, kind)
 	}
 	return a.DoAction(ctx, kind, name, action)
 }

@@ -342,7 +342,7 @@ func (h *resourceHandler) InvokeAction(ctx context.Context, req *apiv1.InvokeAct
 	if req.GetApiVersion() == "" || req.GetKind() == "" || req.GetResourceName() == "" || req.GetAction() == "" {
 		return nil, status.Error(codes.InvalidArgument, "api_version, kind, resource_name, and action are required")
 	}
-	msg, err := h.registry.DoAction(ctx, req.GetApiVersion(), req.GetKind(), req.GetResourceName(), req.GetAction())
+	result, err := h.registry.DoAction(ctx, req.GetApiVersion(), req.GetKind(), req.GetResourceName(), req.GetAction())
 	if err != nil {
 		// Route "not supported" errors to FailedPrecondition so the UI can
 		// distinguish user error (button shouldn't have been shown) from
@@ -352,7 +352,15 @@ func (h *resourceHandler) InvokeAction(ctx context.Context, req *apiv1.InvokeAct
 		}
 		return nil, status.Errorf(codes.Internal, "action %q on %s/%s: %v", req.GetAction(), req.GetKind(), req.GetResourceName(), err)
 	}
-	return &apiv1.InvokeActionResponse{Message: msg}, nil
+	if result == nil {
+		result = &providers.ActionResult{}
+	}
+	return &apiv1.InvokeActionResponse{
+		Message:          result.Message,
+		Url:              result.URL,
+		DownloadContent:  result.DownloadContent,
+		DownloadFilename: result.DownloadFilename,
+	}, nil
 }
 
 // summarizeDryRun builds a default one-line summary when the provider

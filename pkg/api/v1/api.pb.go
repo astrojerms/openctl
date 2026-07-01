@@ -360,10 +360,18 @@ func (x *InvokeActionRequest) GetAction() string {
 }
 
 type InvokeActionResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Message       string                 `protobuf:"bytes,1,opt,name=message,proto3" json:"message,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Message string                 `protobuf:"bytes,1,opt,name=message,proto3" json:"message,omitempty"`
+	// Optional URL for actions that resolve to an external resource
+	// (e.g. Proxmox noVNC console). UI opens in a new tab.
+	Url string `protobuf:"bytes,2,opt,name=url,proto3" json:"url,omitempty"`
+	// Optional downloadable payload for actions that return file content
+	// (e.g. k3s Cluster kubeconfig). UI serves as a file download named
+	// download_filename with the given content.
+	DownloadContent  string `protobuf:"bytes,3,opt,name=download_content,json=downloadContent,proto3" json:"download_content,omitempty"`
+	DownloadFilename string `protobuf:"bytes,4,opt,name=download_filename,json=downloadFilename,proto3" json:"download_filename,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *InvokeActionResponse) Reset() {
@@ -399,6 +407,27 @@ func (*InvokeActionResponse) Descriptor() ([]byte, []int) {
 func (x *InvokeActionResponse) GetMessage() string {
 	if x != nil {
 		return x.Message
+	}
+	return ""
+}
+
+func (x *InvokeActionResponse) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
+}
+
+func (x *InvokeActionResponse) GetDownloadContent() string {
+	if x != nil {
+		return x.DownloadContent
+	}
+	return ""
+}
+
+func (x *InvokeActionResponse) GetDownloadFilename() string {
+	if x != nil {
+		return x.DownloadFilename
 	}
 	return ""
 }
@@ -3688,9 +3717,12 @@ const file_api_proto_rawDesc = "" +
 	"apiVersion\x12\x12\n" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x12#\n" +
 	"\rresource_name\x18\x03 \x01(\tR\fresourceName\x12\x16\n" +
-	"\x06action\x18\x04 \x01(\tR\x06action\"0\n" +
+	"\x06action\x18\x04 \x01(\tR\x06action\"\x9a\x01\n" +
 	"\x14InvokeActionResponse\x12\x18\n" +
-	"\amessage\x18\x01 \x01(\tR\amessage\"F\n" +
+	"\amessage\x18\x01 \x01(\tR\amessage\x12\x10\n" +
+	"\x03url\x18\x02 \x01(\tR\x03url\x12)\n" +
+	"\x10download_content\x18\x03 \x01(\tR\x0fdownloadContent\x12+\n" +
+	"\x11download_filename\x18\x04 \x01(\tR\x10downloadFilename\"F\n" +
 	"\x12DryRunApplyRequest\x120\n" +
 	"\bresource\x18\x01 \x01(\v2\x14.openctl.v1.ResourceR\bresource\"\x9f\x02\n" +
 	"\x13DryRunApplyResponse\x12*\n" +

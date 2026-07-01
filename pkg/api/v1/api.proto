@@ -122,6 +122,14 @@ message InvokeActionRequest {
 
 message InvokeActionResponse {
   string message = 1;
+  // Optional URL for actions that resolve to an external resource
+  // (e.g. Proxmox noVNC console). UI opens in a new tab.
+  string url = 2;
+  // Optional downloadable payload for actions that return file content
+  // (e.g. k3s Cluster kubeconfig). UI serves as a file download named
+  // download_filename with the given content.
+  string download_content  = 3;
+  string download_filename = 4;
 }
 
 message DryRunApplyRequest {

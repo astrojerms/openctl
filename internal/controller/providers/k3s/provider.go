@@ -59,6 +59,47 @@ func New(cfg *protocol.ProviderConfig, vms VMApplier) *Provider {
 func (p *Provider) Name() string    { return providerName }
 func (p *Provider) Kinds() []string { return []string{kindCluster} }
 
+// Actions implements providers.Actioner. Cluster supports one
+// runtime action today: get-kubeconfig, which returns the stored
+// kubeconfig contents from ~/.openctl/k3s/<name>/kubeconfig.
+func (p *Provider) Actions(kind string) []string {
+	if kind != kindCluster {
+		return nil
+	}
+	return []string{"get-kubeconfig"}
+}
+
+// DoAction implements providers.Actioner. Reads the stored kubeconfig
+// (populated at cluster-create time by pkg/k3s/cluster.Creator) and
+// returns it as a downloadable file. Fails with a clear error when
+// the file is missing — a Cluster that was never successfully created
+// (or was manually deleted from disk) has no kubeconfig on file.
+func (p *Provider) DoAction(_ context.Context, kind, name, action string) (*providers.ActionResult, error) {
+	if kind != kindCluster {
+		return nil, fmt.Errorf("no actions for kind %q", kind)
+	}
+	if action != "get-kubeconfig" {
+		return nil, fmt.Errorf("unknown action %q", action)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolve home: %w", err)
+	}
+	path := filepath.Join(home, ".openctl", "k3s", name, "kubeconfig")
+	content, err := os.ReadFile(path) // #nosec G304 -- controller-owned path derived from cluster name
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("kubeconfig not found at %s — cluster may not have been created via openctl or was never successfully applied", path)
+		}
+		return nil, fmt.Errorf("read kubeconfig: %w", err)
+	}
+	return &providers.ActionResult{
+		DownloadContent:  string(content),
+		DownloadFilename: fmt.Sprintf("%s-kubeconfig.yaml", name),
+		Message:          fmt.Sprintf("Kubeconfig read from %s", path),
+	}, nil
+}
+
 // OwnerOf implements providers.OwnershipChecker: returns true if any cluster
 // state file lists (kind, name) as a child. Used by the resource handler to
 // block Delete on owned resources (e.g. attempting to delete a proxmox VM
