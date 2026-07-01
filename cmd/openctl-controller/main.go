@@ -111,7 +111,13 @@ func runServe(args []string) error {
 	}
 
 	dbPath := filepath.Join(*dir, "state.db")
-	ctx := context.Background()
+	// Root context cancelled on SIGINT/SIGTERM. Every subsystem below
+	// (dispatcher, reconciler, HTTP gateway, periodic git push) takes
+	// this ctx and stops when it fires — without cancellation the
+	// gRPC GracefulStop below waits forever for UI Watch streams that
+	// have no reason to disconnect.
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
 	db, err := storage.Open(ctx, dbPath)
 	if err != nil {
 		return err
@@ -249,14 +255,23 @@ func runServe(args []string) error {
 		}()
 	}
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	select {
 	case err := <-errCh:
+		// Server exited on its own — cancel ctx so background
+		// subsystems (dispatcher, reconciler, HTTP gateway) stop
+		// waiting on it before their deferred Stop() calls block.
+		cancel()
+		srv.StopWithTimeout(3 * time.Second)
 		return err
-	case sig := <-sigCh:
-		log.Printf("received %s, shutting down", sig)
-		srv.Stop()
+	case <-ctx.Done():
+		log.Printf("received interrupt, shutting down")
+		// Give in-flight RPCs 3s to finish gracefully; force-close
+		// streams after that so Ctrl-C actually exits even when the
+		// UI has long-running Watch streams open. HTTP gateway,
+		// dispatcher, reconciler, and periodic git push all took a
+		// child of ctx and stop when it cancels — signal.NotifyContext
+		// already cancelled it before this branch runs.
+		srv.StopWithTimeout(3 * time.Second)
 		return nil
 	}
 }
