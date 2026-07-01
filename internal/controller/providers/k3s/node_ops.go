@@ -235,6 +235,15 @@ func parseK3sNodeSpec(manifest *protocol.Resource) (*k3sNodeSpec, error) {
 			out.vmIP = ip
 		}
 	}
+	// Static-IP shortcut: `spec.vmIP` set on the K3sNode manifest
+	// (populated by Cluster.Plan when spec.network.staticIPs is
+	// configured) wins over anything the resolver put in
+	// vmRef.status.ip. This lets Plan-emitted K3sNodes for
+	// static-IP clusters skip waitForVMIP entirely — the VM's
+	// address is deterministic and doesn't need QGA.
+	if ip, ok := manifest.Spec["vmIP"].(string); ok && ip != "" {
+		out.vmIP = ip
+	}
 	// vmIP is allowed to be "" here — applyK3sNode calls waitForVMIP
 	// with the k3s Provider's VMApplier to poll status.ip after a
 	// fresh Plan-emitted VM finishes booting. Standalone K3sNode

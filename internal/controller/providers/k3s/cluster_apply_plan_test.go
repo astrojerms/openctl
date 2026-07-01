@@ -186,3 +186,107 @@ func TestApplyClusterViaPlan_SavesClusterStateForApplyExisting(t *testing.T) {
 func readFile(path string) ([]byte, error) {
 	return osReadFile(path)
 }
+
+// failingChildDispatcher succeeds on VirtualMachine children and
+// fails on the first non-VM child. Simulates a partial-success case
+// like the homelab validation: VMs came up but k3s install hung.
+type failingChildDispatcher struct {
+	calls []*protocol.Resource
+}
+
+func (r *failingChildDispatcher) ApplyChild(_ context.Context, m *protocol.Resource) (*protocol.Resource, error) {
+	r.calls = append(r.calls, m)
+	if m.Kind != "VirtualMachine" {
+		return nil, fmt.Errorf("simulated K3sNode failure on %s", m.Metadata.Name)
+	}
+	return m, nil
+}
+
+// TestApplyClusterViaPlan_InterimStubEnablesDeleteAfterPhase2Failure:
+// after phase 1 succeeds but phase 2 fails, Cluster.Delete has to be
+// able to find the VM children. Without the interim stub, the state
+// file is missing and Delete no-ops — leaving live VMs on the
+// hypervisor. This test drives that scenario end-to-end: partial
+// apply → state file present with the VM child → Delete reads it.
+func TestApplyClusterViaPlan_InterimStubEnablesDeleteAfterPhase2Failure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	cd := &failingChildDispatcher{}
+	p := &Provider{}
+	m := clusterManifest("dev")
+	_, err := p.applyClusterViaPlan(context.Background(), m, cd)
+	if err == nil {
+		t.Fatal("expected error from failing K3sNode dispatch, got nil")
+	}
+	// Cluster state must exist even though the apply failed —
+	// this is the whole point of the interim stub.
+	saved, loadErr := p.loadState("dev")
+	if loadErr != nil {
+		t.Fatalf("loadState after partial apply: %v", loadErr)
+	}
+	if saved == nil {
+		t.Fatal("no cluster state written; Delete would be a no-op and leak VMs")
+	}
+	children, err := readChildren("dev")
+	if err != nil {
+		t.Fatalf("readChildren: %v", err)
+	}
+	if len(children) != 1 || children[0].Kind != "VirtualMachine" || children[0].Name != "dev-cp-0" {
+		t.Errorf("expected 1 VirtualMachine child (dev-cp-0), got %+v", children)
+	}
+	// Status phase should reflect partial state.
+	phase, _ := saved.Status["phase"].(string)
+	if phase != "Provisioning" {
+		t.Errorf("status.phase = %q, want Provisioning", phase)
+	}
+}
+
+// TestClusterDelete_CleansPerNodeState: verify Cluster.Delete's new
+// per-node K3sNode + AgentInstall state cleanup. Populate state
+// files as if a successful apply had run, then Delete and confirm
+// they're gone. Uses a stub VMApplier since we don't need to talk to
+// Proxmox for this test.
+func TestClusterDelete_CleansPerNodeState(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// Populate cluster state with one VM child.
+	m := clusterManifest("dev")
+	if err := (&Provider{}).saveClusterStateStub("dev", m,
+		[]*protocol.Resource{{Metadata: protocol.ResourceMetadata{Name: "dev-cp-0"}}},
+		"Ready", "test",
+	); err != nil {
+		t.Fatalf("save state stub: %v", err)
+	}
+	// Populate the per-node K3sNode + AgentInstall state files.
+	if err := saveNodeState(&nodeState{Name: "dev-cp-0", VMName: "dev-cp-0", VMIP: "1.2.3.4", Role: "server", Installed: true}); err != nil {
+		t.Fatalf("save K3sNode state: %v", err)
+	}
+	if err := saveAgentInstallState(&agentInstallState{Name: "dev-cp-0-agent", VMName: "dev-cp-0", VMIP: "1.2.3.4", ClusterName: "dev", Installed: true}); err != nil {
+		t.Fatalf("save AgentInstall state: %v", err)
+	}
+
+	p := &Provider{vms: nopVMApplier{}}
+	if err := p.Delete(context.Background(), kindCluster, "dev"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	// K3sNode state should be gone.
+	if s, _ := loadNodeState("dev-cp-0"); s != nil {
+		t.Errorf("K3sNode state not cleaned: %+v", s)
+	}
+	// AgentInstall state should be gone.
+	if s, _ := loadAgentInstallState("dev-cp-0-agent"); s != nil {
+		t.Errorf("AgentInstall state not cleaned: %+v", s)
+	}
+}
+
+// nopVMApplier is a stand-in for the proxmox VM provider in Delete
+// tests — we only care about state-file cleanup, not the VM API.
+type nopVMApplier struct{}
+
+func (nopVMApplier) Apply(context.Context, *protocol.Resource) (*protocol.Resource, error) {
+	return nil, nil
+}
+func (nopVMApplier) Get(context.Context, string, string) (*protocol.Resource, error) {
+	return nil, nil
+}
+func (nopVMApplier) Delete(context.Context, string, string) error { return nil }

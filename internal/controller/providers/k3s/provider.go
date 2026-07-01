@@ -545,11 +545,22 @@ func (p *Provider) Delete(ctx context.Context, kind, name string) error {
 				return fmt.Errorf("delete VM %s: %w", child.Name, err)
 			}
 		}
+		// Best-effort cleanup of per-node K3sNode + AgentInstall
+		// state files emitted by the plan-based Apply path. Only
+		// meaningful for VirtualMachine children (their names match
+		// K3sNode / AgentInstall names by convention: <vm>-agent).
+		if child.Kind == "VirtualMachine" {
+			_ = removeNodeState(child.Name)
+			_ = removeAgentInstallState(child.Name + "-agent")
+		}
 	}
 	// Remove state files.
 	dir, _ := stateDir()
 	_ = os.Remove(filepath.Join(dir, name+".yaml"))
 	_ = os.RemoveAll(filepath.Join(dir, name))
+	// Bundle dir from the plan-path CA materialization also lives
+	// under state/k3s/<name>/, so the RemoveAll above already
+	// catches it — no separate cleanup needed.
 	return nil
 }
 

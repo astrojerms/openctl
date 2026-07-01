@@ -106,6 +106,52 @@ func TestParseK3sNodeSpec_Agent(t *testing.T) {
 	}
 }
 
+func TestParseK3sNodeSpec_StaticVMIPOverridesResolvedRef(t *testing.T) {
+	// Plan-emitted K3sNode for a static-IP cluster carries
+	// `spec.vmIP` populated from AllocateIPs. That should take
+	// precedence over anything the ref resolver put in
+	// vmRef.status.ip (which is empty when QGA hasn't reported).
+	m := &protocol.Resource{
+		Spec: map[string]any{
+			"vmRef": map[string]any{
+				"metadata": map[string]any{"name": "vm-a"},
+				"status":   map[string]any{}, // QGA hasn't reported
+			},
+			"vmIP": "10.0.0.42", // static-IP from Plan
+			"role": "server",
+			"ssh":  map[string]any{"privateKeyPath": "/k"},
+		},
+	}
+	s, err := parseK3sNodeSpec(m)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if s.vmIP != "10.0.0.42" {
+		t.Errorf("static-IP override not honored: got %q, want 10.0.0.42", s.vmIP)
+	}
+}
+
+func TestParseK3sNodeSpec_StaticVMIPWinsOverStatusIP(t *testing.T) {
+	// Both `spec.vmIP` and `vmRef.status.ip` present — the
+	// explicit `spec.vmIP` wins, since Plan-time knowledge is
+	// authoritative when it disagrees with runtime observation.
+	m := &protocol.Resource{
+		Spec: map[string]any{
+			"vmRef": vmRefResource("vm-a", "10.0.0.1"),
+			"vmIP":  "10.0.0.42",
+			"role":  "server",
+			"ssh":   map[string]any{"privateKeyPath": "/k"},
+		},
+	}
+	s, err := parseK3sNodeSpec(m)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if s.vmIP != "10.0.0.42" {
+		t.Errorf("spec.vmIP should win over vmRef.status.ip: got %q", s.vmIP)
+	}
+}
+
 func TestParseK3sNodeSpec_MissingVMIP_ParsesAndDefersToWait(t *testing.T) {
 	// VMs that haven't reported their IP yet are OK to parse —
 	// applyK3sNode polls status.ip via the k3s Provider's VMApplier
