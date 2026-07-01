@@ -16,6 +16,7 @@ import (
 	"github.com/openctl/openctl/internal/controller/manifests"
 	"github.com/openctl/openctl/internal/controller/operations"
 	"github.com/openctl/openctl/internal/controller/providers"
+	"github.com/openctl/openctl/internal/controller/refs"
 	"github.com/openctl/openctl/internal/schema"
 	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 	"github.com/openctl/openctl/pkg/protocol"
@@ -278,6 +279,22 @@ func (h *resourceHandler) DryRunApply(ctx context.Context, req *apiv1.DryRunAppl
 	p, err := h.registry.For(manifest.APIVersion)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
+	// Phase 8 step 1: resolve any ResourceRefs in the spec so the diff
+	// reflects what the provider would actually see at Apply-time. When
+	// a ref target is missing, surface as a validation error rather than
+	// a hard 500 — dry-run should be honest about "your refs don't
+	// resolve yet" without failing the whole preview.
+	if manifest.Spec != nil {
+		resolver := refs.New(h.registry)
+		resolved, rerr := resolver.Resolve(ctx, manifest.Spec)
+		if rerr != nil {
+			resp.ValidationErrors = append(resp.ValidationErrors, rerr.Error())
+			resp.Summary = "unresolved ref"
+			return resp, nil
+		}
+		manifest.Spec = resolved
 	}
 
 	// Spec-level diff vs the last applied manifest. Empty when this would

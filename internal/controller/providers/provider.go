@@ -289,6 +289,19 @@ func (r *Registry) DoAction(ctx context.Context, apiVersion, kind, name, action 
 	return a.DoAction(ctx, kind, name, action)
 }
 
+// Get is a Registry-level convenience that dispatches to the right
+// provider's Get method. Implements the refs.Getter interface so the
+// ResourceRef resolver can look up any resource without knowing which
+// provider owns it. Returns the wrapped provider error unchanged so
+// callers can still errors.As it into a *NotFoundError.
+func (r *Registry) Get(ctx context.Context, apiVersion, kind, name string) (*protocol.Resource, error) {
+	p, err := r.For(apiVersion)
+	if err != nil {
+		return nil, err
+	}
+	return p.Get(ctx, kind, name)
+}
+
 // IsObservedOnly reports whether (apiVersion, kind) belongs to a provider
 // that declared the kind observed-only. False when no provider matches the
 // apiVersion or the provider doesn't implement ObservedOnly.
