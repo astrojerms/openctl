@@ -168,6 +168,9 @@ func SchemaSelector(apiVersion, kind string) (pkg, def string, ok bool) {
 		if kind == "K3sNode" {
 			return "k3s", "#K3sNode", true
 		}
+		if kind == "AgentInstall" {
+			return "k3s", "#AgentInstall", true
+		}
 	}
 	return "", "", false
 }

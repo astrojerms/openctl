@@ -57,7 +57,7 @@ func New(cfg *protocol.ProviderConfig, vms VMApplier) *Provider {
 }
 
 func (p *Provider) Name() string    { return providerName }
-func (p *Provider) Kinds() []string { return []string{kindCluster, kindK3sNode} }
+func (p *Provider) Kinds() []string { return []string{kindCluster, kindK3sNode, kindAgentInstall} }
 
 // Actions implements providers.Actioner. Cluster supports one
 // runtime action today: get-kubeconfig, which returns the stored
@@ -181,6 +181,9 @@ const (
 func (p *Provider) Apply(ctx context.Context, manifest *protocol.Resource) (*protocol.Resource, error) {
 	if manifest.Kind == kindK3sNode {
 		return p.applyK3sNode(ctx, manifest)
+	}
+	if manifest.Kind == kindAgentInstall {
+		return p.applyAgentInstall(ctx, manifest)
 	}
 	if err := requireKindCluster(manifest.Kind); err != nil {
 		return nil, err
@@ -394,6 +397,9 @@ func (p *Provider) Get(ctx context.Context, kind, name string) (*protocol.Resour
 	if kind == kindK3sNode {
 		return p.getK3sNode(ctx, name)
 	}
+	if kind == kindAgentInstall {
+		return p.getAgentInstall(ctx, name)
+	}
 	if err := requireKindCluster(kind); err != nil {
 		return nil, err
 	}
@@ -468,6 +474,9 @@ func (p *Provider) List(ctx context.Context, kind string) ([]*protocol.Resource,
 	if kind == kindK3sNode {
 		return p.listK3sNodes(ctx)
 	}
+	if kind == kindAgentInstall {
+		return p.listAgentInstalls(ctx)
+	}
 	if err := requireKindCluster(kind); err != nil {
 		return nil, err
 	}
@@ -502,6 +511,9 @@ func (p *Provider) List(ctx context.Context, kind string) ([]*protocol.Resource,
 func (p *Provider) Delete(ctx context.Context, kind, name string) error {
 	if kind == kindK3sNode {
 		return p.deleteK3sNode(ctx, name)
+	}
+	if kind == kindAgentInstall {
+		return p.deleteAgentInstall(ctx, name)
 	}
 	if err := requireKindCluster(kind); err != nil {
 		return err

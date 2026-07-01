@@ -27,10 +27,20 @@ const DefaultPollInterval = 500 * time.Millisecond
 // skip the sink, which also disables the cache.
 type ManifestSink interface {
 	Save(ctx context.Context, r *protocol.Resource) error
+	// SaveWithRefsHash is Save plus the resolved-refs hash used by the
+	// Phase 8 refs-invalidation dimension of the verifying-trace cache.
+	// Callers that don't have a resolved-refs hash (disk mirror, GitOps
+	// watcher) can pass refsHash="" — the store treats an empty stored
+	// value as "unknown; force a cache miss on the next apply".
+	SaveWithRefsHash(ctx context.Context, r *protocol.Resource, refsHash string) error
 	Delete(ctx context.Context, apiVersion, kind, name string) error
 	// LoadHash returns the input hash recorded by the previous successful
 	// apply for this resource, or "" if no prior apply is on file.
 	LoadHash(ctx context.Context, apiVersion, kind, name string) (string, error)
+	// LoadHashes returns both stored hashes: input_hash (raw manifest)
+	// and refs_hash (resolved ref values). Either may be "" if the row
+	// predates that dimension of the cache.
+	LoadHashes(ctx context.Context, apiVersion, kind, name string) (inputHash, refsHash string, err error)
 	// Hash computes the verifying-trace key for a manifest. Must be a pure
 	// function of the manifest's apply input.
 	Hash(r *protocol.Resource) string
@@ -142,10 +152,15 @@ func (d *Dispatcher) drain(ctx context.Context) {
 // op was completed via the cache; false if the caller should fall through
 // to the normal Apply path.
 //
-// Cache miss conditions (return false):
+// Two-dimensional cache (Phase 8 step 5):
+//   - input_hash of the RAW manifest must match the stored value
+//     (user intent unchanged)
+//   - refs_hash of the RESOLVED manifest must match the stored value
+//     (upstream ref targets haven't updated their status.*)
+//
+// Additional miss conditions:
 //   - manifests sink not configured (tests)
 //   - no prior apply recorded for this resource
-//   - prior hash differs from current input hash
 //   - manifest carries the i-know-this-breaks-the-cluster annotation
 //     (treated as "user is forcing a destructive operation" — never
 //     short-circuit those)
@@ -153,28 +168,35 @@ func (d *Dispatcher) drain(ctx context.Context) {
 // On hit, calls provider.Get to populate a useful result. If Get errors
 // (e.g. the underlying resource was deleted out-of-band), the cache hit
 // is abandoned and the caller falls through to normal Apply.
-func (d *Dispatcher) tryCacheHit(ctx context.Context, p providers.Provider, op *Operation, manifest *protocol.Resource) bool {
+func (d *Dispatcher) tryCacheHit(ctx context.Context, p providers.Provider, op *Operation, raw, resolved *protocol.Resource) bool {
 	if d.manifests == nil {
 		return false
 	}
-	if manifest.Metadata.Annotations["openctl.io/i-know-this-breaks-the-cluster"] == "true" {
+	if raw.Metadata.Annotations["openctl.io/i-know-this-breaks-the-cluster"] == "true" {
 		return false
 	}
-	storedHash, err := d.manifests.LoadHash(ctx, manifest.APIVersion, manifest.Kind, manifest.Metadata.Name)
-	if err != nil || storedHash == "" {
+	storedInput, storedRefs, err := d.manifests.LoadHashes(ctx, raw.APIVersion, raw.Kind, raw.Metadata.Name)
+	if err != nil || storedInput == "" {
 		return false
 	}
-	if d.manifests.Hash(manifest) != storedHash {
+	if d.manifests.Hash(raw) != storedInput {
 		return false
 	}
-	// Hash match — confirm the resource still exists by fetching it.
-	// If Get fails or returns nil, the cache is stale; fall through to
-	// the normal Apply which will recreate from scratch.
-	result, err := p.Get(ctx, manifest.Kind, manifest.Metadata.Name)
+	// refs_hash dimension: any manifest with resolvable $refs writes a
+	// non-empty refs_hash on save. An empty stored refs_hash means "no
+	// ref-hash information on file" (pre-Phase-8 row) and forces a miss
+	// so we recompute it. A non-empty stored value must match.
+	if storedRefs == "" || d.manifests.Hash(resolved) != storedRefs {
+		return false
+	}
+	// Both hashes match — confirm the resource still exists by fetching
+	// it. If Get fails or returns nil, the cache is stale; fall through
+	// to the normal Apply which will recreate from scratch.
+	result, err := p.Get(ctx, resolved.Kind, resolved.Metadata.Name)
 	if err != nil || result == nil {
 		return false
 	}
-	_ = d.store.SetLabel(ctx, op.ID, "cached: input hash unchanged since last apply")
+	_ = d.store.SetLabel(ctx, op.ID, "cached: input+refs hashes unchanged since last apply")
 	resultJSON, _ := json.Marshal(result)
 	_ = d.store.Complete(ctx, op.ID, StatusSucceeded, "", string(resultJSON))
 	return true
@@ -194,46 +216,50 @@ func (d *Dispatcher) execute(ctx context.Context, op *Operation) {
 
 	switch op.Type {
 	case TypeApply:
-		var manifest protocol.Resource
-		if err := json.Unmarshal([]byte(op.ManifestJSON), &manifest); err != nil {
+		var rawManifest protocol.Resource
+		if err := json.Unmarshal([]byte(op.ManifestJSON), &rawManifest); err != nil {
 			_ = d.store.Complete(ctx, op.ID, StatusFailed, fmt.Sprintf("decode manifest: %v", err), "")
 			return
 		}
 		// Phase 8 step 1: resolve any ResourceRefs in the spec before
-		// handing to the provider. The stored manifest keeps the raw
-		// refs (for audit + re-apply-when-target-changes), but the
-		// provider sees resolved values so it doesn't have to know
-		// about the ref protocol. Errors here (e.g. ref target
-		// missing) fail the op — schedulers can retry after the
-		// referenced resource is ready.
-		if resolver := refs.New(d.registry); manifest.Spec != nil {
-			resolvedSpec, err := resolver.Resolve(ctx, manifest.Spec)
+		// handing to the provider. Step 5: keep the RAW manifest
+		// intact (it's what we persist for intent + drift diffs), and
+		// mutate a separate resolvedManifest that gets passed to
+		// provider.Apply. Errors here (e.g. ref target missing) fail
+		// the op — schedulers can retry after the referenced resource
+		// is ready.
+		resolvedManifest := rawManifest
+		if resolver := refs.New(d.registry); rawManifest.Spec != nil {
+			resolvedSpec, err := resolver.Resolve(ctx, rawManifest.Spec)
 			if err != nil {
 				_ = d.store.Complete(ctx, op.ID, StatusFailed,
 					fmt.Sprintf("resolve refs: %v", err), "")
 				return
 			}
-			manifest.Spec = resolvedSpec
+			resolvedManifest.Spec = resolvedSpec
 		}
-		// Verifying-trace cache: if the manifest's input hash matches what
-		// the previous successful apply stored, skip the provider call.
-		// We still call provider.Get to populate a useful result for the
-		// caller — Get is cheap (no mutation, no SSH, no Proxmox writes).
-		if d.tryCacheHit(ctx, p, op, &manifest) {
+		// Two-dimensional verifying-trace cache: intent unchanged
+		// (input_hash matches raw manifest) AND upstream refs
+		// unchanged (refs_hash matches resolved spec). Provider.Get
+		// still runs on the resolved manifest so the cached success
+		// carries an accurate current view.
+		if d.tryCacheHit(ctx, p, op, &rawManifest, &resolvedManifest) {
 			return
 		}
-		result, err := p.Apply(ctx, &manifest)
+		result, err := p.Apply(ctx, &resolvedManifest)
 		if err != nil {
 			_ = d.store.Complete(ctx, op.ID, StatusFailed, err.Error(), "")
 			return
 		}
-		// Persist desired state for drift detection. Use the submitted
-		// manifest, not the result — manifest is "intent", result is
-		// "observed-after-apply" and may carry provider-set defaults that
-		// would falsely match on the next Get.
+		// Persist desired state for drift detection. Save the RAW
+		// manifest (preserving $ref markers) alongside a refs_hash
+		// computed from the resolved spec — that way subsequent Gets
+		// echo user intent, and the cache still invalidates when an
+		// upstream ref target updates.
 		if d.manifests != nil {
 			sinkCtx := manifests.WithSource(ctx, op.Source)
-			if err := d.manifests.Save(sinkCtx, &manifest); err != nil {
+			refsHash := d.manifests.Hash(&resolvedManifest)
+			if err := d.manifests.SaveWithRefsHash(sinkCtx, &rawManifest, refsHash); err != nil {
 				log.Printf("dispatcher: save manifest for %s %q: %v", op.Kind, op.ResourceName, err)
 			}
 		}

@@ -57,7 +57,13 @@ func (m *DiskMirror) Root() string { return m.root }
 // Save writes the manifest to SQLite and then to disk. On disk-write
 // failure the SQLite row is left in place (truth wins).
 func (m *DiskMirror) Save(ctx context.Context, r *protocol.Resource) error {
-	if err := m.store.Save(ctx, r); err != nil {
+	return m.SaveWithRefsHash(ctx, r, "")
+}
+
+// SaveWithRefsHash is Save plus the resolved-refs hash used by the
+// dispatcher's verifying-trace cache. See Store.SaveWithRefsHash.
+func (m *DiskMirror) SaveWithRefsHash(ctx context.Context, r *protocol.Resource, refsHash string) error {
+	if err := m.store.SaveWithRefsHash(ctx, r, refsHash); err != nil {
 		return err
 	}
 	if err := m.writeFile(r); err != nil {
@@ -96,6 +102,11 @@ func (m *DiskMirror) Delete(ctx context.Context, apiVersion, kind, name string) 
 // LoadHash delegates to the wrapped store.
 func (m *DiskMirror) LoadHash(ctx context.Context, apiVersion, kind, name string) (string, error) {
 	return m.store.LoadHash(ctx, apiVersion, kind, name)
+}
+
+// LoadHashes delegates to the wrapped store.
+func (m *DiskMirror) LoadHashes(ctx context.Context, apiVersion, kind, name string) (string, string, error) {
+	return m.store.LoadHashes(ctx, apiVersion, kind, name)
 }
 
 // Hash delegates to the wrapped store.

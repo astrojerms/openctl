@@ -40,8 +40,21 @@ func (s *Store) Hash(r *protocol.Resource) string {
 // Save upserts the manifest's spec for (apiVersion, kind, name). Called by
 // the dispatcher after a successful apply. Also stores the verifying-trace
 // input hash so subsequent applies of the same manifest can short-circuit
-// the provider call.
+// the provider call. Equivalent to SaveWithRefsHash(ctx, r, "") — pre-Phase-8
+// callers.
 func (s *Store) Save(ctx context.Context, r *protocol.Resource) error {
+	return s.SaveWithRefsHash(ctx, r, "")
+}
+
+// SaveWithRefsHash is Save plus an explicit refs_hash for the
+// verifying-trace cache's ref-invalidation dimension. Phase 8 step 5:
+// the dispatcher hashes the raw (pre-resolution) manifest into
+// input_hash and the resolved-ref values into refs_hash; both must
+// match on the next apply for a cache hit. Non-dispatcher callers
+// (disk mirror, GitOps watcher) pass refsHash="" — those rows always
+// miss the ref-hash check, so the dispatcher will re-verify on first
+// live apply.
+func (s *Store) SaveWithRefsHash(ctx context.Context, r *protocol.Resource, refsHash string) error {
 	if r == nil || r.APIVersion == "" || r.Kind == "" || r.Metadata.Name == "" {
 		return fmt.Errorf("save: apiVersion, kind, metadata.name all required")
 	}
@@ -53,18 +66,23 @@ func (s *Store) Save(ctx context.Context, r *protocol.Resource) error {
 	if err != nil {
 		return fmt.Errorf("encode metadata: %w", err)
 	}
+	// SQLite treats "" as NULL-adjacent for this workflow — we store
+	// the empty string when no refs_hash is supplied, and read it back
+	// via COALESCE. This keeps the schema uniform without requiring
+	// callers to plumb sql.NullString values.
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO applied_manifests (api_version, kind, name, spec_json, metadata_json, applied_at, input_hash)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO applied_manifests (api_version, kind, name, spec_json, metadata_json, applied_at, input_hash, refs_hash)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(api_version, kind, name) DO UPDATE SET
 		   spec_json = excluded.spec_json,
 		   metadata_json = excluded.metadata_json,
 		   applied_at = excluded.applied_at,
-		   input_hash = excluded.input_hash`,
+		   input_hash = excluded.input_hash,
+		   refs_hash = excluded.refs_hash`,
 		r.APIVersion, r.Kind, r.Metadata.Name,
 		string(specJSON), string(metaJSON),
 		time.Now().UTC().Format(time.RFC3339Nano),
-		Hash(r),
+		Hash(r), refsHash,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert applied_manifest: %w", err)
@@ -77,20 +95,30 @@ func (s *Store) Save(ctx context.Context, r *protocol.Resource) error {
 // on the hot path before every Apply to decide whether to call the
 // provider at all.
 func (s *Store) LoadHash(ctx context.Context, apiVersion, kind, name string) (string, error) {
-	var hash sql.NullString
-	err := s.db.QueryRowContext(ctx,
-		`SELECT COALESCE(input_hash, '')
+	inputHash, _, err := s.LoadHashes(ctx, apiVersion, kind, name)
+	return inputHash, err
+}
+
+// LoadHashes returns both stored verifying-trace hashes for a resource:
+// input_hash (raw manifest hash — user intent) and refs_hash (resolved
+// $ref values hash — upstream state). Either or both may be "" for
+// resources saved by pre-Phase-8 callers. Returns ("","",nil) when no
+// row exists.
+func (s *Store) LoadHashes(ctx context.Context, apiVersion, kind, name string) (inputHash, refsHash string, err error) {
+	var iHash, rHash sql.NullString
+	err = s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(input_hash, ''), COALESCE(refs_hash, '')
 		 FROM applied_manifests
 		 WHERE api_version = ? AND kind = ? AND name = ?`,
 		apiVersion, kind, name,
-	).Scan(&hash)
+	).Scan(&iHash, &rHash)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
+		return "", "", nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("load input_hash: %w", err)
+		return "", "", fmt.Errorf("load hashes: %w", err)
 	}
-	return hash.String, nil
+	return iHash.String, rHash.String, nil
 }
 
 // Load returns the most recent applied manifest spec for the resource, or
