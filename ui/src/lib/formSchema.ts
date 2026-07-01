@@ -39,6 +39,10 @@ export interface FormField {
   // apiVersion is optional; when absent the UI defaults it to the
   // containing resource's apiVersion.
   optionsSource?: { kind: string; apiVersion?: string };
+  // `@oneOf(group="X")` attribute → this field is one alternative in a
+  // mutually-exclusive group of siblings. The form renderer groups
+  // them into a picker.
+  oneOfGroup?: string;
   reason?: string;
 }
 

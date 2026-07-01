@@ -304,10 +304,13 @@ Punch list (unstarted, prioritized):
       before Watch does. Cluster kubeconfig download + VM console
       access still parked — different modality (file / websocket)
       than the fire-and-forget action RPC covers.
-- [ ] **U8.13** — Discriminated-union picker for VM image source
-      (`template | cloudImage | image`). Today they're three separate
-      "+" buttons with no hint they're exclusive. Schema convention
-      + form walker + a radio-then-form renderer.
+- [x] **U8.13** — Discriminated-union picker for VM image source.
+      CUE convention `@oneOf(group="X")` — sibling fields sharing a
+      group name render as a single picker in the form editor:
+      radio-style buttons at the top, only the chosen alternative's
+      sub-form appears below, switching alternatives clears the
+      previous one. Wired for VirtualMachine.spec.{template,
+      cloudImage, image}.
 - [ ] **U8.14** — Direct delete from list/detail with confirmation.
       Today the only path is Edit → clear spec → apply, or the CLI.
 - [ ] **U8.15** — Per-field validation error highlighting. Errors

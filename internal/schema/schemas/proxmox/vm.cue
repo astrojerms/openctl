@@ -14,14 +14,17 @@ import "openctl.io/schemas/base"
 	// and renders a dropdown of available nodes.
 	node: string @options(kind="ProxmoxNode")
 
-	// Source for VM creation: pick exactly one of template, cloudImage, or image.
+	// Source for VM creation. Pick exactly one via the picker; the
+	// three alternatives share the "image-source" @oneOf group so the
+	// form editor renders a radio at the top and only reveals the
+	// sub-form for the chosen source.
 	// Clones from a Proxmox template by name or vmid.
 	template?: {
 		// Template name in Proxmox (preferred over vmid).
 		name?: string
 		// Template vmid; used when the name isn't unique.
 		vmid?: int
-	}
+	} @oneOf(group="image-source")
 	// Downloads a cloud image URL and provisions a reusable template
 	// behind the scenes, then clones it. The template-name is generated
 	// from the URL unless overridden.
@@ -36,7 +39,7 @@ import "openctl.io/schemas/base"
 		templateName?: string
 		// Where to place cloned VM disks. Defaults to storage.
 		diskStorage?: string
-	}
+	} @oneOf(group="image-source")
 	// Imports an existing disk image from Proxmox storage.
 	image?: {
 		// Storage that contains the source image.
@@ -51,7 +54,7 @@ import "openctl.io/schemas/base"
 		targetStorage?: string
 		// Format to convert to during import.
 		targetFormat?: "qcow2" | "raw"
-	}
+	} @oneOf(group="image-source")
 
 	// CPU configuration. Total vCPUs = cores * sockets.
 	cpu?: {
