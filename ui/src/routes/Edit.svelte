@@ -99,6 +99,23 @@
   // updates the other via the parse+stringify round-trip below.
   let view: 'form' | 'edit' | 'diff' = 'edit';
 
+  // U8.20: manifest-preview toggle in the form view. Persisted in
+  // localStorage so the preference sticks across sessions. Hidden by
+  // default when the user has previously opted out; shown otherwise.
+  const PREVIEW_KEY = 'openctl.form.showPreview';
+  let showPreview = (() => {
+    try {
+      const v = localStorage.getItem(PREVIEW_KEY);
+      return v === null ? true : v === '1';
+    } catch {
+      return true;
+    }
+  })();
+  function togglePreview() {
+    showPreview = !showPreview;
+    try { localStorage.setItem(PREVIEW_KEY, showPreview ? '1' : '0'); } catch { /* ignore */ }
+  }
+
   // Form schema lazy-loaded once on mount; null while fetching, and
   // also when the controller has no schema for this kind (form tab
   // stays disabled in that case).
@@ -697,15 +714,26 @@
       {/if}
     </div>
 
-    <div class="editor-wrap" class:form-view={view === 'form'}>
+    <div class="editor-wrap" class:form-view={view === 'form'} class:form-view-solo={view === 'form' && !showPreview}>
       {#if view === 'form' && formSchema}
         <div class="form-pane">
           <FormField field={formSchema} value={formState} on:change={(e) => onFormChange(e.detail)} />
         </div>
-        <div class="form-preview">
-          <h4>Manifest</h4>
-          <pre>{text}</pre>
-        </div>
+        {#if showPreview}
+          <div class="form-preview">
+            <div class="form-preview-head">
+              <h4>Manifest</h4>
+              <button type="button" class="preview-toggle" on:click={togglePreview} title="Hide manifest preview">
+                Hide
+              </button>
+            </div>
+            <pre>{text}</pre>
+          </div>
+        {:else}
+          <button type="button" class="preview-show" on:click={togglePreview} title="Show manifest preview">
+            Show manifest
+          </button>
+        {/if}
       {:else if view === 'edit'}
         <MonacoEditor value={text} on:change={onChange} {markers} disabled={applying} />
       {:else}
@@ -909,6 +937,45 @@
     gap: 1rem;
     align-items: stretch;
   }
+  .editor-wrap.form-view-solo {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .form-preview-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5rem 0.9rem;
+    background: rgba(127, 127, 127, 0.08);
+    border-bottom: 1px solid rgba(127, 127, 127, 0.15);
+  }
+  .form-preview-head h4 {
+    margin: 0;
+    padding: 0;
+    background: none;
+    border: none;
+    font-size: 0.75rem;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .preview-toggle,
+  .preview-show {
+    background: transparent;
+    border: 1px solid rgba(127, 127, 127, 0.3);
+    color: #aaa;
+    font-size: 0.75rem;
+    padding: 0.15em 0.6em;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .preview-toggle:hover,
+  .preview-show:hover {
+    color: #fff;
+    background: rgba(127, 127, 127, 0.12);
+  }
+  .preview-show {
+    align-self: flex-start;
+  }
   .form-pane {
     overflow-y: auto;
     padding: 1rem 1.25rem;
@@ -924,16 +991,9 @@
     border-radius: 6px;
     overflow: hidden;
   }
-  .form-preview h4 {
-    margin: 0;
-    padding: 0.5rem 0.9rem;
-    font-size: 0.75rem;
-    color: #888;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    background: rgba(127, 127, 127, 0.08);
-    border-bottom: 1px solid rgba(127, 127, 127, 0.15);
-  }
+  /* Old .form-preview h4 background/padding style superseded by
+     .form-preview-head above; the h4 inside that container is
+     styled there. */
   .form-preview pre {
     margin: 0;
     padding: 0.75rem 1rem;
