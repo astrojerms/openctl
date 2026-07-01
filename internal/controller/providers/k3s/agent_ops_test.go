@@ -58,7 +58,7 @@ func TestParseAgentInstallSpec_MissingClusterName(t *testing.T) {
 	}
 }
 
-func TestParseAgentInstallSpec_MissingVMIP(t *testing.T) {
+func TestParseAgentInstallSpec_MissingVMIP_ParsesAndDefersToWait(t *testing.T) {
 	m := &protocol.Resource{
 		Spec: map[string]any{
 			"vmRef": map[string]any{
@@ -69,9 +69,15 @@ func TestParseAgentInstallSpec_MissingVMIP(t *testing.T) {
 			"ssh":         map[string]any{"privateKeyPath": "/k"},
 		},
 	}
-	_, err := parseAgentInstallSpec(m)
-	if err == nil || !strings.Contains(err.Error(), "status.ip") {
-		t.Errorf("expected status.ip error, got %v", err)
+	s, err := parseAgentInstallSpec(m)
+	if err != nil {
+		t.Fatalf("parse should succeed with empty IP, got: %v", err)
+	}
+	if s.vmIP != "" {
+		t.Errorf("expected empty vmIP, got %q", s.vmIP)
+	}
+	if s.vmName != "vm-a" {
+		t.Errorf("expected vmName=vm-a, got %q", s.vmName)
 	}
 }
 

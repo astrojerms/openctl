@@ -106,10 +106,11 @@ func TestParseK3sNodeSpec_Agent(t *testing.T) {
 	}
 }
 
-func TestParseK3sNodeSpec_MissingVMIP(t *testing.T) {
-	// VMs that haven't reported their IP yet can't have K3sNode
-	// installed on them — the parser should fail loud so the op
-	// retries after the VM is ready.
+func TestParseK3sNodeSpec_MissingVMIP_ParsesAndDefersToWait(t *testing.T) {
+	// VMs that haven't reported their IP yet are OK to parse —
+	// applyK3sNode polls status.ip via the k3s Provider's VMApplier
+	// before running the install. Verify parse returns vmIP="" so
+	// the wait path takes over.
 	m := &protocol.Resource{
 		APIVersion: "k3s.openctl.io/v1",
 		Kind:       "K3sNode",
@@ -123,9 +124,15 @@ func TestParseK3sNodeSpec_MissingVMIP(t *testing.T) {
 			"ssh":  map[string]any{"privateKeyPath": "/root/.ssh/id_ed25519"},
 		},
 	}
-	_, err := parseK3sNodeSpec(m)
-	if err == nil || !strings.Contains(err.Error(), "status.ip") {
-		t.Errorf("expected status.ip error, got %v", err)
+	s, err := parseK3sNodeSpec(m)
+	if err != nil {
+		t.Fatalf("parse should succeed with empty IP, got: %v", err)
+	}
+	if s.vmIP != "" {
+		t.Errorf("expected empty vmIP, got %q", s.vmIP)
+	}
+	if s.vmName != "vm-a" {
+		t.Errorf("expected vmName=vm-a, got %q", s.vmName)
 	}
 }
 

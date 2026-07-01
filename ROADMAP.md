@@ -105,9 +105,12 @@ evolved.
       VM children, child resources surface their owning Cluster via
       Metadata.OwnerRefs. Unblocks UI U3.3 deferred + U6.
 - [~] **Arch Phase 8 (full)** — genuinely multi-session
-      architectural lift. Steps 1–5 shipped as declarative +
-      cache primitives; the remaining piece is a dispatcher
-      refactor that consumes Cluster.Plan output as a DAG.
+      architectural lift. Steps 1–5 + the dispatcher refactor
+      landed. Cluster.Apply's initial-create path now fans out
+      through Plan → ChildDispatcher, giving each VM / K3sNode /
+      AgentInstall its own resolve+cache+save pipeline. Needs
+      real-cluster validation before we retire the imperative
+      applyExisting (count-up/respec/delete) branch.
       1. [x] **ResourceRef as spec-level primitive.** CUE `#Ref`
          helper in base.cue authors `{$ref: {apiVersion, kind,
          name, field?}}` markers. Server-side resolver

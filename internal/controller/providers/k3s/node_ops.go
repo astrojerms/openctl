@@ -45,7 +45,7 @@ type nodeState struct {
 // contains the resolved VM (as a map with metadata + spec + status),
 // joinFrom (if any) contains the resolved node-token string, and
 // joinURLFrom contains the resolved server IP.
-func (p *Provider) applyK3sNode(_ context.Context, manifest *protocol.Resource) (*protocol.Resource, error) {
+func (p *Provider) applyK3sNode(ctx context.Context, manifest *protocol.Resource) (*protocol.Resource, error) {
 	name := manifest.Metadata.Name
 	if name == "" {
 		return nil, fmt.Errorf("metadata.name is required")
@@ -61,6 +61,17 @@ func (p *Provider) applyK3sNode(_ context.Context, manifest *protocol.Resource) 
 	// at the dispatcher layer; this is a defense-in-depth belt.
 	if existing, err := loadNodeState(name); err == nil && existing != nil && existing.Installed {
 		return nodeStateToResource(name, manifest, existing), nil
+	}
+
+	// If vmRef was resolved before the VM's QGA reported its IP
+	// (Plan-emitted K3sNode dispatched immediately after VM create),
+	// poll until the IP appears.
+	if spec.vmIP == "" {
+		ip, err := waitForVMIP(ctx, p.vms, spec.vmName, vmIPWaitTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("wait for VM %s IP: %w", spec.vmName, err)
+		}
+		spec.vmIP = ip
 	}
 
 	// Bring up SSH. WaitForSSH retries until sshd responds — a fresh
@@ -224,9 +235,11 @@ func parseK3sNodeSpec(manifest *protocol.Resource) (*k3sNodeSpec, error) {
 			out.vmIP = ip
 		}
 	}
-	if out.vmIP == "" {
-		return nil, fmt.Errorf("vmRef target has no status.ip yet — VM must have run and reported its address before K3sNode can install")
-	}
+	// vmIP is allowed to be "" here — applyK3sNode calls waitForVMIP
+	// with the k3s Provider's VMApplier to poll status.ip after a
+	// fresh Plan-emitted VM finishes booting. Standalone K3sNode
+	// tests that carry a pre-populated status.ip in vmRef still land
+	// in this parse with vmIP set and skip the wait.
 
 	if role, ok := manifest.Spec["role"].(string); ok {
 		out.role = role
