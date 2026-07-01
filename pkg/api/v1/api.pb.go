@@ -127,6 +127,12 @@ type PingResponse struct {
 	Echo string `protobuf:"bytes,1,opt,name=echo,proto3" json:"echo,omitempty"`
 	// Semver-ish version string of the controller binary.
 	ServerVersion string `protobuf:"bytes,2,opt,name=server_version,json=serverVersion,proto3" json:"server_version,omitempty"`
+	// Short git SHA of the build ("dev" for unlinked builds). Injected at
+	// link time via -ldflags. Lets the UI/CLI confirm which commit is
+	// running without guessing from behavior.
+	GitCommit string `protobuf:"bytes,3,opt,name=git_commit,json=gitCommit,proto3" json:"git_commit,omitempty"`
+	// RFC3339 build timestamp ("dev" for unlinked builds).
+	BuildTime     string `protobuf:"bytes,4,opt,name=build_time,json=buildTime,proto3" json:"build_time,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -171,6 +177,20 @@ func (x *PingResponse) GetEcho() string {
 func (x *PingResponse) GetServerVersion() string {
 	if x != nil {
 		return x.ServerVersion
+	}
+	return ""
+}
+
+func (x *PingResponse) GetGitCommit() string {
+	if x != nil {
+		return x.GitCommit
+	}
+	return ""
+}
+
+func (x *PingResponse) GetBuildTime() string {
+	if x != nil {
+		return x.BuildTime
 	}
 	return ""
 }
@@ -3197,10 +3217,14 @@ const file_api_proto_rawDesc = "" +
 	"\tapi.proto\x12\n" +
 	"openctl.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1cgoogle/api/annotations.proto\"'\n" +
 	"\vPingRequest\x12\x18\n" +
-	"\amessage\x18\x01 \x01(\tR\amessage\"I\n" +
+	"\amessage\x18\x01 \x01(\tR\amessage\"\x87\x01\n" +
 	"\fPingResponse\x12\x12\n" +
 	"\x04echo\x18\x01 \x01(\tR\x04echo\x12%\n" +
-	"\x0eserver_version\x18\x02 \x01(\tR\rserverVersion\"I\n" +
+	"\x0eserver_version\x18\x02 \x01(\tR\rserverVersion\x12\x1d\n" +
+	"\n" +
+	"git_commit\x18\x03 \x01(\tR\tgitCommit\x12\x1d\n" +
+	"\n" +
+	"build_time\x18\x04 \x01(\tR\tbuildTime\"I\n" +
 	"\x12ListActionsRequest\x12\x1f\n" +
 	"\vapi_version\x18\x01 \x01(\tR\n" +
 	"apiVersion\x12\x12\n" +

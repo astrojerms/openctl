@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import type { WhoAmIResponse } from '../lib/api';
+  import type { PingResponse, WhoAmIResponse } from '../lib/api';
+  import { ping } from '../lib/api';
   import { logout } from '../lib/auth';
   import { route } from '../lib/router';
   import {
@@ -21,9 +22,16 @@
 
   let busy = false;
 
+  // Version pill in the header. Fetched once on mount so the user can
+  // see at a glance which controller build (git SHA + build time) is
+  // running — sidesteps "is my UI change even deployed?" without
+  // digging into the Home tab.
+  let pong: PingResponse | null = null;
+
   onMount(() => {
     void refreshCatalogue();
     startOpsWatcher();
+    void ping.ping().then((p) => (pong = p)).catch(() => { /* ignore */ });
   });
 
   onDestroy(() => {
@@ -54,6 +62,11 @@
 
 <header>
   <a class="brand" href={routeHref({ name: 'home' })}>openctl</a>
+  {#if pong?.gitCommit}
+    <span class="build-pill" title={pong.buildTime && pong.buildTime !== 'dev' ? `built ${pong.buildTime}` : 'commit / build info'}>
+      {pong.gitCommit}
+    </span>
+  {/if}
   <div class="meta">
     <GitStatus />
     <span class="who" title="Session: {me.sessionId}">
@@ -121,6 +134,16 @@
     color: inherit;
     text-decoration: none;
     font-size: 1rem;
+  }
+  .build-pill {
+    margin-left: 0.6rem;
+    padding: 0.05em 0.55em;
+    border-radius: 999px;
+    background: rgba(127, 127, 127, 0.12);
+    color: #888;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.02em;
   }
   .meta {
     display: flex;

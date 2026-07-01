@@ -53,7 +53,8 @@ func run() error {
 	case "uninstall":
 		return runUninstall(os.Args[2:])
 	case "version":
-		fmt.Println(server.ServerVersion)
+		fmt.Printf("%s (commit=%s built=%s)\n",
+			server.ServerVersion, server.GitCommit, server.BuildTime)
 		return nil
 	case "-h", "--help", "help":
 		printUsage()

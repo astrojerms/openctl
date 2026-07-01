@@ -505,9 +505,22 @@
   // mirror the editor. Force it off if the user lands there somehow.
   $: if (isCreate && view === 'diff') view = 'edit';
 
-  // Re-seed the form whenever the user enters the Form tab, so edits
-  // made in the editor view show up.
-  $: if (view === 'form' && formSchema && !formDriving) reseedFormState();
+  // Re-seed the form only when the user transitions into the Form tab
+  // (edge trigger, not level trigger). A prior level-trigger version
+  // re-parsed text on every keystroke and clobbered the form state:
+  // click "+ cloudInit" → form gets cloudInit={} → scrubEmpty strips
+  // it from text → reactive re-parses text → cloudInit gone from form
+  // state → the "+ cloudInit" button reappears. Users saw no effect on
+  // click and concluded the field wasn't editable. Every optional
+  // composite (labels, annotations, networks, disks, cloudInit,
+  // template/cloudImage/image) had the same shape.
+  let prevView: 'form' | 'edit' | 'diff' = view;
+  $: {
+    if (view === 'form' && prevView !== 'form' && formSchema) {
+      reseedFormState();
+    }
+    prevView = view;
+  }
 
   // Detect when the editor text carries keys the form can't represent.
   // When non-empty, the Form tab is disabled with the offending paths in

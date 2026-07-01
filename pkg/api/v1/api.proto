@@ -28,6 +28,12 @@ message PingResponse {
   string echo = 1;
   // Semver-ish version string of the controller binary.
   string server_version = 2;
+  // Short git SHA of the build ("dev" for unlinked builds). Injected at
+  // link time via -ldflags. Lets the UI/CLI confirm which commit is
+  // running without guessing from behavior.
+  string git_commit = 3;
+  // RFC3339 build timestamp ("dev" for unlinked builds).
+  string build_time = 4;
 }
 
 // ResourceService is the controller's primary surface for managing resources
