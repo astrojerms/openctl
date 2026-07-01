@@ -147,10 +147,11 @@ func (d *Dispatcher) drain(ctx context.Context) {
 	}
 }
 
-// tryCacheHit checks the verifying-trace cache and, on a hit, fast-paths
-// the op to succeeded without calling provider.Apply. Returns true if the
-// op was completed via the cache; false if the caller should fall through
-// to the normal Apply path.
+// tryCacheHitInline is a pure cache-check: on hit returns the cached
+// provider.Get result and hit=true; on miss returns (nil, false). No op
+// status is touched here — callers that own an op row (execute()) handle
+// completion themselves; ApplyManifest uses this to serve child manifests
+// through the same cache without an op row.
 //
 // Two-dimensional cache (Phase 8 step 5):
 //   - input_hash of the RAW manifest must match the stored value
@@ -164,42 +165,73 @@ func (d *Dispatcher) drain(ctx context.Context) {
 //   - manifest carries the i-know-this-breaks-the-cluster annotation
 //     (treated as "user is forcing a destructive operation" — never
 //     short-circuit those)
-//
-// On hit, calls provider.Get to populate a useful result. If Get errors
-// (e.g. the underlying resource was deleted out-of-band), the cache hit
-// is abandoned and the caller falls through to normal Apply.
-func (d *Dispatcher) tryCacheHit(ctx context.Context, p providers.Provider, op *Operation, raw, resolved *protocol.Resource) bool {
+func (d *Dispatcher) tryCacheHitInline(ctx context.Context, p providers.Provider, raw, resolved *protocol.Resource) (*protocol.Resource, bool) {
 	if d.manifests == nil {
-		return false
+		return nil, false
 	}
 	if raw.Metadata.Annotations["openctl.io/i-know-this-breaks-the-cluster"] == "true" {
-		return false
+		return nil, false
 	}
 	storedInput, storedRefs, err := d.manifests.LoadHashes(ctx, raw.APIVersion, raw.Kind, raw.Metadata.Name)
 	if err != nil || storedInput == "" {
-		return false
+		return nil, false
 	}
 	if d.manifests.Hash(raw) != storedInput {
-		return false
+		return nil, false
 	}
-	// refs_hash dimension: any manifest with resolvable $refs writes a
-	// non-empty refs_hash on save. An empty stored refs_hash means "no
-	// ref-hash information on file" (pre-Phase-8 row) and forces a miss
-	// so we recompute it. A non-empty stored value must match.
 	if storedRefs == "" || d.manifests.Hash(resolved) != storedRefs {
-		return false
+		return nil, false
 	}
-	// Both hashes match — confirm the resource still exists by fetching
-	// it. If Get fails or returns nil, the cache is stale; fall through
-	// to the normal Apply which will recreate from scratch.
 	result, err := p.Get(ctx, resolved.Kind, resolved.Metadata.Name)
 	if err != nil || result == nil {
-		return false
+		return nil, false
 	}
-	_ = d.store.SetLabel(ctx, op.ID, "cached: input+refs hashes unchanged since last apply")
-	resultJSON, _ := json.Marshal(result)
-	_ = d.store.Complete(ctx, op.ID, StatusSucceeded, "", string(resultJSON))
-	return true
+	return result, true
+}
+
+// ApplyManifest runs the full Apply pipeline (resolve refs → cache check
+// → provider.Apply → save state) for a single manifest and returns the
+// applied resource. Does not touch operation status.
+//
+// Two call sites:
+//  1. execute() for top-level ops (wraps the result in op completion).
+//  2. Composite providers via the ChildDispatcher on ctx, to run Plan()
+//     child manifests through the same pipeline without spawning
+//     separate ops. This gives children per-resource cache hits, ref
+//     resolution, and manifest persistence for free.
+//
+// Errors:
+//   - unknown apiVersion (no provider) → wrapped as "no provider for apiVersion"
+//   - ref resolve failure → wrapped as "resolve refs"
+//   - provider.Apply failure → returned unwrapped so callers see the
+//     underlying error
+func (d *Dispatcher) ApplyManifest(ctx context.Context, raw *protocol.Resource) (*protocol.Resource, error) {
+	p, err := d.registry.For(raw.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("no provider for apiVersion %q: %w", raw.APIVersion, err)
+	}
+	resolved := *raw
+	if resolver := refs.New(d.registry); raw.Spec != nil {
+		resolvedSpec, err := resolver.Resolve(ctx, raw.Spec)
+		if err != nil {
+			return nil, fmt.Errorf("resolve refs: %w", err)
+		}
+		resolved.Spec = resolvedSpec
+	}
+	if cached, hit := d.tryCacheHitInline(ctx, p, raw, &resolved); hit {
+		return cached, nil
+	}
+	result, err := p.Apply(ctx, &resolved)
+	if err != nil {
+		return nil, err
+	}
+	if d.manifests != nil {
+		refsHash := d.manifests.Hash(&resolved)
+		if err := d.manifests.SaveWithRefsHash(ctx, raw, refsHash); err != nil {
+			log.Printf("dispatcher: save manifest for %s %q: %v", raw.Kind, raw.Metadata.Name, err)
+		}
+	}
+	return result, nil
 }
 
 func (d *Dispatcher) execute(ctx context.Context, op *Operation) {
@@ -221,53 +253,40 @@ func (d *Dispatcher) execute(ctx context.Context, op *Operation) {
 			_ = d.store.Complete(ctx, op.ID, StatusFailed, fmt.Sprintf("decode manifest: %v", err), "")
 			return
 		}
-		// Phase 8 step 1: resolve any ResourceRefs in the spec before
-		// handing to the provider. Step 5: keep the RAW manifest
-		// intact (it's what we persist for intent + drift diffs), and
-		// mutate a separate resolvedManifest that gets passed to
-		// provider.Apply. Errors here (e.g. ref target missing) fail
-		// the op — schedulers can retry after the referenced resource
-		// is ready.
-		resolvedManifest := rawManifest
-		if resolver := refs.New(d.registry); rawManifest.Spec != nil {
-			resolvedSpec, err := resolver.Resolve(ctx, rawManifest.Spec)
-			if err != nil {
-				_ = d.store.Complete(ctx, op.ID, StatusFailed,
-					fmt.Sprintf("resolve refs: %v", err), "")
-				return
-			}
-			resolvedManifest.Spec = resolvedSpec
-		}
-		// Two-dimensional verifying-trace cache: intent unchanged
-		// (input_hash matches raw manifest) AND upstream refs
-		// unchanged (refs_hash matches resolved spec). Provider.Get
-		// still runs on the resolved manifest so the cached success
-		// carries an accurate current view.
-		if d.tryCacheHit(ctx, p, op, &rawManifest, &resolvedManifest) {
-			return
-		}
-		result, err := p.Apply(ctx, &resolvedManifest)
-		if err != nil {
-			_ = d.store.Complete(ctx, op.ID, StatusFailed, err.Error(), "")
-			return
-		}
-		// Persist desired state for drift detection. Save the RAW
-		// manifest (preserving $ref markers) alongside a refs_hash
-		// computed from the resolved spec — that way subsequent Gets
-		// echo user intent, and the cache still invalidates when an
-		// upstream ref target updates.
+		// Wire a ChildDispatcher and manifest-source label onto ctx so
+		// composite providers (k3s Cluster) can invoke the same Apply
+		// pipeline on Plan()-emitted children without re-implementing
+		// resolve/cache/save. Atomic providers ignore both.
+		applyCtx := WithChildDispatcher(ctx, d)
 		if d.manifests != nil {
-			sinkCtx := manifests.WithSource(ctx, op.Source)
-			refsHash := d.manifests.Hash(&resolvedManifest)
-			if err := d.manifests.SaveWithRefsHash(sinkCtx, &rawManifest, refsHash); err != nil {
-				log.Printf("dispatcher: save manifest for %s %q: %v", op.Kind, op.ResourceName, err)
+			applyCtx = manifests.WithSource(applyCtx, op.Source)
+		}
+		// Cache-hit path needs to touch op.Label before the shared
+		// ApplyManifest helper serves the cached result.
+		if d.manifests != nil {
+			resolved := rawManifest
+			if resolver := refs.New(d.registry); rawManifest.Spec != nil {
+				if resolvedSpec, err := resolver.Resolve(applyCtx, rawManifest.Spec); err == nil {
+					resolved.Spec = resolvedSpec
+					if cached, hit := d.tryCacheHitInline(applyCtx, p, &rawManifest, &resolved); hit {
+						_ = d.store.SetLabel(applyCtx, op.ID, "cached: input+refs hashes unchanged since last apply")
+						cachedJSON, _ := json.Marshal(cached)
+						_ = d.store.Complete(applyCtx, op.ID, StatusSucceeded, "", string(cachedJSON))
+						return
+					}
+				}
 			}
+		}
+		result, err := d.ApplyManifest(applyCtx, &rawManifest)
+		if err != nil {
+			_ = d.store.Complete(applyCtx, op.ID, StatusFailed, err.Error(), "")
+			return
 		}
 		var resultJSON []byte
 		if result != nil {
 			resultJSON, _ = json.Marshal(result)
 		}
-		_ = d.store.Complete(ctx, op.ID, StatusSucceeded, "", string(resultJSON))
+		_ = d.store.Complete(applyCtx, op.ID, StatusSucceeded, "", string(resultJSON))
 
 	case TypeDelete:
 		if err := p.Delete(ctx, op.Kind, op.ResourceName); err != nil {

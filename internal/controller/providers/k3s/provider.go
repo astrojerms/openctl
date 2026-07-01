@@ -204,6 +204,15 @@ func (p *Provider) Apply(ctx context.Context, manifest *protocol.Resource) (*pro
 		return p.applyExisting(ctx, manifest, name, spec)
 	}
 
+	// Plan-based path (Phase 8 dispatcher refactor): when running
+	// inside a dispatched op, fan out through Plan → ChildDispatcher
+	// so each VM/K3sNode/AgentInstall gets its own resolve+cache+save
+	// pipeline. Falls back to the imperative path when no
+	// ChildDispatcher is on ctx (CLI direct-apply, unit tests).
+	if cd, ok := operations.ChildDispatcherFrom(ctx); ok {
+		return p.applyClusterViaPlan(ctx, manifest, cd)
+	}
+
 	creator := k3scluster.NewCreator(name, spec, p.config)
 	dispatches := creator.GenerateDispatchRequests()
 

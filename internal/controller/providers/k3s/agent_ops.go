@@ -48,7 +48,7 @@ type agentInstallState struct {
 //   - the referenced VM has status.ip populated
 //   - a Cluster with clusterName exists on disk (its bundle dir has
 //     ca.pem / ca.key so we can mint a per-node server cert)
-func (p *Provider) applyAgentInstall(_ context.Context, manifest *protocol.Resource) (*protocol.Resource, error) {
+func (p *Provider) applyAgentInstall(ctx context.Context, manifest *protocol.Resource) (*protocol.Resource, error) {
 	name := manifest.Metadata.Name
 	if name == "" {
 		return nil, fmt.Errorf("metadata.name is required")
@@ -56,6 +56,14 @@ func (p *Provider) applyAgentInstall(_ context.Context, manifest *protocol.Resou
 	spec, err := parseAgentInstallSpec(manifest)
 	if err != nil {
 		return nil, err
+	}
+
+	if spec.vmIP == "" {
+		ip, err := waitForVMIP(ctx, p.vms, spec.vmName, vmIPWaitTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("wait for VM %s IP: %w", spec.vmName, err)
+		}
+		spec.vmIP = ip
 	}
 
 	// Fast path: same install already recorded.
@@ -216,9 +224,10 @@ func parseAgentInstallSpec(manifest *protocol.Resource) (*agentInstallSpec, erro
 	if out.vmName == "" {
 		return nil, fmt.Errorf("vmRef target has no metadata.name")
 	}
-	if out.vmIP == "" {
-		return nil, fmt.Errorf("vmRef target has no status.ip yet — VM must have run and reported its address before AgentInstall can install")
-	}
+	// vmIP is allowed to be "" — applyAgentInstall polls the VM
+	// provider for status.ip when the ref-resolved manifest was
+	// captured mid-boot (e.g. dispatched immediately after VM
+	// create in a Cluster Plan fan-out).
 
 	if s, ok := manifest.Spec["clusterName"].(string); ok && s != "" {
 		out.clusterName = s
