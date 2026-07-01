@@ -14,8 +14,20 @@ K3S_PLUGIN_DIR=plugins/k3s
 UI_DIR=ui
 UI_OUT=internal/controller/server/uiassets/dist
 
-# Go settings
-GOFLAGS=-ldflags="-s -w"
+# Go settings.
+#
+# LDFLAGS injects git SHA + build time into the controller binary
+# (server.GitCommit / server.BuildTime), surfaced by Ping so the UI and
+# CLI can confirm which build is running without guessing from
+# behavior. Falls back to "dev" when git or date aren't available
+# (fresh checkout without commits, unusual PATHs) so the build never
+# fails on the injection.
+GIT_COMMIT := $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo dev)
+BUILD_TIME := $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo dev)
+LDFLAGS := -s -w \
+  -X github.com/openctl/openctl/internal/controller/server.GitCommit=$(GIT_COMMIT) \
+  -X github.com/openctl/openctl/internal/controller/server.BuildTime=$(BUILD_TIME)
+GOFLAGS=-ldflags="$(LDFLAGS)"
 export GOWORK=off
 
 all: build

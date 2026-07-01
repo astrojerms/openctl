@@ -38,6 +38,12 @@
       {:else}
         <dl>
           <dt>Version</dt><dd>{pong.serverVersion}</dd>
+          {#if pong.gitCommit}
+            <dt>Commit</dt><dd title={pong.buildTime ? `built ${pong.buildTime}` : ''}>{pong.gitCommit}</dd>
+          {/if}
+          {#if pong.buildTime && pong.buildTime !== 'dev'}
+            <dt>Built</dt><dd>{pong.buildTime}</dd>
+          {/if}
           <dt>Echo</dt><dd>{pong.echo}</dd>
         </dl>
       {/if}

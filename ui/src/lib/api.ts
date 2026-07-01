@@ -111,6 +111,10 @@ export const session = {
 export interface PingResponse {
   echo: string;
   serverVersion: string;
+  // Short git SHA injected at build time. "dev" when unlinked.
+  gitCommit?: string;
+  // RFC3339 build timestamp. "dev" when unlinked.
+  buildTime?: string;
 }
 
 export const ping = {

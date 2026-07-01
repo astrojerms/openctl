@@ -24,6 +24,15 @@ import (
 // ServerVersion is the controller binary version string echoed by Ping.
 const ServerVersion = "0.1.0-controller"
 
+// GitCommit is the short git SHA of the build, injected by the Makefile
+// via -ldflags at link time. Falls back to "dev" for unlinked-flag
+// builds (bare `go build`, tests) so nothing depends on the injection.
+var GitCommit = "dev"
+
+// BuildTime is the RFC3339 timestamp of the build, injected the same
+// way. "dev" when unset.
+var BuildTime = "dev"
+
 // Options configures a Server. Token may be empty to disable auth (used for
 // `--no-auth` localhost-only setups). Registry may be nil; the resource
 // service still registers but every call will error with "no provider
@@ -170,5 +179,7 @@ func (h *pingHandler) Ping(_ context.Context, req *apiv1.PingRequest) (*apiv1.Pi
 	return &apiv1.PingResponse{
 		Echo:          req.GetMessage(),
 		ServerVersion: ServerVersion,
+		GitCommit:     GitCommit,
+		BuildTime:     BuildTime,
 	}, nil
 }
