@@ -25,25 +25,23 @@ end-to-end.
 
 ## Suggested next order
 
-Pick from (ordered by pitch-strength, not commitment):
+Post-U8 sprint delivered: templates, kubeconfig/console, auto-
+remediation, provider credential UI, two-way GitOps. Remaining
+candidates for the next round:
 
-- **Templates** — parameterized starters that render to full
-  manifests (proposed feature; see "Future goals"). Would change
-  the product story from "nice YAML editor" to "click one button
-  and get a working homelab VM."
-- ~~**Cluster kubeconfig / VM console**~~ — shipped. See
-  "Recently completed" — extended the Actioner interface to
-  return either a message, a URL, or a downloadable file.
-  Cluster `get-kubeconfig` streams the stored kubeconfig; VM
-  `console` opens the Proxmox noVNC URL in a new tab.
-- **Opt-in auto-remediation** — small feature that closes the loop
-  on the drift reconciler (see the Phase 9/10 rescope above).
-- **Provider credential editing UI** (from "Future goals").
 - **Full Phase 8** — K3sNode as a first-class resource, Cluster as
   composer, wire-level `ResourceRef` primitives. Biggest single
   architectural lift; unblocks refs-cache and cross-resource DAG
-  work.
-- **Two-way GitOps** (from "Future goals").
+  work. Broken into 5 concrete pieces in the phase section
+  below; first PR is the ResourceRef primitive + resolver alone.
+- **Multi-user auth** — OIDC + RBAC (from "Future goals").
+- **User-authored CUE templates** — extend templates from Go-only
+  compiled-in to loading `~/.openctl/templates/*.cue`. Feasible
+  now that the RPC + UI plumbing exists.
+- **Client-side CUE WASM validation** — faster editor diagnostics
+  without a server roundtrip (from "Future goals").
+- **Historical diff** — diff a resource against arbitrary commits
+  in the manifest repo (from "Future goals").
 
 ---
 
@@ -481,6 +479,24 @@ with the commit hash for at-a-glance history. Trim to the last 10.
   server.StopWithTimeout(3s) falls back to force Stop() when
   GracefulStop would otherwise wait indefinitely for UI Watch
   streams.
+- `aff8431` — two-way GitOps: fsnotify watcher on manifest mirror;
+  file edits become Apply ops (source="gitops"), loop-safe via
+  content compare, opt-in via `manifests.gitops.enabled`.
+- `d207b9e` — provider credential editing UI: ConfigService RPCs +
+  Providers page with add/edit/delete forms; secrets never leave
+  the server.
+- `f6b3cb2` — opt-in auto-remediation via
+  `openctl.io/autoReconcile: true` annotation; exponential backoff
+  on repeated failure; ops tagged source="auto-reconcile".
+- `615c639` — Cluster kubeconfig download + VM console URL via
+  extended Actioner (ActionResult with message/url/download shapes).
+- `e821bc9` — templates MVP: TemplateService + sidebar picker +
+  wizard; two starters shipped (ubuntu-server-vm, small-k3s-cluster).
+- `2d629c3` — fix: optional-composite form-clobber (scrubEmpty →
+  reseedFormState loop) + version pill in header.
+- `ba07e5b` — build: make build-controller depend on ui.
+- `b377520` — fix: Ctrl-C shutdown hang on active UI Watch streams.
+- `809c3fa` — U8.21: stacked layout for map-of-objects rendering.
 - `0651d6a` — U8.20: manifest-preview toggle in form view.
 - `0e9b693` — U8.19: Copy/Download YAML buttons on Detail.
 - `b6e5642` — U8.18: pre-fill metadata.name with a suggestion
