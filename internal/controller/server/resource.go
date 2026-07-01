@@ -247,8 +247,25 @@ func (h *resourceHandler) DryRunApply(ctx context.Context, req *apiv1.DryRunAppl
 	resp := &apiv1.DryRunApplyResponse{}
 
 	// Schema validation: surface inline so the editor can mark them.
-	if err := schema.Validate(manifest); err != nil {
-		resp.ValidationErrors = []string{err.Error()}
+	// Emit both the legacy joined string form (for the bottom panel) and
+	// the structured (path, message) form (for inline highlighting).
+	if fes, sErr := schema.ValidateStructured(manifest); sErr != nil {
+		resp.ValidationErrors = []string{sErr.Error()}
+		resp.Summary = "schema validation failed"
+		return resp, nil
+	} else if len(fes) > 0 {
+		strs := make([]string, 0, len(fes))
+		for _, fe := range fes {
+			resp.FieldErrors = append(resp.FieldErrors, &apiv1.FieldError{
+				Path: fe.Path, Message: fe.Message,
+			})
+			if fe.Path != "" {
+				strs = append(strs, fe.Path+": "+fe.Message)
+			} else {
+				strs = append(strs, fe.Message)
+			}
+		}
+		resp.ValidationErrors = strs
 		resp.Summary = "schema validation failed"
 		return resp, nil
 	}

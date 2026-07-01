@@ -316,9 +316,13 @@ Punch list (unstarted, prioritized):
       to the list; the resource disappears on the next Watch tick.
       Not surfaced on List rows yet — Detail is the primary
       delete-from-UI path.
-- [ ] **U8.15** — Per-field validation error highlighting. Errors
-      currently pile up in a bottom panel with dotted paths; pinning
-      each error to its row would close the gap to "real form."
+- [x] **U8.15** — Per-field validation error highlighting. New
+      `schema.ValidateStructured` returns path-attributed errors
+      via cueerrors.Errors; `DryRunApplyResponse.field_errors`
+      ships them to the UI; Edit.svelte publishes a per-path map
+      on a Svelte context; FormField adds a red left-border rail
+      and inline message to the offending row. Bottom-panel error
+      list stays as a fallback for path-less errors.
 - [ ] **U8.16** — List sort/filter/search. Fine at 5 rows, painful
       at 50.
 - [ ] **U8.17** — Live progress on the detail page. Ops drawer tails

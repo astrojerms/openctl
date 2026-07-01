@@ -143,6 +143,19 @@ message DryRunApplyResponse {
   // Human-readable single-line summary suitable for a status pill —
   // e.g. "no-op", "would add 1 worker", "would respec dev-cp-0 (destructive)".
   string summary = 5;
+  // Same errors as validation_errors, but broken out into (path, message)
+  // pairs so the UI can attach each to its offending form field instead
+  // of dumping them all in a bottom panel. Empty for schema-less kinds
+  // or when validation passed.
+  repeated FieldError field_errors = 6;
+}
+
+// FieldError attributes a single schema violation to a dotted path
+// (e.g. "spec.cpu.cores"). Emitted alongside validation_errors on
+// DryRunApplyResponse so the editor can highlight the offending field.
+message FieldError {
+  string path = 1;
+  string message = 2;
 }
 
 message ChildAction {

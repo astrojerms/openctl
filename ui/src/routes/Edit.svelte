@@ -33,6 +33,13 @@
   setContext('resourceAPIVersionStore', apiVersionCtx);
   $: apiVersionCtx.set(apiVersion);
 
+  // Publish per-path validation errors so nested FormField instances
+  // can highlight themselves without threading errors through props.
+  // Keyed by dotted path (e.g. "spec.cpu.cores"); value is the CUE
+  // message. Refreshed by runPreview on each debounce tick.
+  const fieldErrorsCtx = writable<Record<string, string>>({});
+  setContext('resourceFieldErrorsStore', fieldErrorsCtx);
+
   // Captured at submit time in create mode so the success-handoff knows
   // where to navigate after the op succeeds — `resourceName` is empty
   // until then.
@@ -316,6 +323,14 @@
       ]);
       validateErrors = vResp.errors ?? [];
       plan = dResp;
+      // Publish per-path field errors so FormField rows can highlight
+      // themselves. DryRunApply always populates fieldErrors when
+      // validation fails, so this is the single source of truth.
+      const errs: Record<string, string> = {};
+      for (const fe of dResp.fieldErrors ?? []) {
+        if (fe.path && fe.message) errs[fe.path] = fe.message;
+      }
+      fieldErrorsCtx.set(errs);
       // Preserve existing checkbox state for gates that still apply;
       // drop gates that no longer apply.
       const next: Record<string, boolean> = {};
