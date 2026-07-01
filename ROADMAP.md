@@ -311,8 +311,11 @@ Punch list (unstarted, prioritized):
       sub-form appears below, switching alternatives clears the
       previous one. Wired for VirtualMachine.spec.{template,
       cloudImage, image}.
-- [ ] **U8.14** — Direct delete from list/detail with confirmation.
-      Today the only path is Edit → clear spec → apply, or the CLI.
+- [x] **U8.14** — Direct delete from Detail with a type-the-name
+      confirmation (kubectl / AWS-console style). Success navigates
+      to the list; the resource disappears on the next Watch tick.
+      Not surfaced on List rows yet — Detail is the primary
+      delete-from-UI path.
 - [ ] **U8.15** — Per-field validation error highlighting. Errors
       currently pile up in a bottom panel with dotted paths; pinning
       each error to its row would close the gap to "real form."

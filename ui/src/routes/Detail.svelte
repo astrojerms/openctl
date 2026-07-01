@@ -3,7 +3,7 @@
   import { resources, UnauthorizedError, type GetResourceResponse, type Resource, type ResourceRef } from '../lib/api';
   import { watchResources } from '../lib/watch';
   import { statusBadge, type StatusBadge } from '../lib/format';
-  import { routeHref } from '../lib/router';
+  import { routeHref, navigate } from '../lib/router';
 
   export let apiVersion: string;
   export let kind: string;
@@ -241,6 +241,35 @@
     await doAction(a);
   }
 
+  // U8.14: destructive delete flow. Requires the user to type the
+  // resource name back to confirm — same guard shape kubectl and the
+  // AWS console use for destructive actions. Success navigates to
+  // the list (the resource is gone; there's nothing to render here).
+  let deleting = false;
+  let deleteErr = '';
+  async function doDelete() {
+    if (deleting) return;
+    const typed = prompt(`Delete ${kind} ${resourceName}?\n\nType the name to confirm:`);
+    if (typed === null) return;
+    if (typed !== resourceName) {
+      deleteErr = 'Name did not match; delete cancelled.';
+      return;
+    }
+    deleting = true;
+    deleteErr = '';
+    try {
+      await resources.delete(apiVersion, kind, resourceName);
+      // Immediately navigate back — the delete is submitted and the
+      // resource will disappear from the list on the next Watch tick.
+      navigate({ name: 'list', apiVersion, kind });
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return;
+      deleteErr = err instanceof Error ? err.message : String(err);
+    } finally {
+      deleting = false;
+    }
+  }
+
   // U6 aggregations: count children we've heard back from that are
   // drifted or in a non-good state. Reactive on childStates so the
   // numbers tick up as the fanout completes.
@@ -298,8 +327,19 @@
         {reconciling ? 'Reconciling…' : 'Reconcile'}
       </button>
       <a class="edit-btn" href={routeHref({ name: 'edit', apiVersion, kind, resourceName })}>Edit</a>
+      <button
+        type="button"
+        class="delete-btn"
+        disabled={deleting}
+        title="Delete this resource"
+        on:click={doDelete}
+      >{deleting ? 'Deleting…' : 'Delete'}</button>
     </div>
   </header>
+
+  {#if deleteErr}
+    <p class="err small">{deleteErr}</p>
+  {/if}
 
   {#if reconcileMsg}
     <p class="muted small reconcile-msg">{reconcileMsg}</p>
@@ -532,6 +572,23 @@
   .action-btn.destructive:hover:not(:disabled) {
     background: rgba(255, 137, 128, 0.1);
     color: #ff8980;
+  }
+  .delete-btn {
+    background: transparent;
+    color: #ff8980;
+    border: 1px solid rgba(255, 137, 128, 0.5);
+    padding: 0.4em 1em;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .delete-btn:hover:not(:disabled) {
+    background: rgba(255, 137, 128, 0.12);
+  }
+  .delete-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
   .state {
     padding: 0.15em 0.7em;
