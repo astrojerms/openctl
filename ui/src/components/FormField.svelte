@@ -332,29 +332,47 @@
     <button type="button" class="add" on:click={addArrayItem}>+ Add item</button>
   </div>
 {:else if field.type === 'map'}
+  {@const valueIsComposite = field.valueType?.type === 'object' || field.valueType?.type === 'array' || field.valueType?.type === 'map'}
   <div class="map">
     {#if value && typeof value === 'object' && !Array.isArray(value)}
       {#each Object.entries(value as Record<string, unknown>) as [k, v] (k)}
-        <div class="map-row">
-          <input
-            type="text"
-            class="map-key"
-            value={k}
-            placeholder="key"
-            on:change={(e) => setMapKey(k, (e.currentTarget as HTMLInputElement).value)}
-          />
-          <span class="map-sep">:</span>
-          <div class="map-value">
-            <Self
-              field={field.valueType ?? { type: 'string' }}
-              value={v}
-              depth={depth + 1}
-              path={path ? `${path}.${k}` : k}
-              on:change={(e) => setMapValue(k, e.detail)}
+        <div class="map-row" class:map-row-stacked={valueIsComposite}>
+          <div class="map-key-line">
+            <input
+              type="text"
+              class="map-key"
+              value={k}
+              placeholder="key"
+              on:change={(e) => setMapKey(k, (e.currentTarget as HTMLInputElement).value)}
             />
+            {#if !valueIsComposite}
+              <span class="map-sep">:</span>
+            {/if}
+            {#if !valueIsComposite}
+              <div class="map-value">
+                <Self
+                  field={field.valueType ?? { type: 'string' }}
+                  value={v}
+                  depth={depth + 1}
+                  path={path ? `${path}.${k}` : k}
+                  on:change={(e) => setMapValue(k, e.detail)}
+                />
+              </div>
+            {/if}
+            <button type="button" class="remove" on:click={() => removeMapKey(k)}
+              title="Remove entry">×</button>
           </div>
-          <button type="button" class="remove" on:click={() => removeMapKey(k)}
-            title="Remove entry">×</button>
+          {#if valueIsComposite}
+            <div class="map-nested">
+              <Self
+                field={field.valueType ?? { type: 'string' }}
+                value={v}
+                depth={depth + 1}
+                path={path ? `${path}.${k}` : k}
+                on:change={(e) => setMapValue(k, e.detail)}
+              />
+            </div>
+          {/if}
         </div>
       {/each}
     {/if}
@@ -635,6 +653,31 @@
     padding: 0.3rem;
     background: rgba(127, 127, 127, 0.06);
     border-radius: 4px;
+  }
+  /* When the value type is composite (object/array/map), the row
+     stacks: the key + remove button on top; the nested sub-form
+     spans the full width underneath. Fixes ipConfig-shaped maps
+     that used to align the key input with the middle of the
+     nested form. */
+  .map-row-stacked {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .map-key-line {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+  .map-row-stacked .map-key-line .map-key {
+    max-width: 20rem;
+  }
+  .map-row-stacked .map-key-line .remove {
+    margin-left: auto;
+  }
+  .map-nested {
+    padding-left: 0.75rem;
+    border-left: 1px solid rgba(127, 127, 127, 0.15);
   }
   .map-sep {
     color: #888;

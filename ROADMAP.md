@@ -18,21 +18,24 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
-Post-U7 UI polish track (**Phase U8**, see below) actively shipping —
-schema depth, form ergonomics, and a Create flow. Managed-only filter
-+ periodic reconciler landed on the controller side. Everything the
-official phase plan calls "done" is still done; U8 is the punch list
-that surfaced from actually using the UI to author resources.
+Nothing actively in progress. Phase U8 (post-U7 polish) is complete
+— U8.1 through U8.21 all shipped. UI is now genuinely usable for
+authoring, editing, deleting, and operating on VMs and Clusters
+end-to-end.
 
 ## Suggested next order
 
-U8 punch list (see "UI post-U7 polish"), then any of: full arch Phase
-8 (K3sNode as first-class resource + Cluster.Plan refactor + wire-
-level refs), arch Phase 9 (verifying-trace rebuilder), arch Phase 10
-(continuous reconcile), or a runtime-actions track (start/stop/console
-buttons on VM detail, kubeconfig download on Cluster detail) which
-would close the biggest "AWS-console-for-homelab" gap identified in
-U8.
+Pick from:
+- Full **arch Phase 8** (K3sNode as first-class resource + Cluster
+  .Plan refactor + wire-level refs).
+- **Arch Phase 9** (verifying-trace rebuilder).
+- **Arch Phase 10** (continuous reconcile — auto-remediate drift
+  instead of just logging).
+- **Cluster kubeconfig / VM console** — the piece of runtime
+  actions U8.12 parked because it needs a different modality
+  (file download / websocket) than the fire-and-forget action RPC.
+- **Provider credential editing UI** (from "Future goals").
+- **Two-way GitOps** (from "Future goals").
 
 ---
 
@@ -346,9 +349,12 @@ Punch list (unstarted, prioritized):
       button in the preview head collapses the preview pane; a
       "Show manifest" affordance replaces it. Preference persists
       via localStorage.
-- [ ] **U8.21** — Map-of-objects rendering (`cloudInit.ipConfig`).
-      Works but the key input aligns awkwardly with the middle of
-      the nested object subtree.
+- [x] **U8.21** — Map-of-objects rendering polish. When the map's
+      value type is composite (object/array/map), the row switches
+      to a stacked layout: key + remove on top; the nested sub-form
+      spans the full width underneath, indented with a subtle
+      left-border rail. Fixes the awkward alignment on things like
+      `cloudInit.ipConfig`.
 
 ---
 
@@ -390,19 +396,20 @@ When phases or followups land, move them up out of "pending" into their
 detail doc's marked-complete section, then leave a one-line entry here
 with the commit hash for at-a-glance history. Trim to the last 10.
 
+- `0651d6a` — U8.20: manifest-preview toggle in form view.
+- `0e9b693` — U8.19: Copy/Download YAML buttons on Detail.
+- `b6e5642` — U8.18: pre-fill metadata.name with a suggestion
+  (`vm-a3b2`, `cluster-x9k1`).
+- `d488cdf` — U8.17: inline live-progress banner on Detail.
+- `a3389de` — U8.16: list filter + click-to-sort headers.
+- `39a1c5b` — U8.15: per-field validation error highlighting
+  (path-attributed field errors, inline row rail).
+- `e466ecd` — U8.14: delete from Detail with type-the-name
+  confirmation.
+- `aeee483` — U8.13: discriminated-union picker via CUE
+  `@oneOf(group="X")` for VM image source.
+- `d2e66d3` — U8.12: runtime actions — new providers.Actioner
+  interface + ListActions/InvokeAction RPCs; VM start/stop/
+  shutdown/reboot buttons on Detail.
 - `a39fb61` — U8.11: provider-populated dropdowns via CUE
   `@options` attribute; VM.spec.node → ProxmoxNode.
-- `5da3e02` — U8.10 fix: optional composites now open properly
-  (empty `{}`/`[]` no longer collapse back to `+` button).
-- `c64a09a` — U8.9: vertical form-row layout + wider form pane.
-- `4db4927` — U8.8: create polish — collapsed optional sections +
-  name-collision check.
-- `86bf57e` — U8.7: Create flow via /new route reusing Edit.svelte.
-- `2cc8a18` — U8.6: k3s Cluster schema expansion + `#NodeSize`.
-- `527c13b` — U8.5: per-disk Proxmox flag knobs (ssd/discard/
-  iothread/backup/cache).
-- `cb61619` — U8.4: VirtualMachine schema expansion (docs, defaults,
-  enums, network/cloudInit extras).
-- `35820d3` — U8.3: periodic drift reconciler + manual Reconcile.
-- `e7b8605` — U8.2: managed-only filter on Get/List/Watch.
-- `2f59e2c` — U8.1: ProxmoxNode as first-class observed-only kind.
