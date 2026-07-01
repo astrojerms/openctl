@@ -4,6 +4,7 @@
   import { watchResources } from '../lib/watch';
   import { statusBadge, type StatusBadge } from '../lib/format';
   import { routeHref, navigate } from '../lib/router';
+  import { ops as opsStore } from '../lib/ops';
 
   export let apiVersion: string;
   export let kind: string;
@@ -270,6 +271,31 @@
     }
   }
 
+  // U8.17: live progress on the detail page. Subscribe to the global
+  // ops store and surface any in-flight op matching this resource as
+  // an inline banner. When the op completes, we auto-refetch to catch
+  // up before the reconciler tick and then drop the banner. Composite
+  // resources also match children whose ops are still running.
+  $: activeOp = $opsStore.find((o) => {
+    if (o.apiVersion !== apiVersion || o.kind !== kind) return false;
+    if (o.resourceName !== resourceName) return false;
+    return o.status === 'pending' || o.status === 'running';
+  }) ?? null;
+
+  // When the active op transitions to terminal (out of pending/running),
+  // refetch once so status catches up promptly.
+  let lastSeenOpId = '';
+  $: {
+    const id = activeOp?.id ?? '';
+    if (id) {
+      lastSeenOpId = id;
+    } else if (lastSeenOpId) {
+      // Just cleared — refetch to see the result.
+      void load(apiVersion, kind, resourceName);
+      lastSeenOpId = '';
+    }
+  }
+
   // U6 aggregations: count children we've heard back from that are
   // drifted or in a non-good state. Reactive on childStates so the
   // numbers tick up as the fanout completes.
@@ -339,6 +365,17 @@
 
   {#if deleteErr}
     <p class="err small">{deleteErr}</p>
+  {/if}
+
+  {#if activeOp}
+    <article class="op-banner op-{activeOp.status}">
+      <span class="op-dot" class:running={activeOp.status === 'running'}></span>
+      <span>
+        <strong>{activeOp.type}</strong> — {activeOp.status}
+        {#if activeOp.label}· {activeOp.label}{/if}
+      </span>
+      <code class="mono op-id">{activeOp.id.slice(0, 12)}</code>
+    </article>
   {/if}
 
   {#if reconcileMsg}
@@ -589,6 +626,36 @@
   .delete-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
+  }
+  .op-banner {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.55rem 0.9rem;
+    border-radius: 6px;
+    background: rgba(74, 142, 240, 0.08);
+    border-left: 3px solid #4a8ef0;
+    font-size: 0.85rem;
+    margin: 0.5rem 0;
+  }
+  .op-dot {
+    width: 0.6rem;
+    height: 0.6rem;
+    border-radius: 50%;
+    background: #4a8ef0;
+    flex-shrink: 0;
+  }
+  .op-dot.running {
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+  .op-id {
+    margin-left: auto;
+    color: #888;
+    font-size: 0.75rem;
   }
   .state {
     padding: 0.15em 0.7em;
