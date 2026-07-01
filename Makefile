@@ -27,7 +27,13 @@ build-cli:
 	@mkdir -p $(BUILD_DIR)
 	go build $(GOFLAGS) -o $(BUILD_DIR)/$(CLI_BINARY) ./cmd/openctl
 
-build-controller:
+# build-controller depends on `ui` because the controller embeds
+# uiassets/dist/ via //go:embed. Without rebuilding, the browser bundle
+# stays stuck on whatever was last built — a common footgun where Go
+# code changes ship but UI code changes don't. If you specifically want
+# to skip the UI (CI without npm, or rapid Go-only iteration), invoke
+# `go build ./cmd/openctl-controller` directly.
+build-controller: ui
 	@echo "Building openctl-controller..."
 	@mkdir -p $(BUILD_DIR)
 	go build $(GOFLAGS) -o $(BUILD_DIR)/$(CONTROLLER_BINARY) ./cmd/openctl-controller
