@@ -25,6 +25,7 @@ import (
 
 	"github.com/openctl/openctl/internal/controller/manifests"
 	"github.com/openctl/openctl/internal/controller/providers"
+	"github.com/openctl/openctl/pkg/protocol"
 )
 
 // DefaultInterval is the standard reconcile cadence: slow enough not to
@@ -37,23 +38,62 @@ const DefaultInterval = 5 * time.Minute
 // gateway) time to finish wiring before we start firing provider calls.
 const StartupDelay = 5 * time.Second
 
+// AutoReconcileAnnotation opts a resource into auto-remediation. When
+// set to "true", the reconciler enqueues an Apply of the stored
+// manifest whenever drift is detected on this resource. Absent /
+// anything else = drift only logged (default openctl behavior — the
+// user clicks Reconcile in the UI to converge).
+const AutoReconcileAnnotation = "openctl.io/autoReconcile"
+
+// AutoReconcileMinBackoff is the shortest wait between auto-remediate
+// attempts after a failure. Exponential up to Max. Success resets to
+// zero (next drift triggers immediately, subject only to the reconcile
+// interval).
+const (
+	AutoReconcileMinBackoff = 30 * time.Second
+	AutoReconcileMaxBackoff = 1 * time.Hour
+)
+
+// AutoApplyFunc enqueues an Apply of the given desired manifest.
+// Injected by main.go — the reconciler doesn't own the dispatcher.
+// Returning an error is logged and counts as a failure for backoff
+// purposes.
+type AutoApplyFunc func(ctx context.Context, desired *protocol.Resource) error
+
 // Reconciler iterates applied_manifests on a ticker and calls provider.Get
-// on each entry, logging drift transitions. Safe for concurrent calls to
-// Start/Stop, but only one loop runs at a time.
+// on each entry, logging drift transitions. When configured with an
+// AutoApplyFunc, resources annotated with openctl.io/autoReconcile=true
+// also get an Apply enqueued when drift is detected. Safe for concurrent
+// calls to Start/Stop, but only one loop runs at a time.
 type Reconciler struct {
 	registry  *providers.Registry
 	manifests *manifests.Store
 	interval  time.Duration
+
+	// autoApply, when non-nil, is called to enqueue an Apply for a
+	// drifted resource that opted into auto-remediation via annotation.
+	// Nil = drift only logged (default openctl behavior).
+	autoApply AutoApplyFunc
 
 	// driftState tracks whether each managed resource was drifted at the
 	// last check, so we only log on transitions (clean→drifted or
 	// drifted→clean) instead of one line per tick per resource.
 	mu         sync.Mutex
 	driftState map[string]bool
+	// backoff tracks the exponential backoff state per resource for
+	// auto-remediation. Resets on successful apply enqueue.
+	backoff map[string]*backoffState
 
 	stopMu  sync.Mutex
 	stopped bool
 	done    chan struct{}
+}
+
+// backoffState holds per-resource auto-remediation timing so consecutive
+// apply failures don't hammer the provider.
+type backoffState struct {
+	nextAttemptAt time.Time
+	current       time.Duration
 }
 
 // New constructs a Reconciler. interval==0 uses DefaultInterval. registry
@@ -71,8 +111,18 @@ func New(reg *providers.Registry, m *manifests.Store, interval time.Duration) *R
 		manifests:  m,
 		interval:   interval,
 		driftState: map[string]bool{},
+		backoff:    map[string]*backoffState{},
 		done:       make(chan struct{}),
 	}
+}
+
+// WithAutoApply enables auto-remediation. When drift is detected on a
+// resource annotated with openctl.io/autoReconcile=true, the reconciler
+// calls the given func to enqueue an Apply of the stored manifest.
+// Returns r so callers can chain: reconciler.New(...).WithAutoApply(f).
+func (r *Reconciler) WithAutoApply(f AutoApplyFunc) *Reconciler {
+	r.autoApply = f
+	return r
 }
 
 // Start launches the periodic loop in a goroutine and returns immediately.
@@ -182,6 +232,64 @@ func (r *Reconciler) reconcileOne(ctx context.Context, ref manifests.Ref) {
 		reason = "spec drift"
 	}
 	r.markAndLogIfChanged(key, ref, drifted, reason)
+
+	if drifted && r.autoApply != nil && shouldAutoReconcile(desired) {
+		r.tryAutoApply(ctx, key, ref, desired)
+	}
+}
+
+// shouldAutoReconcile reports whether the stored manifest has opted in
+// via the auto-reconcile annotation. Explicit "true" required — any
+// other value (missing, "false", "TRUE") means opt-out to keep the
+// default behavior predictable.
+func shouldAutoReconcile(desired *protocol.Resource) bool {
+	if desired == nil || desired.Metadata.Annotations == nil {
+		return false
+	}
+	return desired.Metadata.Annotations[AutoReconcileAnnotation] == "true"
+}
+
+// tryAutoApply enqueues an apply of the stored manifest via the
+// injected AutoApplyFunc, respecting per-resource exponential backoff.
+// Failures double the wait up to AutoReconcileMaxBackoff; success
+// resets it. All state stays in memory — a controller restart clears
+// backoff (drift will re-fire on the next tick anyway).
+func (r *Reconciler) tryAutoApply(ctx context.Context, key string, ref manifests.Ref, desired *protocol.Resource) {
+	r.mu.Lock()
+	bs := r.backoff[key]
+	if bs == nil {
+		bs = &backoffState{}
+		r.backoff[key] = bs
+	}
+	if !bs.nextAttemptAt.IsZero() && time.Since(bs.nextAttemptAt) < 0 {
+		// Still in backoff; skip this tick.
+		r.mu.Unlock()
+		return
+	}
+	r.mu.Unlock()
+
+	log.Printf("reconciler: auto-remediate %s/%s/%s (annotation=%s)",
+		ref.APIVersion, ref.Kind, ref.Name, AutoReconcileAnnotation)
+	if err := r.autoApply(ctx, desired); err != nil {
+		r.mu.Lock()
+		if bs.current == 0 {
+			bs.current = AutoReconcileMinBackoff
+		} else {
+			bs.current *= 2
+			if bs.current > AutoReconcileMaxBackoff {
+				bs.current = AutoReconcileMaxBackoff
+			}
+		}
+		bs.nextAttemptAt = time.Now().Add(bs.current)
+		r.mu.Unlock()
+		log.Printf("reconciler: auto-remediate %s/%s/%s failed: %v (next attempt in %s)",
+			ref.APIVersion, ref.Kind, ref.Name, err, bs.current)
+		return
+	}
+	r.mu.Lock()
+	bs.current = 0
+	bs.nextAttemptAt = time.Time{}
+	r.mu.Unlock()
 }
 
 // markAndLogIfChanged updates driftState and logs only when the drift

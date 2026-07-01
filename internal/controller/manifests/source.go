@@ -7,8 +7,9 @@ import "context"
 // from the CLI vs. from the browser UI. Plumbed through Operation.Source
 // at submit time and read back by the git hook to format commit messages.
 const (
-	SourceCLI = "cli"
-	SourceUI  = "ui"
+	SourceCLI            = "cli"
+	SourceUI             = "ui"
+	SourceAutoReconcile  = "auto-reconcile"
 )
 
 // sourceKey is the context key for the originator of a dispatcher

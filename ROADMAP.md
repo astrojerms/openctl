@@ -132,14 +132,14 @@ Replaced with two smaller entries:
       verifying-trace cache with a `refs_hash` column so cross-
       resource dependency changes trigger correct rebuilds. Blocked
       on full Phase 8 shipping.
-- [ ] **Opt-in auto-remediation** — opt-in per resource via
-      `openctl.io/autoReconcile: true` annotation; the existing
-      periodic reconciler (U8.3) enqueues an Apply of the stored
-      manifest when drift is detected on annotated resources. Adds
-      exponential-backoff throttling on repeated failure and stamps
-      "auto-reconcile" as the op source so the audit trail is honest
-      about why an apply fired. Default off — a homelab user turning
-      a VM off by hand shouldn't fight the controller.
+- [x] **Opt-in auto-remediation** — opt-in per resource via
+      `openctl.io/autoReconcile: true` annotation. When drift is
+      detected on an annotated resource, the reconciler enqueues an
+      Apply of the stored manifest with source="auto-reconcile" so
+      the op history shows why it fired. Exponential-backoff
+      throttling (30s → 1h) on repeated failure so a persistently-
+      broken resource doesn't hammer the provider. Default off —
+      unannotated resources continue to only log drift.
 
 Open design questions captured in the HTML doc; revisit before
 committing to any of these.
