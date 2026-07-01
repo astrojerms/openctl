@@ -342,8 +342,10 @@ Punch list (unstarted, prioritized):
       Download (as `<kind>-<name>.yaml`). Falls back to the observed
       resource for observed-only kinds that have no applied
       manifest.
-- [ ] **U8.20** — Manifest-preview toggle in the form view (some
-      users won't want it eating a third of the pane).
+- [x] **U8.20** — Manifest-preview toggle in the form view. Hide
+      button in the preview head collapses the preview pane; a
+      "Show manifest" affordance replaces it. Preference persists
+      via localStorage.
 - [ ] **U8.21** — Map-of-objects rendering (`cloudInit.ipConfig`).
       Works but the key input aligns awkwardly with the middle of
       the nested object subtree.
