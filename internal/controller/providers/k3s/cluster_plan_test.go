@@ -230,6 +230,66 @@ func TestPlan_StaticIPsFlowThrough(t *testing.T) {
 	}
 }
 
+func TestPlan_StaticIPsBakedIntoK3sNodeAndAgentInstall(t *testing.T) {
+	// Static-IP clusters: the K3sNode and AgentInstall child
+	// manifests carry `spec.vmIP` populated from AllocateIPs, so
+	// applyK3sNode / applyAgentInstall can skip the QGA-based
+	// waitForVMIP poll (which would hang forever if QGA isn't in
+	// the guest template). The original homelab validation hit
+	// this — the whole point of this fix.
+	m := clusterManifest("dev", func(r *protocol.Resource) {
+		r.Spec["nodes"].(map[string]any)["controlPlane"].(map[string]any)["count"] = float64(2)
+		net := r.Spec["network"].(map[string]any)
+		net["dhcp"] = false
+		net["staticIPs"] = map[string]any{
+			"startIP": "192.168.1.100",
+			"gateway": "192.168.1.1",
+			"netmask": "24",
+		}
+	})
+	children := planFor(t, m)
+
+	// Each K3sNode / AgentInstall for this static-IP cluster
+	// should have `spec.vmIP` set to the deterministic AllocateIPs
+	// assignment.
+	wantIPs := map[string]string{
+		"dev-cp-0":       "192.168.1.100",
+		"dev-cp-1":       "192.168.1.101",
+		"dev-cp-0-agent": "192.168.1.100",
+		"dev-cp-1-agent": "192.168.1.101",
+	}
+	for _, c := range children {
+		if c.Kind != kindK3sNode && c.Kind != kindAgentInstall {
+			continue
+		}
+		want, expected := wantIPs[c.Metadata.Name]
+		if !expected {
+			continue
+		}
+		got, _ := c.Spec["vmIP"].(string)
+		if got != want {
+			t.Errorf("%s %s spec.vmIP = %q, want %q", c.Kind, c.Metadata.Name, got, want)
+		}
+	}
+}
+
+func TestPlan_DHCPClusterDoesNotBakeVMIP(t *testing.T) {
+	// Complement of the previous test: a DHCP cluster (no
+	// staticIPs) must NOT set spec.vmIP. Runtime path is required
+	// because IPs are only known after QGA reports them; setting
+	// vmIP to "" would just be misleading noise.
+	m := clusterManifest("dev") // default has network.dhcp=true
+	children := planFor(t, m)
+	for _, c := range children {
+		if c.Kind != kindK3sNode && c.Kind != kindAgentInstall {
+			continue
+		}
+		if _, has := c.Spec["vmIP"]; has {
+			t.Errorf("%s %s should NOT have vmIP set on a DHCP cluster; got %+v", c.Kind, c.Metadata.Name, c.Spec["vmIP"])
+		}
+	}
+}
+
 func TestPlan_RejectsNonClusterKind(t *testing.T) {
 	m := &protocol.Resource{
 		APIVersion: "k3s.openctl.io/v1",

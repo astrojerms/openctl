@@ -33,6 +33,11 @@ import "openctl.io/schemas/base"
 	// ~/.openctl/state/k3s/<clusterName>/.
 	clusterName: string
 
+	// Optional deterministic IP for the target VM. Same semantics
+	// as K3sNode.spec.vmIP — Cluster.Plan populates this for
+	// static-IP clusters so the QGA-based IP wait is skipped.
+	vmIP?: string
+
 	// SSH credentials for reaching the target VM. Matches the shape
 	// used by K3sNode.spec.ssh so users can share values.
 	ssh: {

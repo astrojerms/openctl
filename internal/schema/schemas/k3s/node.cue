@@ -48,6 +48,13 @@ import "openctl.io/schemas/base"
 	// ["--cluster-cidr=10.42.0.0/16", "--disable=traefik"]).
 	extraArgs?: [...string]
 
+	// Optional deterministic IP for the target VM. When set, the
+	// provider skips polling vmRef.status.ip and SSHes directly
+	// here. Cluster.Plan populates this for static-IP clusters so
+	// the QGA-based IP-wait isn't required. Standalone K3sNode
+	// authors typically leave this blank and let vmRef.status.ip
+	// carry the address.
+	vmIP?: string
 	// SSH credentials for reaching the target VM. Matches the
 	// shape used by Cluster.spec.ssh so users can share values.
 	ssh: {

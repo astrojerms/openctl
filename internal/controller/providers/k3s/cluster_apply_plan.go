@@ -67,6 +67,18 @@ func (p *Provider) applyClusterViaPlan(ctx context.Context, manifest *protocol.R
 		}
 	}
 
+	// Save an interim cluster state stub as soon as all VMs exist.
+	// Without this, a Phase 2/3 failure leaves live VMs on the
+	// hypervisor but Cluster.Delete can't find them because it
+	// walks the cluster state file's children[]. The stub carries
+	// the VM refs and a "Provisioning" phase so the operator sees
+	// the partial success and Delete can clean up. The final
+	// saveClusterStateFromChildren call overwrites this with the
+	// full Ready state once everything succeeds.
+	if err := p.saveClusterStateStub(name, manifest, vms, "Provisioning", "VMs created; installing k3s"); err != nil {
+		return nil, fmt.Errorf("save interim cluster state: %w", err)
+	}
+
 	// Phase 2: K3sNodes. First CP is initialized (no joinFrom in
 	// spec — Plan deleted it); subsequent K3sNodes have joinFrom
 	// $refs that resolve at dispatch time against the first CP's
@@ -159,6 +171,56 @@ func (p *Provider) materializeClusterCABundle(clusterName string, k3sNodeManifes
 		return fmt.Errorf("persist bundle: %w", err)
 	}
 	return nil
+}
+
+// saveClusterStateStub writes a minimal cluster state YAML with just
+// the VM children populated. Called after Phase 1 of the plan path so
+// Cluster.Delete can find + clean up the child VMs even if Phase 2/3
+// fail. The final saveClusterStateFromChildren call overwrites this
+// with a Ready-state document (including agent bundle + kubeconfig
+// paths) once every phase succeeds.
+//
+// phase and message set status.phase / status.message so operators
+// see progress in ResourceService.Get. Idempotent: overwrites any
+// existing file at the state path.
+func (p *Provider) saveClusterStateStub(name string, manifest *protocol.Resource, vms []*protocol.Resource, phase, message string) error {
+	dir, err := stateDir()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	children := make([]childRef, 0, len(vms))
+	for _, vm := range vms {
+		children = append(children, childRef{
+			Provider: "proxmox",
+			Kind:     "VirtualMachine",
+			Name:     vm.Metadata.Name,
+		})
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	doc := map[string]any{
+		"apiVersion": "k3s.openctl.io/v1",
+		"kind":       "Cluster",
+		"metadata": map[string]any{
+			"name":      name,
+			"provider":  "k3s",
+			"createdAt": now,
+			"updatedAt": now,
+		},
+		"spec": manifest.Spec,
+		"status": map[string]any{
+			"phase":   phase,
+			"message": message,
+		},
+		"children": children,
+	}
+	data, err := yaml.Marshal(doc)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, name+".yaml"), data, 0o600)
 }
 
 // saveClusterStateFromChildren writes the legacy cluster state YAML

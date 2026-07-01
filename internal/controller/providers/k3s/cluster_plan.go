@@ -61,13 +61,16 @@ func (p *Provider) Plan(_ context.Context, manifest *protocol.Resource) (*provid
 	}
 
 	// One K3sNode per node. First CP has no joinFrom; every other
-	// node joins the first CP.
+	// node joins the first CP. When staticIPs are configured, the
+	// IP is baked into the K3sNode spec directly — otherwise the
+	// K3sNode's applyK3sNode polls the VM provider's status.ip via
+	// QGA, which requires qemu-guest-agent inside the guest.
 	for i, nodeName := range allNodes {
 		role := "server"
 		if i >= len(cpNodes) {
 			role = "agent"
 		}
-		k3sNode := buildK3sNodeManifest(clusterName, nodeName, role, firstCP, spec)
+		k3sNode := buildK3sNodeManifest(clusterName, nodeName, role, firstCP, nodeIPs[nodeName], spec)
 		if i == 0 && role == "server" {
 			// First server initializes — no join fields.
 			delete(k3sNode.Spec, "joinFrom")
@@ -77,8 +80,9 @@ func (p *Provider) Plan(_ context.Context, manifest *protocol.Resource) (*provid
 	}
 
 	// One AgentInstall per node — all point at the same cluster.
+	// Same static-IP pass-through as K3sNode.
 	for _, nodeName := range allNodes {
-		children = append(children, buildAgentInstallManifest(clusterName, nodeName, spec))
+		children = append(children, buildAgentInstallManifest(clusterName, nodeName, nodeIPs[nodeName], spec))
 	}
 
 	return &providers.PlanResult{Children: children}, nil
@@ -165,7 +169,13 @@ func buildVMManifest(clusterName, nodeName string, i, cpCount int, size k3sresou
 	return vm
 }
 
-func buildK3sNodeManifest(clusterName, nodeName, role, firstCPName string, spec *k3sresources.ClusterSpec) *protocol.Resource {
+// buildK3sNodeManifest emits one K3sNode child. staticIP is the
+// deterministic allocation from AllocateIPs — non-empty when
+// spec.network.staticIPs is set, empty when the cluster is DHCP.
+// When non-empty, `spec.vmIP` is baked into the manifest so
+// applyK3sNode can skip the QGA-based waitForVMIP loop that
+// otherwise polls the VM provider for status.ip.
+func buildK3sNodeManifest(clusterName, nodeName, role, firstCPName, staticIP string, spec *k3sresources.ClusterSpec) *protocol.Resource {
 	k3s := &protocol.Resource{
 		APIVersion: "k3s.openctl.io/v1",
 		Kind:       kindK3sNode,
@@ -222,11 +232,16 @@ func buildK3sNodeManifest(clusterName, nodeName, role, firstCPName string, spec 
 		}
 		k3s.Spec["extraArgs"] = extra
 	}
+	if staticIP != "" {
+		k3s.Spec["vmIP"] = staticIP
+	}
 	return k3s
 }
 
-func buildAgentInstallManifest(clusterName, nodeName string, spec *k3sresources.ClusterSpec) *protocol.Resource {
-	return &protocol.Resource{
+// buildAgentInstallManifest emits one AgentInstall child. staticIP
+// has the same static-IP-pass-through semantics as buildK3sNodeManifest.
+func buildAgentInstallManifest(clusterName, nodeName, staticIP string, spec *k3sresources.ClusterSpec) *protocol.Resource {
+	agent := &protocol.Resource{
 		APIVersion: "k3s.openctl.io/v1",
 		Kind:       kindAgentInstall,
 		Metadata: protocol.ResourceMetadata{
@@ -251,6 +266,10 @@ func buildAgentInstallManifest(clusterName, nodeName string, spec *k3sresources.
 			},
 		},
 	}
+	if staticIP != "" {
+		agent.Spec["vmIP"] = staticIP
+	}
+	return agent
 }
 
 func roleForIndex(i, cpCount int) string {

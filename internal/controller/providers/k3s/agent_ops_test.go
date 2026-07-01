@@ -58,6 +58,27 @@ func TestParseAgentInstallSpec_MissingClusterName(t *testing.T) {
 	}
 }
 
+func TestParseAgentInstallSpec_StaticVMIPOverridesResolvedRef(t *testing.T) {
+	m := &protocol.Resource{
+		Spec: map[string]any{
+			"vmRef": map[string]any{
+				"metadata": map[string]any{"name": "vm-a"},
+				"status":   map[string]any{},
+			},
+			"vmIP":        "10.0.0.42",
+			"clusterName": "dev",
+			"ssh":         map[string]any{"privateKeyPath": "/k"},
+		},
+	}
+	s, err := parseAgentInstallSpec(m)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if s.vmIP != "10.0.0.42" {
+		t.Errorf("static-IP override not honored: got %q", s.vmIP)
+	}
+}
+
 func TestParseAgentInstallSpec_MissingVMIP_ParsesAndDefersToWait(t *testing.T) {
 	m := &protocol.Resource{
 		Spec: map[string]any{

@@ -224,6 +224,12 @@ func parseAgentInstallSpec(manifest *protocol.Resource) (*agentInstallSpec, erro
 	if out.vmName == "" {
 		return nil, fmt.Errorf("vmRef target has no metadata.name")
 	}
+	// Static-IP shortcut: same semantics as parseK3sNodeSpec.
+	// spec.vmIP set by Cluster.Plan for static-IP clusters wins,
+	// so applyAgentInstall can skip waitForVMIP.
+	if ip, ok := manifest.Spec["vmIP"].(string); ok && ip != "" {
+		out.vmIP = ip
+	}
 	// vmIP is allowed to be "" — applyAgentInstall polls the VM
 	// provider for status.ip when the ref-resolved manifest was
 	// captured mid-boot (e.g. dispatched immediately after VM
