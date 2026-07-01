@@ -47,40 +47,64 @@ func (p *Provider) Kinds() []string { return []string{kindVM, kindNode} }
 func (p *Provider) ObservedOnlyKinds() []string { return []string{kindNode} }
 
 // Actions implements providers.Actioner. VirtualMachine supports the
-// standard power-lifecycle set; ProxmoxNode has no runtime actions
-// (nothing to do to a node from openctl short of Proxmox admin).
+// standard power-lifecycle set plus "console" (opens Proxmox noVNC in
+// a new tab); ProxmoxNode has no runtime actions.
 func (p *Provider) Actions(kind string) []string {
 	if kind != kindVM {
 		return nil
 	}
 	// Ordering matters for the UI — buttons render in this order.
-	return []string{"start", "shutdown", "stop", "reboot"}
+	return []string{"start", "shutdown", "stop", "reboot", "console"}
 }
 
 // DoAction implements providers.Actioner. Looks up the VM to get its
-// node+vmid, then dispatches to the appropriate client method. Returns
-// the Proxmox task UPID on success so the UI can surface it (e.g. for
-// linking to Proxmox's own task log).
-func (p *Provider) DoAction(_ context.Context, kind, name, action string) (string, error) {
+// node+vmid, then either dispatches to the appropriate client method
+// (lifecycle actions return a Proxmox task UPID as the message) or
+// constructs an external URL (console — returns a noVNC link that
+// opens in a new tab).
+func (p *Provider) DoAction(_ context.Context, kind, name, action string) (*providers.ActionResult, error) {
 	if kind != kindVM {
-		return "", fmt.Errorf("no actions for kind %q", kind)
+		return nil, fmt.Errorf("no actions for kind %q", kind)
 	}
 	vm, err := p.handler.Client().GetVM(name)
 	if err != nil {
-		return "", fmt.Errorf("get VM %q: %w", name, err)
+		return nil, fmt.Errorf("get VM %q: %w", name, err)
 	}
 	client := p.handler.Client()
 	switch action {
 	case "start":
-		return client.StartVM(vm.Node, vm.VMID)
+		upid, err := client.StartVM(vm.Node, vm.VMID)
+		if err != nil {
+			return nil, err
+		}
+		return &providers.ActionResult{Message: upid}, nil
 	case "stop":
-		return client.StopVM(vm.Node, vm.VMID)
+		upid, err := client.StopVM(vm.Node, vm.VMID)
+		if err != nil {
+			return nil, err
+		}
+		return &providers.ActionResult{Message: upid}, nil
 	case "shutdown":
-		return client.ShutdownVM(vm.Node, vm.VMID)
+		upid, err := client.ShutdownVM(vm.Node, vm.VMID)
+		if err != nil {
+			return nil, err
+		}
+		return &providers.ActionResult{Message: upid}, nil
 	case "reboot":
-		return client.RebootVM(vm.Node, vm.VMID)
+		upid, err := client.RebootVM(vm.Node, vm.VMID)
+		if err != nil {
+			return nil, err
+		}
+		return &providers.ActionResult{Message: upid}, nil
+	case "console":
+		// Proxmox noVNC URL. User must already be logged into the
+		// Proxmox web UI (openctl doesn't proxy the session). The URL
+		// is what Proxmox's own web UI generates when you click Console.
+		endpoint := p.handler.Config().Endpoint
+		url := fmt.Sprintf("%s/?console=kvm&novnc=1&vmid=%d&node=%s", endpoint, vm.VMID, vm.Node)
+		return &providers.ActionResult{URL: url, Message: "Opening Proxmox noVNC console…"}, nil
 	default:
-		return "", fmt.Errorf("unknown action %q", action)
+		return nil, fmt.Errorf("unknown action %q", action)
 	}
 }
 

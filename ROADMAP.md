@@ -31,9 +31,11 @@ Pick from (ordered by pitch-strength, not commitment):
   manifests (proposed feature; see "Future goals"). Would change
   the product story from "nice YAML editor" to "click one button
   and get a working homelab VM."
-- **Cluster kubeconfig / VM console** — the piece of runtime
-  actions U8.12 parked because it needs a different modality
-  (file download / websocket) than the fire-and-forget action RPC.
+- ~~**Cluster kubeconfig / VM console**~~ — shipped. See
+  "Recently completed" — extended the Actioner interface to
+  return either a message, a URL, or a downloadable file.
+  Cluster `get-kubeconfig` streams the stored kubeconfig; VM
+  `console` opens the Proxmox noVNC URL in a new tab.
 - **Opt-in auto-remediation** — small feature that closes the loop
   on the drift reconciler (see the Phase 9/10 rescope above).
 - **Provider credential editing UI** (from "Future goals").

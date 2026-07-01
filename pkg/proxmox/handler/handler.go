@@ -38,6 +38,11 @@ func New(config *protocol.ProviderConfig) *Handler {
 // reboot, shutdown) that don't fit the request/response Handle surface.
 func (h *Handler) Client() *client.Client { return h.client }
 
+// Config returns the Proxmox endpoint + token configuration. Exposed so
+// the provider can construct external URLs (e.g. Proxmox noVNC console
+// links) without duplicating the endpoint string.
+func (h *Handler) Config() *protocol.ProviderConfig { return h.config }
+
 // Handle handles a request and returns a response
 func (h *Handler) Handle(req *protocol.Request) (*protocol.Response, error) {
 	switch req.ResourceType {

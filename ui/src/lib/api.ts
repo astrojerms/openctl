@@ -247,6 +247,13 @@ export interface ListActionsResponse {
 
 export interface InvokeActionResponse {
   message?: string;
+  // External URL to open (e.g. Proxmox noVNC console). UI opens in a
+  // new tab when set.
+  url?: string;
+  // Downloadable payload (e.g. k3s Cluster kubeconfig). UI serves as
+  // a file download named downloadFilename with the given content.
+  downloadContent?: string;
+  downloadFilename?: string;
 }
 
 export interface DeleteResourceResponse {

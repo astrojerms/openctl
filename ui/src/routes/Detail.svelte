@@ -199,13 +199,34 @@
     actionErr = '';
     try {
       const resp = await resources.invokeAction(apiVersion, kind, resourceName, action);
-      actionMsg = resp.message
-        ? `${action} → ${resp.message}`
-        : `${action} submitted`;
+      // Dispatch on result shape: URL → open in new tab, download →
+      // stream a file, otherwise show the message inline.
+      if (resp.downloadContent && resp.downloadFilename) {
+        const blob = new Blob([resp.downloadContent], { type: 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = resp.downloadFilename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        actionMsg = `Downloaded ${resp.downloadFilename}`;
+      } else if (resp.url) {
+        window.open(resp.url, '_blank', 'noopener,noreferrer');
+        actionMsg = resp.message || `Opened ${action}`;
+      } else {
+        actionMsg = resp.message
+          ? `${action} → ${resp.message}`
+          : `${action} submitted`;
+      }
       // Refetch after a brief pause so status updates from the provider
       // are reflected. Watch will catch up too, but the immediate refetch
-      // gives faster feedback for click→result.
-      setTimeout(() => void load(apiVersion, kind, resourceName), 800);
+      // gives faster feedback for click→result. Skip for pure link/
+      // download actions — they don't change resource state.
+      if (!resp.url && !resp.downloadContent) {
+        setTimeout(() => void load(apiVersion, kind, resourceName), 800);
+      }
     } catch (err) {
       if (err instanceof UnauthorizedError) return;
       actionErr = err instanceof Error ? err.message : String(err);
@@ -226,6 +247,8 @@
       case 'stop': return 'Force stop';
       case 'shutdown': return 'Shutdown';
       case 'reboot': return 'Reboot';
+      case 'console': return 'Console';
+      case 'get-kubeconfig': return 'Kubeconfig';
       default: return a;
     }
   }
