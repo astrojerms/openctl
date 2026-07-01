@@ -291,7 +291,7 @@ func (r *Repo) Status(ctx context.Context) (Status, error) {
 
 // StartPeriodicPush spawns a background goroutine that pushes every
 // r.pushInterval. No-op if push mode isn't "periodic" or the interval is
-// zero or no remote is configured. Stops when ctx is cancelled.
+// zero or no remote is configured. Stops when ctx is canceled.
 func (r *Repo) StartPeriodicPush(ctx context.Context, log func(format string, args ...any)) {
 	if r.pushMode != PushModePeriodic || r.pushInterval <= 0 || r.remote == "" {
 		return

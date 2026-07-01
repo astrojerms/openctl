@@ -27,13 +27,13 @@ const (
 // nodeState is what we persist per K3sNode. YAML-shaped for
 // consistency with the Cluster state files under ~/.openctl/state/k3s/.
 type nodeState struct {
-	Name       string    `yaml:"name"`
-	VMName     string    `yaml:"vmName"`
-	VMIP       string    `yaml:"vmIP"`
-	Role       string    `yaml:"role"`
-	Installed  bool      `yaml:"installed"`
-	NodeToken  string    `yaml:"nodeToken,omitempty"`  // servers only
-	Kubeconfig string    `yaml:"kubeconfig,omitempty"` // first-server only
+	Name        string    `yaml:"name"`
+	VMName      string    `yaml:"vmName"`
+	VMIP        string    `yaml:"vmIP"`
+	Role        string    `yaml:"role"`
+	Installed   bool      `yaml:"installed"`
+	NodeToken   string    `yaml:"nodeToken,omitempty"`  // servers only
+	Kubeconfig  string    `yaml:"kubeconfig,omitempty"` // first-server only
 	InstalledAt time.Time `yaml:"installedAt,omitempty"`
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -94,7 +95,7 @@ func TestWatcherSkipsUnchangedFile(t *testing.T) {
 	store := newWatcherTestStore(t)
 
 	// Pre-populate the store with the same content the file will
-	// carry — the watcher should recognise "no change" and skip.
+	// carry — the watcher should recognize "no change" and skip.
 	preloaded := &protocol.Resource{
 		APIVersion: "proxmox.openctl.io/v1",
 		Kind:       "VirtualMachine",
@@ -183,12 +184,7 @@ func TestWatcherHonoursDeleteWhenConfigured(t *testing.T) {
 	if !waitFor(2*time.Second, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
-		for _, n := range deletes {
-			if n == "gone" {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(deletes, "gone")
 	}) {
 		t.Fatal("watcher never called delete for the removed file")
 	}

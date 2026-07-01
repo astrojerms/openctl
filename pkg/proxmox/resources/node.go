@@ -1,8 +1,8 @@
 package resources
 
 import (
-	"github.com/openctl/openctl/pkg/proxmox/client"
 	"github.com/openctl/openctl/pkg/protocol"
+	"github.com/openctl/openctl/pkg/proxmox/client"
 )
 
 // NodeToResource converts a Proxmox cluster member into a protocol Resource.

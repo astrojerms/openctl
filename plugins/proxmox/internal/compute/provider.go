@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openctl/openctl/pkg/proxmox/client"
-	"github.com/openctl/openctl/pkg/proxmox/resources"
 	"github.com/openctl/openctl/pkg/compute"
 	"github.com/openctl/openctl/pkg/protocol"
+	"github.com/openctl/openctl/pkg/proxmox/client"
+	"github.com/openctl/openctl/pkg/proxmox/resources"
 )
 
 // ProxmoxProvider implements the compute.Provider interface for Proxmox

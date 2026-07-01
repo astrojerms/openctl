@@ -96,7 +96,7 @@ func findBinary(t *testing.T) string {
 
 // Cleanup removes the temporary directory
 func (h *TestHarness) Cleanup() {
-	os.RemoveAll(h.tempDir)
+	_ = os.RemoveAll(h.tempDir)
 }
 
 // WriteConfig writes a config file

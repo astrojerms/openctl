@@ -87,9 +87,9 @@ func (h *operationHandler) ListOperations(ctx context.Context, req *apiv1.ListOp
 	return &apiv1.ListOperationsResponse{Operations: out}, nil
 }
 
-// CancelOperation marks a pending op as cancelled. UI Phase U7 surfaces
+// CancelOperation marks a pending op as canceled. UI Phase U7 surfaces
 // this as a "Cancel" button on pending-op rows. Running ops require
-// cooperative cancellation in providers (deferred); cancelling a running
+// cooperative cancellation in providers (deferred); canceling a running
 // op returns FailedPrecondition.
 func (h *operationHandler) CancelOperation(ctx context.Context, req *apiv1.CancelOperationRequest) (*apiv1.CancelOperationResponse, error) {
 	if req.GetId() == "" {
@@ -108,7 +108,7 @@ func (h *operationHandler) CancelOperation(ctx context.Context, req *apiv1.Cance
 	}
 	return &apiv1.CancelOperationResponse{
 		Status:  res.Status,
-		Message: fmt.Sprintf("operation %s cancelled", req.GetId()),
+		Message: fmt.Sprintf("operation %s canceled", req.GetId()),
 	}, nil
 }
 

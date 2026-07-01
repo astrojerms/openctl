@@ -40,12 +40,12 @@ const (
 	StatusSucceeded   = "succeeded"
 	StatusFailed      = "failed"
 	StatusInterrupted = "interrupted"
-	// StatusCancelled means a pending op was cancelled before the
+	// StatusCancelled means a pending op was canceled before the
 	// dispatcher claimed it. Distinct from `failed` so the UI/CLI can
 	// distinguish intentional cancellation from provider errors. Running
-	// ops can't currently be cancelled (cooperative cancellation deferred
+	// ops can't currently be canceled (cooperative cancellation deferred
 	// to the per-provider audits).
-	StatusCancelled = "cancelled"
+	StatusCancelled = "canceled"
 )
 
 // Operation is the in-process representation of a row in the operations
@@ -408,14 +408,14 @@ type CancelResult struct {
 	Reason string
 }
 
-// CancelPending atomically marks a pending op as cancelled. The dispatcher
+// CancelPending atomically marks a pending op as canceled. The dispatcher
 // uses StatusPending in its WHERE clause when claiming work, so flipping
 // the row out of pending is sufficient to prevent execution; no separate
 // notification is needed.
 //
-// Behaviour by current status:
-//   - pending  → flipped to cancelled, completed_at set; returns
-//     {Status: cancelled}
+// Behavior by current status:
+//   - pending  → flipped to canceled, completed_at set; returns
+//     {Status: canceled}
 //   - running  → refused, returns {Status: running, Reason: …}; cooperative
 //     cancellation of running ops is deferred to the per-provider audits
 //   - terminal → refused, returns {Status: current, Reason: …}
@@ -425,7 +425,7 @@ func (s *Store) CancelPending(ctx context.Context, id string) (CancelResult, err
 		`UPDATE operations SET status = ?, error = ?, completed_at = ?
 		 WHERE id = ? AND status = ?`,
 		StatusCancelled,
-		"cancelled by user before dispatcher claimed the op",
+		"canceled by user before dispatcher claimed the op",
 		nowUTC(),
 		id, StatusPending,
 	)

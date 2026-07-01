@@ -114,7 +114,7 @@ func runServe(args []string) error {
 	}
 
 	dbPath := filepath.Join(*dir, "state.db")
-	// Root context cancelled on SIGINT/SIGTERM. Every subsystem below
+	// Root context canceled on SIGINT/SIGTERM. Every subsystem below
 	// (dispatcher, reconciler, HTTP gateway, periodic git push) takes
 	// this ctx and stops when it fires — without cancellation the
 	// gRPC GracefulStop below waits forever for UI Watch streams that
@@ -351,7 +351,7 @@ func runServe(args []string) error {
 		// UI has long-running Watch streams open. HTTP gateway,
 		// dispatcher, reconciler, and periodic git push all took a
 		// child of ctx and stop when it cancels — signal.NotifyContext
-		// already cancelled it before this branch runs.
+		// already canceled it before this branch runs.
 		srv.StopWithTimeout(3 * time.Second)
 		return nil
 	}

@@ -26,7 +26,7 @@ const defaultWatchPollInterval = 500 * time.Millisecond
 // emits ADDED/MODIFIED/DELETED events. The first tick emits ADDED for
 // every existing match so the client gets a snapshot before live deltas.
 //
-// Server-side terminates when the stream context is cancelled (client
+// Server-side terminates when the stream context is canceled (client
 // disconnect or grpc deadline). No goroutine outlives the stream.
 func (h *resourceHandler) Watch(req *apiv1.WatchRequest, stream apiv1.ResourceService_WatchServer) error {
 	if req.GetApiVersion() == "" || req.GetKind() == "" {

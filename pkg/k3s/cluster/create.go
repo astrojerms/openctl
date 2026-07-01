@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -422,9 +423,7 @@ func pollAgentInfo(c *agentclient.Client, name, ip string, overall time.Duration
 
 func copyMap(m map[string]string) map[string]string {
 	out := make(map[string]string, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
+	maps.Copy(out, m)
 	return out
 }
 
