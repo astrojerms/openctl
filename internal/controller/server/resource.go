@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -300,6 +301,41 @@ func (h *resourceHandler) DryRunApply(ctx context.Context, req *apiv1.DryRunAppl
 	}
 
 	return resp, nil
+}
+
+// ListActions returns the runtime action names the responsible provider
+// supports for (apiVersion, kind). Empty response when the provider has
+// no Actioner interface. Never errors on "no actions" — the UI treats
+// that as "hide the action bar" rather than a failure.
+func (h *resourceHandler) ListActions(_ context.Context, req *apiv1.ListActionsRequest) (*apiv1.ListActionsResponse, error) {
+	if req.GetApiVersion() == "" || req.GetKind() == "" {
+		return nil, status.Error(codes.InvalidArgument, "api_version and kind are required")
+	}
+	return &apiv1.ListActionsResponse{
+		Actions: h.registry.ActionsFor(req.GetApiVersion(), req.GetKind()),
+	}, nil
+}
+
+// InvokeAction runs a runtime action against an existing resource.
+// FailedPrecondition when the provider doesn't support actions or the
+// action isn't in its supported list; Internal for provider-side
+// failures (Proxmox API errors, etc). Success returns the provider's
+// short text — typically a task UPID for Proxmox.
+func (h *resourceHandler) InvokeAction(ctx context.Context, req *apiv1.InvokeActionRequest) (*apiv1.InvokeActionResponse, error) {
+	if req.GetApiVersion() == "" || req.GetKind() == "" || req.GetResourceName() == "" || req.GetAction() == "" {
+		return nil, status.Error(codes.InvalidArgument, "api_version, kind, resource_name, and action are required")
+	}
+	msg, err := h.registry.DoAction(ctx, req.GetApiVersion(), req.GetKind(), req.GetResourceName(), req.GetAction())
+	if err != nil {
+		// Route "not supported" errors to FailedPrecondition so the UI can
+		// distinguish user error (button shouldn't have been shown) from
+		// provider failure (real problem the user should see).
+		if strings.Contains(err.Error(), "not supported") || strings.Contains(err.Error(), "does not support") {
+			return nil, status.Error(codes.FailedPrecondition, err.Error())
+		}
+		return nil, status.Errorf(codes.Internal, "action %q on %s/%s: %v", req.GetAction(), req.GetKind(), req.GetResourceName(), err)
+	}
+	return &apiv1.InvokeActionResponse{Message: msg}, nil
 }
 
 // summarizeDryRun builds a default one-line summary when the provider

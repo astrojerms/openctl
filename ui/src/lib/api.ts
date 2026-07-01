@@ -229,6 +229,14 @@ export interface ApplyResponse {
   message?: string;
 }
 
+export interface ListActionsResponse {
+  actions?: string[];
+}
+
+export interface InvokeActionResponse {
+  message?: string;
+}
+
 export const resources = {
   list: (apiVersion: string, kind: string) =>
     api.post<ListResourcesResponse>('/v1/resources:list', { apiVersion, kind }),
@@ -238,6 +246,12 @@ export const resources = {
     api.post<DryRunApplyResponse>('/v1/resources:dryRunApply', { resource }),
   apply: (req: ApplyRequest) =>
     api.post<ApplyResponse>('/v1/resources:apply', req),
+  listActions: (apiVersion: string, kind: string) =>
+    api.post<ListActionsResponse>('/v1/resources:listActions', { apiVersion, kind }),
+  invokeAction: (apiVersion: string, kind: string, resourceName: string, action: string) =>
+    api.post<InvokeActionResponse>('/v1/resources:invokeAction', {
+      apiVersion, kind, resourceName, action,
+    }),
 };
 
 // --- Operations ----------------------------------------------------------

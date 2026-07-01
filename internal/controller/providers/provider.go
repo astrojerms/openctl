@@ -97,6 +97,25 @@ const (
 	GateIKnowThisBreaks  = "i_know_this_breaks_the_cluster"
 )
 
+// Actioner is an optional provider capability for runtime actions on
+// existing resources — start/stop/reboot for VMs, get-kubeconfig for
+// clusters, etc. Distinct from Apply/Delete because these don't change
+// the desired state; they operate on the live resource. Providers that
+// don't expose any actions don't need to implement it.
+type Actioner interface {
+	// Actions returns the action names this provider supports for the
+	// given kind, e.g. ["start", "stop", "reboot"] for VirtualMachine.
+	// Return an empty slice for kinds that have no actions.
+	Actions(kind string) []string
+
+	// DoAction invokes the named action against a specific resource.
+	// Returns a short human-readable message on success (e.g. the
+	// underlying task id) or an error. Actions are synchronous today;
+	// long-running actions can queue their own ops via the provider's
+	// existing client when we grow into them.
+	DoAction(ctx context.Context, kind, name, action string) (string, error)
+}
+
 // Provider implements operations for resources of a particular vendor
 // (proxmox, k3s, etc). Phase 2 semantics are synchronous; Phase 3 layers
 // async operations + persisted state on top.
@@ -220,6 +239,41 @@ func (r *Registry) ChildrenOf(kind, name string) []ResourceRef {
 		}
 	}
 	return out
+}
+
+// ActionsFor returns the supported action names for (apiVersion, kind).
+// Empty when no provider matches or the provider doesn't implement
+// Actioner. Callers should treat an empty list as "no actions"; UI hides
+// the action bar in that case.
+func (r *Registry) ActionsFor(apiVersion, kind string) []string {
+	p, err := r.For(apiVersion)
+	if err != nil {
+		return nil
+	}
+	a, ok := p.(Actioner)
+	if !ok {
+		return nil
+	}
+	return a.Actions(kind)
+}
+
+// DoAction routes an action invocation to the responsible provider.
+// Returns FailedPrecondition-flavored errors when the provider doesn't
+// implement Actioner or the action isn't in its supported list, so the
+// server layer can map cleanly to gRPC status codes.
+func (r *Registry) DoAction(ctx context.Context, apiVersion, kind, name, action string) (string, error) {
+	p, err := r.For(apiVersion)
+	if err != nil {
+		return "", err
+	}
+	a, ok := p.(Actioner)
+	if !ok {
+		return "", fmt.Errorf("provider %q does not support runtime actions", p.Name())
+	}
+	if !slices.Contains(a.Actions(kind), action) {
+		return "", fmt.Errorf("action %q not supported for kind %q", action, kind)
+	}
+	return a.DoAction(ctx, kind, name, action)
 }
 
 // IsObservedOnly reports whether (apiVersion, kind) belongs to a provider

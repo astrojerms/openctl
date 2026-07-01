@@ -170,6 +170,77 @@
     }
   }
 
+  // U8.12: runtime actions. Fetched once per kind on load. Empty means
+  // the provider has no runtime actions for this kind — bar hides.
+  let actions: string[] = [];
+  let actionInflight = '';
+  let actionMsg = '';
+  let actionErr = '';
+
+  async function loadActions(av: string, k: string) {
+    try {
+      const resp = await resources.listActions(av, k);
+      actions = resp.actions ?? [];
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return;
+      // Actions are best-effort — a failure just hides the bar, no toast.
+      // eslint-disable-next-line no-console
+      console.warn('listActions failed', err);
+      actions = [];
+    }
+  }
+
+  async function doAction(action: string) {
+    if (actionInflight) return;
+    actionInflight = action;
+    actionMsg = '';
+    actionErr = '';
+    try {
+      const resp = await resources.invokeAction(apiVersion, kind, resourceName, action);
+      actionMsg = resp.message
+        ? `${action} → ${resp.message}`
+        : `${action} submitted`;
+      // Refetch after a brief pause so status updates from the provider
+      // are reflected. Watch will catch up too, but the immediate refetch
+      // gives faster feedback for click→result.
+      setTimeout(() => void load(apiVersion, kind, resourceName), 800);
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return;
+      actionErr = err instanceof Error ? err.message : String(err);
+    } finally {
+      actionInflight = '';
+    }
+  }
+
+  // Load actions when the kind changes. Independent of the resource
+  // fetch so a slow provider doesn't hold up rendering.
+  $: void loadActions(apiVersion, kind);
+
+  // Human labels for known actions. Falls back to the raw action name
+  // so unknown actions still render (with a plain label).
+  function actionLabel(a: string): string {
+    switch (a) {
+      case 'start': return 'Start';
+      case 'stop': return 'Force stop';
+      case 'shutdown': return 'Shutdown';
+      case 'reboot': return 'Reboot';
+      default: return a;
+    }
+  }
+
+  // Destructive actions get a confirmation prompt.
+  function actionIsDestructive(a: string): boolean {
+    return a === 'stop' || a === 'shutdown' || a === 'reboot';
+  }
+
+  async function onActionClick(a: string) {
+    if (actionIsDestructive(a)) {
+      const ok = confirm(`${actionLabel(a)} ${resourceName}?`);
+      if (!ok) return;
+    }
+    await doAction(a);
+  }
+
   // U6 aggregations: count children we've heard back from that are
   // drifted or in a non-good state. Reactive on childStates so the
   // numbers tick up as the fanout completes.
@@ -203,6 +274,18 @@
           {#if childUnhealthy > 0} · {childUnhealthy} unhealthy{/if}
         </span>
       {/if}
+      {#each actions as a}
+        <button
+          type="button"
+          class="action-btn"
+          class:destructive={actionIsDestructive(a)}
+          disabled={!!actionInflight}
+          title={`Invoke '${a}' on ${resourceName}`}
+          on:click={() => onActionClick(a)}
+        >
+          {actionInflight === a ? '…' : actionLabel(a)}
+        </button>
+      {/each}
       <button
         type="button"
         class="reconcile-btn"
@@ -223,6 +306,12 @@
   {/if}
   {#if reconcileErr}
     <p class="err small">{reconcileErr}</p>
+  {/if}
+  {#if actionMsg}
+    <p class="muted small">{actionMsg}</p>
+  {/if}
+  {#if actionErr}
+    <p class="err small">{actionErr}</p>
   {/if}
 
   {#if loading}
@@ -418,6 +507,31 @@
   }
   .reconcile-msg {
     color: #4a8ef0;
+  }
+  .action-btn {
+    background: transparent;
+    color: #ccc;
+    border: 1px solid rgba(127, 127, 127, 0.35);
+    padding: 0.4em 0.9em;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  .action-btn:hover:not(:disabled) {
+    background: rgba(127, 127, 127, 0.12);
+    color: #fff;
+  }
+  .action-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .action-btn.destructive {
+    color: #ff8980;
+    border-color: rgba(255, 137, 128, 0.35);
+  }
+  .action-btn.destructive:hover:not(:disabled) {
+    background: rgba(255, 137, 128, 0.1);
+    color: #ff8980;
   }
   .state {
     padding: 0.15em 0.7em;

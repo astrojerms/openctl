@@ -33,6 +33,11 @@ func New(config *protocol.ProviderConfig) *Handler {
 	}
 }
 
+// Client returns the underlying Proxmox client. Exposed so the
+// controller-side Provider can invoke lifecycle methods (start, stop,
+// reboot, shutdown) that don't fit the request/response Handle surface.
+func (h *Handler) Client() *client.Client { return h.client }
+
 // Handle handles a request and returns a response
 func (h *Handler) Handle(req *protocol.Request) (*protocol.Response, error) {
 	switch req.ResourceType {
