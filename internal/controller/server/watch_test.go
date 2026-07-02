@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ import (
 type watchableProvider struct {
 	mu        sync.Mutex
 	resources map[string]*protocol.Resource
+	listErrs  int
 }
 
 func newWatchableProvider() *watchableProvider {
@@ -43,6 +45,10 @@ func (w *watchableProvider) Get(_ context.Context, _, name string) (*protocol.Re
 func (w *watchableProvider) List(_ context.Context, _ string) ([]*protocol.Resource, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.listErrs > 0 {
+		w.listErrs--
+		return nil, errors.New("temporary provider outage")
+	}
 	out := make([]*protocol.Resource, 0, len(w.resources))
 	for _, r := range w.resources {
 		out = append(out, r)
@@ -64,6 +70,11 @@ func (w *watchableProvider) remove(name string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	delete(w.resources, name)
+}
+func (w *watchableProvider) failNextLists(n int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.listErrs = n
 }
 
 func startWatchTestServer(t *testing.T, fake *watchableProvider) (string, string) {
@@ -195,6 +206,56 @@ func TestResourceWatchEmitsDeletedWhenResourceGone(t *testing.T) {
 	got = mustReadEvent(t, events, 3*time.Second)
 	if got.GetType() != apiv1.WatchEvent_DELETED || got.GetResource().GetMetadata().GetName() != "transient" {
 		t.Errorf("want DELETED transient, got %v %q", got.GetType(), got.GetResource().GetMetadata().GetName())
+	}
+}
+
+func TestResourceWatchKeepsStreamOpenOnTransientListError(t *testing.T) {
+	fake := newWatchableProvider()
+	addr, caPath, mstore := startWatchTestServerWithManifests(t, fake)
+	conn := dialTestServer(t, addr, caPath)
+	defer func() { _ = conn.Close() }()
+
+	pre := &protocol.Resource{
+		APIVersion: "fake.openctl.io/v1",
+		Kind:       "FakeKind",
+		Metadata:   protocol.ResourceMetadata{Name: "after-outage"},
+	}
+	fake.preload(pre)
+	if err := mstore.Save(context.Background(), pre); err != nil {
+		t.Fatalf("Save after-outage: %v", err)
+	}
+	fake.failNextLists(1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stream, err := apiv1.NewResourceServiceClient(conn).Watch(ctx, &apiv1.WatchRequest{
+		ApiVersion: "fake.openctl.io/v1",
+		Kind:       "FakeKind",
+	})
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+
+	events := make(chan *apiv1.WatchEvent, 1)
+	errs := make(chan error, 1)
+	go func() {
+		ev, recvErr := stream.Recv()
+		if recvErr != nil {
+			errs <- recvErr
+			return
+		}
+		events <- ev
+	}()
+
+	select {
+	case err := <-errs:
+		t.Fatalf("watch should stay open across transient list error, got %v", err)
+	case ev := <-events:
+		if ev.GetType() != apiv1.WatchEvent_ADDED || ev.GetResource().GetMetadata().GetName() != "after-outage" {
+			t.Fatalf("event = %v %q, want ADDED after-outage", ev.GetType(), ev.GetResource().GetMetadata().GetName())
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for watch event after transient list error")
 	}
 }
 
