@@ -75,8 +75,8 @@ func TestParseK3sNodeSpec_JoiningServer(t *testing.T) {
 	if !strings.Contains(cmd, "K3S_URL=https://192.168.1.10:6443") {
 		t.Errorf("joining-server command missing URL: %s", cmd)
 	}
-	if !strings.HasSuffix(strings.TrimSpace(cmd), "server") {
-		t.Errorf("joining-server command should end with 'server' subcommand: %s", cmd)
+	if !strings.Contains(cmd, "sh -s - server") {
+		t.Errorf("joining-server command should include 'sh -s - server' subcommand: %s", cmd)
 	}
 }
 
@@ -98,11 +98,44 @@ func TestParseK3sNodeSpec_Agent(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 	cmd := buildNodeInstallCommand(s)
-	if strings.HasSuffix(strings.TrimSpace(cmd), "server") {
-		t.Errorf("agent command should NOT end with 'server': %s", cmd)
+	if strings.Contains(cmd, "sh -s - server") {
+		t.Errorf("agent command should NOT include ' sh -s - server' subcommand: %s", cmd)
 	}
 	if !strings.Contains(cmd, "K3S_TOKEN=K10::agent:token") {
 		t.Errorf("agent command missing token: %s", cmd)
+	}
+}
+
+// TestBuildNodeInstallCommand_HardeningWrapper asserts every install
+// command carries the cloud-init wait + pipefail hardening. Regression
+// guard for the homelab validation bug: the k3s installer was silently
+// killed mid-run because cloud-init hadn't finished, and `curl | sh`
+// under plain POSIX sh reported exit 0 anyway.
+func TestBuildNodeInstallCommand_HardeningWrapper(t *testing.T) {
+	cases := []struct {
+		name string
+		spec *k3sNodeSpec
+	}{
+		{"first-server", &k3sNodeSpec{role: "server"}},
+		{"joining-server", &k3sNodeSpec{role: "server", joinFromToken: "t", joinFromIP: "1.1.1.1"}},
+		{"agent", &k3sNodeSpec{role: "agent", joinFromToken: "t", joinFromIP: "1.1.1.1"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := buildNodeInstallCommand(tc.spec)
+			if !strings.Contains(cmd, "cloud-init status --wait") {
+				t.Errorf("missing cloud-init wait: %s", cmd)
+			}
+			if !strings.Contains(cmd, "set -o pipefail") {
+				t.Errorf("missing pipefail: %s", cmd)
+			}
+			if !strings.HasPrefix(cmd, "bash -c '") {
+				t.Errorf("expected bash -c wrapper, got: %s", cmd)
+			}
+			if !strings.HasSuffix(cmd, "'") {
+				t.Errorf("expected trailing single-quote, got: %s", cmd)
+			}
+		})
 	}
 }
 
