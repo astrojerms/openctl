@@ -5,8 +5,21 @@ delete) off the imperative `applyExisting` branch and onto the Plan-driven
 dispatcher model, then delete the legacy code. Tracked in ROADMAP under
 "Suggested next order → Retire `applyExisting`".
 
-Status: **plan only, not started.** Needs homelab validation before the
-final deletion.
+Status: **in progress.** PR 1 (`DeleteChild` channel), PR 2a (scale-down
+via `DeleteChild`), and PR 2b (count-up via Plan children) have landed.
+Respec (2c), cutover (3), and deletion (4) remain. Needs homelab
+validation before the final deletion.
+
+## Gating
+
+The plan-based existing-cluster converge is **off by default** and opt-in
+via `OPENCTL_CONVERGE_VIA_PLAN=1` (`convergeViaPlanEnabled()` in
+`provider.go`). With it unset, an existing-cluster apply behaves exactly
+as before the migration (`runChildVMDelete` for removals, `applyCountUp`
+for count-up) — so the merged-but-unvalidated slices stay dormant. Set
+the env on the controller to exercise the new path for homelab
+validation; PR 3 flips the default to on once proven, and PR 4 deletes
+the legacy executors.
 
 ---
 
