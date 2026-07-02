@@ -166,6 +166,24 @@ const (
 	annotIKnowThisBreaks  = "openctl.io/i-know-this-breaks-the-cluster"
 )
 
+// convergeViaPlanEnabled reports whether existing-cluster convergence should
+// run through the Plan/dispatcher path (scale-down via DeleteChild, count-up
+// via Plan children) rather than the legacy imperative executors
+// (runChildVMDelete, applyCountUp/Joiner).
+//
+// Opt-in via OPENCTL_CONVERGE_VIA_PLAN=1 while the path is being
+// homelab-validated; off by default means an existing-cluster apply behaves
+// exactly as it did before the migration. A later change flips the default
+// once the path is proven, and the legacy executors are then deleted.
+func convergeViaPlanEnabled() bool {
+	switch os.Getenv("OPENCTL_CONVERGE_VIA_PLAN") {
+	case "1", "true", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
 // Apply creates a fresh cluster, or — if the cluster already exists —
 // converges its child set toward the new manifest. Phase 5 supports
 // removals (with --allow-destructive) and detects catastrophic ops (with
@@ -342,17 +360,17 @@ func (p *Provider) applyExisting(ctx context.Context, manifest *protocol.Resourc
 		}
 	}
 
-	// Phase 5.x count-up: add new nodes against the live cluster. When a
-	// ChildDispatcher is present (controller path) the new nodes are applied
-	// as Plan()-emitted VM/K3sNode/AgentInstall children — each K3sNode
-	// resolves its join token from a surviving CP's state via $ref, and each
-	// AgentInstall extends the CA bundle itself. Without a dispatcher (CLI
-	// direct-apply) it falls back to the imperative Joiner.
+	// Phase 5.x count-up: add new nodes against the live cluster. With the
+	// plan-based converge enabled and a ChildDispatcher present (controller
+	// path) the new nodes are applied as Plan()-emitted VM/K3sNode/
+	// AgentInstall children — each K3sNode resolves its join token from a
+	// surviving CP's state via $ref, and each AgentInstall extends the CA
+	// bundle itself. Otherwise it falls back to the imperative Joiner.
 	addedEndpoints := map[string]string{}
 	if len(plan.addCPs)+len(plan.addWorkers) > 0 {
 		var joinEndpoints map[string]string
 		var err error
-		if cd, ok := operations.ChildDispatcherFrom(ctx); ok {
+		if cd, ok := operations.ChildDispatcherFrom(ctx); ok && convergeViaPlanEnabled() {
 			joinEndpoints, err = p.addNodesViaPlan(ctx, cd, manifest, name, plan, current, removed)
 		} else {
 			joinEndpoints, err = p.applyCountUp(ctx, rec, name, spec, plan, current, removed)
@@ -425,8 +443,9 @@ func (p *Provider) applyExisting(ctx context.Context, manifest *protocol.Resourc
 func (p *Provider) removeNodes(ctx context.Context, spec *k3sresources.ClusterSpec, removeWorkers, removeCPs []string) error {
 	cd, hasCD := operations.ChildDispatcherFrom(ctx)
 	rec := operations.RecorderFrom(ctx)
+	viaPlan := hasCD && convergeViaPlanEnabled()
 	del := func(node string) error {
-		if hasCD {
+		if viaPlan {
 			return p.deleteNodeChildren(ctx, cd, spec, node)
 		}
 		return runChildVMDelete(ctx, rec, node, p.vms)
