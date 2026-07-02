@@ -15,8 +15,10 @@ import path from 'node:path';
 // In dev (`npm run dev`), Vite proxies /v1/* to the controller's HTTP
 // gateway (default 127.0.0.1:9445). Cookies are same-origin from the
 // browser's perspective, so the session cookie set by Login round-trips
-// just like production.
-const HTTP_GATEWAY = process.env.OPENCTL_HTTP_GATEWAY ?? 'http://127.0.0.1:9445';
+// just like production. The gateway now serves HTTPS (for HTTP/2), so the
+// target is https:// and `secure: false` tells Vite's proxy to accept the
+// controller's self-signed cert.
+const HTTP_GATEWAY = process.env.OPENCTL_HTTP_GATEWAY ?? 'https://127.0.0.1:9445';
 
 export default defineConfig({
   plugins: [svelte()],
@@ -36,6 +38,9 @@ export default defineConfig({
       '/v1': {
         target: HTTP_GATEWAY,
         changeOrigin: false,
+        // The gateway's cert is self-signed by the controller CA; the dev
+        // proxy talks to localhost, so skip cert verification here.
+        secure: false,
       },
     },
   },

@@ -9,7 +9,7 @@ A homelab infrastructure controller. Present-day: a persistent
 background daemon (`openctl-controller`) that owns a SQLite state DB,
 compiles in-process providers for Proxmox and k3s, exposes a gRPC +
 grpc-gateway REST API, and serves a Svelte web UI at
-`http://127.0.0.1:9445/ui/` behind a session-cookie auth layer.
+`https://127.0.0.1:9445/ui/` (HTTP/2 over TLS) behind a session-cookie auth layer.
 Users author resources via the UI (typed form + Monaco YAML editor)
 or the CLI (`openctl ctl apply -f manifest.yaml`) and the controller
 routes applies through the in-process providers.

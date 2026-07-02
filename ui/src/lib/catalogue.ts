@@ -14,8 +14,10 @@ import { schemas, resources, type SchemaInfo, UnauthorizedError } from './api';
 // Templates list `GET /v1/templates`) had no free connection and hung on
 // "Loading..." forever. A transient List returns its connection immediately,
 // so the persistent-stream budget is left for the ops watch and whichever
-// resource page the user is actually viewing. (The durable fix is HTTP/2 on
-// the gateway — one connection, many streams — tracked in ROADMAP.)
+// resource page the user is actually viewing. (The gateway now speaks
+// HTTP/2 — one connection, many streams — so this cap is gone and live
+// Watch counts would be safe again; polling is kept because it's cheap and
+// avoids holding a stream per kind for cosmetic badges.)
 //
 // counts is keyed by `<apiVersion>/<kind>` so two providers can share a
 // kind name without colliding. `null` value = count fetch in flight or
