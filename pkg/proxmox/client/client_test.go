@@ -1,7 +1,9 @@
 package client
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -69,7 +71,7 @@ func TestListVMs(t *testing.T) {
 	c := New(server.URL, "test", "test")
 	c.httpClient = server.Client()
 
-	vms, err := c.ListVMs()
+	vms, err := c.ListVMs(context.Background())
 	if err != nil {
 		t.Fatalf("ListVMs failed: %v", err)
 	}
@@ -117,7 +119,7 @@ func TestGetVM(t *testing.T) {
 	c := New(server.URL, "test", "test")
 	c.httpClient = server.Client()
 
-	vm, err := c.GetVM("test-vm")
+	vm, err := c.GetVM(context.Background(), "test-vm")
 	if err != nil {
 		t.Fatalf("GetVM failed: %v", err)
 	}
@@ -148,12 +150,86 @@ func TestGetVM_NotFound(t *testing.T) {
 	c := New(server.URL, "test", "test")
 	c.httpClient = server.Client()
 
-	_, err := c.GetVM("nonexistent")
+	_, err := c.GetVM(context.Background(), "nonexistent")
 	if err == nil {
 		t.Fatal("expected error for nonexistent VM")
 	}
 	if !strings.Contains(err.Error(), "not found") {
 		t.Errorf("expected 'not found' error, got: %v", err)
+	}
+}
+
+// TestGetVM_NotFoundSentinel verifies that a genuine miss (Proxmox reachable,
+// no VM by that name) wraps ErrNotFound so callers can branch on it.
+func TestGetVM_NotFoundSentinel(t *testing.T) {
+	server := mockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api2/json/nodes":
+			json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]string{{"node": "pve1"}},
+			})
+		case "/api2/json/nodes/pve1/qemu":
+			json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{}})
+		}
+	})
+	defer server.Close()
+
+	c := New(server.URL, "test", "test")
+	c.httpClient = server.Client()
+
+	_, err := c.GetVM(context.Background(), "nonexistent")
+	if err == nil {
+		t.Fatal("expected error for nonexistent VM")
+	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected err to wrap ErrNotFound, got: %v", err)
+	}
+}
+
+// TestGetVM_TransientErrorNotSentinel verifies that a transient failure (the
+// Proxmox API erroring) is NOT reported as ErrNotFound — otherwise a reconcile
+// would conclude the VM is gone and recreate it, and Apply would clone a
+// duplicate.
+func TestGetVM_TransientErrorNotSentinel(t *testing.T) {
+	server := mockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		// Node listing itself fails (e.g. Proxmox 5xx / auth blip).
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	})
+	defer server.Close()
+
+	c := New(server.URL, "test", "test")
+	c.httpClient = server.Client()
+
+	_, err := c.GetVM(context.Background(), "test-vm")
+	if err == nil {
+		t.Fatal("expected error when the API is failing")
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Errorf("transient API error must not be classified as ErrNotFound, got: %v", err)
+	}
+}
+
+// TestContextCancellation verifies the client honors a canceled context so a
+// canceled Watch/reconcile aborts the in-flight request instead of waiting out
+// the client timeout.
+func TestContextCancellation(t *testing.T) {
+	server := mockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{}})
+	})
+	defer server.Close()
+
+	c := New(server.URL, "test", "test")
+	c.httpClient = server.Client()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already canceled before the call
+
+	_, err := c.ListVMs(ctx)
+	if err == nil {
+		t.Fatal("expected error from canceled context")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got: %v", err)
 	}
 }
 
@@ -175,7 +251,7 @@ func TestGetVMConfig(t *testing.T) {
 	c := New(server.URL, "test", "test")
 	c.httpClient = server.Client()
 
-	config, err := c.GetVMConfig("pve1", 100)
+	config, err := c.GetVMConfig(context.Background(), "pve1", 100)
 	if err != nil {
 		t.Fatalf("GetVMConfig failed: %v", err)
 	}
@@ -213,7 +289,7 @@ func TestListTemplates(t *testing.T) {
 	c := New(server.URL, "test", "test")
 	c.httpClient = server.Client()
 
-	templates, err := c.ListTemplates()
+	templates, err := c.ListTemplates(context.Background())
 	if err != nil {
 		t.Fatalf("ListTemplates failed: %v", err)
 	}
@@ -250,7 +326,7 @@ func TestGetTemplate(t *testing.T) {
 	c := New(server.URL, "test", "test")
 	c.httpClient = server.Client()
 
-	tmpl, err := c.GetTemplate("ubuntu-22.04")
+	tmpl, err := c.GetTemplate(context.Background(), "ubuntu-22.04")
 	if err != nil {
 		t.Fatalf("GetTemplate failed: %v", err)
 	}
@@ -281,7 +357,7 @@ func TestGetTemplate_NotFound(t *testing.T) {
 	c := New(server.URL, "test", "test")
 	c.httpClient = server.Client()
 
-	_, err := c.GetTemplate("nonexistent")
+	_, err := c.GetTemplate(context.Background(), "nonexistent")
 	if err == nil {
 		t.Fatal("expected error for nonexistent template")
 	}
@@ -307,7 +383,7 @@ func TestCloneVM(t *testing.T) {
 	c := New(server.URL, "test", "test")
 	c.httpClient = server.Client()
 
-	vmid, upid, err := c.CloneVM("pve1", 9000, "new-vm", nil)
+	vmid, upid, err := c.CloneVM(context.Background(), "pve1", 9000, "new-vm", nil)
 	if err != nil {
 		t.Fatalf("CloneVM failed: %v", err)
 	}
@@ -343,7 +419,7 @@ func TestConfigureVM(t *testing.T) {
 		"cores":  4,
 		"memory": 8192,
 	}
-	err := c.ConfigureVM("pve1", 100, params)
+	err := c.ConfigureVM(context.Background(), "pve1", 100, params)
 	if err != nil {
 		t.Fatalf("ConfigureVM failed: %v", err)
 	}
@@ -369,7 +445,7 @@ func TestStartVM(t *testing.T) {
 	c := New(server.URL, "test", "test")
 	c.httpClient = server.Client()
 
-	upid, err := c.StartVM("pve1", 100)
+	upid, err := c.StartVM(context.Background(), "pve1", 100)
 	if err != nil {
 		t.Fatalf("StartVM failed: %v", err)
 	}
@@ -392,7 +468,7 @@ func TestStopVM(t *testing.T) {
 	c := New(server.URL, "test", "test")
 	c.httpClient = server.Client()
 
-	upid, err := c.StopVM("pve1", 100)
+	upid, err := c.StopVM(context.Background(), "pve1", 100)
 	if err != nil {
 		t.Fatalf("StopVM failed: %v", err)
 	}
@@ -415,7 +491,7 @@ func TestDeleteVM(t *testing.T) {
 	c := New(server.URL, "test", "test")
 	c.httpClient = server.Client()
 
-	err := c.DeleteVM("pve1", 100)
+	err := c.DeleteVM(context.Background(), "pve1", 100)
 	if err != nil {
 		t.Fatalf("DeleteVM failed: %v", err)
 	}
@@ -444,7 +520,7 @@ func TestResizeVMDisk(t *testing.T) {
 	c := New(server.URL, "test", "test")
 	c.httpClient = server.Client()
 
-	err := c.ResizeVMDisk("pve1", 100, "scsi0", "50G")
+	err := c.ResizeVMDisk(context.Background(), "pve1", 100, "scsi0", "50G")
 	if err != nil {
 		t.Fatalf("ResizeVMDisk failed: %v", err)
 	}
@@ -523,7 +599,7 @@ func TestSetDiskOptions(t *testing.T) {
 	c := New(server.URL, "test", "test")
 	c.httpClient = server.Client()
 
-	err := c.SetDiskOptions("pve1", 100, "scsi0", map[string]string{"ssd": "1", "discard": "on"})
+	err := c.SetDiskOptions(context.Background(), "pve1", 100, "scsi0", map[string]string{"ssd": "1", "discard": "on"})
 	if err != nil {
 		t.Fatalf("SetDiskOptions: %v", err)
 	}
@@ -543,7 +619,7 @@ func TestSetDiskOptions_NoOp(t *testing.T) {
 	defer server.Close()
 	c := New(server.URL, "test", "test")
 	c.httpClient = server.Client()
-	if err := c.SetDiskOptions("pve1", 100, "scsi0", nil); err != nil {
+	if err := c.SetDiskOptions(context.Background(), "pve1", 100, "scsi0", nil); err != nil {
 		t.Fatalf("SetDiskOptions nil opts: %v", err)
 	}
 	if called {
@@ -568,7 +644,7 @@ func TestGetStorageInfo(t *testing.T) {
 	c := New(server.URL, "test", "test")
 	c.httpClient = server.Client()
 
-	info, err := c.GetStorageInfo("local-lvm")
+	info, err := c.GetStorageInfo(context.Background(), "local-lvm")
 	if err != nil {
 		t.Fatalf("GetStorageInfo failed: %v", err)
 	}
@@ -594,7 +670,7 @@ func TestAPIError(t *testing.T) {
 	c := New(server.URL, "bad-token", "bad-secret")
 	c.httpClient = server.Client()
 
-	_, err := c.ListVMs()
+	_, err := c.ListVMs(context.Background())
 	if err == nil {
 		t.Fatal("expected error for unauthorized request")
 	}
@@ -616,7 +692,7 @@ func TestAuthorizationHeader(t *testing.T) {
 	c := New(server.URL, "root@pam!mytoken", "supersecret")
 	c.httpClient = server.Client()
 
-	c.ListVMs()
+	c.ListVMs(context.Background())
 
 	expected := "PVEAPIToken=root@pam!mytoken=supersecret"
 	if authHeader != expected {
@@ -637,7 +713,7 @@ func TestConvertToTemplate(t *testing.T) {
 	c := New(server.URL, "test", "test")
 	c.httpClient = server.Client()
 
-	err := c.ConvertToTemplate("pve1", 100)
+	err := c.ConvertToTemplate(context.Background(), "pve1", 100)
 	if err != nil {
 		t.Fatalf("ConvertToTemplate failed: %v", err)
 	}
@@ -666,7 +742,7 @@ func TestAddCloudInitDrive(t *testing.T) {
 	c := New(server.URL, "test", "test")
 	c.httpClient = server.Client()
 
-	err := c.AddCloudInitDrive("pve1", 100, "local-lvm")
+	err := c.AddCloudInitDrive(context.Background(), "pve1", 100, "local-lvm")
 	if err != nil {
 		t.Fatalf("AddCloudInitDrive failed: %v", err)
 	}
@@ -697,7 +773,7 @@ func TestDownloadToStorage(t *testing.T) {
 	c := New(server.URL, "test", "test")
 	c.httpClient = server.Client()
 
-	upid, err := c.DownloadToStorage("pve1", "local", "https://example.com/image.img", "image.img", "iso")
+	upid, err := c.DownloadToStorage(context.Background(), "pve1", "local", "https://example.com/image.img", "image.img", "iso")
 	if err != nil {
 		t.Fatalf("DownloadToStorage failed: %v", err)
 	}
