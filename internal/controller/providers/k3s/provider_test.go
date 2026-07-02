@@ -75,6 +75,56 @@ func writeClusterState(t *testing.T, home, name, body string) {
 	}
 }
 
+// TestRemoveNodes_DispatchesFullChildSet: with a ChildDispatcher present,
+// scale-down tears down each removed node's full plan-native child set
+// (AgentInstall + K3sNode + VM), workers before CPs, so the per-node state
+// files are cleaned up rather than orphaned.
+func TestRemoveNodes_DispatchesFullChildSet(t *testing.T) {
+	cd := &recordingChildDispatcher{}
+	ctx := operations.WithChildDispatcher(context.Background(), cd)
+	p := New(&protocol.ProviderConfig{}, &fakeVMs{})
+	spec := &k3sresources.ClusterSpec{}
+	spec.Compute.Provider = "proxmox"
+
+	if err := p.removeNodes(ctx, spec, []string{"c-w-0"}, []string{"c-cp-2"}); err != nil {
+		t.Fatalf("removeNodes: %v", err)
+	}
+
+	want := []string{
+		"k3s.openctl.io/v1|AgentInstall|c-w-0-agent",
+		"k3s.openctl.io/v1|K3sNode|c-w-0",
+		"proxmox.openctl.io/v1|VirtualMachine|c-w-0",
+		"k3s.openctl.io/v1|AgentInstall|c-cp-2-agent",
+		"k3s.openctl.io/v1|K3sNode|c-cp-2",
+		"proxmox.openctl.io/v1|VirtualMachine|c-cp-2",
+	}
+	if got := cd.deleteKeys(); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("DeleteChild calls mismatch:\n got=%v\nwant=%v", got, want)
+	}
+	// The VM-only fallback must not fire when a dispatcher is present.
+	if vms := p.vms.(*fakeVMs); len(vms.deleted) != 0 {
+		t.Errorf("VM-only fallback used despite ChildDispatcher present: %v", vms.deleted)
+	}
+}
+
+// TestRemoveNodes_FallsBackToVMOnlyWithoutDispatcher: with no ChildDispatcher
+// (CLI direct-apply, which never wrote per-node state), scale-down keeps the
+// legacy VM-only delete.
+func TestRemoveNodes_FallsBackToVMOnlyWithoutDispatcher(t *testing.T) {
+	vms := &fakeVMs{}
+	p := New(&protocol.ProviderConfig{}, vms)
+	spec := &k3sresources.ClusterSpec{}
+	spec.Compute.Provider = "proxmox"
+
+	if err := p.removeNodes(context.Background(), spec, []string{"c-w-0"}, []string{"c-cp-0"}); err != nil {
+		t.Fatalf("removeNodes: %v", err)
+	}
+	want := [][]string{{"VirtualMachine", "c-w-0"}, {"VirtualMachine", "c-cp-0"}}
+	if fmt.Sprintf("%v", vms.deleted) != fmt.Sprintf("%v", want) {
+		t.Errorf("VM deletes = %v, want %v", vms.deleted, want)
+	}
+}
+
 func TestProviderName(t *testing.T) {
 	p := New(&protocol.ProviderConfig{}, &fakeVMs{})
 	if p.Name() != "k3s" {
