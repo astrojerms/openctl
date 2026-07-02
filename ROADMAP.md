@@ -18,22 +18,15 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
-- **[PR #1: dispatcher refactor](https://github.com/astrojerms/openctl/pull/1)**
-  — Cluster.Apply's initial-create path now fans out through
-  `Plan()` + `ChildDispatcher`; each VM / K3sNode / AgentInstall
-  goes through the standard resolve/cache/save pipeline.
-  Includes 4 end-to-end integration tests exercising the real
-  dispatcher (fan-out, ref-chain between children, per-child
-  cache, child-failure propagation). Blocked on real-cluster
-  validation before merge.
+- No active roadmap branch. The dispatcher refactor shipped and was
+  homelab-validated with the `validate-3` single-control-plane k3s
+  apply path.
 
 ## Suggested next order
 
 Full arch Phase 8 (steps 1–5 + dispatcher refactor) closed out
 this session. Remaining candidates for the next round:
 
-- **Validate PR #1 on real hardware**, then merge — this unblocks
-  everything below.
 - **UI DAG view for composite resources** — `Detail.svelte` for a
   Cluster (or any composite) renders the parent + children as a
   graph rather than the current flat children list. Now that
@@ -41,7 +34,9 @@ this session. Remaining candidates for the next round:
   exist, this is a frontend job. Broken out as Phase U9 below.
 - **Retire `applyExisting`** — migrate count-up / respec / delete
   to the Plan-driven model; delete ~600 lines of imperative code
-  in `pkg/k3s/cluster/create.go`. Depends on PR #1 validated.
+  in `pkg/k3s/cluster/create.go`. The initial-create dispatcher
+  path is homelab-validated; existing-cluster convergence still
+  uses the legacy branch.
 - **Multi-user auth** — OIDC + RBAC (from "Future goals").
 - **User-authored CUE templates** — extend templates from Go-only
   compiled-in to loading `~/.openctl/templates/*.cue`. Feasible
@@ -107,18 +102,21 @@ evolved.
       provider.Get to populate result and marks op with a "cached"
       label). Parent-hash-aware (children's hashes folded into the
       parent hash) deferred until composite ops are reified.
-- [~] **Arch Phase 8 (scoped)** — Owner-ref / children plumbing on the
+- [x] **Arch Phase 8 (scoped)** — Owner-ref / children plumbing on the
       Resource proto, Registry.ChildrenOf + OwnerRefOf helpers, k3s
       Cluster implements ChildrenLister so Get/List/Watch return its
       VM children, child resources surface their owning Cluster via
-      Metadata.OwnerRefs. Unblocks UI U3.3 deferred + U6.
-- [~] **Arch Phase 8 (full)** — genuinely multi-session
+      Metadata.OwnerRefs. Unblocked UI U3.3 deferred + U6.
+- [x] **Arch Phase 8 (full)** — genuinely multi-session
       architectural lift. Steps 1–5 + the dispatcher refactor
       landed. Cluster.Apply's initial-create path now fans out
       through Plan → ChildDispatcher, giving each VM / K3sNode /
-      AgentInstall its own resolve+cache+save pipeline. Needs
-      real-cluster validation before we retire the imperative
-      applyExisting (count-up/respec/delete) branch.
+      AgentInstall its own resolve+cache+save pipeline. Homelab
+      validation is complete: `validate-3` reached Ready after PRs
+      #5–#9 fixed plan child normalization, cloud-init/k3s install
+      hardening, SSH-drop recovery, nil-safe reconnect cleanup, local
+      agent binary packaging, and Provisioning-stub resume. Retiring
+      the imperative `applyExisting` branch remains a separate cleanup.
       1. [x] **ResourceRef as spec-level primitive.** CUE `#Ref`
          helper in base.cue authors `{$ref: {apiVersion, kind,
          name, field?}}` markers. Server-side resolver
@@ -167,11 +165,10 @@ evolved.
          the first CP's status.nodeToken, AgentInstall vmRef pointing
          at its VM, owner labels for attribution). 9 tests cover
          single-CP, HA 3-CP, worker pools, static-IPs flow-through,
-         version + extraArgs propagation. **Dispatcher is not wired
-         to consume Plan output yet** — Cluster.Apply remains the
-         operative path. A future refactor swaps Apply for a DAG
-         over Plan children; that swap is the biggest remaining
-         piece and needs a real test cluster to validate against.
+         version + extraArgs propagation. The dispatcher now consumes
+         Plan output for initial Cluster create via `ChildDispatcher`;
+         homelab validation covered the VM → K3sNode → AgentInstall
+         flow end to end.
       5. [x] **Verifying-cache refs_hash extension.** Two-dimensional
          cache: `input_hash` (raw manifest — user intent) plus
          `refs_hash` (resolved $ref values — upstream state).

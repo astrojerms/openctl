@@ -95,17 +95,23 @@ func TestVerifyingTraceCacheMissOnSpecChange(t *testing.T) {
 	manifestA := `{"apiVersion":"fake.openctl.io/v1","kind":"FakeKind","metadata":{"name":"x"},"spec":{"cores":2}}`
 	manifestB := `{"apiVersion":"fake.openctl.io/v1","kind":"FakeKind","metadata":{"name":"x"},"spec":{"cores":4}}`
 
-	op1, _ := store.Submit(context.Background(), &Operation{
+	op1, err := store.Submit(context.Background(), &Operation{
 		Type: TypeApply, APIVersion: "fake.openctl.io/v1", Kind: "FakeKind",
 		ResourceName: "x", ManifestJSON: manifestA,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	d.Notify()
 	waitForStatus(t, store, op1.ID, StatusSucceeded, 2*time.Second)
 
-	op2, _ := store.Submit(context.Background(), &Operation{
+	op2, err := store.Submit(context.Background(), &Operation{
 		Type: TypeApply, APIVersion: "fake.openctl.io/v1", Kind: "FakeKind",
 		ResourceName: "x", ManifestJSON: manifestB,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	d.Notify()
 	waitForStatus(t, store, op2.ID, StatusSucceeded, 2*time.Second)
 
@@ -123,17 +129,23 @@ func TestVerifyingTraceCacheDisabledByIKnowFlag(t *testing.T) {
 	manifest := `{"apiVersion":"fake.openctl.io/v1","kind":"FakeKind","metadata":{"name":"x"},"spec":{"cores":2}}`
 	manifestWithFlag := `{"apiVersion":"fake.openctl.io/v1","kind":"FakeKind","metadata":{"name":"x","annotations":{"openctl.io/i-know-this-breaks-the-cluster":"true"}},"spec":{"cores":2}}`
 
-	op1, _ := store.Submit(context.Background(), &Operation{
+	op1, err := store.Submit(context.Background(), &Operation{
 		Type: TypeApply, APIVersion: "fake.openctl.io/v1", Kind: "FakeKind",
 		ResourceName: "x", ManifestJSON: manifest,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	d.Notify()
 	waitForStatus(t, store, op1.ID, StatusSucceeded, 2*time.Second)
 
-	op2, _ := store.Submit(context.Background(), &Operation{
+	op2, err := store.Submit(context.Background(), &Operation{
 		Type: TypeApply, APIVersion: "fake.openctl.io/v1", Kind: "FakeKind",
 		ResourceName: "x", ManifestJSON: manifestWithFlag,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	d.Notify()
 	waitForStatus(t, store, op2.ID, StatusSucceeded, 2*time.Second)
 
