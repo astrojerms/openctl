@@ -324,8 +324,24 @@ func parseK3sNodeSpec(manifest *protocol.Resource) (*k3sNodeSpec, error) {
 // mirrors what pkg/k3s/cluster.Creator produces, kept side-by-side
 // deliberately so a future PR (Cluster.Plan refactor, step 4) can
 // unify them.
+//
+// Two hardening steps wrap the k3s installer:
+//
+//   - `cloud-init status --wait` first. WaitForSSH returns as soon as
+//     sshd accepts a connection, but on a freshly-cloned VM cloud-init
+//     is often still applying the network config, dpkg locks, etc.
+//     Running the k3s installer against a half-configured system is
+//     what caused the homelab validation to see
+//     "cat: node-token: No such file or directory" — the installer
+//     script was killed mid-run and no k3s.service was ever created.
+//
+//   - `bash -c 'set -o pipefail; ...'` around `curl … | sh -s -`.
+//     Under plain POSIX sh a pipeline's exit code is the last stage's,
+//     so a failing `curl` upstream of `sh -s -` still reports success.
+//     That's exactly how the failure above hid: the installer never
+//     ran but SSH returned 0. pipefail propagates the real error.
 func buildNodeInstallCommand(s *k3sNodeSpec) string {
-	cmd := "curl -sfL https://get.k3s.io | "
+	inner := "curl -sfL https://get.k3s.io | "
 	var env []string
 	if s.version != "" {
 		env = append(env, fmt.Sprintf("INSTALL_K3S_VERSION=%s", s.version))
@@ -333,27 +349,37 @@ func buildNodeInstallCommand(s *k3sNodeSpec) string {
 	// First server: no join token, no server URL.
 	if s.role == "server" && s.joinFromToken == "" {
 		if len(env) > 0 {
-			cmd += strings.Join(env, " ") + " "
+			inner += strings.Join(env, " ") + " "
 		}
-		cmd += "sh -s -"
+		inner += "sh -s -"
 		if len(s.extraArgs) > 0 {
-			cmd += " " + strings.Join(s.extraArgs, " ")
+			inner += " " + strings.Join(s.extraArgs, " ")
 		}
-		return cmd
+		return wrapK3sInstall(inner)
 	}
 	// Joining server or agent: token + URL required.
 	env = append(env,
 		fmt.Sprintf("K3S_TOKEN=%s", s.joinFromToken),
 		fmt.Sprintf("K3S_URL=https://%s:6443", s.joinFromIP),
 	)
-	cmd += strings.Join(env, " ") + " sh -s -"
+	inner += strings.Join(env, " ") + " sh -s -"
 	if s.role == "server" {
-		cmd += " server"
+		inner += " server"
 	}
 	if len(s.extraArgs) > 0 {
-		cmd += " " + strings.Join(s.extraArgs, " ")
+		inner += " " + strings.Join(s.extraArgs, " ")
 	}
-	return cmd
+	return wrapK3sInstall(inner)
+}
+
+// wrapK3sInstall wraps the raw `curl | sh` k3s install pipeline with
+// (1) a `cloud-init status --wait` gate and (2) `set -o pipefail` so
+// curl failures propagate through the pipe instead of being masked by
+// `sh -s -` exiting 0. See buildNodeInstallCommand's doc comment for
+// the failure mode this covers.
+func wrapK3sInstall(inner string) string {
+	return "bash -c 'cloud-init status --wait >/dev/null 2>&1 || true; set -o pipefail; " +
+		inner + "'"
 }
 
 // nodeStateToResource projects the persisted state (and optionally
