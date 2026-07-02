@@ -390,37 +390,47 @@ func (p *Provider) applyExisting(ctx context.Context, manifest *protocol.Resourc
 	// Phase 5.x in-place respec: destroy → recreate → rejoin each affected
 	// node, one at a time. Runs after adds so the cluster has its maximum
 	// replica count before any individual node goes down for the respec.
+	// With the plan-based converge enabled + a dispatcher present, this runs
+	// through the Plan/dispatcher path; otherwise via the imperative Joiner.
 	if len(respecs) > 0 {
-		existingState, err := p.loadState(name)
-		if err != nil {
-			return nil, err
-		}
-		existingIPs := readAgentEndpoints(existingState)
-		// Merge in any IPs we just learned from the count-up so respec on a
-		// freshly-added node uses its new IP rather than failing the lookup.
-		maps.Copy(existingIPs, addedEndpoints)
-		survivingCPs := []string{}
-		for _, c := range current {
-			if c.Kind == "VirtualMachine" && strings.HasPrefix(c.Name, cpPrefix) && !removed[c.Name] {
-				survivingCPs = append(survivingCPs, c.Name)
+		if cd, ok := operations.ChildDispatcherFrom(ctx); ok && convergeViaPlanEnabled() {
+			updated, err := p.respecNodesViaPlan(ctx, cd, manifest, name, spec, respecs, current, removed)
+			if err != nil {
+				return nil, err
 			}
+			maps.Copy(addedEndpoints, updated)
+		} else {
+			existingState, err := p.loadState(name)
+			if err != nil {
+				return nil, err
+			}
+			existingIPs := readAgentEndpoints(existingState)
+			// Merge in any IPs we just learned from the count-up so respec on
+			// a freshly-added node uses its new IP rather than failing lookup.
+			maps.Copy(existingIPs, addedEndpoints)
+			survivingCPs := []string{}
+			for _, c := range current {
+				if c.Kind == "VirtualMachine" && strings.HasPrefix(c.Name, cpPrefix) && !removed[c.Name] {
+					survivingCPs = append(survivingCPs, c.Name)
+				}
+			}
+			if len(survivingCPs) == 0 && len(plan.addCPs) > 0 {
+				survivingCPs = plan.addCPs
+			}
+			if len(survivingCPs) == 0 {
+				return nil, fmt.Errorf("respec requires at least one CP to remain reachable")
+			}
+			firstCPName := survivingCPs[0]
+			firstCPIP := existingIPs[firstCPName]
+			if firstCPIP == "" {
+				return nil, fmt.Errorf("no IP for surviving CP %s; can't rejoin after respec", firstCPName)
+			}
+			updated, err := p.applyRespecs(ctx, rec, name, spec, respecs, existingIPs, firstCPName, firstCPIP)
+			if err != nil {
+				return nil, err
+			}
+			maps.Copy(addedEndpoints, updated)
 		}
-		if len(survivingCPs) == 0 && len(plan.addCPs) > 0 {
-			survivingCPs = plan.addCPs
-		}
-		if len(survivingCPs) == 0 {
-			return nil, fmt.Errorf("respec requires at least one CP to remain reachable")
-		}
-		firstCPName := survivingCPs[0]
-		firstCPIP := existingIPs[firstCPName]
-		if firstCPIP == "" {
-			return nil, fmt.Errorf("no IP for surviving CP %s; can't rejoin after respec", firstCPName)
-		}
-		updated, err := p.applyRespecs(ctx, rec, name, spec, respecs, existingIPs, firstCPName, firstCPIP)
-		if err != nil {
-			return nil, err
-		}
-		maps.Copy(addedEndpoints, updated)
 	}
 
 	if err := p.rewriteState(name, manifest, keep, addedEndpoints, removed); err != nil {

@@ -6,9 +6,15 @@ dispatcher model, then delete the legacy code. Tracked in ROADMAP under
 "Suggested next order → Retire `applyExisting`".
 
 Status: **in progress.** PR 1 (`DeleteChild` channel), PR 2a (scale-down
-via `DeleteChild`), and PR 2b (count-up via Plan children) have landed.
-Respec (2c), cutover (3), and deletion (4) remain. Needs homelab
-validation before the final deletion.
+via `DeleteChild`), PR 2b (count-up via Plan children), and PR 2c (respec
+via destroy+recreate through the dispatcher) have landed, all behind the
+gate below. Cutover (3) and deletion (4) remain. Needs homelab validation
+before the final deletion.
+
+Note: respec of the *sole* control plane is refused on the plan path —
+there's no peer for the recreated node to rejoin, and re-initializing it
+would orphan every other node. (It's a catastrophic op gated upstream
+anyway.) Use the imperative path or a full recreate for that case.
 
 ## Gating
 
