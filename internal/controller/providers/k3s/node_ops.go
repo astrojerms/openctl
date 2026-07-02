@@ -86,7 +86,23 @@ func (p *Provider) applyK3sNode(ctx context.Context, manifest *protocol.Resource
 	// Build the appropriate install command for this role.
 	cmd := buildNodeInstallCommand(spec)
 	if _, err := client.RunSudo(cmd); err != nil {
-		return nil, fmt.Errorf("k3s install failed on %s: %w", spec.vmIP, err)
+		// The k3s installer script starts k3s.service near the end,
+		// which reconfigures iptables/CNI and frequently kills the
+		// in-flight SSH connection before `curl | sh` can return.
+		// The install itself completed successfully — we just lost
+		// the transport. Reconnect and verify k3s is running before
+		// treating this as a real failure.
+		if !isConnectionDropError(err) {
+			return nil, fmt.Errorf("k3s install failed on %s: %w", spec.vmIP, err)
+		}
+		_ = client.Close()
+		client, err = ssh.WaitForSSH(spec.vmIP, sshPort, spec.sshUser, spec.sshKeyPath, sshWaitTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("k3s install: reconnect after transport drop failed on %s: %w", spec.vmIP, err)
+		}
+		if err := verifyK3sHealthy(client, spec.role); err != nil {
+			return nil, fmt.Errorf("k3s install on %s: connection dropped and post-drop verify failed: %w", spec.vmIP, err)
+		}
 	}
 
 	// Populate state.
@@ -380,6 +396,60 @@ func buildNodeInstallCommand(s *k3sNodeSpec) string {
 func wrapK3sInstall(inner string) string {
 	return "bash -c 'cloud-init status --wait >/dev/null 2>&1 || true; set -o pipefail; " +
 		inner + "'"
+}
+
+// isConnectionDropError returns true when err looks like the SSH
+// transport was severed rather than the remote command exiting with
+// a non-zero status. The k3s installer triggers this on purpose near
+// the end: `systemctl start k3s` reconfigures iptables/CNI, which
+// kills existing SSH connections. From the client's perspective the
+// stream ends without an exit status.
+//
+// String-match because golang.org/x/crypto/ssh returns *ssh.ExitError
+// with a status only when the remote actually exited; a mid-stream
+// drop surfaces as a plain error with these shapes. Keep the list
+// tight — a genuine command failure must still fail loudly.
+func isConnectionDropError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	for _, needle := range []string{
+		"exited without exit status or exit signal",
+		"connection reset by peer",
+		"broken pipe",
+		"use of closed network connection",
+		"EOF",
+	} {
+		if strings.Contains(msg, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// verifyK3sHealthy checks that the k3s install actually completed
+// after a mid-install SSH drop. For servers, that means k3s.service
+// is active AND the node-token file exists (the installer writes it
+// only after the server initializes). For agents, k3s-agent.service
+// active is enough — no token file to check.
+//
+// Used only on the mid-install SSH-drop recovery path
+// (isConnectionDropError). The healthy path never runs this.
+func verifyK3sHealthy(client *ssh.Client, role string) error {
+	if role == "server" {
+		if _, err := client.RunSudo("systemctl is-active k3s"); err != nil {
+			return fmt.Errorf("k3s.service not active: %w", err)
+		}
+		if _, err := client.RunSudo("test -f /var/lib/rancher/k3s/server/node-token"); err != nil {
+			return fmt.Errorf("node-token missing (install did not complete): %w", err)
+		}
+		return nil
+	}
+	if _, err := client.RunSudo("systemctl is-active k3s-agent"); err != nil {
+		return fmt.Errorf("k3s-agent.service not active: %w", err)
+	}
+	return nil
 }
 
 // nodeStateToResource projects the persisted state (and optionally
