@@ -34,7 +34,7 @@ func (p *Provider) addNodesViaPlan(
 	current []childRef,
 	removed map[string]bool,
 ) (map[string]string, error) {
-	survivingCP, err := survivingControlPlane(name, current, removed)
+	survivingCP, err := survivingControlPlane(name, current, removed, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -93,19 +93,25 @@ func (p *Provider) addNodesViaPlan(
 }
 
 // survivingControlPlane returns the first (sorted) control-plane node that
-// exists in state and is not being removed in this converge — the CP new
-// nodes join. Mirrors the selection applyCountUp makes.
-func survivingControlPlane(clusterName string, current []childRef, removed map[string]bool) (string, error) {
+// exists in state, is not being removed in this converge, and is not in
+// exclude — the CP that new or recreated nodes join. exclude lets a respec
+// skip the node currently being torn down (it can't join itself). Mirrors
+// the selection applyCountUp/applyRespecs make.
+func survivingControlPlane(clusterName string, current []childRef, removed, exclude map[string]bool) (string, error) {
 	cpPrefix := clusterName + "-cp-"
 	var cps []string
 	for _, c := range current {
-		if c.Kind == "VirtualMachine" && strings.HasPrefix(c.Name, cpPrefix) && !removed[c.Name] {
-			cps = append(cps, c.Name)
+		if c.Kind != "VirtualMachine" || !strings.HasPrefix(c.Name, cpPrefix) {
+			continue
 		}
+		if removed[c.Name] || exclude[c.Name] {
+			continue
+		}
+		cps = append(cps, c.Name)
 	}
 	sort.Strings(cps)
 	if len(cps) == 0 {
-		return "", fmt.Errorf("count-up requires at least one surviving control plane; saw none")
+		return "", fmt.Errorf("no surviving control plane to join (all removed or excluded)")
 	}
 	return cps[0], nil
 }
