@@ -234,6 +234,37 @@ func (d *Dispatcher) ApplyManifest(ctx context.Context, raw *protocol.Resource) 
 	return result, nil
 }
 
+// DeleteManifest routes a single manifest through provider.Delete and
+// removes it from the manifest store — the delete-direction mirror of
+// ApplyManifest, and the same pipeline the top-level TypeDelete op runs.
+//
+// Used by composite providers via the ChildDispatcher on ctx to remove
+// Plan()-emitted children (scale-down, the respec destroy step) without
+// spawning separate delete ops. No ref resolution or cache is involved:
+// Delete takes only kind+name, and there is nothing to cache.
+//
+// Idempotent to the extent the provider's Delete is — providers return
+// nil for an already-absent resource — so deleting a child twice is safe.
+// A manifest-store removal failure is logged, not returned, matching the
+// top-level TypeDelete path: the resource is already gone from the
+// provider, so a lingering manifest row is a soft error, not a reason to
+// fail the caller.
+func (d *Dispatcher) DeleteManifest(ctx context.Context, raw *protocol.Resource) error {
+	p, err := d.registry.For(raw.APIVersion)
+	if err != nil {
+		return fmt.Errorf("no provider for apiVersion %q: %w", raw.APIVersion, err)
+	}
+	if err := p.Delete(ctx, raw.Kind, raw.Metadata.Name); err != nil {
+		return err
+	}
+	if d.manifests != nil {
+		if err := d.manifests.Delete(ctx, raw.APIVersion, raw.Kind, raw.Metadata.Name); err != nil {
+			log.Printf("dispatcher: delete manifest for %s %q: %v", raw.Kind, raw.Metadata.Name, err)
+		}
+	}
+	return nil
+}
+
 func (d *Dispatcher) execute(ctx context.Context, op *Operation) {
 	p, err := d.registry.For(op.APIVersion)
 	if err != nil {

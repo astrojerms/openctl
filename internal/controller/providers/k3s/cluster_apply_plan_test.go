@@ -26,7 +26,8 @@ var osReadFile = os.ReadFile
 type recordingChildDispatcher struct {
 	mu       sync.Mutex
 	calls    []*protocol.Resource
-	writeK3s bool // if true, K3sNode child calls persist a state file
+	deletes  []*protocol.Resource // DeleteChild calls, in order
+	writeK3s bool                 // if true, K3sNode child calls persist a state file
 }
 
 func (r *recordingChildDispatcher) ApplyChild(_ context.Context, m *protocol.Resource) (*protocol.Resource, error) {
@@ -62,6 +63,18 @@ func (r *recordingChildDispatcher) ApplyChild(_ context.Context, m *protocol.Res
 		}
 	}
 	return m, nil
+}
+
+func (r *recordingChildDispatcher) DeleteChild(_ context.Context, m *protocol.Resource) error {
+	r.mu.Lock()
+	r.deletes = append(r.deletes, m)
+	r.mu.Unlock()
+	if r.writeK3s && m.Kind == kindK3sNode {
+		// Mirror deleteK3sNode's state removal so a delete+re-apply
+		// sequence (respec) behaves like the real provider.
+		_ = removeNodeState(m.Metadata.Name)
+	}
+	return nil
 }
 
 // kindsInOrder returns the ordered list of kinds seen by the
@@ -240,6 +253,10 @@ func (r *failingChildDispatcher) ApplyChild(_ context.Context, m *protocol.Resou
 		return nil, fmt.Errorf("simulated K3sNode failure on %s", m.Metadata.Name)
 	}
 	return m, nil
+}
+
+func (r *failingChildDispatcher) DeleteChild(_ context.Context, _ *protocol.Resource) error {
+	return nil
 }
 
 // TestApplyClusterViaPlan_InterimStubEnablesDeleteAfterPhase2Failure:

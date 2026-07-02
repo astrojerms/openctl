@@ -22,6 +22,13 @@ import (
 // without spinning up a full dispatcher + storage.
 type ChildDispatcher interface {
 	ApplyChild(ctx context.Context, manifest *protocol.Resource) (*protocol.Resource, error)
+	// DeleteChild removes a single Plan()-emitted child through the same
+	// provider.Delete + manifest-store pipeline that a top-level Delete op
+	// uses. Composite providers use it for scale-down (removing a node's
+	// VM / K3sNode / AgentInstall) and the respec destroy step. Idempotent
+	// to the extent the provider's Delete is — an already-absent child
+	// returns nil — so a re-run after partial progress is safe.
+	DeleteChild(ctx context.Context, manifest *protocol.Resource) error
 }
 
 type childDispatchKey struct{}
@@ -46,4 +53,10 @@ func ChildDispatcherFrom(ctx context.Context) (ChildDispatcher, bool) {
 // narrow and doesn't expose the entire dispatcher surface to providers.
 func (d *Dispatcher) ApplyChild(ctx context.Context, manifest *protocol.Resource) (*protocol.Resource, error) {
 	return d.ApplyManifest(ctx, manifest)
+}
+
+// DeleteChild implements ChildDispatcher on *Dispatcher. Delegates to
+// DeleteManifest — the delete-direction mirror of ApplyChild.
+func (d *Dispatcher) DeleteChild(ctx context.Context, manifest *protocol.Resource) error {
+	return d.DeleteManifest(ctx, manifest)
 }
