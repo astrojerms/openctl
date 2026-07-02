@@ -89,6 +89,18 @@ func (r *recordingChildDispatcher) kindsInOrder() []string {
 	return out
 }
 
+// deleteKeys returns the ordered "apiVersion|kind|name" of each DeleteChild
+// call — used to assert scale-down tears down the full plan-native child set.
+func (r *recordingChildDispatcher) deleteKeys() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, 0, len(r.deletes))
+	for _, c := range r.deletes {
+		out = append(out, c.APIVersion+"|"+c.Kind+"|"+c.Metadata.Name)
+	}
+	return out
+}
+
 func TestApplyClusterViaPlan_DispatchOrder(t *testing.T) {
 	// applyClusterViaPlan writes state under ~/.openctl/state — pin
 	// HOME to a temp dir so we don't touch the real filesystem.

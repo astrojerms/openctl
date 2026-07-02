@@ -328,15 +328,8 @@ func (p *Provider) applyExisting(ctx context.Context, manifest *protocol.Resourc
 	// Execute removals. Note: no kubectl drain (homelab assumption — workloads
 	// tolerate node loss). Workers go first, then CPs, so we drop schedulable
 	// capacity before touching apiserver replicas.
-	for _, w := range plan.removeWorkers {
-		if err := runChildVMDelete(ctx, rec, w, p.vms); err != nil {
-			return nil, fmt.Errorf("delete worker %s: %w", w, err)
-		}
-	}
-	for _, cp := range plan.removeCPs {
-		if err := runChildVMDelete(ctx, rec, cp, p.vms); err != nil {
-			return nil, fmt.Errorf("delete control-plane %s: %w", cp, err)
-		}
+	if err := p.removeNodes(ctx, spec, plan.removeWorkers, plan.removeCPs); err != nil {
+		return nil, err
 	}
 
 	// Compose the converged children set: keep survivors of any removes,
@@ -405,6 +398,59 @@ func (p *Provider) applyExisting(ctx context.Context, manifest *protocol.Resourc
 		return nil, fmt.Errorf("rewrite state: %w", err)
 	}
 	return p.loadState(name)
+}
+
+// removeNodes tears down the given worker and control-plane nodes during an
+// existing-cluster converge. Workers go before CPs so schedulable capacity
+// drops before apiserver replicas (no kubectl drain — homelab assumption).
+//
+// When a ChildDispatcher is present (a dispatched op — the controller path),
+// each node is removed as its full plan-native child set — AgentInstall +
+// K3sNode + VM — via DeleteChild, so the per-node state files under
+// state/k3s-nodes/ and state/k3s-agent-installs/ are cleaned up instead of
+// orphaned. (Before this, scale-down deleted only the VM and leaked those
+// two files.) Without a dispatcher (CLI direct-apply, which never wrote
+// those files) it falls back to the VM-only delete.
+func (p *Provider) removeNodes(ctx context.Context, spec *k3sresources.ClusterSpec, removeWorkers, removeCPs []string) error {
+	cd, hasCD := operations.ChildDispatcherFrom(ctx)
+	rec := operations.RecorderFrom(ctx)
+	del := func(node string) error {
+		if hasCD {
+			return p.deleteNodeChildren(ctx, cd, spec, node)
+		}
+		return runChildVMDelete(ctx, rec, node, p.vms)
+	}
+	for _, w := range removeWorkers {
+		if err := del(w); err != nil {
+			return fmt.Errorf("delete worker %s: %w", w, err)
+		}
+	}
+	for _, cp := range removeCPs {
+		if err := del(cp); err != nil {
+			return fmt.Errorf("delete control-plane %s: %w", cp, err)
+		}
+	}
+	return nil
+}
+
+// deleteNodeChildren removes a single node's AgentInstall, K3sNode, and VM
+// through the ChildDispatcher (provider.Delete + manifest-store removal +
+// per-node state cleanup). AgentInstall and K3sNode go before the VM so
+// their best-effort SSH uninstall can still reach a live guest; all three
+// are idempotent on an already-absent target, so a re-run after partial
+// progress is safe. Child names/apiVersions mirror what Plan() emits.
+func (p *Provider) deleteNodeChildren(ctx context.Context, cd operations.ChildDispatcher, spec *k3sresources.ClusterSpec, node string) error {
+	vmAPIVersion := spec.Compute.Provider + ".openctl.io/v1"
+	for _, c := range []*protocol.Resource{
+		{APIVersion: "k3s.openctl.io/v1", Kind: kindAgentInstall, Metadata: protocol.ResourceMetadata{Name: node + "-agent"}},
+		{APIVersion: "k3s.openctl.io/v1", Kind: kindK3sNode, Metadata: protocol.ResourceMetadata{Name: node}},
+		{APIVersion: vmAPIVersion, Kind: "VirtualMachine", Metadata: protocol.ResourceMetadata{Name: node}},
+	} {
+		if err := cd.DeleteChild(ctx, c); err != nil {
+			return fmt.Errorf("delete %s %q: %w", c.Kind, c.Metadata.Name, err)
+		}
+	}
+	return nil
 }
 
 func isProvisioningCluster(r *protocol.Resource) bool {
