@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"log"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -52,8 +53,19 @@ func (h *resourceHandler) Watch(req *apiv1.WatchRequest, stream apiv1.ResourceSe
 	for {
 		matches, err := h.listForWatch(ctx, req.GetApiVersion(), req.GetKind(), req.GetName())
 		if err != nil {
-			// Transient list errors: log via gRPC and end the stream.
-			return status.Errorf(codes.Internal, "list during watch: %v", err)
+			// Provider reads can fail transiently (for example a homelab
+			// Proxmox route flap). Keep the stream alive and preserve the
+			// last snapshot rather than surfacing a fatal HTTP 500 to the UI.
+			log.Printf("resource watch: list %s/%s %q: %v", req.GetApiVersion(), req.GetKind(), req.GetName(), err)
+			select {
+			case <-ctx.Done():
+				if errors.Is(ctx.Err(), context.Canceled) {
+					return nil
+				}
+				return ctx.Err()
+			case <-ticker.C:
+				continue
+			}
 		}
 
 		seen := map[string]string{}
