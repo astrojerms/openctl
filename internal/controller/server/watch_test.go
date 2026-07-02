@@ -259,6 +259,48 @@ func TestResourceWatchKeepsStreamOpenOnTransientListError(t *testing.T) {
 	}
 }
 
+func TestResourceWatchReturnsErrorOnSustainedListOutage(t *testing.T) {
+	fake := newWatchableProvider()
+	addr, caPath, _ := startWatchTestServerWithManifests(t, fake)
+	conn := dialTestServer(t, addr, caPath)
+	defer func() { _ = conn.Close() }()
+
+	// Fail every list far past the tolerated burst — models a provider that
+	// is genuinely unreachable (an offline Proxmox host), not a flap.
+	fake.failNextLists(maxConsecutiveWatchListErrors * 4)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	stream, err := apiv1.NewResourceServiceClient(conn).Watch(ctx, &apiv1.WatchRequest{
+		ApiVersion: "fake.openctl.io/v1",
+		Kind:       "FakeKind",
+	})
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+
+	// The stream must terminate with an error rather than hanging open
+	// forever — a stuck-open stream pins a browser connection + gRPC stream.
+	errs := make(chan error, 1)
+	go func() {
+		for {
+			if _, recvErr := stream.Recv(); recvErr != nil {
+				errs <- recvErr
+				return
+			}
+		}
+	}()
+
+	select {
+	case recvErr := <-errs:
+		if recvErr == nil {
+			t.Fatal("expected a non-nil error terminating the watch")
+		}
+	case <-time.After(6 * time.Second):
+		t.Fatal("watch did not return on a sustained list outage — stream is stuck open")
+	}
+}
+
 func TestWatchOperationsTerminatesOnTerminalForIDFilter(t *testing.T) {
 	fake := newWatchableProvider()
 	addr, caPath := startWatchTestServer(t, fake)

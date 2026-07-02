@@ -18,9 +18,15 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
-- No active roadmap branch. The dispatcher refactor shipped and was
-  homelab-validated with the `validate-3` single-control-plane k3s
-  apply path.
+- **`fix/watch-release-conn-on-outage`** — fixes the UI hanging when a
+  provider is unreachable (regression from PR #11). Watch now bounds
+  consecutive list-error retries and releases the stream on a sustained
+  outage; Proxmox client gets a 5s dial timeout. See the Arch Phase 8
+  post-validation hardening note below. Deeper follow-ups parked (see
+  "Watch / gateway connection resilience" under the punch list).
+- Otherwise no active roadmap branch. The dispatcher refactor shipped
+  and was homelab-validated with the `validate-3` single-control-plane
+  k3s apply path.
 
 ## Suggested next order
 
@@ -37,6 +43,17 @@ this session. Remaining candidates for the next round:
   in `pkg/k3s/cluster/create.go`. The initial-create dispatcher
   path is homelab-validated; existing-cluster convergence still
   uses the legacy branch.
+- **Watch / gateway connection resilience** — parked follow-ups from
+  the `no route to host` hang fix. (1) Thread `context` through the
+  Proxmox client (`pkg/proxmox/client` uses `http.NewRequest`, provider
+  `List`/`Get` discard the passed ctx) so a canceled Watch/reconciler
+  cancels the in-flight HTTP call instead of waiting out the timeout.
+  (2) Address the per-kind-connection fragility: the UI opens one
+  long-lived Watch per kind over HTTP/1.1 (~6 conns/origin), so ~6+
+  kinds sit at the browser's limit even when healthy. Options: serve
+  the gateway over h2c/TLS (one connection, ~100 multiplexed streams),
+  multiplex all kind-watches into a single stream, or push-based watch
+  fan-out from the dispatcher (replacing the 500ms poll — see U1).
 - **Multi-user auth** — OIDC + RBAC (from "Future goals").
 - **User-authored CUE templates** — extend templates from Go-only
   compiled-in to loading `~/.openctl/templates/*.cue`. Feasible
@@ -119,8 +136,20 @@ evolved.
       the imperative `applyExisting` branch remains a separate cleanup.
       Post-validation hardening: PRs #10 and #12 removed flaky
       operation-cache test submits under the race detector; PR #11
-      keeps UI resource watch streams alive across transient provider
-      list failures.
+      kept UI resource watch streams alive across transient provider
+      list failures — but over-corrected: it made a failing Watch
+      retry *forever* server-side, so a permanently-unreachable
+      provider (offline homelab Proxmox → `no route to host`) pinned
+      its browser HTTP/1.1 connection + gateway gRPC stream open
+      indefinitely. The UI nav opens one long-lived Watch per kind, so
+      two dead Proxmox kinds exhausted the browser's ~6-per-origin
+      connection pool and every other page hung. Fixed in
+      `fix/watch-release-conn-on-outage`: Watch now tolerates a bounded
+      burst of list failures (5 ticks ≈ 2.5s) then returns
+      `Unavailable`, releasing the connection so the client's reconnect
+      backoff takes over. Same PR adds a 5s TCP dial timeout to the
+      Proxmox client so a black-holing host fails fast instead of
+      hanging the full 60s request timeout.
       1. [x] **ResourceRef as spec-level primitive.** CUE `#Ref`
          helper in base.cue authors `{$ref: {apiVersion, kind,
          name, field?}}` markers. Server-side resolver
