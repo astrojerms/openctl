@@ -43,17 +43,29 @@ this session. Remaining candidates for the next round:
   in `pkg/k3s/cluster/create.go`. The initial-create dispatcher
   path is homelab-validated; existing-cluster convergence still
   uses the legacy branch.
-- **Watch / gateway connection resilience** — parked follow-ups from
-  the `no route to host` hang fix. (1) Thread `context` through the
-  Proxmox client (`pkg/proxmox/client` uses `http.NewRequest`, provider
-  `List`/`Get` discard the passed ctx) so a canceled Watch/reconciler
-  cancels the in-flight HTTP call instead of waiting out the timeout.
-  (2) Address the per-kind-connection fragility: the UI opens one
-  long-lived Watch per kind over HTTP/1.1 (~6 conns/origin), so ~6+
-  kinds sit at the browser's limit even when healthy. Options: serve
-  the gateway over h2c/TLS (one connection, ~100 multiplexed streams),
-  multiplex all kind-watches into a single stream, or push-based watch
-  fan-out from the dispatcher (replacing the 500ms poll — see U1).
+- **Watch / gateway connection resilience** — follow-ups from the
+  `no route to host` hang fix.
+  - [x] **Nav badge counts no longer hold a stream per kind.** The nav
+    opened one long-lived Watch per kind over HTTP/1.1 (~6 conns/origin);
+    with 5 kinds + the ops-drawer stream the browser's connection pool
+    was fully pinned even when every provider was healthy, so unrelated
+    page fetches (e.g. `GET /v1/templates`) hung on "Loading..." forever.
+    Phase 8 adding `K3sNode` + `AgentInstall` is what crossed the
+    threshold. `ui/src/lib/catalogue.ts` now polls a one-shot List per
+    kind (transient connection) instead of a persistent Watch. Page
+    List/Detail watches already abort on unmount, so persistent streams
+    are now ~3 (ops + current page), leaving headroom.
+  - [ ] **Durable fix: HTTP/2 on the gateway.** Polling counts is a
+    band-aid; the real cap is HTTP/1.1's ~6 conns/origin. Browsers only
+    speak h2 over TLS, so this means serving the UI over HTTPS (reuse the
+    controller CA + a localhost server cert). One connection, ~100
+    multiplexed streams — removes the whole class of problem and lets the
+    nav go back to live Watch counts if desired.
+  - [ ] **Thread `context` through the Proxmox client.** `pkg/proxmox/client`
+    uses `http.NewRequest` and the provider `List`/`Get` discard the
+    passed ctx, so a canceled Watch/reconciler can't cancel the in-flight
+    HTTP call — it waits out the timeout. (5s dial timeout added as a
+    stopgap.)
 - **Multi-user auth** — OIDC + RBAC (from "Future goals").
 - **User-authored CUE templates** — extend templates from Go-only
   compiled-in to loading `~/.openctl/templates/*.cue`. Feasible
