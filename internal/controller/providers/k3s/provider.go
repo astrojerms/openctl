@@ -342,10 +342,21 @@ func (p *Provider) applyExisting(ctx context.Context, manifest *protocol.Resourc
 		}
 	}
 
-	// Phase 5.x count-up: add new nodes against the live cluster.
+	// Phase 5.x count-up: add new nodes against the live cluster. When a
+	// ChildDispatcher is present (controller path) the new nodes are applied
+	// as Plan()-emitted VM/K3sNode/AgentInstall children — each K3sNode
+	// resolves its join token from a surviving CP's state via $ref, and each
+	// AgentInstall extends the CA bundle itself. Without a dispatcher (CLI
+	// direct-apply) it falls back to the imperative Joiner.
 	addedEndpoints := map[string]string{}
 	if len(plan.addCPs)+len(plan.addWorkers) > 0 {
-		joinEndpoints, err := p.applyCountUp(ctx, rec, name, spec, plan, current, removed)
+		var joinEndpoints map[string]string
+		var err error
+		if cd, ok := operations.ChildDispatcherFrom(ctx); ok {
+			joinEndpoints, err = p.addNodesViaPlan(ctx, cd, manifest, name, plan, current, removed)
+		} else {
+			joinEndpoints, err = p.applyCountUp(ctx, rec, name, spec, plan, current, removed)
+		}
 		if err != nil {
 			return nil, err
 		}
