@@ -560,10 +560,10 @@ with the commit hash for at-a-glance history. Trim to the last 10.
   provider List failures (for example Proxmox route flaps), log the
   outage, preserve the previous snapshot, and retry on the next poll
   instead of surfacing a fatal UI HTTP 500.
-- `cefc7b0` / PR #12 — test: operations cache tests no longer rely
-  on flaky submit races under the CI race detector; coverage still
-  exercises verifying-trace cache disabled and refs-hash cache-miss
-  behavior.
+- `195fca4` — test: operations cache tests no longer rely on flaky
+  submit races under the CI race detector; coverage still exercises
+  verifying-trace cache disabled and refs-hash cache-miss behavior
+  (follow-up to `cefc7b0`).
 - `218f44a` — fix: packaged k3s agent binaries into controller
   install and taught Cluster apply to resume from a persisted
   Provisioning stub after a controller rebuild/restart.
