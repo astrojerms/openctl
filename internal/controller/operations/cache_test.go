@@ -44,8 +44,6 @@ func TestVerifyingTraceCacheHitSkipsApply(t *testing.T) {
 		getOut:   cachedResource,
 	}
 	store, d := newDispatcherWithManifests(t, p)
-	d.Start(context.Background())
-	t.Cleanup(d.Stop)
 
 	manifest := `{"apiVersion":"fake.openctl.io/v1","kind":"FakeKind","metadata":{"name":"x"},"spec":{"cores":2}}`
 
@@ -57,8 +55,7 @@ func TestVerifyingTraceCacheHitSkipsApply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.Notify()
-	waitForStatus(t, store, first.ID, StatusSucceeded, 2*time.Second)
+	runPendingOp(t, d, store, first.ID, StatusSucceeded)
 
 	if p.applies.Load() != 1 {
 		t.Fatalf("first apply: provider.Apply called %d times, want 1", p.applies.Load())
@@ -72,8 +69,7 @@ func TestVerifyingTraceCacheHitSkipsApply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.Notify()
-	finalOp := waitForStatus(t, store, second.ID, StatusSucceeded, 2*time.Second)
+	finalOp := runPendingOp(t, d, store, second.ID, StatusSucceeded)
 
 	if p.applies.Load() != 1 {
 		t.Errorf("second apply (cache hit): provider.Apply called %d times, want still 1", p.applies.Load())
@@ -89,8 +85,6 @@ func TestVerifyingTraceCacheHitSkipsApply(t *testing.T) {
 func TestVerifyingTraceCacheMissOnSpecChange(t *testing.T) {
 	p := &fakeProvider{name: "fake", kinds: []string{"FakeKind"}}
 	store, d := newDispatcherWithManifests(t, p)
-	d.Start(context.Background())
-	t.Cleanup(d.Stop)
 
 	manifestA := `{"apiVersion":"fake.openctl.io/v1","kind":"FakeKind","metadata":{"name":"x"},"spec":{"cores":2}}`
 	manifestB := `{"apiVersion":"fake.openctl.io/v1","kind":"FakeKind","metadata":{"name":"x"},"spec":{"cores":4}}`
@@ -102,8 +96,7 @@ func TestVerifyingTraceCacheMissOnSpecChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.Notify()
-	waitForStatus(t, store, op1.ID, StatusSucceeded, 2*time.Second)
+	runPendingOp(t, d, store, op1.ID, StatusSucceeded)
 
 	op2, err := store.Submit(context.Background(), &Operation{
 		Type: TypeApply, APIVersion: "fake.openctl.io/v1", Kind: "FakeKind",
@@ -112,8 +105,7 @@ func TestVerifyingTraceCacheMissOnSpecChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.Notify()
-	waitForStatus(t, store, op2.ID, StatusSucceeded, 2*time.Second)
+	runPendingOp(t, d, store, op2.ID, StatusSucceeded)
 
 	if p.applies.Load() != 2 {
 		t.Errorf("spec change should miss the cache; provider.Apply called %d times, want 2", p.applies.Load())
@@ -123,8 +115,6 @@ func TestVerifyingTraceCacheMissOnSpecChange(t *testing.T) {
 func TestVerifyingTraceCacheDisabledByIKnowFlag(t *testing.T) {
 	p := &fakeProvider{name: "fake", kinds: []string{"FakeKind"}}
 	store, d := newDispatcherWithManifests(t, p)
-	d.Start(context.Background())
-	t.Cleanup(d.Stop)
 
 	manifest := `{"apiVersion":"fake.openctl.io/v1","kind":"FakeKind","metadata":{"name":"x"},"spec":{"cores":2}}`
 	manifestWithFlag := `{"apiVersion":"fake.openctl.io/v1","kind":"FakeKind","metadata":{"name":"x","annotations":{"openctl.io/i-know-this-breaks-the-cluster":"true"}},"spec":{"cores":2}}`
@@ -136,8 +126,7 @@ func TestVerifyingTraceCacheDisabledByIKnowFlag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.Notify()
-	waitForStatus(t, store, op1.ID, StatusSucceeded, 2*time.Second)
+	runPendingOp(t, d, store, op1.ID, StatusSucceeded)
 
 	op2, err := store.Submit(context.Background(), &Operation{
 		Type: TypeApply, APIVersion: "fake.openctl.io/v1", Kind: "FakeKind",
@@ -146,8 +135,7 @@ func TestVerifyingTraceCacheDisabledByIKnowFlag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.Notify()
-	waitForStatus(t, store, op2.ID, StatusSucceeded, 2*time.Second)
+	runPendingOp(t, d, store, op2.ID, StatusSucceeded)
 
 	if p.applies.Load() != 2 {
 		t.Errorf("i-know flag should disable cache; provider.Apply called %d times, want 2", p.applies.Load())

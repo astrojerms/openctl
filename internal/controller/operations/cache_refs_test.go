@@ -79,8 +79,6 @@ func TestRefsHashCacheMissWhenTargetChanges(t *testing.T) {
 	}
 	target := newRefTargetProvider("target", "Target", "10.0.0.1")
 	store, d := newDispatcherWithTwoProviders(t, consumer, target)
-	d.Start(context.Background())
-	t.Cleanup(d.Stop)
 
 	// A manifest whose spec.ipRef resolves against Target/foo's
 	// status.ip. Same raw manifest for both applies.
@@ -93,8 +91,7 @@ func TestRefsHashCacheMissWhenTargetChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.Notify()
-	waitForStatus(t, store, op1.ID, StatusSucceeded, 2*time.Second)
+	runPendingOp(t, d, store, op1.ID, StatusSucceeded)
 	if consumer.applies.Load() != 1 {
 		t.Fatalf("first apply: consumer.Apply called %d times, want 1", consumer.applies.Load())
 	}
@@ -109,8 +106,7 @@ func TestRefsHashCacheMissWhenTargetChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.Notify()
-	waitForStatus(t, store, op2.ID, StatusSucceeded, 2*time.Second)
+	runPendingOp(t, d, store, op2.ID, StatusSucceeded)
 
 	if consumer.applies.Load() != 2 {
 		t.Errorf("ref target change should miss the cache; consumer.Apply called %d times, want 2", consumer.applies.Load())
@@ -130,8 +126,6 @@ func TestRefsHashCacheHitWhenTargetUnchanged(t *testing.T) {
 	}
 	target := newRefTargetProvider("target", "Target", "10.0.0.1")
 	store, d := newDispatcherWithTwoProviders(t, consumer, target)
-	d.Start(context.Background())
-	t.Cleanup(d.Stop)
 
 	manifest := `{"apiVersion":"consumer.openctl.io/v1","kind":"Consumer","metadata":{"name":"c"},"spec":{"ipRef":{"$ref":{"apiVersion":"target.openctl.io/v1","kind":"Target","name":"foo","field":"status.ip"}}}}`
 
@@ -142,8 +136,7 @@ func TestRefsHashCacheHitWhenTargetUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.Notify()
-	waitForStatus(t, store, op1.ID, StatusSucceeded, 2*time.Second)
+	runPendingOp(t, d, store, op1.ID, StatusSucceeded)
 
 	op2, err := store.Submit(context.Background(), &Operation{
 		Type: TypeApply, APIVersion: "consumer.openctl.io/v1", Kind: "Consumer",
@@ -152,8 +145,7 @@ func TestRefsHashCacheHitWhenTargetUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.Notify()
-	waitForStatus(t, store, op2.ID, StatusSucceeded, 2*time.Second)
+	runPendingOp(t, d, store, op2.ID, StatusSucceeded)
 
 	if consumer.applies.Load() != 1 {
 		t.Errorf("unchanged target: expected 1 Apply (cache hit on second pass), got %d", consumer.applies.Load())
