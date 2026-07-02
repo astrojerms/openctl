@@ -18,15 +18,15 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
-- **`fix/watch-release-conn-on-outage`** — fixes the UI hanging when a
-  provider is unreachable (regression from PR #11). Watch now bounds
-  consecutive list-error retries and releases the stream on a sustained
-  outage; Proxmox client gets a 5s dial timeout. See the Arch Phase 8
-  post-validation hardening note below. Deeper follow-ups parked (see
-  "Watch / gateway connection resilience" under the punch list).
-- Otherwise no active roadmap branch. The dispatcher refactor shipped
-  and was homelab-validated with the `validate-3` single-control-plane
-  k3s apply path.
+- No active roadmap branch. `main` is clean. The dispatcher refactor
+  shipped and was homelab-validated with the `validate-3`
+  single-control-plane k3s apply path.
+
+The whole `no route to host` / connection-resilience thread is now
+closed: watch-release-on-outage (#14), macOS code signing (#15),
+HTTP/2 gateway (#16), and Proxmox context threading + not-found
+hardening (#17) all shipped. The next candidate is **Retire
+`applyExisting`** (see Suggested next order).
 
 ## Suggested next order
 
@@ -43,51 +43,6 @@ this session. Remaining candidates for the next round:
   in `pkg/k3s/cluster/create.go`. The initial-create dispatcher
   path is homelab-validated; existing-cluster convergence still
   uses the legacy branch.
-- **Watch / gateway connection resilience** — follow-ups from the
-  `no route to host` hang fix.
-  - [x] **Nav badge counts no longer hold a stream per kind.** The nav
-    opened one long-lived Watch per kind over HTTP/1.1 (~6 conns/origin);
-    with 5 kinds + the ops-drawer stream the browser's connection pool
-    was fully pinned even when every provider was healthy, so unrelated
-    page fetches (e.g. `GET /v1/templates`) hung on "Loading..." forever.
-    Phase 8 adding `K3sNode` + `AgentInstall` is what crossed the
-    threshold. `ui/src/lib/catalogue.ts` now polls a one-shot List per
-    kind (transient connection) instead of a persistent Watch. Page
-    List/Detail watches already abort on unmount, so persistent streams
-    are now ~3 (ops + current page), leaving headroom.
-  - [x] **Durable fix: HTTP/2 on the gateway.** The gateway now serves
-    HTTPS on `:9445` (reusing the controller's existing self-signed
-    cert/key — SANs `localhost`/`127.0.0.1`/`::1`), so browsers negotiate
-    h2 via ALPN. One connection multiplexes ~100 streams, removing the
-    HTTP/1.1 ~6-conns/origin ceiling that caused the starvation class of
-    bug entirely. Verified: ALPN=h2, TLS 1.3, `/ui/` + `/v1/*` over
-    HTTP/2. Browser shows a one-time self-signed-cert warning (click
-    through, or trust the CA — see DEVELOPMENT.md "HTTPS gateway").
-    Reverting `catalogue.ts` to live Watch counts is now safe but left as
-    an optional follow-up — polling counts is cheap and works.
-  - [x] **Thread `context` through the Proxmox client.** Every client
-    method now takes a `context.Context` (via `http.NewRequestWithContext`);
-    the controller provider's `Get`/`List`/`Apply`/`Delete`/`DoAction` and
-    the legacy compute plugin pass their real ctx down, and the polling
-    loops (`WaitForTask`/`WaitForVMIP`) select on `ctx.Done()`. A canceled
-    Watch/reconcile now aborts the in-flight request immediately instead of
-    waiting out the 60s client timeout. Same PR fixes the not-found
-    collapse below.
-- **macOS code signing for stable firewall identity** — the *original*
-  `no route to host` report turned out to be a per-app firewall (LuLu)
-  silently re-blocking each rebuild. `go build` emits an ad-hoc Mach-O
-  whose cdhash changes every build, so LuLu/Little Snitch treat every
-  `make build` as a new app and drop the approval.
-  - [x] **Sign every build with one persistent self-signed identity.**
-    `make codesign-setup` creates an `openctl-dev` code-signing cert in
-    the login keychain (once); `make build` then re-signs the CLI,
-    controller, and native plugins. codesign's designated requirement for
-    a self-signed leaf is `identifier + certificate leaf hash` — no
-    cdhash — so every rebuild satisfies the identical requirement and a
-    firewall rule approved once survives rebuilds. No-op off macOS / when
-    the identity isn't installed, so CI and other contributors are
-    unaffected. See `scripts/macos-codesign-setup.sh`, `scripts/codesign-macos.sh`,
-    and the DEVELOPMENT.md "macOS code signing" section.
 - **Multi-user auth** — OIDC + RBAC (from "Future goals").
 - **User-authored CUE templates** — extend templates from Go-only
   compiled-in to loading `~/.openctl/templates/*.cue`. Feasible
@@ -623,12 +578,22 @@ When phases or followups land, move them up out of "pending" into their
 detail doc's marked-complete section, then leave a one-line entry here
 with the commit hash for at-a-glance history. Trim to the last 10.
 
-- `fix/proxmox-context-notfound` — harden the proxmox provider: thread
+- `aa7b2a0` (#17) — fix: harden the proxmox provider: thread
   `context.Context` through the whole client (cancelable HTTP; polling
   loops honor `ctx.Done()`) and stop collapsing every lookup error to
   NotFound (new `client.ErrNotFound` sentinel; `applyVM` no longer clones
   a duplicate on a transient blip). Tests cover the sentinel split,
   context cancellation, and the apply not-found/transient branches.
+- `e2af31a` (#16) — feat: serve the gateway over HTTP/2 (TLS, reusing the
+  controller's self-signed cert) so browsers multiplex ~100 streams over
+  one connection, ending the HTTP/1.1 ~6-conns/origin starvation class.
+- `0cb047b` (#15) — build: sign macOS binaries with a stable self-signed
+  `openctl-dev` identity so per-app firewalls (LuLu / Little Snitch) stop
+  re-blocking every `make build`. No-op off macOS.
+- `df967ea` (#14) — fix: bound consecutive Watch list-error retries and
+  release the stream on a sustained provider outage (so a dead Proxmox
+  no longer pins a browser connection + gateway stream open forever);
+  adds a 5s TCP dial timeout to the Proxmox client.
 - `30a14ab` — fix: resource Watch streams now tolerate transient
   provider List failures (for example Proxmox route flaps), log the
   outage, preserve the previous snapshot, and retry on the next poll
@@ -647,14 +612,3 @@ with the commit hash for at-a-glance history. Trim to the last 10.
   verifies service health + node-token before succeeding.
 - `db0d4b3` — fix: k3s install waits for cloud-init and runs
   curl-piped shell with pipefail so curl failures cannot be hidden.
-- `99ae770` — fix: JSON-normalize k3s plan child specs so
-  ParseVMSpec sees sshKeys, disks, and networks with expected
-  `[]any` shapes.
-- `b377520` — fix: shutdown hang on Ctrl-C. Root ctx now cancels
-  on SIGINT/SIGTERM (signal.NotifyContext) so subsystems exit;
-  server.StopWithTimeout(3s) falls back to force Stop() when
-  GracefulStop would otherwise wait indefinitely for UI Watch
-  streams.
-- `aff8431` — two-way GitOps: fsnotify watcher on manifest mirror;
-  file edits become Apply ops (source="gitops"), loop-safe via
-  content compare, opt-in via `manifests.gitops.enabled`.
