@@ -66,6 +66,21 @@ this session. Remaining candidates for the next round:
     passed ctx, so a canceled Watch/reconciler can't cancel the in-flight
     HTTP call — it waits out the timeout. (5s dial timeout added as a
     stopgap.)
+- **macOS code signing for stable firewall identity** — the *original*
+  `no route to host` report turned out to be a per-app firewall (LuLu)
+  silently re-blocking each rebuild. `go build` emits an ad-hoc Mach-O
+  whose cdhash changes every build, so LuLu/Little Snitch treat every
+  `make build` as a new app and drop the approval.
+  - [x] **Sign every build with one persistent self-signed identity.**
+    `make codesign-setup` creates an `openctl-dev` code-signing cert in
+    the login keychain (once); `make build` then re-signs the CLI,
+    controller, and native plugins. codesign's designated requirement for
+    a self-signed leaf is `identifier + certificate leaf hash` — no
+    cdhash — so every rebuild satisfies the identical requirement and a
+    firewall rule approved once survives rebuilds. No-op off macOS / when
+    the identity isn't installed, so CI and other contributors are
+    unaffected. See `scripts/macos-codesign-setup.sh`, `scripts/codesign-macos.sh`,
+    and the DEVELOPMENT.md "macOS code signing" section.
 - **Multi-user auth** — OIDC + RBAC (from "Future goals").
 - **User-authored CUE templates** — extend templates from Go-only
   compiled-in to loading `~/.openctl/templates/*.cue`. Feasible

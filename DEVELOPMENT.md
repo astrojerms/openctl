@@ -114,6 +114,45 @@ State on local dev defaults to `~/.openctl/controller/`:
 To start fresh, `rm -rf ~/.openctl/controller/`. The next `serve` will
 re-bootstrap.
 
+### macOS code signing (per-app firewalls)
+
+If you run a per-app outbound firewall (LuLu, Little Snitch), you may hit
+a baffling failure: the controller can't reach Proxmox — `connect: no
+route to host` to your PVE host — even though `curl` from the same shell
+works fine. The cause isn't the network. `go build` produces an ad-hoc
+Mach-O whose cdhash changes on **every** build, and these firewalls
+identify unsigned apps by that cdhash. So each `make build` looks like a
+brand-new app: the rule you approved yesterday no longer matches, the
+firewall silently blocks the new binary, and openctl sees an instant
+`EHOSTUNREACH` (which prints as "no route to host").
+
+The fix is to sign every build with one persistent self-signed identity.
+Run the one-time setup, then rebuild:
+
+```sh
+make codesign-setup     # creates the "openctl-dev" identity in your login keychain
+make build              # every build is now signed with it
+```
+
+`make build` signs the CLI, controller, and native plugins automatically
+(the k3s *agent* Linux binaries are ELF, not Mach-O, so they're skipped —
+they run on remote nodes, not this Mac). Because codesign's designated
+requirement for a self-signed leaf is `identifier "…" and certificate
+leaf = H"<cert hash>"` — no cdhash — every rebuild satisfies the identical
+requirement, so a firewall rule you approve **once** keeps applying across
+rebuilds. Confirm with:
+
+```sh
+codesign -d --requirements - bin/openctl-controller   # stable across rebuilds
+```
+
+Signing is a no-op off macOS and for anyone who hasn't run the setup
+(CI and other contributors build exactly as before). The cert is
+untrusted-but-stable on purpose: the firewall wants a consistent identity,
+not an Apple-issued one. To undo: `security delete-identity -c openctl-dev
+~/Library/Keychains/login.keychain-db`. Details in
+`scripts/macos-codesign-setup.sh`.
+
 ### Modifying the gRPC API
 
 The wire contract lives in `pkg/api/v1/api.proto`. After editing:

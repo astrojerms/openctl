@@ -1,4 +1,4 @@
-.PHONY: all build build-cli build-controller build-plugins build-plugin-proxmox build-plugin-k3s build-plugin-k3s-agent build-plugin-k3s-agent-linux install clean test test-e2e fmt lint modernize modernize-check generate ui ui-install ui-clean
+.PHONY: all build build-cli build-controller build-plugins build-plugin-proxmox build-plugin-k3s build-plugin-k3s-agent build-plugin-k3s-agent-linux install clean test test-e2e fmt lint modernize modernize-check generate ui ui-install ui-clean codesign-setup
 
 # Binary names
 CLI_BINARY=openctl
@@ -30,6 +30,23 @@ LDFLAGS := -s -w \
 GOFLAGS=-ldflags="$(LDFLAGS)"
 export GOWORK=off
 
+# macOS code signing.
+#
+# `go build` emits an ad-hoc Mach-O whose cdhash changes every build, so
+# per-app firewalls (LuLu, Little Snitch) treat each rebuild as a new app
+# and silently re-block it — surfacing as `connect: no route to host`
+# reaching Proxmox. Signing each build with ONE persistent self-signed
+# identity gives every rebuild the same designated requirement, so a
+# firewall rule approved once keeps applying. One-time setup:
+#
+#     make codesign-setup      # or: scripts/macos-codesign-setup.sh
+#
+# codesign_binary is a no-op off macOS or when the identity isn't
+# installed (see scripts/codesign-macos.sh), so CI and unconfigured devs
+# build normally. $(call codesign_binary,<path>,<bundle-id>)
+CODESIGN_IDENTITY ?= openctl-dev
+codesign_binary = @CODESIGN_IDENTITY=$(CODESIGN_IDENTITY) sh scripts/codesign-macos.sh "$(1)" "$(2)"
+
 all: build
 
 build: build-cli build-controller build-plugins
@@ -38,6 +55,7 @@ build-cli:
 	@echo "Building openctl CLI..."
 	@mkdir -p $(BUILD_DIR)
 	go build $(GOFLAGS) -o $(BUILD_DIR)/$(CLI_BINARY) ./cmd/openctl
+	$(call codesign_binary,$(BUILD_DIR)/$(CLI_BINARY),io.openctl.cli)
 
 # build-controller depends on `ui` because the controller embeds
 # uiassets/dist/ via //go:embed. Without rebuilding, the browser bundle
@@ -49,6 +67,7 @@ build-controller: ui
 	@echo "Building openctl-controller..."
 	@mkdir -p $(BUILD_DIR)
 	go build $(GOFLAGS) -o $(BUILD_DIR)/$(CONTROLLER_BINARY) ./cmd/openctl-controller
+	$(call codesign_binary,$(BUILD_DIR)/$(CONTROLLER_BINARY),io.openctl.controller)
 
 build-plugins: build-plugin-proxmox build-plugin-k3s
 
@@ -56,19 +75,25 @@ build-plugin-proxmox:
 	@echo "Building openctl-proxmox plugin..."
 	@mkdir -p $(BUILD_DIR)
 	cd $(PROXMOX_PLUGIN_DIR) && go build $(GOFLAGS) -o ../../$(BUILD_DIR)/$(PLUGIN_PROXMOX_BINARY) ./cmd/openctl-proxmox
+	$(call codesign_binary,$(BUILD_DIR)/$(PLUGIN_PROXMOX_BINARY),io.openctl.plugin.proxmox)
 
 build-plugin-k3s:
 	@echo "Building openctl-k3s plugin..."
 	@mkdir -p $(BUILD_DIR)
 	cd $(K3S_PLUGIN_DIR) && go build $(GOFLAGS) -o ../../$(BUILD_DIR)/$(PLUGIN_K3S_BINARY) ./cmd/openctl-k3s
+	$(call codesign_binary,$(BUILD_DIR)/$(PLUGIN_K3S_BINARY),io.openctl.plugin.k3s)
 
 # Build the k3s agent for the host platform (for local dev/testing).
 build-plugin-k3s-agent:
 	@echo "Building openctl-k3s-agent (native)..."
 	@mkdir -p $(BUILD_DIR)
 	cd $(K3S_PLUGIN_DIR) && go build $(GOFLAGS) -o ../../$(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY) ./cmd/openctl-k3s-agent
+	$(call codesign_binary,$(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY),io.openctl.k3s-agent)
 
 # Cross-compile the k3s agent for all Linux architectures we deploy to.
+# These are Linux ELF binaries — NOT Mach-O — so they are deliberately not
+# codesigned (codesign only operates on Mach-O; they run on remote nodes,
+# not this Mac, so no local firewall cares).
 # These artifacts get uploaded to k3s nodes during cluster create.
 build-plugin-k3s-agent-linux:
 	@echo "Building openctl-k3s-agent for linux/amd64, linux/arm64, linux/arm..."
@@ -113,6 +138,12 @@ install-plugin-k3s: build-plugin-k3s build-plugin-k3s-agent-linux
 clean: ui-clean
 	@echo "Cleaning..."
 	rm -rf $(BUILD_DIR)
+
+# One-time: create the persistent self-signed code-signing identity so
+# rebuilt binaries keep a stable identity and per-app firewalls stop
+# re-blocking them. Safe to re-run. See scripts/macos-codesign-setup.sh.
+codesign-setup:
+	@CODESIGN_IDENTITY=$(CODESIGN_IDENTITY) sh scripts/macos-codesign-setup.sh
 
 # Build the browser UI (Vite + Svelte). Output goes directly into the
 # controller's embed.FS root ($(UI_OUT)) so a subsequent `make build` bakes
