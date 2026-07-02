@@ -127,9 +127,12 @@ func TestCompleteWritesTerminalStatus(t *testing.T) {
 	s := openStore(t, 50)
 	ctx := context.Background()
 
-	op, _ := s.Submit(ctx, &Operation{
+	op, err := s.Submit(ctx, &Operation{
 		Type: TypeApply, APIVersion: "p.openctl.io/v1", Kind: "VM", ResourceName: "x",
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, _ = s.ClaimNextPending(ctx)
 
 	if err := s.Complete(ctx, op.ID, StatusSucceeded, "", `{"ok":true}`); err != nil {
@@ -277,9 +280,12 @@ func TestCancelPendingRefusesRunningOp(t *testing.T) {
 	s := openStore(t, 50)
 	ctx := context.Background()
 
-	op, _ := s.Submit(ctx, &Operation{
+	op, err := s.Submit(ctx, &Operation{
 		Type: TypeApply, APIVersion: "p.openctl.io/v1", Kind: "VM", ResourceName: "x",
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	// Move to running.
 	if _, err := s.ClaimNextPending(ctx); err != nil {
 		t.Fatal(err)

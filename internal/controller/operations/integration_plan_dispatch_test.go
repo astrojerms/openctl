@@ -275,10 +275,13 @@ func TestIntegration_ChildRefResolvesFromJustSavedState(t *testing.T) {
 	t.Cleanup(d.Stop)
 
 	manifest := `{"apiVersion":"orchestrator.openctl.io/v1","kind":"Orchestration","metadata":{"name":"cluster"},"spec":{}}`
-	op, _ := store.Submit(context.Background(), &Operation{
+	op, err := store.Submit(context.Background(), &Operation{
 		Type: TypeApply, APIVersion: "orchestrator.openctl.io/v1", Kind: "Orchestration",
 		ResourceName: "cluster", ManifestJSON: manifest,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	d.Notify()
 	waitForStatus(t, store, op.ID, StatusSucceeded, 3*time.Second)
 
@@ -315,10 +318,13 @@ func TestIntegration_SecondApplyHitsPerChildCache(t *testing.T) {
 
 	manifest := `{"apiVersion":"orchestrator.openctl.io/v1","kind":"Orchestration","metadata":{"name":"cluster"},"spec":{}}`
 
-	op1, _ := store.Submit(context.Background(), &Operation{
+	op1, err := store.Submit(context.Background(), &Operation{
 		Type: TypeApply, APIVersion: "orchestrator.openctl.io/v1", Kind: "Orchestration",
 		ResourceName: "cluster", ManifestJSON: manifest,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	d.Notify()
 	waitForStatus(t, store, op1.ID, StatusSucceeded, 3*time.Second)
 	firstApplies := leaf.applies.Load()
@@ -326,10 +332,13 @@ func TestIntegration_SecondApplyHitsPerChildCache(t *testing.T) {
 		t.Fatalf("first apply: leaf.Apply = %d, want 2", firstApplies)
 	}
 
-	op2, _ := store.Submit(context.Background(), &Operation{
+	op2, err := store.Submit(context.Background(), &Operation{
 		Type: TypeApply, APIVersion: "orchestrator.openctl.io/v1", Kind: "Orchestration",
 		ResourceName: "cluster", ManifestJSON: manifest,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	d.Notify()
 	waitForStatus(t, store, op2.ID, StatusSucceeded, 3*time.Second)
 
@@ -363,10 +372,13 @@ func TestIntegration_ChildFailurePropagatesToParent(t *testing.T) {
 	t.Cleanup(d.Stop)
 
 	manifest := `{"apiVersion":"orchestrator.openctl.io/v1","kind":"Orchestration","metadata":{"name":"cluster"},"spec":{}}`
-	op, _ := opStore.Submit(context.Background(), &Operation{
+	op, err := opStore.Submit(context.Background(), &Operation{
 		Type: TypeApply, APIVersion: "orchestrator.openctl.io/v1", Kind: "Orchestration",
 		ResourceName: "cluster", ManifestJSON: manifest,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	d.Notify()
 	finalOp := waitForStatus(t, opStore, op.ID, StatusFailed, 3*time.Second)
 	// The error message should identify which child failed —

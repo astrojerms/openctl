@@ -54,12 +54,15 @@ func TestBeginChildBypassesConflictCheck(t *testing.T) {
 	ctx := context.Background()
 
 	// Submit a top-level apply for a VM.
-	first, _ := s.Submit(ctx, &Operation{
+	first, err := s.Submit(ctx, &Operation{
 		Type: TypeApply, APIVersion: "proxmox.openctl.io/v1", Kind: "VirtualMachine", ResourceName: "vm-x",
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Submitting a second top-level apply for the same VM should conflict.
-	_, err := s.Submit(ctx, &Operation{
+	_, err = s.Submit(ctx, &Operation{
 		Type: TypeApply, APIVersion: "proxmox.openctl.io/v1", Kind: "VirtualMachine", ResourceName: "vm-x",
 	})
 	var ce *ConflictError

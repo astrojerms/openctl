@@ -135,17 +135,23 @@ func TestRefsHashCacheHitWhenTargetUnchanged(t *testing.T) {
 
 	manifest := `{"apiVersion":"consumer.openctl.io/v1","kind":"Consumer","metadata":{"name":"c"},"spec":{"ipRef":{"$ref":{"apiVersion":"target.openctl.io/v1","kind":"Target","name":"foo","field":"status.ip"}}}}`
 
-	op1, _ := store.Submit(context.Background(), &Operation{
+	op1, err := store.Submit(context.Background(), &Operation{
 		Type: TypeApply, APIVersion: "consumer.openctl.io/v1", Kind: "Consumer",
 		ResourceName: "c", ManifestJSON: manifest,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	d.Notify()
 	waitForStatus(t, store, op1.ID, StatusSucceeded, 2*time.Second)
 
-	op2, _ := store.Submit(context.Background(), &Operation{
+	op2, err := store.Submit(context.Background(), &Operation{
 		Type: TypeApply, APIVersion: "consumer.openctl.io/v1", Kind: "Consumer",
 		ResourceName: "c", ManifestJSON: manifest,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	d.Notify()
 	waitForStatus(t, store, op2.ID, StatusSucceeded, 2*time.Second)
 

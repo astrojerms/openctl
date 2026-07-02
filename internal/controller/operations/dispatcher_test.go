@@ -66,17 +66,30 @@ func newDispatcherWithStore(t *testing.T, p *fakeProvider) (*Store, *Dispatcher)
 	return store, d
 }
 
-func waitForStatus(t *testing.T, store *Store, opID string, want string, _ time.Duration) *Operation {
+func waitForStatus(t *testing.T, store *Store, opID string, want string, timeout time.Duration) *Operation {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(timeout)
+	var lastStatus string
+	var lastErr error
 	for time.Now().Before(deadline) {
 		op, err := store.Get(context.Background(), opID)
 		if err == nil && op.Status == want {
 			return op
 		}
+		if err != nil {
+			lastErr = err
+		} else if op != nil {
+			lastStatus = op.Status
+			if op.Error != "" {
+				lastErr = errors.New(op.Error)
+			}
+		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("timeout waiting for op %s to reach status %q", opID, want)
+	if lastErr != nil {
+		t.Fatalf("timeout waiting for op %s to reach status %q (last status %q, last error: %v)", opID, want, lastStatus, lastErr)
+	}
+	t.Fatalf("timeout waiting for op %s to reach status %q (last status %q)", opID, want, lastStatus)
 	return nil
 }
 
@@ -122,12 +135,15 @@ func TestDispatcherProcessesDeleteOp(t *testing.T) {
 	d.Start(context.Background())
 	t.Cleanup(d.Stop)
 
-	op, _ := store.Submit(context.Background(), &Operation{
+	op, err := store.Submit(context.Background(), &Operation{
 		Type:         TypeDelete,
 		APIVersion:   "fake.openctl.io/v1",
 		Kind:         "FakeKind",
 		ResourceName: "x",
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	d.Notify()
 
 	waitForStatus(t, store, op.ID, StatusSucceeded, 2*time.Second)
@@ -146,13 +162,16 @@ func TestDispatcherFailsOpWhenProviderErrors(t *testing.T) {
 	d.Start(context.Background())
 	t.Cleanup(d.Stop)
 
-	op, _ := store.Submit(context.Background(), &Operation{
+	op, err := store.Submit(context.Background(), &Operation{
 		Type:         TypeApply,
 		APIVersion:   "fake.openctl.io/v1",
 		Kind:         "FakeKind",
 		ResourceName: "x",
 		ManifestJSON: `{"apiVersion":"fake.openctl.io/v1","kind":"FakeKind","metadata":{"name":"x"}}`,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	d.Notify()
 
 	final := waitForStatus(t, store, op.ID, StatusFailed, 2*time.Second)
@@ -168,13 +187,16 @@ func TestDispatcherFailsOpWhenProviderUnregistered(t *testing.T) {
 	t.Cleanup(d.Stop)
 
 	// Submit an op for a provider we DIDN'T register.
-	op, _ := store.Submit(context.Background(), &Operation{
+	op, err := store.Submit(context.Background(), &Operation{
 		Type:         TypeApply,
 		APIVersion:   "missing.openctl.io/v1",
 		Kind:         "Whatever",
 		ResourceName: "x",
 		ManifestJSON: `{}`,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	d.Notify()
 
 	final := waitForStatus(t, store, op.ID, StatusFailed, 2*time.Second)
