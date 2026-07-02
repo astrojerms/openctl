@@ -39,10 +39,14 @@ this session. Remaining candidates for the next round:
   Plan output + child ownership labels + child ops rows all
   exist, this is a frontend job. Broken out as Phase U9 below.
 - **Retire `applyExisting`** — migrate count-up / respec / delete
-  to the Plan-driven model; delete ~600 lines of imperative code
-  in `pkg/k3s/cluster/create.go`. The initial-create dispatcher
-  path is homelab-validated; existing-cluster convergence still
-  uses the legacy branch.
+  to the Plan-driven model, then delete the legacy imperative
+  executors (`countup.go`, `applyRespecs`, `pkg/k3s/cluster/join.go`).
+  The initial-create dispatcher path is homelab-validated;
+  existing-cluster convergence still uses the legacy branch. This is
+  not a delete-only job — the Plan path lacks the convergence
+  primitives (no diff, no delete channel, no respec, no guardrails),
+  so they must be built first. Staged plan (4 PRs, homelab-gated
+  before deletion): [K3S-CONVERGENCE.md](K3S-CONVERGENCE.md).
 - **Multi-user auth** — OIDC + RBAC (from "Future goals").
 - **User-authored CUE templates** — extend templates from Go-only
   compiled-in to loading `~/.openctl/templates/*.cue`. Feasible
