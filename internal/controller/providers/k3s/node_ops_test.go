@@ -106,6 +106,44 @@ func TestParseK3sNodeSpec_Agent(t *testing.T) {
 	}
 }
 
+// TestIsConnectionDropError covers the recovery predicate that
+// distinguishes "SSH stream died mid-install" (the k3s installer
+// restarts iptables, which kills the transport) from "remote command
+// exited non-zero" (a genuine install failure that must propagate).
+func TestIsConnectionDropError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"nil-ish", errStr(""), false},
+		{"real command failure", errStr("Process exited with status 1: something broke"), false},
+		{"remote wait no exit", errStr("wait: remote command exited without exit status or exit signal"), true},
+		{"connection reset", errStr("read tcp: connection reset by peer"), true},
+		{"broken pipe", errStr("write: broken pipe"), true},
+		{"closed connection", errStr("use of closed network connection"), true},
+		{"eof", errStr("unexpected EOF"), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isConnectionDropError(tc.err); got != tc.want {
+				t.Errorf("isConnectionDropError(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+type stringError string
+
+func (s stringError) Error() string { return string(s) }
+func errStr(s string) error {
+	if s == "" {
+		return nil
+	}
+	return stringError(s)
+}
+
 // TestBuildNodeInstallCommand_HardeningWrapper asserts every install
 // command carries the cloud-init wait + pipefail hardening. Regression
 // guard for the homelab validation bug: the k3s installer was silently
