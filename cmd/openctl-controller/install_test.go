@@ -18,6 +18,7 @@ func TestResolveInstallPathsUsesHome(t *testing.T) {
 		got, want string
 	}{
 		{p.BinaryPath, filepath.Join(tmp, "Library", "Application Support", "openctl", "bin", "openctl-controller")},
+		{p.AgentDir, filepath.Join(tmp, "Library", "Application Support", "openctl", "bin", "k3s-agents")},
 		{p.PlistPath, filepath.Join(tmp, "Library", "LaunchAgents", "io.openctl.controller.plist")},
 		{p.LogOut, filepath.Join(tmp, "Library", "Logs", "openctl", "controller.out.log")},
 		{p.StateDir, filepath.Join(tmp, ".openctl", "controller")},
@@ -116,6 +117,51 @@ func TestCopyFileAtomicAndExecutable(t *testing.T) {
 	// Atomic-write artifact should be cleaned up.
 	if _, err := os.Stat(dst + ".new"); !os.IsNotExist(err) {
 		t.Errorf("expected dst.new to be gone, got err=%v", err)
+	}
+}
+
+func TestCopyK3sAgentBinaries(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+	names := []string{
+		"openctl-k3s-agent-linux-amd64",
+		"openctl-k3s-agent-linux-arm64",
+		"openctl-k3s-agent-linux-armv7",
+	}
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(srcDir, name), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := copyK3sAgentBinaries(srcDir, dstDir); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		path := filepath.Join(dstDir, name)
+		data, err := os.ReadFile(path) // #nosec G304 -- test temp path
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != name {
+			t.Errorf("%s contents = %q, want %q", name, data, name)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o755 {
+			t.Errorf("%s mode = %o, want 0755", name, info.Mode().Perm())
+		}
+	}
+}
+
+func TestCopyK3sAgentBinariesReportsMissingBuild(t *testing.T) {
+	err := copyK3sAgentBinaries(t.TempDir(), t.TempDir())
+	if err == nil {
+		t.Fatal("expected missing binary error")
+	}
+	if !strings.Contains(err.Error(), "make build-plugin-k3s-agent-linux") {
+		t.Fatalf("error should explain how to build agents, got %v", err)
 	}
 }
 
