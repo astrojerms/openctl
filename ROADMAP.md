@@ -117,6 +117,10 @@ evolved.
       hardening, SSH-drop recovery, nil-safe reconnect cleanup, local
       agent binary packaging, and Provisioning-stub resume. Retiring
       the imperative `applyExisting` branch remains a separate cleanup.
+      Post-validation hardening: PRs #10 and #12 removed flaky
+      operation-cache test submits under the race detector; PR #11
+      keeps UI resource watch streams alive across transient provider
+      list failures.
       1. [x] **ResourceRef as spec-level primitive.** CUE `#Ref`
          helper in base.cue authors `{$ref: {apiVersion, kind,
          name, field?}}` markers. Server-side resolver
@@ -552,6 +556,27 @@ When phases or followups land, move them up out of "pending" into their
 detail doc's marked-complete section, then leave a one-line entry here
 with the commit hash for at-a-glance history. Trim to the last 10.
 
+- `30a14ab` — fix: resource Watch streams now tolerate transient
+  provider List failures (for example Proxmox route flaps), log the
+  outage, preserve the previous snapshot, and retry on the next poll
+  instead of surfacing a fatal UI HTTP 500.
+- `cefc7b0` / PR #12 — test: operations cache tests no longer rely
+  on flaky submit races under the CI race detector; coverage still
+  exercises verifying-trace cache disabled and refs-hash cache-miss
+  behavior.
+- `218f44a` — fix: packaged k3s agent binaries into controller
+  install and taught Cluster apply to resume from a persisted
+  Provisioning stub after a controller rebuild/restart.
+- `975aee9` — fix: nil-safe K3sNode client close after SSH-drop
+  reconnect failures.
+- `02add4c` — fix: K3sNode install tolerates SSH disconnects caused
+  by k3s.service startup reconfiguring networking; reconnects and
+  verifies service health + node-token before succeeding.
+- `db0d4b3` — fix: k3s install waits for cloud-init and runs
+  curl-piped shell with pipefail so curl failures cannot be hidden.
+- `99ae770` — fix: JSON-normalize k3s plan child specs so
+  ParseVMSpec sees sshKeys, disks, and networks with expected
+  `[]any` shapes.
 - `b377520` — fix: shutdown hang on Ctrl-C. Root ctx now cancels
   on SIGINT/SIGTERM (signal.NotifyContext) so subsystems exit;
   server.StopWithTimeout(3s) falls back to force Stop() when
@@ -563,32 +588,3 @@ with the commit hash for at-a-glance history. Trim to the last 10.
 - `d207b9e` — provider credential editing UI: ConfigService RPCs +
   Providers page with add/edit/delete forms; secrets never leave
   the server.
-- `f6b3cb2` — opt-in auto-remediation via
-  `openctl.io/autoReconcile: true` annotation; exponential backoff
-  on repeated failure; ops tagged source="auto-reconcile".
-- `615c639` — Cluster kubeconfig download + VM console URL via
-  extended Actioner (ActionResult with message/url/download shapes).
-- `e821bc9` — templates MVP: TemplateService + sidebar picker +
-  wizard; two starters shipped (ubuntu-server-vm, small-k3s-cluster).
-- `2d629c3` — fix: optional-composite form-clobber (scrubEmpty →
-  reseedFormState loop) + version pill in header.
-- `ba07e5b` — build: make build-controller depend on ui.
-- `b377520` — fix: Ctrl-C shutdown hang on active UI Watch streams.
-- `809c3fa` — U8.21: stacked layout for map-of-objects rendering.
-- `0651d6a` — U8.20: manifest-preview toggle in form view.
-- `0e9b693` — U8.19: Copy/Download YAML buttons on Detail.
-- `b6e5642` — U8.18: pre-fill metadata.name with a suggestion
-  (`vm-a3b2`, `cluster-x9k1`).
-- `d488cdf` — U8.17: inline live-progress banner on Detail.
-- `a3389de` — U8.16: list filter + click-to-sort headers.
-- `39a1c5b` — U8.15: per-field validation error highlighting
-  (path-attributed field errors, inline row rail).
-- `e466ecd` — U8.14: delete from Detail with type-the-name
-  confirmation.
-- `aeee483` — U8.13: discriminated-union picker via CUE
-  `@oneOf(group="X")` for VM image source.
-- `d2e66d3` — U8.12: runtime actions — new providers.Actioner
-  interface + ListActions/InvokeAction RPCs; VM start/stop/
-  shutdown/reboot buttons on Detail.
-- `a39fb61` — U8.11: provider-populated dropdowns via CUE
-  `@options` attribute; VM.spec.node → ProxmoxNode.

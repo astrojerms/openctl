@@ -93,6 +93,26 @@ func waitForStatus(t *testing.T, store *Store, opID string, want string, timeout
 	return nil
 }
 
+func runPendingOp(t *testing.T, d *Dispatcher, store *Store, opID string, want string) *Operation {
+	t.Helper()
+	op, err := store.ClaimNextPending(context.Background())
+	if err != nil {
+		t.Fatalf("ClaimNextPending: %v", err)
+	}
+	if op.ID != opID {
+		t.Fatalf("ClaimNextPending got %s, want %s", op.ID, opID)
+	}
+	d.execute(context.Background(), op)
+	final, err := store.Get(context.Background(), opID)
+	if err != nil {
+		t.Fatalf("Get %s: %v", opID, err)
+	}
+	if final.Status != want {
+		t.Fatalf("op %s status = %q, want %q (error: %s)", opID, final.Status, want, final.Error)
+	}
+	return final
+}
+
 func TestDispatcherProcessesApplyOp(t *testing.T) {
 	p := &fakeProvider{
 		name:  "fake",
