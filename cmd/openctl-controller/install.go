@@ -27,6 +27,7 @@ type installPaths struct {
 	HomeDir       string
 	BinaryDir     string // ~/Library/Application Support/openctl/bin
 	BinaryPath    string // .../openctl-controller
+	AgentDir      string // .../k3s-agents
 	PlistDir      string // ~/Library/LaunchAgents
 	PlistPath     string // .../io.openctl.controller.plist
 	LogDir        string // ~/Library/Logs/openctl
@@ -49,6 +50,7 @@ func resolveInstallPaths() (*installPaths, error) {
 		HomeDir:       home,
 		BinaryDir:     binaryDir,
 		BinaryPath:    filepath.Join(binaryDir, "openctl-controller"),
+		AgentDir:      filepath.Join(binaryDir, "k3s-agents"),
 		PlistDir:      plistDir,
 		PlistPath:     filepath.Join(plistDir, plistName),
 		LogDir:        logDir,
@@ -103,7 +105,7 @@ func runInstall(args []string) error {
 		return fmt.Errorf("resolve symlinks for current binary: %w", err)
 	}
 
-	for _, dir := range []string{paths.BinaryDir, paths.PlistDir, paths.LogDir, paths.StateDir, paths.CLIConfigDir} {
+	for _, dir := range []string{paths.BinaryDir, paths.AgentDir, paths.PlistDir, paths.LogDir, paths.StateDir, paths.CLIConfigDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fmt.Errorf("mkdir %s: %w", dir, err)
 		}
@@ -115,6 +117,9 @@ func runInstall(args []string) error {
 
 	if err := copyFile(src, paths.BinaryPath, 0o755); err != nil {
 		return fmt.Errorf("copy binary: %w", err)
+	}
+	if err := copyK3sAgentBinaries(filepath.Dir(src), paths.AgentDir); err != nil {
+		return fmt.Errorf("copy k3s agent binaries: %w", err)
 	}
 
 	plist, err := renderPlist(paths)
@@ -149,6 +154,7 @@ func runInstall(args []string) error {
 
 	fmt.Println("openctl-controller installed and running.")
 	fmt.Printf("  binary:   %s\n", paths.BinaryPath)
+	fmt.Printf("  agents:   %s\n", paths.AgentDir)
 	fmt.Printf("  plist:    %s\n", paths.PlistPath)
 	fmt.Printf("  logs:     %s\n", paths.LogOut)
 	fmt.Printf("  state:    %s\n", paths.StateDir)
@@ -293,6 +299,27 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	return os.Rename(tmp, dst)
 }
 
+func copyK3sAgentBinaries(srcDir, dstDir string) error {
+	names := []string{
+		"openctl-k3s-agent-linux-amd64",
+		"openctl-k3s-agent-linux-arm64",
+		"openctl-k3s-agent-linux-armv7",
+	}
+	for _, name := range names {
+		src := filepath.Join(srcDir, name)
+		if _, err := os.Stat(src); err != nil {
+			if os.IsNotExist(err) {
+				return fmt.Errorf("%s not found next to controller binary; run `make build-plugin-k3s-agent-linux` before install", name)
+			}
+			return err
+		}
+		if err := copyFile(src, filepath.Join(dstDir, name), 0o755); err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
+	}
+	return nil
+}
+
 func removeIfExists(path string) error {
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err
@@ -353,6 +380,7 @@ const installUsage = `usage: openctl-controller install --local
 
 Installs the controller as a per-user LaunchAgent on macOS:
   - copies this binary to ~/Library/Application Support/openctl/bin/
+  - copies k3s agent binaries to ~/Library/Application Support/openctl/bin/k3s-agents/
   - writes ~/Library/LaunchAgents/io.openctl.controller.plist
   - launchctl-loads the plist (RunAtLoad + KeepAlive)
   - verifies the controller responds on 127.0.0.1:9444

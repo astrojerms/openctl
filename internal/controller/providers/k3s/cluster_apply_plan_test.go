@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openctl/openctl/internal/controller/operations"
 	"github.com/openctl/openctl/pkg/protocol"
 )
 
@@ -147,6 +148,45 @@ func TestApplyClusterViaPlan_MaterializesCABundle(t *testing.T) {
 	// Sanity: at least ca.pem should exist.
 	if _, statErr := readFile(bundleDir + "/ca.pem"); statErr != nil {
 		t.Errorf("expected ca.pem in bundle dir, got: %v", statErr)
+	}
+}
+
+func TestApplyProvisioningClusterResumesPlanPath(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	if err := (&Provider{}).saveClusterStateStub("dev", clusterManifest("dev"), []*protocol.Resource{
+		{
+			APIVersion: "proxmox.openctl.io/v1",
+			Kind:       "VirtualMachine",
+			Metadata:   protocol.ResourceMetadata{Name: "dev-cp-0"},
+		},
+	}, "Provisioning", "VMs created; installing k3s"); err != nil {
+		t.Fatalf("saveClusterStateStub: %v", err)
+	}
+
+	cd := &recordingChildDispatcher{writeK3s: true}
+	p := &Provider{}
+	ctx := operations.WithChildDispatcher(context.Background(), cd)
+	if _, err := p.Apply(ctx, clusterManifest("dev")); err != nil {
+		t.Fatalf("Apply should resume provisioning cluster: %v", err)
+	}
+
+	kinds := cd.kindsInOrder()
+	if len(kinds) != 3 {
+		t.Fatalf("expected 3 resumed child applies, got %d: %v", len(kinds), kinds)
+	}
+	want := []string{"VirtualMachine", kindK3sNode, kindAgentInstall}
+	for i := range want {
+		if kinds[i] != want[i] {
+			t.Fatalf("child[%d] = %q, want %q (all: %v)", i, kinds[i], want[i], kinds)
+		}
+	}
+	state, err := p.loadState("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if phase, _ := state.Status["phase"].(string); phase != "Ready" {
+		t.Fatalf("resumed apply should save Ready state, got %q", phase)
 	}
 }
 

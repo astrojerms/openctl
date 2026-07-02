@@ -201,6 +201,11 @@ func (p *Provider) Apply(ctx context.Context, manifest *protocol.Resource) (*pro
 	// new manifest and either no-op, converge, or refuse depending on the
 	// destructive flags.
 	if existing, _ := p.loadState(name); existing != nil {
+		if isProvisioningCluster(existing) {
+			if cd, ok := operations.ChildDispatcherFrom(ctx); ok {
+				return p.applyClusterViaPlan(ctx, manifest, cd)
+			}
+		}
 		return p.applyExisting(ctx, manifest, name, spec)
 	}
 
@@ -400,6 +405,14 @@ func (p *Provider) applyExisting(ctx context.Context, manifest *protocol.Resourc
 		return nil, fmt.Errorf("rewrite state: %w", err)
 	}
 	return p.loadState(name)
+}
+
+func isProvisioningCluster(r *protocol.Resource) bool {
+	if r == nil || r.Status == nil {
+		return false
+	}
+	phase, _ := r.Status["phase"].(string)
+	return phase == "Provisioning"
 }
 
 func (p *Provider) Get(ctx context.Context, kind, name string) (*protocol.Resource, error) {
