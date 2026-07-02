@@ -22,6 +22,25 @@ import (
 // hooks from the dispatcher (see UI.md U1).
 const defaultWatchPollInterval = 500 * time.Millisecond
 
+// maxConsecutiveWatchListErrors bounds how long a Watch tolerates a run of
+// failing list ticks before it gives up and returns the error to the client.
+//
+// A short burst of failures is a transient provider flap (e.g. a homelab
+// Proxmox route blip) — we ride those out without tearing the stream down
+// (see #11). But a *sustained* failure means the provider is genuinely
+// unreachable, and holding the stream open forever is actively harmful: each
+// live Watch pins one browser→gateway HTTP/1.1 connection (of which browsers
+// allow only ~6 per origin) plus one gateway→gRPC stream. The UI nav opens
+// one long-lived Watch per kind, so a couple of dead kinds (an offline Proxmox
+// host's VirtualMachine + ProxmoxNode) can pin enough connections that every
+// other page stops loading. Returning the error releases those resources and
+// lets the client's own reconnect backoff take over — the connection is then
+// free during the backoff window, which is the behavior that kept the UI
+// usable before the stream was made error-tolerant.
+//
+// At the 500ms poll interval this tolerates ~2.5s of flapping before yielding.
+const maxConsecutiveWatchListErrors = 5
+
 // Watch implements apiv1.ResourceServiceServer. Poll-based: lists the
 // requested resources every poll-tick, diffs against the last snapshot,
 // emits ADDED/MODIFIED/DELETED events. The first tick emits ADDED for
@@ -45,6 +64,7 @@ func (h *resourceHandler) Watch(req *apiv1.WatchRequest, stream apiv1.ResourceSe
 	// full specs.
 	snapshot := map[string]string{}
 	first := true
+	consecutiveErrs := 0
 
 	emit := func(et apiv1.WatchEvent_Type, r *apiv1.Resource) error {
 		return stream.Send(&apiv1.WatchEvent{Type: et, Resource: r})
@@ -54,9 +74,21 @@ func (h *resourceHandler) Watch(req *apiv1.WatchRequest, stream apiv1.ResourceSe
 		matches, err := h.listForWatch(ctx, req.GetApiVersion(), req.GetKind(), req.GetName())
 		if err != nil {
 			// Provider reads can fail transiently (for example a homelab
-			// Proxmox route flap). Keep the stream alive and preserve the
-			// last snapshot rather than surfacing a fatal HTTP 500 to the UI.
-			log.Printf("resource watch: list %s/%s %q: %v", req.GetApiVersion(), req.GetKind(), req.GetName(), err)
+			// Proxmox route flap). Ride out a short burst without tearing the
+			// stream down or surfacing a fatal HTTP 500 to the UI, preserving
+			// the last snapshot. But a *sustained* outage means the provider
+			// is unreachable: return the error so the streaming connection and
+			// its gateway gRPC stream are released and the client's reconnect
+			// backoff takes over, rather than pinning them open forever (which
+			// starves the browser's per-origin connection pool — see
+			// maxConsecutiveWatchListErrors).
+			consecutiveErrs++
+			log.Printf("resource watch: list %s/%s %q (failure %d/%d): %v",
+				req.GetApiVersion(), req.GetKind(), req.GetName(), consecutiveErrs, maxConsecutiveWatchListErrors, err)
+			if consecutiveErrs >= maxConsecutiveWatchListErrors {
+				return status.Errorf(codes.Unavailable,
+					"resource watch: list %s/%s repeatedly failed: %v", req.GetApiVersion(), req.GetKind(), err)
+			}
 			select {
 			case <-ctx.Done():
 				if errors.Is(ctx.Err(), context.Canceled) {
@@ -67,6 +99,7 @@ func (h *resourceHandler) Watch(req *apiv1.WatchRequest, stream apiv1.ResourceSe
 				continue
 			}
 		}
+		consecutiveErrs = 0
 
 		seen := map[string]string{}
 		for _, m := range matches {

@@ -8,6 +8,7 @@ import (
 	"io"
 	"maps"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -44,6 +45,13 @@ func New(endpoint, tokenID, tokenSecret string) *Client {
 				TLSClientConfig: &tls.Config{
 					InsecureSkipVerify: true,
 				},
+				// Bound the TCP connect phase separately from the overall
+				// 60s request timeout. When the Proxmox host is offline or
+				// black-holing packets, dials would otherwise hang the full
+				// 60s per request; a tight connect timeout fails fast so
+				// watches and the reconciler shed the dead endpoint quickly
+				// instead of holding streams open.
+				DialContext: (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
 			},
 		},
 	}

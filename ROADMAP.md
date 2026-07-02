@@ -18,9 +18,15 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
-- No active roadmap branch. The dispatcher refactor shipped and was
-  homelab-validated with the `validate-3` single-control-plane k3s
-  apply path.
+- **`fix/watch-release-conn-on-outage`** — fixes the UI hanging when a
+  provider is unreachable (regression from PR #11). Watch now bounds
+  consecutive list-error retries and releases the stream on a sustained
+  outage; Proxmox client gets a 5s dial timeout. See the Arch Phase 8
+  post-validation hardening note below. Deeper follow-ups parked (see
+  "Watch / gateway connection resilience" under the punch list).
+- Otherwise no active roadmap branch. The dispatcher refactor shipped
+  and was homelab-validated with the `validate-3` single-control-plane
+  k3s apply path.
 
 ## Suggested next order
 
@@ -37,6 +43,29 @@ this session. Remaining candidates for the next round:
   in `pkg/k3s/cluster/create.go`. The initial-create dispatcher
   path is homelab-validated; existing-cluster convergence still
   uses the legacy branch.
+- **Watch / gateway connection resilience** — follow-ups from the
+  `no route to host` hang fix.
+  - [x] **Nav badge counts no longer hold a stream per kind.** The nav
+    opened one long-lived Watch per kind over HTTP/1.1 (~6 conns/origin);
+    with 5 kinds + the ops-drawer stream the browser's connection pool
+    was fully pinned even when every provider was healthy, so unrelated
+    page fetches (e.g. `GET /v1/templates`) hung on "Loading..." forever.
+    Phase 8 adding `K3sNode` + `AgentInstall` is what crossed the
+    threshold. `ui/src/lib/catalogue.ts` now polls a one-shot List per
+    kind (transient connection) instead of a persistent Watch. Page
+    List/Detail watches already abort on unmount, so persistent streams
+    are now ~3 (ops + current page), leaving headroom.
+  - [ ] **Durable fix: HTTP/2 on the gateway.** Polling counts is a
+    band-aid; the real cap is HTTP/1.1's ~6 conns/origin. Browsers only
+    speak h2 over TLS, so this means serving the UI over HTTPS (reuse the
+    controller CA + a localhost server cert). One connection, ~100
+    multiplexed streams — removes the whole class of problem and lets the
+    nav go back to live Watch counts if desired.
+  - [ ] **Thread `context` through the Proxmox client.** `pkg/proxmox/client`
+    uses `http.NewRequest` and the provider `List`/`Get` discard the
+    passed ctx, so a canceled Watch/reconciler can't cancel the in-flight
+    HTTP call — it waits out the timeout. (5s dial timeout added as a
+    stopgap.)
 - **Multi-user auth** — OIDC + RBAC (from "Future goals").
 - **User-authored CUE templates** — extend templates from Go-only
   compiled-in to loading `~/.openctl/templates/*.cue`. Feasible
@@ -119,8 +148,20 @@ evolved.
       the imperative `applyExisting` branch remains a separate cleanup.
       Post-validation hardening: PRs #10 and #12 removed flaky
       operation-cache test submits under the race detector; PR #11
-      keeps UI resource watch streams alive across transient provider
-      list failures.
+      kept UI resource watch streams alive across transient provider
+      list failures — but over-corrected: it made a failing Watch
+      retry *forever* server-side, so a permanently-unreachable
+      provider (offline homelab Proxmox → `no route to host`) pinned
+      its browser HTTP/1.1 connection + gateway gRPC stream open
+      indefinitely. The UI nav opens one long-lived Watch per kind, so
+      two dead Proxmox kinds exhausted the browser's ~6-per-origin
+      connection pool and every other page hung. Fixed in
+      `fix/watch-release-conn-on-outage`: Watch now tolerates a bounded
+      burst of list failures (5 ticks ≈ 2.5s) then returns
+      `Unavailable`, releasing the connection so the client's reconnect
+      backoff takes over. Same PR adds a 5s TCP dial timeout to the
+      Proxmox client so a black-holing host fails fast instead of
+      hanging the full 60s request timeout.
       1. [x] **ResourceRef as spec-level primitive.** CUE `#Ref`
          helper in base.cue authors `{$ref: {apiVersion, kind,
          name, field?}}` markers. Server-side resolver
