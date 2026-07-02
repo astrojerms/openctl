@@ -126,9 +126,9 @@ func (p *ProxmoxProvider) CreateInstance(ctx context.Context, spec *compute.Inst
 	var err error
 
 	if vmSpec.CloudImage != nil {
-		vmid, err = p.createFromCloudImage(node, spec.Name, vmSpec)
+		vmid, err = p.createFromCloudImage(ctx, node, spec.Name, vmSpec)
 	} else if vmSpec.Template != nil {
-		vmid, err = p.createFromTemplate(node, spec.Name, vmSpec)
+		vmid, err = p.createFromTemplate(ctx, node, spec.Name, vmSpec)
 	} else {
 		return nil, fmt.Errorf("either image.url or image.template is required")
 	}
@@ -147,14 +147,14 @@ func (p *ProxmoxProvider) CreateInstance(ctx context.Context, spec *compute.Inst
 }
 
 // createFromCloudImage creates a VM from a cloud image
-func (p *ProxmoxProvider) createFromCloudImage(node, name string, spec *resources.VMSpec) (int, error) {
+func (p *ProxmoxProvider) createFromCloudImage(ctx context.Context, node, name string, spec *resources.VMSpec) (int, error) {
 	storage := spec.CloudImage.Storage
 
 	// Generate template name from URL
 	templateName := generateTemplateNameFromURL(spec.CloudImage.URL)
 
 	// Check if template already exists
-	existingTemplate, _ := p.client.GetTemplate(templateName)
+	existingTemplate, _ := p.client.GetTemplate(ctx, templateName)
 	var templateVMID int
 
 	if existingTemplate != nil {
@@ -162,19 +162,19 @@ func (p *ProxmoxProvider) createFromCloudImage(node, name string, spec *resource
 	} else {
 		// Download and create template
 		filename := extractFilenameFromURL(spec.CloudImage.URL)
-		upid, err := p.client.DownloadToStorage(node, storage, spec.CloudImage.URL, filename, "iso")
+		upid, err := p.client.DownloadToStorage(ctx, node, storage, spec.CloudImage.URL, filename, "iso")
 		if err != nil {
 			return 0, fmt.Errorf("failed to download cloud image: %w", err)
 		}
 
 		if upid != "" {
-			if waitErr := p.client.WaitForTask(node, upid, 30*time.Minute); waitErr != nil {
+			if waitErr := p.client.WaitForTask(ctx, node, upid, 30*time.Minute); waitErr != nil {
 				return 0, fmt.Errorf("download task failed: %w", waitErr)
 			}
 		}
 
 		// Create base VM for template
-		nextID, err := p.client.CreateVM(node, map[string]any{
+		nextID, err := p.client.CreateVM(ctx, node, map[string]any{
 			"name":   templateName,
 			"ostype": "l26",
 			"scsihw": "virtio-scsi-pci",
@@ -188,24 +188,24 @@ func (p *ProxmoxProvider) createFromCloudImage(node, name string, spec *resource
 		// Import disk
 		importPath := fmt.Sprintf("%s:import/%s", storage, filename)
 		diskConfig := fmt.Sprintf("%s:0,import-from=%s", storage, importPath)
-		if err := p.client.ConfigureVM(node, nextID, map[string]any{
+		if err := p.client.ConfigureVM(ctx, node, nextID, map[string]any{
 			"scsi0": diskConfig,
 		}); err != nil {
-			_ = p.client.DeleteVM(node, nextID)
+			_ = p.client.DeleteVM(ctx, node, nextID)
 			return 0, fmt.Errorf("failed to import disk: %w", err)
 		}
 
 		time.Sleep(5 * time.Second)
 
 		// Add cloud-init drive
-		if err := p.client.AddCloudInitDrive(node, nextID, storage); err != nil {
-			_ = p.client.DeleteVM(node, nextID)
+		if err := p.client.AddCloudInitDrive(ctx, node, nextID, storage); err != nil {
+			_ = p.client.DeleteVM(ctx, node, nextID)
 			return 0, fmt.Errorf("failed to add cloud-init drive: %w", err)
 		}
 
 		// Convert to template
-		if err := p.client.ConvertToTemplate(node, nextID); err != nil {
-			_ = p.client.DeleteVM(node, nextID)
+		if err := p.client.ConvertToTemplate(ctx, node, nextID); err != nil {
+			_ = p.client.DeleteVM(ctx, node, nextID)
 			return 0, fmt.Errorf("failed to convert to template: %w", err)
 		}
 
@@ -218,13 +218,13 @@ func (p *ProxmoxProvider) createFromCloudImage(node, name string, spec *resource
 		"storage": storage,
 	}
 
-	vmid, upid, err := p.client.CloneVM(node, templateVMID, name, cloneParams)
+	vmid, upid, err := p.client.CloneVM(ctx, node, templateVMID, name, cloneParams)
 	if err != nil {
 		return 0, fmt.Errorf("failed to clone template: %w", err)
 	}
 
 	if upid != "" {
-		if err := p.client.WaitForTask(node, upid, 10*time.Minute); err != nil {
+		if err := p.client.WaitForTask(ctx, node, upid, 10*time.Minute); err != nil {
 			return 0, fmt.Errorf("clone task failed: %w", err)
 		}
 	}
@@ -232,7 +232,7 @@ func (p *ProxmoxProvider) createFromCloudImage(node, name string, spec *resource
 	// Apply configuration
 	configParams := spec.ToProxmoxConfig()
 	if len(configParams) > 0 {
-		if err := p.client.ConfigureVM(node, vmid, configParams); err != nil {
+		if err := p.client.ConfigureVM(ctx, node, vmid, configParams); err != nil {
 			return 0, fmt.Errorf("failed to configure VM: %w", err)
 		}
 	}
@@ -240,7 +240,7 @@ func (p *ProxmoxProvider) createFromCloudImage(node, name string, spec *resource
 	// Resize disk if specified
 	for _, disk := range spec.Disks {
 		if disk.Size != "" && disk.Name != "" {
-			if err := p.client.ResizeVMDisk(node, vmid, disk.Name, disk.Size); err != nil {
+			if err := p.client.ResizeVMDisk(ctx, node, vmid, disk.Name, disk.Size); err != nil {
 				return 0, fmt.Errorf("failed to resize disk: %w", err)
 			}
 		}
@@ -248,12 +248,12 @@ func (p *ProxmoxProvider) createFromCloudImage(node, name string, spec *resource
 
 	// Regenerate cloud-init
 	if spec.CloudInit != nil {
-		_ = p.client.RegenerateCloudInit(node, vmid)
+		_ = p.client.RegenerateCloudInit(ctx, node, vmid)
 	}
 
 	// Start VM
 	if spec.StartOnCreate {
-		if _, err := p.client.StartVM(node, vmid); err != nil {
+		if _, err := p.client.StartVM(ctx, node, vmid); err != nil {
 			return 0, fmt.Errorf("failed to start VM: %w", err)
 		}
 	}
@@ -262,12 +262,12 @@ func (p *ProxmoxProvider) createFromCloudImage(node, name string, spec *resource
 }
 
 // createFromTemplate creates a VM from an existing template
-func (p *ProxmoxProvider) createFromTemplate(node, name string, spec *resources.VMSpec) (int, error) {
+func (p *ProxmoxProvider) createFromTemplate(ctx context.Context, node, name string, spec *resources.VMSpec) (int, error) {
 	templateID := spec.Template.VMID
 	templateNode := node
 
 	if templateID == 0 && spec.Template.Name != "" {
-		tmpl, err := p.client.GetTemplate(spec.Template.Name)
+		tmpl, err := p.client.GetTemplate(ctx, spec.Template.Name)
 		if err != nil {
 			return 0, fmt.Errorf("template not found: %s", spec.Template.Name)
 		}
@@ -280,34 +280,34 @@ func (p *ProxmoxProvider) createFromTemplate(node, name string, spec *resources.
 		cloneParams["target"] = node
 	}
 
-	vmid, upid, err := p.client.CloneVM(templateNode, templateID, name, cloneParams)
+	vmid, upid, err := p.client.CloneVM(ctx, templateNode, templateID, name, cloneParams)
 	if err != nil {
 		return 0, err
 	}
 
 	if upid != "" {
-		if err := p.client.WaitForTask(templateNode, upid, 5*time.Minute); err != nil {
+		if err := p.client.WaitForTask(ctx, templateNode, upid, 5*time.Minute); err != nil {
 			return 0, fmt.Errorf("clone task failed: %w", err)
 		}
 	}
 
 	configParams := spec.ToProxmoxConfig()
 	if len(configParams) > 0 {
-		if err := p.client.ConfigureVM(node, vmid, configParams); err != nil {
+		if err := p.client.ConfigureVM(ctx, node, vmid, configParams); err != nil {
 			return 0, fmt.Errorf("failed to configure VM: %w", err)
 		}
 	}
 
 	for _, disk := range spec.Disks {
 		if disk.Size != "" {
-			if err := p.client.ResizeVMDisk(node, vmid, disk.Name, disk.Size); err != nil {
+			if err := p.client.ResizeVMDisk(ctx, node, vmid, disk.Name, disk.Size); err != nil {
 				return 0, fmt.Errorf("failed to resize disk: %w", err)
 			}
 		}
 	}
 
 	if spec.StartOnCreate {
-		if _, err := p.client.StartVM(node, vmid); err != nil {
+		if _, err := p.client.StartVM(ctx, node, vmid); err != nil {
 			return 0, fmt.Errorf("failed to start VM: %w", err)
 		}
 	}
@@ -317,24 +317,24 @@ func (p *ProxmoxProvider) createFromTemplate(node, name string, spec *resources.
 
 // DeleteInstance deletes a compute instance
 func (p *ProxmoxProvider) DeleteInstance(ctx context.Context, id string) error {
-	vm, err := p.client.GetVM(id)
+	vm, err := p.client.GetVM(ctx, id)
 	if err != nil {
 		return err
 	}
 
 	if vm.Status == "running" {
-		if _, err := p.client.StopVM(vm.Node, vm.VMID); err != nil {
+		if _, err := p.client.StopVM(ctx, vm.Node, vm.VMID); err != nil {
 			return fmt.Errorf("failed to stop VM: %w", err)
 		}
 		time.Sleep(5 * time.Second)
 	}
 
-	return p.client.DeleteVM(vm.Node, vm.VMID)
+	return p.client.DeleteVM(ctx, vm.Node, vm.VMID)
 }
 
 // GetInstance retrieves a compute instance
 func (p *ProxmoxProvider) GetInstance(ctx context.Context, id string) (*compute.Instance, error) {
-	vm, err := p.client.GetVM(id)
+	vm, err := p.client.GetVM(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -344,7 +344,7 @@ func (p *ProxmoxProvider) GetInstance(ctx context.Context, id string) (*compute.
 
 // ListInstances lists instances matching filters
 func (p *ProxmoxProvider) ListInstances(ctx context.Context, filters *compute.Filters) ([]*compute.Instance, error) {
-	vms, err := p.client.ListVMs()
+	vms, err := p.client.ListVMs(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -404,13 +404,13 @@ func (p *ProxmoxProvider) WaitForReady(ctx context.Context, id string, timeout t
 
 // GetSSHAccess returns SSH connection details
 func (p *ProxmoxProvider) GetSSHAccess(ctx context.Context, id string) (*compute.SSHAccess, error) {
-	vm, err := p.client.GetVM(id)
+	vm, err := p.client.GetVM(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
 	// Get IP from QEMU agent
-	ip, err := p.client.GetVMIPAddress(vm.Node, vm.VMID)
+	ip, err := p.client.GetVMIPAddress(ctx, vm.Node, vm.VMID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get VM IP: %w", err)
 	}

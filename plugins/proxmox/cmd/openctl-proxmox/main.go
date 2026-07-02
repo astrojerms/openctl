@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -56,7 +57,7 @@ func handleRequest() error {
 	}
 
 	h := handler.New(&req.Config)
-	resp, err := h.Handle(&req)
+	resp, err := h.Handle(context.Background(), &req)
 	if err != nil {
 		return err
 	}

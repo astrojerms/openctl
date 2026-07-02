@@ -1,6 +1,10 @@
 package handler
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -16,7 +20,7 @@ func TestHandler_HandleUnknownResourceType(t *testing.T) {
 		ResourceType: "UnknownResource",
 	}
 
-	resp, err := h.Handle(req)
+	resp, err := h.Handle(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Handle should not return error: %v", err)
 	}
@@ -41,7 +45,7 @@ func TestHandler_HandleVMUnknownAction(t *testing.T) {
 		ResourceType: "VirtualMachine",
 	}
 
-	resp, err := h.Handle(req)
+	resp, err := h.Handle(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Handle should not return error: %v", err)
 	}
@@ -63,7 +67,7 @@ func TestHandler_HandleTemplateUnsupportedAction(t *testing.T) {
 		ResourceType: "Template",
 	}
 
-	resp, err := h.Handle(req)
+	resp, err := h.Handle(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Handle should not return error: %v", err)
 	}
@@ -95,7 +99,7 @@ func TestHandler_CreateVMMissingNode(t *testing.T) {
 		},
 	}
 
-	resp, err := h.Handle(req)
+	resp, err := h.Handle(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Handle should not return error: %v", err)
 	}
@@ -130,7 +134,7 @@ func TestHandler_CreateVMWithoutTemplate(t *testing.T) {
 		},
 	}
 
-	resp, err := h.Handle(req)
+	resp, err := h.Handle(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Handle should not return error: %v", err)
 	}
@@ -191,7 +195,7 @@ func TestHandler_RoutesToCorrectResourceType(t *testing.T) {
 				},
 			}
 
-			resp, err := h.Handle(req)
+			resp, err := h.Handle(context.Background(), req)
 
 			// The handler returns protocol errors, not Go errors
 			// for known error conditions
@@ -203,6 +207,78 @@ func TestHandler_RoutesToCorrectResourceType(t *testing.T) {
 			// Note: non-error cases will fail because we don't have
 			// a real Proxmox server to connect to
 		})
+	}
+}
+
+// vmApplyRequest builds an Apply request for a VM backed by a template so the
+// not-found branch has a create path to attempt.
+func vmApplyRequest(name string) *protocol.Request {
+	return &protocol.Request{
+		Version:      protocol.ProtocolVersion,
+		Action:       protocol.ActionApply,
+		ResourceType: "VirtualMachine",
+		ResourceName: name,
+		Manifest: &protocol.Resource{
+			APIVersion: "proxmox.openctl.io/v1",
+			Kind:       "VirtualMachine",
+			Metadata:   protocol.ResourceMetadata{Name: name},
+			Spec: map[string]any{
+				"node":     "pve1",
+				"template": map[string]any{"name": "ubuntu"},
+			},
+		},
+	}
+}
+
+// TestApplyVM_TransientErrorDoesNotCreate is the core of the not-found fix:
+// when the existence check fails transiently (Proxmox erroring), Apply must
+// surface the error rather than fall through and clone a duplicate of a VM
+// that already exists.
+func TestApplyVM_TransientErrorDoesNotCreate(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Every call fails — including the pre-create existence check.
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	h := New(&protocol.ProviderConfig{Endpoint: server.URL, TokenID: "t", TokenSecret: "s", Node: "pve1"})
+
+	resp, err := h.Handle(context.Background(), vmApplyRequest("existing-vm"))
+	if err == nil {
+		t.Fatalf("expected a transient error, got resp=%+v", resp)
+	}
+	if !strings.Contains(err.Error(), "check existing VM") {
+		t.Errorf("expected the existence-check error (not a create attempt), got: %v", err)
+	}
+}
+
+// TestApplyVM_NotFoundTakesCreatePath verifies the complementary case: a
+// genuine miss (Proxmox reachable, VM absent) routes into create. Here the
+// template it references is also absent, so create returns a NotFound about
+// the template — proving Apply chose the create branch, not the update branch.
+func TestApplyVM_NotFoundTakesCreatePath(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api2/json/nodes":
+			json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"node": "pve1"}}})
+		default:
+			// No VMs, no templates anywhere.
+			json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{}})
+		}
+	}))
+	defer server.Close()
+
+	h := New(&protocol.ProviderConfig{Endpoint: server.URL, TokenID: "t", TokenSecret: "s", Node: "pve1"})
+
+	resp, err := h.Handle(context.Background(), vmApplyRequest("brand-new-vm"))
+	if err != nil {
+		t.Fatalf("Handle should return a protocol response, not a Go error: %v", err)
+	}
+	if resp.Status != protocol.StatusError || resp.Error.Code != protocol.ErrorCodeNotFound {
+		t.Fatalf("expected a NotFound (template missing) from the create path, got: %+v", resp)
+	}
+	if !strings.Contains(resp.Error.Message, "template") {
+		t.Errorf("expected the create path's template-not-found message, got: %s", resp.Error.Message)
 	}
 }
 
@@ -294,7 +370,7 @@ func TestCreateVMFromCloudImage_MissingURL(t *testing.T) {
 		},
 	}
 
-	resp, err := h.Handle(req)
+	resp, err := h.Handle(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Handle should not return error: %v", err)
 	}
@@ -332,7 +408,7 @@ func TestCreateVMFromCloudImage_MissingStorage(t *testing.T) {
 		},
 	}
 
-	resp, err := h.Handle(req)
+	resp, err := h.Handle(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Handle should not return error: %v", err)
 	}
@@ -370,7 +446,7 @@ func TestCreateVMFromImage_MissingStorage(t *testing.T) {
 		},
 	}
 
-	resp, err := h.Handle(req)
+	resp, err := h.Handle(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Handle should not return error: %v", err)
 	}
@@ -408,7 +484,7 @@ func TestCreateVMFromImage_MissingFile(t *testing.T) {
 		},
 	}
 
-	resp, err := h.Handle(req)
+	resp, err := h.Handle(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Handle should not return error: %v", err)
 	}

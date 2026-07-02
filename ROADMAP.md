@@ -65,11 +65,14 @@ this session. Remaining candidates for the next round:
     through, or trust the CA — see DEVELOPMENT.md "HTTPS gateway").
     Reverting `catalogue.ts` to live Watch counts is now safe but left as
     an optional follow-up — polling counts is cheap and works.
-  - [ ] **Thread `context` through the Proxmox client.** `pkg/proxmox/client`
-    uses `http.NewRequest` and the provider `List`/`Get` discard the
-    passed ctx, so a canceled Watch/reconciler can't cancel the in-flight
-    HTTP call — it waits out the timeout. (5s dial timeout added as a
-    stopgap.)
+  - [x] **Thread `context` through the Proxmox client.** Every client
+    method now takes a `context.Context` (via `http.NewRequestWithContext`);
+    the controller provider's `Get`/`List`/`Apply`/`Delete`/`DoAction` and
+    the legacy compute plugin pass their real ctx down, and the polling
+    loops (`WaitForTask`/`WaitForVMIP`) select on `ctx.Done()`. A canceled
+    Watch/reconcile now aborts the in-flight request immediately instead of
+    waiting out the 60s client timeout. Same PR fixes the not-found
+    collapse below.
 - **macOS code signing for stable firewall identity** — the *original*
   `no route to host` report turned out to be a per-app firewall (LuLu)
   silently re-blocking each rebuild. `go build` emits an ad-hoc Mach-O
@@ -132,9 +135,13 @@ this session. Remaining candidates for the next round:
 - [ ] Proxmox bootstrap install (`openctl-controller install --target
       proxmox://homelab`).
 - [ ] Plugin-defined CLI subcommands (`openctl k3s logs/restart/upgrade`).
-- [ ] Bug fix: `pkg/proxmox/handler/handler.go:114` collapses any
-      `GetVM` error to NotFound — network timeouts produce false "VM
-      gone" results.
+- [x] Bug fix: the proxmox handler collapsed any `GetVM`/`GetNode`/
+      `GetTemplate` error to NotFound — a network timeout produced a false
+      "VM gone" result, and `applyVM` treated it as "doesn't exist" and
+      cloned a duplicate. The client now returns a wrapped
+      `client.ErrNotFound` sentinel only for a genuine miss; the handler
+      branches on `errors.Is(..., ErrNotFound)` and surfaces transient
+      failures as real errors so callers retry instead of recreating.
 
 ---
 
@@ -616,6 +623,12 @@ When phases or followups land, move them up out of "pending" into their
 detail doc's marked-complete section, then leave a one-line entry here
 with the commit hash for at-a-glance history. Trim to the last 10.
 
+- `fix/proxmox-context-notfound` — harden the proxmox provider: thread
+  `context.Context` through the whole client (cancelable HTTP; polling
+  loops honor `ctx.Done()`) and stop collapsing every lookup error to
+  NotFound (new `client.ErrNotFound` sentinel; `applyVM` no longer clones
+  a duplicate on a transient blip). Tests cover the sentinel split,
+  context cancellation, and the apply not-found/transient branches.
 - `30a14ab` — fix: resource Watch streams now tolerate transient
   provider List failures (for example Proxmox route flaps), log the
   outage, preserve the previous snapshot, and retry on the next poll
@@ -645,6 +658,3 @@ with the commit hash for at-a-glance history. Trim to the last 10.
 - `aff8431` — two-way GitOps: fsnotify watcher on manifest mirror;
   file edits become Apply ops (source="gitops"), loop-safe via
   content compare, opt-in via `manifests.gitops.enabled`.
-- `d207b9e` — provider credential editing UI: ConfigService RPCs +
-  Providers page with add/edit/delete forms; secrets never leave
-  the server.

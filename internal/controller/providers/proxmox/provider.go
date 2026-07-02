@@ -62,36 +62,36 @@ func (p *Provider) Actions(kind string) []string {
 // (lifecycle actions return a Proxmox task UPID as the message) or
 // constructs an external URL (console — returns a noVNC link that
 // opens in a new tab).
-func (p *Provider) DoAction(_ context.Context, kind, name, action string) (*providers.ActionResult, error) {
+func (p *Provider) DoAction(ctx context.Context, kind, name, action string) (*providers.ActionResult, error) {
 	if kind != kindVM {
 		return nil, fmt.Errorf("no actions for kind %q", kind)
 	}
-	vm, err := p.handler.Client().GetVM(name)
+	vm, err := p.handler.Client().GetVM(ctx, name)
 	if err != nil {
 		return nil, fmt.Errorf("get VM %q: %w", name, err)
 	}
 	client := p.handler.Client()
 	switch action {
 	case "start":
-		upid, err := client.StartVM(vm.Node, vm.VMID)
+		upid, err := client.StartVM(ctx, vm.Node, vm.VMID)
 		if err != nil {
 			return nil, err
 		}
 		return &providers.ActionResult{Message: upid}, nil
 	case "stop":
-		upid, err := client.StopVM(vm.Node, vm.VMID)
+		upid, err := client.StopVM(ctx, vm.Node, vm.VMID)
 		if err != nil {
 			return nil, err
 		}
 		return &providers.ActionResult{Message: upid}, nil
 	case "shutdown":
-		upid, err := client.ShutdownVM(vm.Node, vm.VMID)
+		upid, err := client.ShutdownVM(ctx, vm.Node, vm.VMID)
 		if err != nil {
 			return nil, err
 		}
 		return &providers.ActionResult{Message: upid}, nil
 	case "reboot":
-		upid, err := client.RebootVM(vm.Node, vm.VMID)
+		upid, err := client.RebootVM(ctx, vm.Node, vm.VMID)
 		if err != nil {
 			return nil, err
 		}
@@ -111,14 +111,14 @@ func (p *Provider) DoAction(_ context.Context, kind, name, action string) (*prov
 // Apply creates a VM if missing; otherwise returns the observed state
 // without mutating (per the no-op-on-existing rule). ProxmoxNode is
 // observed-only and rejects Apply.
-func (p *Provider) Apply(_ context.Context, manifest *protocol.Resource) (*protocol.Resource, error) {
+func (p *Provider) Apply(ctx context.Context, manifest *protocol.Resource) (*protocol.Resource, error) {
 	if manifest.Kind == kindNode {
 		return nil, fmt.Errorf("%s is observed-only; cannot be applied", kindNode)
 	}
 	if err := requireKindVM(manifest.Kind); err != nil {
 		return nil, err
 	}
-	resp, err := p.handler.Handle(&protocol.Request{
+	resp, err := p.handler.Handle(ctx, &protocol.Request{
 		Version:      protocol.ProtocolVersion,
 		Action:       protocol.ActionApply,
 		ResourceType: manifest.Kind,
@@ -137,11 +137,11 @@ func (p *Provider) Apply(_ context.Context, manifest *protocol.Resource) (*proto
 // Get returns the current observed state of a VM or ProxmoxNode. Returns
 // providers.NotFound when Proxmox has no resource with the given name, so
 // the gRPC layer can map to codes.NotFound.
-func (p *Provider) Get(_ context.Context, kind, name string) (*protocol.Resource, error) {
+func (p *Provider) Get(ctx context.Context, kind, name string) (*protocol.Resource, error) {
 	if err := requireKnownKind(kind); err != nil {
 		return nil, err
 	}
-	resp, err := p.handler.Handle(&protocol.Request{
+	resp, err := p.handler.Handle(ctx, &protocol.Request{
 		Version:      protocol.ProtocolVersion,
 		Action:       protocol.ActionGet,
 		ResourceType: kind,
@@ -160,11 +160,11 @@ func (p *Provider) Get(_ context.Context, kind, name string) (*protocol.Resource
 }
 
 // List returns all observed resources of the given kind.
-func (p *Provider) List(_ context.Context, kind string) ([]*protocol.Resource, error) {
+func (p *Provider) List(ctx context.Context, kind string) ([]*protocol.Resource, error) {
 	if err := requireKnownKind(kind); err != nil {
 		return nil, err
 	}
-	resp, err := p.handler.Handle(&protocol.Request{
+	resp, err := p.handler.Handle(ctx, &protocol.Request{
 		Version:      protocol.ProtocolVersion,
 		Action:       protocol.ActionList,
 		ResourceType: kind,
@@ -180,14 +180,14 @@ func (p *Provider) List(_ context.Context, kind string) ([]*protocol.Resource, e
 
 // Delete removes a VM. Idempotent — delete on a missing VM returns nil.
 // ProxmoxNode is observed-only and rejects Delete.
-func (p *Provider) Delete(_ context.Context, kind, name string) error {
+func (p *Provider) Delete(ctx context.Context, kind, name string) error {
 	if kind == kindNode {
 		return fmt.Errorf("%s is observed-only; cannot be deleted", kindNode)
 	}
 	if err := requireKindVM(kind); err != nil {
 		return err
 	}
-	resp, err := p.handler.Handle(&protocol.Request{
+	resp, err := p.handler.Handle(ctx, &protocol.Request{
 		Version:      protocol.ProtocolVersion,
 		Action:       protocol.ActionDelete,
 		ResourceType: kind,

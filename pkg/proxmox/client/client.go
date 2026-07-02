@@ -2,8 +2,10 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -24,6 +26,15 @@ func debugf(format string, args ...any) {
 		fmt.Fprintf(os.Stderr, "[proxmox-debug] "+format+"\n", args...)
 	}
 }
+
+// ErrNotFound is the sentinel returned by the lookup helpers (GetVM,
+// GetNode, GetTemplate) when Proxmox is reachable but has no resource with
+// the requested name. Callers use errors.Is(err, ErrNotFound) to tell a
+// genuine "does not exist" apart from a transient failure (network timeout,
+// API 5xx). Collapsing the two — treating any error as "not found" — is a
+// correctness hazard: a reconcile would recreate a VM that is actually
+// still there, and Apply would clone a duplicate.
+var ErrNotFound = errors.New("not found")
 
 // Client is a Proxmox API client
 type Client struct {
@@ -76,8 +87,8 @@ type Node struct {
 // ListNodes returns all cluster members with their observed status and
 // capacity. Used by the ProxmoxNode resource — atomic providers that only
 // need node names (e.g. ListVMs's fan-out) use the lighter listNodes().
-func (c *Client) ListNodes() ([]*Node, error) {
-	resp, err := c.get("/api2/json/nodes")
+func (c *Client) ListNodes(ctx context.Context) ([]*Node, error) {
+	resp, err := c.get(ctx, "/api2/json/nodes")
 	if err != nil {
 		return nil, err
 	}
@@ -90,10 +101,11 @@ func (c *Client) ListNodes() ([]*Node, error) {
 	return result.Data, nil
 }
 
-// GetNode returns a single cluster member by name, or an error if no node
-// with that name exists.
-func (c *Client) GetNode(name string) (*Node, error) {
-	nodes, err := c.ListNodes()
+// GetNode returns a single cluster member by name. Returns an error wrapping
+// ErrNotFound when Proxmox is reachable but has no node with that name;
+// propagates the underlying error verbatim on a transient failure.
+func (c *Client) GetNode(ctx context.Context, name string) (*Node, error) {
+	nodes, err := c.ListNodes(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +114,7 @@ func (c *Client) GetNode(name string) (*Node, error) {
 			return n, nil
 		}
 	}
-	return nil, fmt.Errorf("node %q not found", name)
+	return nil, fmt.Errorf("node %q: %w", name, ErrNotFound)
 }
 
 // VM represents a Proxmox VM
@@ -150,9 +162,9 @@ type Template struct {
 }
 
 // ListVMs lists all VMs across all nodes
-func (c *Client) ListVMs() ([]*VM, error) {
+func (c *Client) ListVMs(ctx context.Context) ([]*VM, error) {
 	debugf("ListVMs: fetching nodes from %s", c.endpoint)
-	nodes, err := c.listNodes()
+	nodes, err := c.listNodes(ctx)
 	if err != nil {
 		debugf("ListVMs: failed to list nodes: %v", err)
 		return nil, err
@@ -162,7 +174,7 @@ func (c *Client) ListVMs() ([]*VM, error) {
 	var allVMs []*VM
 	for _, node := range nodes {
 		debugf("ListVMs: fetching VMs from node %s", node)
-		vms, err := c.listNodeVMs(node)
+		vms, err := c.listNodeVMs(ctx, node)
 		if err != nil {
 			debugf("ListVMs: failed to list VMs on node %s: %v", node, err)
 			continue
@@ -179,9 +191,12 @@ func (c *Client) ListVMs() ([]*VM, error) {
 	return allVMs, nil
 }
 
-// GetVM gets a specific VM by name
-func (c *Client) GetVM(name string) (*VM, error) {
-	vms, err := c.ListVMs()
+// GetVM gets a specific VM by name. Returns an error wrapping ErrNotFound
+// when Proxmox is reachable but has no VM with that name; propagates the
+// underlying error verbatim on a transient failure so callers don't mistake
+// an outage for a missing VM.
+func (c *Client) GetVM(ctx context.Context, name string) (*VM, error) {
+	vms, err := c.ListVMs(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -192,13 +207,13 @@ func (c *Client) GetVM(name string) (*VM, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("VM %q not found", name)
+	return nil, fmt.Errorf("VM %q: %w", name, ErrNotFound)
 }
 
 // GetVMConfig gets the configuration for a VM
-func (c *Client) GetVMConfig(node string, vmid int) (*VMConfig, error) {
+func (c *Client) GetVMConfig(ctx context.Context, node string, vmid int) (*VMConfig, error) {
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/config", node, vmid)
-	resp, err := c.get(path)
+	resp, err := c.get(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -214,8 +229,8 @@ func (c *Client) GetVMConfig(node string, vmid int) (*VMConfig, error) {
 }
 
 // CreateVM creates a new VM with the given parameters
-func (c *Client) CreateVM(node string, params map[string]any) (int, error) {
-	nextID, err := c.getNextVMID()
+func (c *Client) CreateVM(ctx context.Context, node string, params map[string]any) (int, error) {
+	nextID, err := c.getNextVMID(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -223,7 +238,7 @@ func (c *Client) CreateVM(node string, params map[string]any) (int, error) {
 	params["vmid"] = nextID
 
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu", node)
-	_, err = c.post(path, params)
+	_, err = c.post(ctx, path, params)
 	if err != nil {
 		return 0, err
 	}
@@ -237,8 +252,8 @@ func (c *Client) CreateVM(node string, params map[string]any) (int, error) {
 //
 // This approach allows using arbitrary filesystem paths for the source image.
 // Returns vmid and any task UPID for the import operation.
-func (c *Client) CreateVMFromImage(node string, name string, imageStorage string, imageFile string, contentType string, targetStorage string, params map[string]any) (int, string, error) {
-	nextID, err := c.getNextVMID()
+func (c *Client) CreateVMFromImage(ctx context.Context, node string, name string, imageStorage string, imageFile string, contentType string, targetStorage string, params map[string]any) (int, string, error) {
+	nextID, err := c.getNextVMID(ctx)
 	if err != nil {
 		return 0, "", err
 	}
@@ -269,7 +284,7 @@ func (c *Client) CreateVMFromImage(node string, name string, imageStorage string
 	debugf("CreateVMFromImage: Step 1 - creating VM %d with params: %v", nextID, createParams)
 
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu", node)
-	_, err = c.post(path, createParams)
+	_, err = c.post(ctx, path, createParams)
 	if err != nil {
 		return 0, "", fmt.Errorf("failed to create VM: %w", err)
 	}
@@ -304,11 +319,11 @@ func (c *Client) CreateVMFromImage(node string, name string, imageStorage string
 	debugf("CreateVMFromImage: Step 2 - importing disk with config: %v", configParams)
 
 	configPath := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/config", node, nextID)
-	resp, err := c.post(configPath, configParams)
+	resp, err := c.post(ctx, configPath, configParams)
 	if err != nil {
 		// If disk import fails, try to clean up the VM
 		debugf("CreateVMFromImage: disk import failed, cleaning up VM %d", nextID)
-		_ = c.DeleteVM(node, nextID)
+		_ = c.DeleteVM(ctx, node, nextID)
 		return 0, "", fmt.Errorf("failed to import disk: %w", err)
 	}
 
@@ -316,7 +331,7 @@ func (c *Client) CreateVMFromImage(node string, name string, imageStorage string
 	bootParams := map[string]any{
 		"boot": "order=scsi0",
 	}
-	_, _ = c.put(configPath, bootParams)
+	_, _ = c.put(ctx, configPath, bootParams)
 
 	// Extract task UPID if present (for async import tracking)
 	var result struct {
@@ -331,8 +346,8 @@ func (c *Client) CreateVMFromImage(node string, name string, imageStorage string
 }
 
 // CloneVM clones a template to create a new VM
-func (c *Client) CloneVM(node string, templateID int, name string, params map[string]any) (int, string, error) {
-	nextID, err := c.getNextVMID()
+func (c *Client) CloneVM(ctx context.Context, node string, templateID int, name string, params map[string]any) (int, string, error) {
+	nextID, err := c.getNextVMID(ctx)
 	if err != nil {
 		return 0, "", err
 	}
@@ -345,7 +360,7 @@ func (c *Client) CloneVM(node string, templateID int, name string, params map[st
 	maps.Copy(cloneParams, params)
 
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/clone", node, templateID)
-	resp, err := c.post(path, cloneParams)
+	resp, err := c.post(ctx, path, cloneParams)
 	if err != nil {
 		return 0, "", err
 	}
@@ -361,9 +376,9 @@ func (c *Client) CloneVM(node string, templateID int, name string, params map[st
 }
 
 // ConfigureVM updates VM configuration
-func (c *Client) ConfigureVM(node string, vmid int, params map[string]any) error {
+func (c *Client) ConfigureVM(ctx context.Context, node string, vmid int, params map[string]any) error {
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/config", node, vmid)
-	_, err := c.put(path, params)
+	_, err := c.put(ctx, path, params)
 	return err
 }
 
@@ -371,9 +386,9 @@ func (c *Client) ConfigureVM(node string, vmid int, params map[string]any) error
 // GetVMConfig (which uses a struct that only models a fixed subset of
 // keys), this surfaces all disk and network slots that the VM actually
 // has — necessary when merging flags into an arbitrary disk entry.
-func (c *Client) GetVMConfigRaw(node string, vmid int) (map[string]any, error) {
+func (c *Client) GetVMConfigRaw(ctx context.Context, node string, vmid int) (map[string]any, error) {
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/config", node, vmid)
-	resp, err := c.get(path)
+	resp, err := c.get(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -390,11 +405,11 @@ func (c *Client) GetVMConfigRaw(node string, vmid int) (map[string]any, error) {
 // disk config string for `disk` (e.g. "scsi0") on the VM. Preserves the
 // volume reference and any existing options not overridden. No-op when
 // opts is empty.
-func (c *Client) SetDiskOptions(node string, vmid int, disk string, opts map[string]string) error {
+func (c *Client) SetDiskOptions(ctx context.Context, node string, vmid int, disk string, opts map[string]string) error {
 	if len(opts) == 0 {
 		return nil
 	}
-	cfg, err := c.GetVMConfigRaw(node, vmid)
+	cfg, err := c.GetVMConfigRaw(ctx, node, vmid)
 	if err != nil {
 		return fmt.Errorf("read VM %d config: %w", vmid, err)
 	}
@@ -406,7 +421,7 @@ func (c *Client) SetDiskOptions(node string, vmid int, disk string, opts map[str
 	if merged == raw {
 		return nil
 	}
-	return c.ConfigureVM(node, vmid, map[string]any{disk: merged})
+	return c.ConfigureVM(ctx, node, vmid, map[string]any{disk: merged})
 }
 
 // MergeDiskOptions merges `overrides` into an existing Proxmox disk
@@ -441,20 +456,20 @@ func MergeDiskOptions(existing string, overrides map[string]string) string {
 }
 
 // ResizeVMDisk resizes a VM disk
-func (c *Client) ResizeVMDisk(node string, vmid int, disk string, size string) error {
+func (c *Client) ResizeVMDisk(ctx context.Context, node string, vmid int, disk string, size string) error {
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/resize", node, vmid)
 	params := map[string]any{
 		"disk": disk,
 		"size": size,
 	}
-	_, err := c.put(path, params)
+	_, err := c.put(ctx, path, params)
 	return err
 }
 
 // StartVM starts a VM
-func (c *Client) StartVM(node string, vmid int) (string, error) {
+func (c *Client) StartVM(ctx context.Context, node string, vmid int) (string, error) {
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/status/start", node, vmid)
-	resp, err := c.post(path, nil)
+	resp, err := c.post(ctx, path, nil)
 	if err != nil {
 		return "", err
 	}
@@ -472,9 +487,9 @@ func (c *Client) StartVM(node string, vmid int) (string, error) {
 // StopVM stops a VM (hard poweroff — equivalent to pulling the plug).
 // Use ShutdownVM for a graceful ACPI shutdown when the guest is
 // cooperating.
-func (c *Client) StopVM(node string, vmid int) (string, error) {
+func (c *Client) StopVM(ctx context.Context, node string, vmid int) (string, error) {
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/status/stop", node, vmid)
-	resp, err := c.post(path, nil)
+	resp, err := c.post(ctx, path, nil)
 	if err != nil {
 		return "", err
 	}
@@ -492,9 +507,9 @@ func (c *Client) StopVM(node string, vmid int) (string, error) {
 // ShutdownVM triggers a graceful ACPI shutdown. Returns the task upid;
 // the guest may take time to comply. Requires qemu-guest-agent or an
 // OS that honors ACPI shutdown signals.
-func (c *Client) ShutdownVM(node string, vmid int) (string, error) {
+func (c *Client) ShutdownVM(ctx context.Context, node string, vmid int) (string, error) {
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/status/shutdown", node, vmid)
-	resp, err := c.post(path, nil)
+	resp, err := c.post(ctx, path, nil)
 	if err != nil {
 		return "", err
 	}
@@ -509,9 +524,9 @@ func (c *Client) ShutdownVM(node string, vmid int) (string, error) {
 
 // RebootVM triggers a graceful reboot via ACPI. Same guest requirements
 // as ShutdownVM.
-func (c *Client) RebootVM(node string, vmid int) (string, error) {
+func (c *Client) RebootVM(ctx context.Context, node string, vmid int) (string, error) {
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/status/reboot", node, vmid)
-	resp, err := c.post(path, nil)
+	resp, err := c.post(ctx, path, nil)
 	if err != nil {
 		return "", err
 	}
@@ -525,15 +540,15 @@ func (c *Client) RebootVM(node string, vmid int) (string, error) {
 }
 
 // DeleteVM deletes a VM
-func (c *Client) DeleteVM(node string, vmid int) error {
+func (c *Client) DeleteVM(ctx context.Context, node string, vmid int) error {
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d", node, vmid)
-	_, err := c.delete(path)
+	_, err := c.delete(ctx, path)
 	return err
 }
 
 // ListTemplates lists all VM templates
-func (c *Client) ListTemplates() ([]*Template, error) {
-	vms, err := c.ListVMs()
+func (c *Client) ListTemplates(ctx context.Context) ([]*Template, error) {
+	vms, err := c.ListVMs(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -553,9 +568,11 @@ func (c *Client) ListTemplates() ([]*Template, error) {
 	return templates, nil
 }
 
-// GetTemplate gets a template by name
-func (c *Client) GetTemplate(name string) (*Template, error) {
-	templates, err := c.ListTemplates()
+// GetTemplate gets a template by name. Returns an error wrapping
+// ErrNotFound when Proxmox is reachable but has no template with that name;
+// propagates the underlying error verbatim on a transient failure.
+func (c *Client) GetTemplate(ctx context.Context, name string) (*Template, error) {
+	templates, err := c.ListTemplates(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -566,7 +583,7 @@ func (c *Client) GetTemplate(name string) (*Template, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("template %q not found", name)
+	return nil, fmt.Errorf("template %q: %w", name, ErrNotFound)
 }
 
 // StorageContent represents a file in Proxmox storage
@@ -578,13 +595,13 @@ type StorageContent struct {
 }
 
 // ListStorageContent lists contents of a storage
-func (c *Client) ListStorageContent(node, storage, contentType string) ([]*StorageContent, error) {
+func (c *Client) ListStorageContent(ctx context.Context, node, storage, contentType string) ([]*StorageContent, error) {
 	path := fmt.Sprintf("/api2/json/nodes/%s/storage/%s/content", node, storage)
 	if contentType != "" {
 		path += "?content=" + contentType
 	}
 
-	resp, err := c.get(path)
+	resp, err := c.get(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -608,9 +625,9 @@ type StorageInfo struct {
 }
 
 // GetStorageInfo gets information about a storage
-func (c *Client) GetStorageInfo(storage string) (*StorageInfo, error) {
+func (c *Client) GetStorageInfo(ctx context.Context, storage string) (*StorageInfo, error) {
 	path := fmt.Sprintf("/api2/json/storage/%s", storage)
-	resp, err := c.get(path)
+	resp, err := c.get(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -627,7 +644,7 @@ func (c *Client) GetStorageInfo(storage string) (*StorageInfo, error) {
 
 // DownloadToStorage downloads a file from URL to Proxmox storage
 // Returns the task UPID for tracking progress
-func (c *Client) DownloadToStorage(node, storage, url, filename, contentType string) (string, error) {
+func (c *Client) DownloadToStorage(ctx context.Context, node, storage, url, filename, contentType string) (string, error) {
 	path := fmt.Sprintf("/api2/json/nodes/%s/storage/%s/download-url", node, storage)
 
 	params := map[string]any{
@@ -638,7 +655,7 @@ func (c *Client) DownloadToStorage(node, storage, url, filename, contentType str
 
 	debugf("DownloadToStorage: downloading %s to %s:%s/%s", url, storage, contentType, filename)
 
-	resp, err := c.post(path, params)
+	resp, err := c.post(ctx, path, params)
 	if err != nil {
 		return "", fmt.Errorf("failed to start download: %w", err)
 	}
@@ -654,16 +671,16 @@ func (c *Client) DownloadToStorage(node, storage, url, filename, contentType str
 }
 
 // ConvertToTemplate converts a VM to a template
-func (c *Client) ConvertToTemplate(node string, vmid int) error {
+func (c *Client) ConvertToTemplate(ctx context.Context, node string, vmid int) error {
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/template", node, vmid)
 	debugf("ConvertToTemplate: converting VM %d to template", vmid)
 
-	_, err := c.post(path, nil)
+	_, err := c.post(ctx, path, nil)
 	return err
 }
 
 // AddCloudInitDrive adds a cloud-init drive to a VM
-func (c *Client) AddCloudInitDrive(node string, vmid int, storage string) error {
+func (c *Client) AddCloudInitDrive(ctx context.Context, node string, vmid int, storage string) error {
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/config", node, vmid)
 
 	params := map[string]any{
@@ -672,36 +689,36 @@ func (c *Client) AddCloudInitDrive(node string, vmid int, storage string) error 
 
 	debugf("AddCloudInitDrive: adding cloud-init drive to VM %d on storage %s", vmid, storage)
 
-	_, err := c.put(path, params)
+	_, err := c.put(ctx, path, params)
 	return err
 }
 
 // SetCloudInitConfig sets cloud-init configuration for a VM
-func (c *Client) SetCloudInitConfig(node string, vmid int, config map[string]any) error {
+func (c *Client) SetCloudInitConfig(ctx context.Context, node string, vmid int, config map[string]any) error {
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/config", node, vmid)
 
 	debugf("SetCloudInitConfig: setting cloud-init config for VM %d: %v", vmid, config)
 
-	_, err := c.put(path, config)
+	_, err := c.put(ctx, path, config)
 	return err
 }
 
 // RegenerateCloudInit regenerates the cloud-init image
-func (c *Client) RegenerateCloudInit(node string, vmid int) error {
+func (c *Client) RegenerateCloudInit(ctx context.Context, node string, vmid int) error {
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/cloudinit", node, vmid)
 
 	debugf("RegenerateCloudInit: regenerating cloud-init for VM %d", vmid)
 
-	_, err := c.put(path, nil)
+	_, err := c.put(ctx, path, nil)
 	return err
 }
 
 // WaitForTask waits for a task to complete
-func (c *Client) WaitForTask(node string, upid string, timeout time.Duration) error {
+func (c *Client) WaitForTask(ctx context.Context, node string, upid string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 
 	for time.Now().Before(deadline) {
-		status, err := c.getTaskStatus(node, upid)
+		status, err := c.getTaskStatus(ctx, node, upid)
 		if err != nil {
 			return err
 		}
@@ -710,15 +727,19 @@ func (c *Client) WaitForTask(node string, upid string, timeout time.Duration) er
 			return nil
 		}
 
-		time.Sleep(2 * time.Second)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
 	}
 
 	return fmt.Errorf("task did not complete within timeout")
 }
 
-func (c *Client) getTaskStatus(node, upid string) (string, error) {
+func (c *Client) getTaskStatus(ctx context.Context, node, upid string) (string, error) {
 	path := fmt.Sprintf("/api2/json/nodes/%s/tasks/%s/status", node, url.PathEscape(upid))
-	resp, err := c.get(path)
+	resp, err := c.get(ctx, path)
 	if err != nil {
 		return "", err
 	}
@@ -735,8 +756,8 @@ func (c *Client) getTaskStatus(node, upid string) (string, error) {
 	return result.Data.Status, nil
 }
 
-func (c *Client) listNodes() ([]string, error) {
-	nodes, err := c.ListNodes()
+func (c *Client) listNodes(ctx context.Context) ([]string, error) {
+	nodes, err := c.ListNodes(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -747,9 +768,9 @@ func (c *Client) listNodes() ([]string, error) {
 	return names, nil
 }
 
-func (c *Client) listNodeVMs(node string) ([]*VM, error) {
+func (c *Client) listNodeVMs(ctx context.Context, node string) ([]*VM, error) {
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu", node)
-	resp, err := c.get(path)
+	resp, err := c.get(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -764,8 +785,8 @@ func (c *Client) listNodeVMs(node string) ([]*VM, error) {
 	return result.Data, nil
 }
 
-func (c *Client) getNextVMID() (int, error) {
-	resp, err := c.get("/api2/json/cluster/nextid")
+func (c *Client) getNextVMID(ctx context.Context) (int, error) {
+	resp, err := c.get(ctx, "/api2/json/cluster/nextid")
 	if err != nil {
 		return 0, err
 	}
@@ -785,23 +806,23 @@ func (c *Client) getNextVMID() (int, error) {
 	return vmid, nil
 }
 
-func (c *Client) get(path string) ([]byte, error) {
-	return c.doRequest("GET", path, nil)
+func (c *Client) get(ctx context.Context, path string) ([]byte, error) {
+	return c.doRequest(ctx, "GET", path, nil)
 }
 
-func (c *Client) post(path string, params map[string]any) ([]byte, error) {
-	return c.doRequest("POST", path, params)
+func (c *Client) post(ctx context.Context, path string, params map[string]any) ([]byte, error) {
+	return c.doRequest(ctx, "POST", path, params)
 }
 
-func (c *Client) put(path string, params map[string]any) ([]byte, error) {
-	return c.doRequest("PUT", path, params)
+func (c *Client) put(ctx context.Context, path string, params map[string]any) ([]byte, error) {
+	return c.doRequest(ctx, "PUT", path, params)
 }
 
-func (c *Client) delete(path string) ([]byte, error) {
-	return c.doRequest("DELETE", path, nil)
+func (c *Client) delete(ctx context.Context, path string) ([]byte, error) {
+	return c.doRequest(ctx, "DELETE", path, nil)
 }
 
-func (c *Client) doRequest(method, path string, params map[string]any) ([]byte, error) {
+func (c *Client) doRequest(ctx context.Context, method, path string, params map[string]any) ([]byte, error) {
 	reqURL := c.endpoint + path
 	debugf("HTTP %s %s", method, reqURL)
 
@@ -814,7 +835,7 @@ func (c *Client) doRequest(method, path string, params map[string]any) ([]byte, 
 		body = bytes.NewBufferString(values.Encode())
 	}
 
-	req, err := http.NewRequest(method, reqURL, body)
+	req, err := http.NewRequestWithContext(ctx, method, reqURL, body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -869,9 +890,9 @@ type AgentIPAddress struct {
 }
 
 // GetVMIPAddress gets the IP address of a VM using the QEMU guest agent
-func (c *Client) GetVMIPAddress(node string, vmid int) (string, error) {
+func (c *Client) GetVMIPAddress(ctx context.Context, node string, vmid int) (string, error) {
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/agent/network-get-interfaces", node, vmid)
-	resp, err := c.get(path)
+	resp, err := c.get(ctx, path)
 	if err != nil {
 		return "", fmt.Errorf("failed to get network interfaces from agent: %w", err)
 	}
@@ -901,7 +922,7 @@ func (c *Client) GetVMIPAddress(node string, vmid int) (string, error) {
 }
 
 // WaitForVMIP waits for a VM to get an IP address
-func (c *Client) WaitForVMIP(node string, vmid int, timeout time.Duration) (string, error) {
+func (c *Client) WaitForVMIP(ctx context.Context, node string, vmid int, timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -911,18 +932,22 @@ func (c *Client) WaitForVMIP(node string, vmid int, timeout time.Duration) (stri
 			return "", fmt.Errorf("timeout waiting for VM IP")
 		}
 
-		ip, err := c.GetVMIPAddress(node, vmid)
+		ip, err := c.GetVMIPAddress(ctx, node, vmid)
 		if err == nil && ip != "" {
 			return ip, nil
 		}
 
-		<-ticker.C
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-ticker.C:
+		}
 	}
 }
 
 // SnippetExists checks if a snippet file exists in storage
-func (c *Client) SnippetExists(node, storage, filename string) (bool, error) {
-	contents, err := c.ListStorageContent(node, storage, "snippets")
+func (c *Client) SnippetExists(ctx context.Context, node, storage, filename string) (bool, error) {
+	contents, err := c.ListStorageContent(ctx, node, storage, "snippets")
 	if err != nil {
 		return false, err
 	}
@@ -939,7 +964,7 @@ func (c *Client) SnippetExists(node, storage, filename string) (bool, error) {
 
 // UploadSnippet uploads a snippet file to storage
 // This uses multipart form upload to the Proxmox API
-func (c *Client) UploadSnippet(node, storage, filename, content string) error {
+func (c *Client) UploadSnippet(ctx context.Context, node, storage, filename, content string) error {
 	path := fmt.Sprintf("/api2/json/nodes/%s/storage/%s/upload", node, storage)
 
 	debugf("UploadSnippet: uploading %s to %s:snippets/", filename, storage)
@@ -969,7 +994,7 @@ func (c *Client) UploadSnippet(node, storage, filename, content string) error {
 
 	// Create request
 	reqURL := c.endpoint + path
-	req, err := http.NewRequest("POST", reqURL, &body)
+	req, err := http.NewRequestWithContext(ctx, "POST", reqURL, &body)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -1010,8 +1035,8 @@ runcmd:
 `
 
 // EnsureQemuAgentSnippet ensures the qemu-agent enablement snippet exists
-func (c *Client) EnsureQemuAgentSnippet(node, storage string) error {
-	exists, err := c.SnippetExists(node, storage, QemuAgentSnippetName)
+func (c *Client) EnsureQemuAgentSnippet(ctx context.Context, node, storage string) error {
+	exists, err := c.SnippetExists(ctx, node, storage, QemuAgentSnippetName)
 	if err != nil {
 		debugf("EnsureQemuAgentSnippet: failed to check if snippet exists: %v", err)
 		// Continue anyway - might work
@@ -1023,5 +1048,5 @@ func (c *Client) EnsureQemuAgentSnippet(node, storage string) error {
 	}
 
 	debugf("EnsureQemuAgentSnippet: creating snippet")
-	return c.UploadSnippet(node, storage, QemuAgentSnippetName, QemuAgentSnippetContent)
+	return c.UploadSnippet(ctx, node, storage, QemuAgentSnippetName, QemuAgentSnippetContent)
 }
