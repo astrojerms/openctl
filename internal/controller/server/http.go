@@ -308,12 +308,31 @@ func extractJSONString(body, name string) string {
 }
 
 // ServeHTTPGateway is the top-level helper main.go calls. Spins up an
-// HTTP listener at addr that handles /v1/*, /ui/*, and / routes; returns
+// HTTPS listener at addr that handles /v1/*, /ui/*, and / routes; returns
 // once the listener errors or ctx cancels.
-func ServeHTTPGateway(ctx context.Context, addr, grpcAddr string, caCertPEM []byte, serverName string) error {
+//
+// We serve TLS (not plaintext) specifically to get HTTP/2: browsers only
+// negotiate h2 over TLS (via ALPN), and h2 multiplexes ~100 concurrent
+// streams over a single connection. HTTP/1.1's ~6-connections-per-origin
+// cap is what made long-lived Watch streams starve the browser's
+// connection pool (the "Loading..." hang) — h2 removes that ceiling
+// entirely, so streaming watches no longer compete with page fetches for
+// scarce connections.
+//
+// The cert/key are the same self-signed pair the gRPC server uses
+// (SAN: localhost + 127.0.0.1 + ::1), signed by the controller's own CA.
+// The browser doesn't trust that CA, so it shows a one-time "not private"
+// interstitial the user clicks through; that doesn't downgrade the
+// protocol — the h2 connection is still established. Trusting the CA
+// (DEVELOPMENT.md) removes the warning.
+func ServeHTTPGateway(ctx context.Context, addr, grpcAddr string, caCertPEM []byte, serverName, certFile, keyFile string) error {
 	h, err := NewHTTPGateway(ctx, grpcAddr, caCertPEM, serverName)
 	if err != nil {
 		return err
+	}
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return fmt.Errorf("load gateway TLS keypair: %w", err)
 	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -322,10 +341,21 @@ func ServeHTTPGateway(ctx context.Context, addr, grpcAddr string, caCertPEM []by
 	srv := &http.Server{
 		Handler:           h,
 		ReadHeaderTimeout: 5 * time.Second,
+		// NextProtos must list "h2" explicitly: because we set a non-nil
+		// TLSConfig, net/http won't auto-enable HTTP/2 for us the way a
+		// bare ServeTLS(certFile, keyFile) would. "http/1.1" stays as a
+		// fallback for curl and older clients.
+		TLSConfig: &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS12,
+			NextProtos:   []string{"h2", "http/1.1"},
+		},
 	}
 	go func() {
 		<-ctx.Done()
 		_ = srv.Close()
 	}()
-	return srv.Serve(ln)
+	// Cert + key already live in TLSConfig.Certificates, so the file
+	// args are empty.
+	return srv.ServeTLS(ln, "", "")
 }

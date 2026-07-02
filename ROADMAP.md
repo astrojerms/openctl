@@ -55,12 +55,16 @@ this session. Remaining candidates for the next round:
     kind (transient connection) instead of a persistent Watch. Page
     List/Detail watches already abort on unmount, so persistent streams
     are now ~3 (ops + current page), leaving headroom.
-  - [ ] **Durable fix: HTTP/2 on the gateway.** Polling counts is a
-    band-aid; the real cap is HTTP/1.1's ~6 conns/origin. Browsers only
-    speak h2 over TLS, so this means serving the UI over HTTPS (reuse the
-    controller CA + a localhost server cert). One connection, ~100
-    multiplexed streams — removes the whole class of problem and lets the
-    nav go back to live Watch counts if desired.
+  - [x] **Durable fix: HTTP/2 on the gateway.** The gateway now serves
+    HTTPS on `:9445` (reusing the controller's existing self-signed
+    cert/key — SANs `localhost`/`127.0.0.1`/`::1`), so browsers negotiate
+    h2 via ALPN. One connection multiplexes ~100 streams, removing the
+    HTTP/1.1 ~6-conns/origin ceiling that caused the starvation class of
+    bug entirely. Verified: ALPN=h2, TLS 1.3, `/ui/` + `/v1/*` over
+    HTTP/2. Browser shows a one-time self-signed-cert warning (click
+    through, or trust the CA — see DEVELOPMENT.md "HTTPS gateway").
+    Reverting `catalogue.ts` to live Watch counts is now safe but left as
+    an optional follow-up — polling counts is cheap and works.
   - [ ] **Thread `context` through the Proxmox client.** `pkg/proxmox/client`
     uses `http.NewRequest` and the provider `List`/`Get` discard the
     passed ctx, so a canceled Watch/reconciler can't cancel the in-flight

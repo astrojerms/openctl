@@ -153,6 +153,34 @@ not an Apple-issued one. To undo: `security delete-identity -c openctl-dev
 ~/Library/Keychains/login.keychain-db`. Details in
 `scripts/macos-codesign-setup.sh`.
 
+### HTTPS gateway (HTTP/2)
+
+The HTTP gateway + UI is served over **HTTPS** on `127.0.0.1:9445`
+(`https://127.0.0.1:9445/ui/`). It's TLS specifically to get HTTP/2:
+browsers only negotiate h2 over TLS, and h2 multiplexes ~100 streams over
+one connection. That's what removed the old "Loading..." hang — under
+HTTP/1.1 (~6 connections per origin) a handful of long-lived Watch streams
+would exhaust the pool and starve ordinary page fetches. The gateway
+reuses the same self-signed cert/key the gRPC server uses (SANs:
+`localhost`, `127.0.0.1`, `::1`), signed by the controller's own CA.
+
+Because that CA isn't in your trust store, the browser shows a one-time
+"Your connection is not private" interstitial — click through
+(Advanced → Proceed). This does **not** downgrade the protocol; the h2
+connection is still established. To silence the warning, trust the CA:
+
+```sh
+# macOS (login keychain; prompts for your password once):
+security add-trusted-cert -r trustRoot \
+  -k ~/Library/Keychains/login.keychain-db \
+  ~/.openctl/controller/tls/ca.crt
+```
+
+For `curl` against the gateway, use `-k` (skip verification) or
+`--cacert ~/.openctl/controller/tls/ca.crt`. The **CLI** talks gRPC
+directly on `:9444` (not the gateway) and already trusts this CA via
+`openctl` config, so it's unaffected.
+
 ### Modifying the gRPC API
 
 The wire contract lives in `pkg/api/v1/api.proto`. After editing:

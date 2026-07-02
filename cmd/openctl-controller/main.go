@@ -328,9 +328,9 @@ func runServe(args []string) error {
 			return fmt.Errorf("read CA cert: %w", err)
 		}
 		go func() {
-			log.Printf("openctl-controller HTTP gateway listening on %s", *httpListen)
-			log.Printf("  UI:          http://%s/ui/", *httpListen)
-			if err := server.ServeHTTPGateway(ctx, *httpListen, *listen, caBytes, host); err != nil {
+			log.Printf("openctl-controller HTTP gateway listening on %s (HTTP/2 over TLS)", *httpListen)
+			log.Printf("  UI:          https://%s/ui/", *httpListen)
+			if err := server.ServeHTTPGateway(ctx, *httpListen, *listen, caBytes, host, mat.ServerCertPath, mat.ServerKeyPath); err != nil {
 				errCh <- fmt.Errorf("http gateway: %w", err)
 			}
 		}()
