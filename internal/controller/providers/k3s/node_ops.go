@@ -81,7 +81,15 @@ func (p *Provider) applyK3sNode(ctx context.Context, manifest *protocol.Resource
 	if err != nil {
 		return nil, fmt.Errorf("ssh to %s@%s: %w", spec.sshUser, spec.vmIP, err)
 	}
-	defer func() { _ = client.Close() }()
+	// Defer must be nil-safe because the SSH-drop recovery path below
+	// may reassign `client` and, on reconnect failure, leave it nil.
+	// A plain `client.Close()` panics dereferencing the nil receiver
+	// inside Close's own `if c.sshClient != nil` guard.
+	defer func() {
+		if client != nil {
+			_ = client.Close()
+		}
+	}()
 
 	// Build the appropriate install command for this role.
 	cmd := buildNodeInstallCommand(spec)
@@ -96,10 +104,12 @@ func (p *Provider) applyK3sNode(ctx context.Context, manifest *protocol.Resource
 			return nil, fmt.Errorf("k3s install failed on %s: %w", spec.vmIP, err)
 		}
 		_ = client.Close()
-		client, err = ssh.WaitForSSH(spec.vmIP, sshPort, spec.sshUser, spec.sshKeyPath, sshWaitTimeout)
-		if err != nil {
-			return nil, fmt.Errorf("k3s install: reconnect after transport drop failed on %s: %w", spec.vmIP, err)
+		client = nil
+		newClient, reconnectErr := ssh.WaitForSSH(spec.vmIP, sshPort, spec.sshUser, spec.sshKeyPath, sshWaitTimeout)
+		if reconnectErr != nil {
+			return nil, fmt.Errorf("k3s install: reconnect after transport drop failed on %s: %w", spec.vmIP, reconnectErr)
 		}
+		client = newClient
 		if err := verifyK3sHealthy(client, spec.role); err != nil {
 			return nil, fmt.Errorf("k3s install on %s: connection dropped and post-drop verify failed: %w", spec.vmIP, err)
 		}
