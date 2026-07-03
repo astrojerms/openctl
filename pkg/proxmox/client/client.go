@@ -539,11 +539,29 @@ func (c *Client) RebootVM(ctx context.Context, node string, vmid int) (string, e
 	return result.Data, nil
 }
 
-// DeleteVM deletes a VM
+// DeleteVM deletes a VM and waits for the Proxmox destroy task to finish.
+// The DELETE endpoint returns immediately with a task UPID while the VM is
+// still being torn down; waiting means a caller that recreates a VM of the
+// same name right afterward (e.g. a k3s node respec: destroy → recreate)
+// doesn't race the async delete and hit "configuration file ... does not
+// exist" on the half-removed VM. An empty/unparseable task UPID (nothing to
+// wait on) is treated as already complete.
 func (c *Client) DeleteVM(ctx context.Context, node string, vmid int) error {
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d", node, vmid)
-	_, err := c.delete(ctx, path)
-	return err
+	resp, err := c.delete(ctx, path)
+	if err != nil {
+		return err
+	}
+	var result struct {
+		Data string `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil || result.Data == "" {
+		return nil
+	}
+	if err := c.WaitForTask(ctx, node, result.Data, 2*time.Minute); err != nil {
+		return fmt.Errorf("wait for VM %d destroy task: %w", vmid, err)
+	}
+	return nil
 }
 
 // ListTemplates lists all VM templates
