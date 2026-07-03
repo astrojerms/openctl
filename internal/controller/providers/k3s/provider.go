@@ -166,21 +166,22 @@ const (
 	annotIKnowThisBreaks  = "openctl.io/i-know-this-breaks-the-cluster"
 )
 
-// convergeViaPlanEnabled reports whether existing-cluster convergence should
-// run through the Plan/dispatcher path (scale-down via DeleteChild, count-up
-// via Plan children) rather than the legacy imperative executors
-// (runChildVMDelete, applyCountUp/Joiner).
+// convergeViaPlanEnabled reports whether existing-cluster convergence runs
+// through the Plan/dispatcher path (scale-down via DeleteChild, count-up via
+// Plan children, respec via destroy+recreate) rather than the legacy
+// imperative executors (runChildVMDelete, applyCountUp/Joiner, applyRespecs).
 //
-// Opt-in via OPENCTL_CONVERGE_VIA_PLAN=1 while the path is being
-// homelab-validated; off by default means an existing-cluster apply behaves
-// exactly as it did before the migration. A later change flips the default
-// once the path is proven, and the legacy executors are then deleted.
+// Default on, now that the path is homelab-validated (count-up, scale-down,
+// worker respec). Opt back out to the legacy path with
+// OPENCTL_CONVERGE_VIA_PLAN=0 (an escape hatch until the legacy executors are
+// deleted). The legacy path had no CP-respec etcd handling either, so
+// defaulting on is not a regression there.
 func convergeViaPlanEnabled() bool {
 	switch os.Getenv("OPENCTL_CONVERGE_VIA_PLAN") {
-	case "1", "true", "yes":
-		return true
-	default:
+	case "0", "false", "no":
 		return false
+	default:
+		return true
 	}
 }
 
