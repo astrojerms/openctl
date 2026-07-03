@@ -392,7 +392,7 @@ func buildNodeInstallCommand(s *k3sNodeSpec) string {
 	if s.role == "server" {
 		inner += " server"
 	}
-	if len(s.extraArgs) > 0 {
+	if s.role == "server" && len(s.extraArgs) > 0 {
 		inner += " " + strings.Join(s.extraArgs, " ")
 	}
 	return wrapK3sInstall(inner)
