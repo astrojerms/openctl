@@ -129,6 +129,8 @@ func TestIsConnectionDropError(t *testing.T) {
 		{"broken pipe", errStr("write: broken pipe"), true},
 		{"closed connection", errStr("use of closed network connection"), true},
 		{"eof", errStr("unexpected EOF"), true},
+		// Session/channel open racing k3s's post-start network churn.
+		{"channel open packet", errStr("ssh: unexpected packet in response to channel open"), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
