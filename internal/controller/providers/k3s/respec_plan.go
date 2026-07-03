@@ -3,6 +3,7 @@ package k3s
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"github.com/openctl/openctl/internal/controller/operations"
 	k3sresources "github.com/openctl/openctl/pkg/k3s/resources"
@@ -62,6 +63,17 @@ func (p *Provider) respecNodesViaPlan(
 		// Destroy the current node (clears its K3sNode/AgentInstall state).
 		if err := p.deleteNodeChildren(ctx, cd, spec, node); err != nil {
 			return nil, fmt.Errorf("respec %s: destroy: %w", node, err)
+		}
+
+		// Evict the node's server-side state before recreating it under the
+		// same hostname: the Node object and, crucially, the node-password
+		// secret. The recreated agent generates a fresh node password, and
+		// k3s would otherwise reject it as a duplicate hostname whose
+		// password no longer matches. Best-effort via a surviving CP.
+		if cpIP, err := p.survivingCPEndpoint(name, current, removed, map[string]bool{node: true}); err == nil {
+			p.evictK8sNode(cpIP, spec, node)
+		} else {
+			log.Printf("k3s converge: respec %s: skip cluster eviction: %v", node, err)
 		}
 
 		// Recreate at the desired size, rejoining the surviving CP.
