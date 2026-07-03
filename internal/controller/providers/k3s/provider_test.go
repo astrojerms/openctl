@@ -80,15 +80,13 @@ func writeClusterState(t *testing.T, home, name, body string) {
 // (AgentInstall + K3sNode + VM), workers before CPs, so the per-node state
 // files are cleaned up rather than orphaned.
 func TestRemoveNodes_DispatchesFullChildSet(t *testing.T) {
-	// Default (unset) now enables the plan path.
-	t.Setenv("OPENCTL_CONVERGE_VIA_PLAN", "")
 	cd := &recordingChildDispatcher{}
 	ctx := operations.WithChildDispatcher(context.Background(), cd)
 	p := New(&protocol.ProviderConfig{}, &fakeVMs{})
 	spec := &k3sresources.ClusterSpec{}
 	spec.Compute.Provider = "proxmox"
 
-	if err := p.removeNodes(ctx, spec, []string{"c-w-0"}, []string{"c-cp-2"}); err != nil {
+	if err := p.removeNodes(ctx, cd, spec, []string{"c-w-0"}, []string{"c-cp-2"}); err != nil {
 		t.Fatalf("removeNodes: %v", err)
 	}
 
@@ -103,52 +101,10 @@ func TestRemoveNodes_DispatchesFullChildSet(t *testing.T) {
 	if got := cd.deleteKeys(); strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("DeleteChild calls mismatch:\n got=%v\nwant=%v", got, want)
 	}
-	// The VM-only fallback must not fire when a dispatcher is present.
+	// removeNodes routes entirely through the dispatcher — it must not
+	// touch the VM provider directly.
 	if vms := p.vms.(*fakeVMs); len(vms.deleted) != 0 {
-		t.Errorf("VM-only fallback used despite ChildDispatcher present: %v", vms.deleted)
-	}
-}
-
-// TestRemoveNodes_FallsBackToVMOnlyWithoutDispatcher: with no ChildDispatcher
-// (CLI direct-apply, which never wrote per-node state), scale-down keeps the
-// legacy VM-only delete.
-func TestRemoveNodes_FallsBackToVMOnlyWithoutDispatcher(t *testing.T) {
-	vms := &fakeVMs{}
-	p := New(&protocol.ProviderConfig{}, vms)
-	spec := &k3sresources.ClusterSpec{}
-	spec.Compute.Provider = "proxmox"
-
-	if err := p.removeNodes(context.Background(), spec, []string{"c-w-0"}, []string{"c-cp-0"}); err != nil {
-		t.Fatalf("removeNodes: %v", err)
-	}
-	want := [][]string{{"VirtualMachine", "c-w-0"}, {"VirtualMachine", "c-cp-0"}}
-	if fmt.Sprintf("%v", vms.deleted) != fmt.Sprintf("%v", want) {
-		t.Errorf("VM deletes = %v, want %v", vms.deleted, want)
-	}
-}
-
-// TestRemoveNodes_GateOffUsesVMOnlyDespiteDispatcher: with the plan-based
-// converge explicitly opted out (OPENCTL_CONVERGE_VIA_PLAN=0), scale-down
-// keeps the legacy VM-only delete even when a ChildDispatcher is present —
-// the escape hatch back to the imperative path.
-func TestRemoveNodes_GateOffUsesVMOnlyDespiteDispatcher(t *testing.T) {
-	t.Setenv("OPENCTL_CONVERGE_VIA_PLAN", "0")
-	cd := &recordingChildDispatcher{}
-	ctx := operations.WithChildDispatcher(context.Background(), cd)
-	vms := &fakeVMs{}
-	p := New(&protocol.ProviderConfig{}, vms)
-	spec := &k3sresources.ClusterSpec{}
-	spec.Compute.Provider = "proxmox"
-
-	if err := p.removeNodes(ctx, spec, []string{"c-w-0"}, nil); err != nil {
-		t.Fatalf("removeNodes: %v", err)
-	}
-	if len(cd.deleteKeys()) != 0 {
-		t.Errorf("gate off: expected no DeleteChild calls, got %v", cd.deleteKeys())
-	}
-	want := [][]string{{"VirtualMachine", "c-w-0"}}
-	if fmt.Sprintf("%v", vms.deleted) != fmt.Sprintf("%v", want) {
-		t.Errorf("gate off: VM deletes = %v, want %v", vms.deleted, want)
+		t.Errorf("VM provider deleted directly despite dispatcher path: %v", vms.deleted)
 	}
 }
 
@@ -510,63 +466,24 @@ children:
     kind: VirtualMachine
     name: dev-worker-1
 `)
-	vms := &fakeVMs{}
-	p := New(&protocol.ProviderConfig{}, vms)
+	p := New(&protocol.ProviderConfig{}, &fakeVMs{})
 	manifest := scaleDownManifest(1)
 	manifest.Metadata.Annotations = map[string]string{
 		"openctl.io/allow-destructive": "true",
 	}
-	if _, err := p.Apply(context.Background(), manifest); err != nil {
+	cd := &recordingChildDispatcher{}
+	ctx := operations.WithChildDispatcher(context.Background(), cd)
+	if _, err := p.Apply(ctx, manifest); err != nil {
 		t.Fatalf("scale-down with flag: %v", err)
 	}
-	if len(vms.deleted) != 1 || vms.deleted[0][1] != "dev-worker-1" {
-		t.Errorf("expected delete of dev-worker-1, got %v", vms.deleted)
+	// The removed worker is torn down as its full plan-native child set.
+	want := []string{
+		"k3s.openctl.io/v1|AgentInstall|dev-worker-1-agent",
+		"k3s.openctl.io/v1|K3sNode|dev-worker-1",
+		"proxmox.openctl.io/v1|VirtualMachine|dev-worker-1",
 	}
-}
-
-func TestApplyExistingScaleDownRecordsChildOpsViaRecorder(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	writeClusterState(t, home, "dev", `apiVersion: k3s.openctl.io/v1
-kind: Cluster
-metadata:
-  name: dev
-spec: {}
-children:
-  - provider: proxmox
-    kind: VirtualMachine
-    name: dev-cp-0
-  - provider: proxmox
-    kind: VirtualMachine
-    name: dev-worker-0
-  - provider: proxmox
-    kind: VirtualMachine
-    name: dev-worker-1
-`)
-	vms := &fakeVMs{}
-	p := New(&protocol.ProviderConfig{}, vms)
-	manifest := scaleDownManifest(1)
-	manifest.Metadata.Annotations = map[string]string{
-		"openctl.io/allow-destructive": "true",
-	}
-	rec := &fakeRecorder{}
-	ctx := operations.WithRecorder(context.Background(), rec, "parent-op-id")
-	if _, err := p.Apply(ctx, manifest); err != nil {
-		t.Fatalf("apply: %v", err)
-	}
-	// One delete child op for the removed worker, with the right shape.
-	if len(rec.calls) != 1 {
-		t.Fatalf("recorder calls = %d, want 1", len(rec.calls))
-	}
-	c := rec.calls[0]
-	if c.Op.Type != operations.TypeDelete {
-		t.Errorf("child type = %q, want delete", c.Op.Type)
-	}
-	if c.Op.Kind != "VirtualMachine" || c.Op.ResourceName != "dev-worker-1" {
-		t.Errorf("child target = %s/%s, want VirtualMachine/dev-worker-1", c.Op.Kind, c.Op.ResourceName)
-	}
-	if !c.Ok {
-		t.Errorf("child should have ended with ok=true, got err=%q", c.Err)
+	if got := cd.deleteKeys(); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("DeleteChild calls mismatch:\n got=%v\nwant=%v", got, want)
 	}
 }
 
@@ -619,92 +536,36 @@ children:
     kind: VirtualMachine
     name: dev-worker-0
 `)
-	vms := &fakeVMs{}
-	p := New(&protocol.ProviderConfig{}, vms)
+	p := New(&protocol.ProviderConfig{}, &fakeVMs{})
 	// Manifest with 0 workers + 1 CP. Removing the only worker is
 	// catastrophic; even --allow-destructive isn't enough.
 	manifest := scaleDownManifest(0)
 	manifest.Metadata.Annotations = map[string]string{
 		"openctl.io/allow-destructive": "true",
 	}
-	_, err := p.Apply(context.Background(), manifest)
+	cd := &recordingChildDispatcher{}
+	ctx := operations.WithChildDispatcher(context.Background(), cd)
+	_, err := p.Apply(ctx, manifest)
 	if err == nil {
 		t.Fatal("removing last worker should be blocked even with --allow-destructive")
 	}
-	if len(vms.deleted) != 0 {
-		t.Errorf("blocked catastrophic op must not delete VMs, got %v", vms.deleted)
+	if len(cd.deleteKeys()) != 0 {
+		t.Errorf("blocked catastrophic op must not tear down anything, got %v", cd.deleteKeys())
 	}
 
 	// Now with the catastrophic-override flag, it goes through.
 	manifest.Metadata.Annotations["openctl.io/i-know-this-breaks-the-cluster"] = "true"
-	if _, err := p.Apply(context.Background(), manifest); err != nil {
+	if _, err := p.Apply(ctx, manifest); err != nil {
 		t.Fatalf("catastrophic op with both flags: %v", err)
 	}
-	if len(vms.deleted) != 1 || vms.deleted[0][1] != "dev-worker-0" {
-		t.Errorf("expected delete of dev-worker-0, got %v", vms.deleted)
+	// The only worker is torn down as its full plan-native child set.
+	want := []string{
+		"k3s.openctl.io/v1|AgentInstall|dev-worker-0-agent",
+		"k3s.openctl.io/v1|K3sNode|dev-worker-0",
+		"proxmox.openctl.io/v1|VirtualMachine|dev-worker-0",
 	}
-}
-
-func TestApplyExistingScaleUpRequiresBundleDir(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	// State carries agent endpoints (so the surviving-CP IP lookup
-	// succeeds) but no bundle dir alongside it — simulates state from a
-	// cluster created by something other than the controller.
-	writeClusterState(t, home, "dev", `apiVersion: k3s.openctl.io/v1
-kind: Cluster
-metadata:
-  name: dev
-spec: {}
-status:
-  outputs:
-    agent:
-      endpoints:
-        dev-cp-0: 192.168.1.100
-children:
-  - provider: proxmox
-    kind: VirtualMachine
-    name: dev-cp-0
-  - provider: proxmox
-    kind: VirtualMachine
-    name: dev-worker-0
-`)
-	vms := &fakeVMs{}
-	p := New(&protocol.ProviderConfig{}, vms)
-	_, err := p.Apply(context.Background(), scaleDownManifest(2))
-	if err == nil {
-		t.Fatal("count-up without an existing bundle dir should error clearly")
-	}
-	if !strings.Contains(err.Error(), "bundle dir") {
-		t.Errorf("expected bundle-dir error, got: %v", err)
-	}
-}
-
-func TestApplyExistingScaleUpRequiresSurvivingCPEndpoint(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	// No agent endpoints in state — can't learn the surviving CP's IP.
-	writeClusterState(t, home, "dev", `apiVersion: k3s.openctl.io/v1
-kind: Cluster
-metadata:
-  name: dev
-spec: {}
-children:
-  - provider: proxmox
-    kind: VirtualMachine
-    name: dev-cp-0
-  - provider: proxmox
-    kind: VirtualMachine
-    name: dev-worker-0
-`)
-	vms := &fakeVMs{}
-	p := New(&protocol.ProviderConfig{}, vms)
-	_, err := p.Apply(context.Background(), scaleDownManifest(2))
-	if err == nil {
-		t.Fatal("count-up without surviving-CP endpoint should error clearly")
-	}
-	if !strings.Contains(err.Error(), "no IP for surviving CP") {
-		t.Errorf("expected surviving-CP error, got: %v", err)
+	if got := cd.deleteKeys(); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("expected teardown of dev-worker-0, got %v", got)
 	}
 }
 

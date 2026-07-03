@@ -166,30 +166,13 @@ const (
 	annotIKnowThisBreaks  = "openctl.io/i-know-this-breaks-the-cluster"
 )
 
-// convergeViaPlanEnabled reports whether existing-cluster convergence runs
-// through the Plan/dispatcher path (scale-down via DeleteChild, count-up via
-// Plan children, respec via destroy+recreate) rather than the legacy
-// imperative executors (runChildVMDelete, applyCountUp/Joiner, applyRespecs).
-//
-// Default on, now that the path is homelab-validated (count-up, scale-down,
-// worker respec). Opt back out to the legacy path with
-// OPENCTL_CONVERGE_VIA_PLAN=0 (an escape hatch until the legacy executors are
-// deleted). The legacy path had no CP-respec etcd handling either, so
-// defaulting on is not a regression there.
-func convergeViaPlanEnabled() bool {
-	switch os.Getenv("OPENCTL_CONVERGE_VIA_PLAN") {
-	case "0", "false", "no":
-		return false
-	default:
-		return true
-	}
-}
-
 // Apply creates a fresh cluster, or — if the cluster already exists —
-// converges its child set toward the new manifest. Phase 5 supports
-// removals (with --allow-destructive) and detects catastrophic ops (with
-// --i-know-this-breaks-the-cluster). Phase 5.x adds count-up support
-// (adding nodes to a live cluster via the Joiner).
+// converges its child set toward the new manifest. Existing-cluster
+// convergence (removals, count-up, respec) runs exclusively through the
+// Plan/dispatcher path and therefore requires a ChildDispatcher on ctx
+// (always present on the controller path). Removals need
+// --allow-destructive; catastrophic ops need
+// --i-know-this-breaks-the-cluster.
 //
 // IP allocation: if spec.network.staticIPs is set the IPs are deterministic
 // per node name (existing nodes keep their IPs across re-applies). If
@@ -292,10 +275,10 @@ func (p *Provider) Apply(ctx context.Context, manifest *protocol.Resource) (*pro
 
 // applyExisting handles re-apply of a Cluster that already has state. It
 // computes the structural diff vs. the new manifest, enforces the
-// destructive/catastrophic guardrails, and converges the child set —
-// removals via VM delete (Phase 5), additions via the Joiner (Phase 5.x
-// count-up), and per-node CPU/memory respecs via destroy + recreate +
-// rejoin (Phase 5.x in-place spec changes).
+// destructive/catastrophic guardrails, and converges the child set through
+// the Plan/dispatcher path: removals via DeleteChild, count-up via
+// Plan()-emitted children, and per-node CPU/memory respecs via destroy +
+// recreate + rejoin (one node at a time).
 func (p *Provider) applyExisting(ctx context.Context, manifest *protocol.Resource, name string, spec *k3sresources.ClusterSpec) (*protocol.Resource, error) {
 	current, _ := readChildren(name)
 	plan := computeChangePlan(name, spec, current)
@@ -342,12 +325,20 @@ func (p *Provider) applyExisting(ctx context.Context, manifest *protocol.Resourc
 		return nil, fmt.Errorf("catastrophic: %s; pass --i-know-this-breaks-the-cluster to override", reason)
 	}
 
-	rec := operations.RecorderFrom(ctx)
+	// Existing-cluster convergence runs exclusively through the
+	// Plan/dispatcher path (scale-down via DeleteChild, count-up + respec
+	// via Plan children). It requires a ChildDispatcher on ctx — always
+	// present on the controller path. Fail clearly rather than silently
+	// no-op'ing a converge the caller asked for.
+	cd, ok := operations.ChildDispatcherFrom(ctx)
+	if !ok {
+		return nil, fmt.Errorf("existing-cluster convergence requires the controller dispatcher (no ChildDispatcher on ctx)")
+	}
 
 	// Execute removals. Note: no kubectl drain (homelab assumption — workloads
 	// tolerate node loss). Workers go first, then CPs, so we drop schedulable
 	// capacity before touching apiserver replicas.
-	if err := p.removeNodes(ctx, spec, plan.removeWorkers, plan.removeCPs); err != nil {
+	if err := p.removeNodes(ctx, cd, spec, plan.removeWorkers, plan.removeCPs); err != nil {
 		return nil, err
 	}
 
@@ -362,30 +353,19 @@ func (p *Provider) applyExisting(ctx context.Context, manifest *protocol.Resourc
 	}
 
 	// Tidy the departed nodes' Kubernetes Node objects so the cluster doesn't
-	// keep them around as NotReady. Only on the plan-converge path (which
-	// owns cluster-level cleanup); best-effort — see deleteDepartedK8sNodes.
-	if convergeViaPlanEnabled() && len(removed) > 0 {
-		if _, ok := operations.ChildDispatcherFrom(ctx); ok {
-			departed := append(append([]string{}, plan.removeWorkers...), plan.removeCPs...)
-			p.deleteDepartedK8sNodes(name, spec, departed, current, removed)
-		}
+	// keep them around as NotReady. Best-effort — see deleteDepartedK8sNodes.
+	if len(removed) > 0 {
+		departed := append(append([]string{}, plan.removeWorkers...), plan.removeCPs...)
+		p.deleteDepartedK8sNodes(name, spec, departed, current, removed)
 	}
 
-	// Phase 5.x count-up: add new nodes against the live cluster. With the
-	// plan-based converge enabled and a ChildDispatcher present (controller
-	// path) the new nodes are applied as Plan()-emitted VM/K3sNode/
-	// AgentInstall children — each K3sNode resolves its join token from a
-	// surviving CP's state via $ref, and each AgentInstall extends the CA
-	// bundle itself. Otherwise it falls back to the imperative Joiner.
+	// Count-up: add new nodes against the live cluster as Plan()-emitted
+	// VM/K3sNode/AgentInstall children — each K3sNode resolves its join
+	// token from a surviving CP's state via $ref, and each AgentInstall
+	// extends the CA bundle itself.
 	addedEndpoints := map[string]string{}
 	if len(plan.addCPs)+len(plan.addWorkers) > 0 {
-		var joinEndpoints map[string]string
-		var err error
-		if cd, ok := operations.ChildDispatcherFrom(ctx); ok && convergeViaPlanEnabled() {
-			joinEndpoints, err = p.addNodesViaPlan(ctx, cd, manifest, name, plan, current, removed)
-		} else {
-			joinEndpoints, err = p.applyCountUp(ctx, rec, name, spec, plan, current, removed)
-		}
+		joinEndpoints, err := p.addNodesViaPlan(ctx, cd, manifest, name, plan, current, removed)
 		if err != nil {
 			return nil, err
 		}
@@ -398,50 +378,16 @@ func (p *Provider) applyExisting(ctx context.Context, manifest *protocol.Resourc
 		}
 	}
 
-	// Phase 5.x in-place respec: destroy → recreate → rejoin each affected
-	// node, one at a time. Runs after adds so the cluster has its maximum
-	// replica count before any individual node goes down for the respec.
-	// With the plan-based converge enabled + a dispatcher present, this runs
-	// through the Plan/dispatcher path; otherwise via the imperative Joiner.
+	// In-place respec: destroy → recreate → rejoin each affected node, one
+	// at a time, through the Plan/dispatcher path. Runs after adds so the
+	// cluster has its maximum replica count before any individual node goes
+	// down for the respec.
 	if len(respecs) > 0 {
-		if cd, ok := operations.ChildDispatcherFrom(ctx); ok && convergeViaPlanEnabled() {
-			updated, err := p.respecNodesViaPlan(ctx, cd, manifest, name, spec, respecs, current, removed)
-			if err != nil {
-				return nil, err
-			}
-			maps.Copy(addedEndpoints, updated)
-		} else {
-			existingState, err := p.loadState(name)
-			if err != nil {
-				return nil, err
-			}
-			existingIPs := readAgentEndpoints(existingState)
-			// Merge in any IPs we just learned from the count-up so respec on
-			// a freshly-added node uses its new IP rather than failing lookup.
-			maps.Copy(existingIPs, addedEndpoints)
-			survivingCPs := []string{}
-			for _, c := range current {
-				if c.Kind == "VirtualMachine" && strings.HasPrefix(c.Name, cpPrefix) && !removed[c.Name] {
-					survivingCPs = append(survivingCPs, c.Name)
-				}
-			}
-			if len(survivingCPs) == 0 && len(plan.addCPs) > 0 {
-				survivingCPs = plan.addCPs
-			}
-			if len(survivingCPs) == 0 {
-				return nil, fmt.Errorf("respec requires at least one CP to remain reachable")
-			}
-			firstCPName := survivingCPs[0]
-			firstCPIP := existingIPs[firstCPName]
-			if firstCPIP == "" {
-				return nil, fmt.Errorf("no IP for surviving CP %s; can't rejoin after respec", firstCPName)
-			}
-			updated, err := p.applyRespecs(ctx, rec, name, spec, respecs, existingIPs, firstCPName, firstCPIP)
-			if err != nil {
-				return nil, err
-			}
-			maps.Copy(addedEndpoints, updated)
+		updated, err := p.respecNodesViaPlan(ctx, cd, manifest, name, spec, respecs, current, removed)
+		if err != nil {
+			return nil, err
 		}
+		maps.Copy(addedEndpoints, updated)
 	}
 
 	if err := p.rewriteState(name, manifest, keep, addedEndpoints, removed); err != nil {
@@ -454,30 +400,18 @@ func (p *Provider) applyExisting(ctx context.Context, manifest *protocol.Resourc
 // existing-cluster converge. Workers go before CPs so schedulable capacity
 // drops before apiserver replicas (no kubectl drain — homelab assumption).
 //
-// When a ChildDispatcher is present (a dispatched op — the controller path),
-// each node is removed as its full plan-native child set — AgentInstall +
+// Each node is removed as its full plan-native child set — AgentInstall +
 // K3sNode + VM — via DeleteChild, so the per-node state files under
 // state/k3s-nodes/ and state/k3s-agent-installs/ are cleaned up instead of
-// orphaned. (Before this, scale-down deleted only the VM and leaked those
-// two files.) Without a dispatcher (CLI direct-apply, which never wrote
-// those files) it falls back to the VM-only delete.
-func (p *Provider) removeNodes(ctx context.Context, spec *k3sresources.ClusterSpec, removeWorkers, removeCPs []string) error {
-	cd, hasCD := operations.ChildDispatcherFrom(ctx)
-	rec := operations.RecorderFrom(ctx)
-	viaPlan := hasCD && convergeViaPlanEnabled()
-	del := func(node string) error {
-		if viaPlan {
-			return p.deleteNodeChildren(ctx, cd, spec, node)
-		}
-		return runChildVMDelete(ctx, rec, node, p.vms)
-	}
+// orphaned.
+func (p *Provider) removeNodes(ctx context.Context, cd operations.ChildDispatcher, spec *k3sresources.ClusterSpec, removeWorkers, removeCPs []string) error {
 	for _, w := range removeWorkers {
-		if err := del(w); err != nil {
+		if err := p.deleteNodeChildren(ctx, cd, spec, w); err != nil {
 			return fmt.Errorf("delete worker %s: %w", w, err)
 		}
 	}
 	for _, cp := range removeCPs {
-		if err := del(cp); err != nil {
+		if err := p.deleteNodeChildren(ctx, cd, spec, cp); err != nil {
 			return fmt.Errorf("delete control-plane %s: %w", cp, err)
 		}
 	}

@@ -2,20 +2,16 @@ package k3s
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"strings"
 
-	"github.com/openctl/openctl/internal/controller/operations"
-	"github.com/openctl/openctl/pkg/k3s/agent/certs"
-	k3scluster "github.com/openctl/openctl/pkg/k3s/cluster"
 	k3sresources "github.com/openctl/openctl/pkg/k3s/resources"
 	"github.com/openctl/openctl/pkg/protocol"
 )
 
 // respecNode describes a single existing node whose CPU/memory differs
-// from what the manifest implies. Phase 5.x in-place respec destroys then
-// recreates each one in turn, then re-joins it via the Joiner.
+// from what the manifest implies. In-place respec destroys then recreates
+// each one in turn, then re-joins it through the Plan/dispatcher path
+// (respecNodesViaPlan in respec_plan.go).
 //
 // Disk resize is NOT covered — the proxmox VM Get path doesn't surface
 // disk size, so we have nothing to diff against. Adding disk respec would
@@ -178,99 +174,4 @@ func catastrophicRespecReason(respecs []respecNode, haveCPs, haveWorkers int) st
 		return "respec on the only worker would leave no place for workloads during recreate"
 	}
 	return ""
-}
-
-// applyRespecs runs destroy → recreate → rejoin for each respec node,
-// one at a time. Returns the map of node-name → new IP for callers that
-// want to refresh agent endpoints (same as count-up). For static-IP
-// clusters this map is also same-key-same-value but the controller
-// re-issues the Joiner so the agent-side cert + service redeploy.
-func (p *Provider) applyRespecs(
-	ctx context.Context,
-	rec operations.ChildRecorder,
-	clusterName string,
-	spec *k3sresources.ClusterSpec,
-	respecs []respecNode,
-	existingIPs map[string]string,
-	firstCPName, firstCPIP string,
-) (map[string]string, error) {
-	if len(respecs) == 0 {
-		return nil, nil
-	}
-	bundleDir, err := clusterBundleDir(clusterName)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := os.Stat(bundleDir); err != nil {
-		return nil, fmt.Errorf("cluster bundle dir %s missing (was this cluster created by the controller?): %w", bundleDir, err)
-	}
-	bundle, err := certs.LoadBundle(bundleDir)
-	if err != nil {
-		return nil, fmt.Errorf("load existing bundle: %w", err)
-	}
-
-	// Build a quick name → desired manifest map from the cluster's full
-	// dispatch list so we don't reconstruct the per-node manifest by hand.
-	creator := k3scluster.NewCreator(clusterName, spec, p.config)
-	manifestsByName := map[string]*protocol.Resource{}
-	for _, d := range creator.GenerateDispatchRequests() {
-		manifestsByName[d.Manifest.Metadata.Name] = d.Manifest
-	}
-
-	updated := map[string]string{}
-	for _, r := range respecs {
-		newManifest, ok := manifestsByName[r.Name]
-		if !ok {
-			return nil, fmt.Errorf("respec: no manifest derivable for %s", r.Name)
-		}
-
-		// Destroy the existing VM.
-		if err := runChildVMDelete(ctx, rec, r.Name, p.vms); err != nil {
-			return nil, fmt.Errorf("respec delete %s: %w", r.Name, err)
-		}
-
-		// Recreate with the new spec.
-		if err := runChildVMApply(ctx, rec, newManifest, p.vms); err != nil {
-			return nil, fmt.Errorf("respec recreate %s: %w", r.Name, err)
-		}
-
-		// Re-resolve the IP (deterministic for static, QGA poll for DHCP).
-		nodeIPs, err := p.resolveNodeIPs(ctx, rec, clusterName, spec, []string{r.Name})
-		if err != nil {
-			return nil, err
-		}
-		newIP := nodeIPs[r.Name]
-		updated[r.Name] = newIP
-
-		// The cert for this node uses CommonName + IP-as-SAN. The CommonName
-		// doesn't change (same node name) but the IP might (DHCP). Re-mint
-		// to be safe — same CA, new leaf.
-		if err := bundle.MintServerCerts([]certs.NodeIdentity{{Name: r.Name, IP: newIP}}); err != nil {
-			return nil, fmt.Errorf("respec re-mint cert for %s: %w", r.Name, err)
-		}
-
-		// Rejoin: the node is "new" to k3s after the destroy. Reuse the
-		// Joiner; only the one node is in scope.
-		var cps, workers []string
-		if r.IsCP {
-			cps = []string{r.Name}
-		} else {
-			workers = []string{r.Name}
-		}
-		joiner := k3scluster.NewJoiner(
-			clusterName, spec, p.config,
-			bundle, bundleDir,
-			existingIPs,
-			firstCPName, firstCPIP,
-			cps, workers,
-			map[string]string{r.Name: newIP},
-		)
-		if _, err := runChildStep(ctx, rec, clusterName, "respec-rejoin/"+r.Name,
-			fmt.Sprintf("Rejoin %s after respec (%d→%d cpu, %d→%d MB)",
-				r.Name, r.ObservedCPUs, r.DesiredCPUs, r.ObservedMemMB, r.DesiredMemMB),
-			func() (any, error) { return nil, joiner.JoinNodes() }); err != nil {
-			return nil, fmt.Errorf("respec rejoin %s: %w", r.Name, err)
-		}
-	}
-	return updated, nil
 }

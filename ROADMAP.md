@@ -25,8 +25,12 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 The whole `no route to host` / connection-resilience thread is now
 closed: watch-release-on-outage (#14), macOS code signing (#15),
 HTTP/2 gateway (#16), and Proxmox context threading + not-found
-hardening (#17) all shipped. The next candidate is **Retire
-`applyExisting`** (see Suggested next order).
+hardening (#17) all shipped. **Retire `applyExisting`** is now complete
+too — the imperative convergence executors are deleted and the
+Plan/dispatcher path is the sole existing-cluster converge path,
+validated on homelab (3-CP embedded-etcd HA create + full control-plane
+respec). The next candidate is the **UI DAG view** (see Suggested next
+order).
 
 ## Suggested next order
 
@@ -38,15 +42,13 @@ this session. Remaining candidates for the next round:
   graph rather than the current flat children list. Now that
   Plan output + child ownership labels + child ops rows all
   exist, this is a frontend job. Broken out as Phase U9 below.
-- **Retire `applyExisting`** — migrate count-up / respec / delete
-  to the Plan-driven model, then delete the legacy imperative
-  executors (`countup.go`, `applyRespecs`, `pkg/k3s/cluster/join.go`).
-  The initial-create dispatcher path is homelab-validated;
-  existing-cluster convergence still uses the legacy branch. This is
-  not a delete-only job — the Plan path lacks the convergence
-  primitives (no diff, no delete channel, no respec, no guardrails),
-  so they must be built first. Staged plan (4 PRs, homelab-gated
-  before deletion): [K3S-CONVERGENCE.md](K3S-CONVERGENCE.md).
+- **Retire `applyExisting`** ✅ *done* — count-up / respec / delete now
+  run exclusively through the Plan/dispatcher model; the legacy
+  imperative executors (`applyCountUp`, `applyRespecs`, and
+  `pkg/k3s/cluster/join.go`'s `Joiner`) are deleted, along with the
+  `OPENCTL_CONVERGE_VIA_PLAN` gate. Validated on homelab (3-CP HA create
+  + full CP respec) before removal. Details:
+  [K3S-CONVERGENCE.md](K3S-CONVERGENCE.md).
 - **Multi-user auth** — OIDC + RBAC (from "Future goals").
 - **User-authored CUE templates** — extend templates from Go-only
   compiled-in to loading `~/.openctl/templates/*.cue`. Feasible
