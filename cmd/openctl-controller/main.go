@@ -289,7 +289,7 @@ func runServe(args []string) error {
 		Sessions:   sessionStore,
 		DiskMirror: diskMirror,
 		Repo:       gitRepo,
-		Templates:  templates.Default(),
+		Templates:  buildTemplateRegistry(),
 	}
 	if !*noAuth {
 		opts.Token = token
@@ -482,6 +482,45 @@ func resolveManifestDir(cfg *config.Config) (string, error) {
 		return paths.ManifestsDir, nil
 	}
 	return config.ExpandPath(dir)
+}
+
+// resolveTemplatesDir mirrors resolveManifestDir for the user-template scan
+// directory: honor cfg.Templates.Dir, else ~/.openctl/templates.
+func resolveTemplatesDir(cfg *config.Config) (string, error) {
+	dir := ""
+	if cfg != nil && cfg.Templates != nil {
+		dir = cfg.Templates.Dir
+	}
+	if dir == "" {
+		paths, err := config.GetPaths()
+		if err != nil {
+			return "", err
+		}
+		return paths.TemplatesDir, nil
+	}
+	return config.ExpandPath(dir)
+}
+
+// buildTemplateRegistry returns the compiled-in starters merged with any
+// user-authored CUE templates under the templates dir. A missing dir or a
+// scan error degrades to just the built-ins (logged) — never fatal.
+func buildTemplateRegistry() *templates.Registry {
+	base := templates.Default()
+	cfg, _ := config.Load() // best-effort; nil cfg falls back to the default dir
+	dir, err := resolveTemplatesDir(cfg)
+	if err != nil {
+		log.Printf("  templates:   cannot resolve dir, serving built-ins only: %v", err)
+		return base
+	}
+	user, err := templates.LoadFromDir(dir)
+	if err != nil {
+		log.Printf("  templates:   cannot scan %s, serving built-ins only: %v", dir, err)
+		return base
+	}
+	if len(user) > 0 {
+		log.Printf("  templates:   loaded %d user template(s) from %s", len(user), dir)
+	}
+	return base.With(user...)
 }
 
 // buildRegistry constructs the Provider registry from ~/.openctl/config.yaml.

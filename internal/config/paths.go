@@ -18,6 +18,11 @@ const (
 	// materialized manifest mirror (UI Phase U2). Resolved as
 	// ~/.openctl/manifests when no override is set in config.
 	ManifestsDirName = "manifests"
+	// TemplatesDirName is the default subdirectory the controller scans
+	// for user-authored CUE templates. Resolved as ~/.openctl/templates
+	// when no override is set in config. Missing dir is not an error —
+	// only the compiled-in starters are served.
+	TemplatesDirName = "templates"
 )
 
 // Paths holds the various paths used by openctl
@@ -27,6 +32,7 @@ type Paths struct {
 	PluginsDir   string
 	SecretsDir   string
 	ManifestsDir string
+	TemplatesDir string
 }
 
 // GetPaths returns the paths for the current user
@@ -44,6 +50,7 @@ func GetPaths() (*Paths, error) {
 		PluginsDir:   filepath.Join(configDir, PluginsDirName),
 		SecretsDir:   filepath.Join(configDir, SecretsDirName),
 		ManifestsDir: filepath.Join(configDir, ManifestsDirName),
+		TemplatesDir: filepath.Join(configDir, TemplatesDirName),
 	}, nil
 }
 

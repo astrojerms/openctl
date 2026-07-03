@@ -17,6 +17,17 @@ type Config struct {
 	Controller *Controller          `yaml:"controller,omitempty"`
 	Manifests  *Manifests           `yaml:"manifests,omitempty"`
 	Reconciler *Reconciler          `yaml:"reconciler,omitempty"`
+	Templates  *Templates           `yaml:"templates,omitempty"`
+}
+
+// Templates configures where the controller scans for user-authored CUE
+// templates, served alongside the compiled-in starters through the same
+// TemplateService RPCs. nil/omitted → ~/.openctl/templates is used; a
+// missing directory is not an error.
+type Templates struct {
+	// Dir is the directory scanned for `*.cue` template files. Defaults to
+	// ~/.openctl/templates when empty. Tilde is expanded via ExpandPath.
+	Dir string `yaml:"dir"`
 }
 
 // Reconciler configures the controller's periodic drift checker. When

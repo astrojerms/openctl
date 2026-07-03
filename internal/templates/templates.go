@@ -12,6 +12,7 @@ package templates
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 
@@ -75,6 +76,26 @@ func NewRegistry(ts ...*Template) *Registry {
 		return r.byName[r.order[i]].DisplayName < r.byName[r.order[j]].DisplayName
 	})
 	return r
+}
+
+// With returns a new registry with the given templates layered on top of the
+// receiver's. Unlike NewRegistry it does not panic on a name collision — a
+// supplied template overrides a same-named existing one (so a user-authored
+// template can customize a built-in starter). Used to merge disk-loaded
+// templates over the compiled-in set. The receiver is left unchanged.
+func (r *Registry) With(ts ...*Template) *Registry {
+	merged := &Registry{byName: make(map[string]*Template, len(r.byName)+len(ts))}
+	maps.Copy(merged.byName, r.byName)
+	for _, t := range ts {
+		merged.byName[t.Name] = t
+	}
+	for name := range merged.byName {
+		merged.order = append(merged.order, name)
+	}
+	sort.Slice(merged.order, func(i, j int) bool {
+		return merged.byName[merged.order[i]].DisplayName < merged.byName[merged.order[j]].DisplayName
+	})
+	return merged
 }
 
 // All returns the registered templates in stable display order.
