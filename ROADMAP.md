@@ -50,9 +50,13 @@ this session. Remaining candidates for the next round:
   + full CP respec) before removal. Details:
   [K3S-CONVERGENCE.md](K3S-CONVERGENCE.md).
 - **Multi-user auth** — OIDC + RBAC (from "Future goals").
-- **User-authored CUE templates** — extend templates from Go-only
-  compiled-in to loading `~/.openctl/templates/*.cue`. Feasible
-  now that the RPC + UI plumbing exists.
+- **User-authored CUE templates** ✅ *done* — the controller now scans
+  `~/.openctl/templates/*.cue` (override via `templates.dir`) and serves
+  them through the existing TemplateService alongside the compiled-in
+  starters. Each file declares a concrete `template:` metadata block +
+  `params:` + a `resource:` that references `params.<name>`; a
+  same-named file overrides a built-in. Malformed files are logged and
+  skipped, never fatal. See `examples/user-template.cue`.
 - **Client-side CUE WASM validation** — faster editor diagnostics
   without a server roundtrip (from "Future goals").
 - **Historical diff** — diff a resource against arbitrary commits
