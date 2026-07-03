@@ -576,9 +576,14 @@ phase plan when ready to commit.
 - [ ] **Mobile-friendly layout** — not v1 but worth flagging.
 - [ ] **Plugin-defined CLI subcommands** — deferred from agent work,
       see DESIGN.md "TODO: Plugin-defined CLI subcommands."
-- [ ] **Default-timeout problem** — controller's submit-returns-immediately
-      model mostly fixes this, but verify the CLI's defaults match the
-      new shape.
+- [x] **Default-timeout problem** — verified. The controller's
+      submit-returns-immediately model means the global `--timeout` (300s,
+      used for the fast gRPC submit + exec'd-plugin executors) is fine; the
+      only mismatch was `ctl apply/delete`'s `--wait-timeout`, whose 5m
+      default was shorter than a real cluster create (~10-15m) so the CLI
+      reported "did not finish" while the op ran on fine server-side. Bumped
+      the wait default to 30m (the op keeps running if it fires; poll with
+      `openctl ctl op get`).
 
 ---
 

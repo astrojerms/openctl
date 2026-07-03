@@ -73,7 +73,7 @@ Destructive convergence (Phase 5):
 	}
 	cmd.Flags().StringVarP(&file, "file", "f", "", "manifest file (.yaml or .cue)")
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "return immediately after submission instead of polling for completion")
-	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 5*time.Minute, "max time to wait for completion when not --no-wait")
+	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 30*time.Minute, "max time to wait for completion when not --no-wait (the op keeps running server-side if this fires)")
 	cmd.Flags().BoolVar(&allowDestructive, "allow-destructive", false, "permit removing declared children when re-applying a Cluster")
 	cmd.Flags().BoolVar(&iKnowThisBreaks, "i-know-this-breaks-the-cluster", false, "override the catastrophic-op block (last CP, quorum loss, last worker)")
 	return cmd
@@ -119,7 +119,7 @@ func newCtlDeleteCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&apiVersion, "api-version", "", "resource apiVersion (e.g. proxmox.openctl.io/v1)")
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "return immediately after submission instead of polling for completion")
-	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 5*time.Minute, "max time to wait for completion when not --no-wait")
+	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 30*time.Minute, "max time to wait for completion when not --no-wait (the op keeps running server-side if this fires)")
 	return cmd
 }
 
