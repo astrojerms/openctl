@@ -501,6 +501,35 @@ func TestDeleteVM(t *testing.T) {
 	}
 }
 
+// TestDeleteVM_WaitsForDestroyTask: when the DELETE returns a task UPID,
+// DeleteVM must poll the task to completion before returning — so a
+// same-name recreate right after (respec) doesn't race the async delete.
+func TestDeleteVM_WaitsForDestroyTask(t *testing.T) {
+	var taskChecked bool
+	server := mockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "DELETE" && r.URL.Path == "/api2/json/nodes/pve1/qemu/100":
+			json.NewEncoder(w).Encode(map[string]any{"data": "UPID:pve1:0000:qmdestroy:100:root@pam:"})
+		case strings.HasPrefix(r.URL.Path, "/api2/json/nodes/pve1/tasks/") && strings.HasSuffix(r.URL.Path, "/status"):
+			taskChecked = true
+			json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"status": "stopped"}})
+		default:
+			http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusNotFound)
+		}
+	})
+	defer server.Close()
+
+	c := New(server.URL, "test", "test")
+	c.httpClient = server.Client()
+
+	if err := c.DeleteVM(context.Background(), "pve1", 100); err != nil {
+		t.Fatalf("DeleteVM failed: %v", err)
+	}
+	if !taskChecked {
+		t.Error("DeleteVM did not wait for the destroy task (status endpoint never polled)")
+	}
+}
+
 func TestResizeVMDisk(t *testing.T) {
 	var receivedParams map[string]string
 	server := mockServer(t, func(w http.ResponseWriter, r *http.Request) {
