@@ -76,6 +76,11 @@ func (p *Provider) Plan(_ context.Context, manifest *protocol.Resource) (*provid
 			// First server initializes — no join fields.
 			delete(k3sNode.Spec, "joinFrom")
 			delete(k3sNode.Spec, "joinURLFrom")
+			// HA: bootstrap embedded etcd so the other CPs can join.
+			// A single-CP cluster stays on the default SQLite datastore.
+			if len(cpNodes) > 1 {
+				k3sNode.Spec["clusterInit"] = true
+			}
 		}
 		children = append(children, k3sNode)
 	}

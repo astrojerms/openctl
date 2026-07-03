@@ -188,6 +188,33 @@ func TestBuildNodeInstallCommand_HardeningWrapper(t *testing.T) {
 	}
 }
 
+// TestBuildNodeInstallCommand_ClusterInit asserts `--cluster-init` is
+// emitted only for the first server when clusterInit is set — the HA
+// bootstrap that enables embedded etcd so additional CPs can join.
+func TestBuildNodeInstallCommand_ClusterInit(t *testing.T) {
+	cases := []struct {
+		name string
+		spec *k3sNodeSpec
+		want bool
+	}{
+		{"first-server-ha", &k3sNodeSpec{role: "server", clusterInit: true}, true},
+		{"first-server-single-cp", &k3sNodeSpec{role: "server"}, false},
+		// Joining servers and agents must never get --cluster-init even
+		// if the flag leaked in: they join an existing etcd, not init one.
+		{"joining-server", &k3sNodeSpec{role: "server", joinFromToken: "t", joinFromIP: "1.1.1.1", clusterInit: true}, false},
+		{"agent", &k3sNodeSpec{role: "agent", joinFromToken: "t", joinFromIP: "1.1.1.1", clusterInit: true}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := buildNodeInstallCommand(tc.spec)
+			got := strings.Contains(cmd, "--cluster-init")
+			if got != tc.want {
+				t.Errorf("--cluster-init present=%v, want %v: %s", got, tc.want, cmd)
+			}
+		})
+	}
+}
+
 func TestParseK3sNodeSpec_StaticVMIPOverridesResolvedRef(t *testing.T) {
 	// Plan-emitted K3sNode for a static-IP cluster carries
 	// `spec.vmIP` populated from AllocateIPs. That should take
