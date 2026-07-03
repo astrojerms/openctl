@@ -1637,9 +1637,11 @@ var SchemaService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	RepoService_GetStatus_FullMethodName = "/openctl.v1.RepoService/GetStatus"
-	RepoService_Push_FullMethodName      = "/openctl.v1.RepoService/Push"
-	RepoService_Pull_FullMethodName      = "/openctl.v1.RepoService/Pull"
+	RepoService_GetStatus_FullMethodName           = "/openctl.v1.RepoService/GetStatus"
+	RepoService_Push_FullMethodName                = "/openctl.v1.RepoService/Push"
+	RepoService_Pull_FullMethodName                = "/openctl.v1.RepoService/Pull"
+	RepoService_GetResourceHistory_FullMethodName  = "/openctl.v1.RepoService/GetResourceHistory"
+	RepoService_GetResourceAtCommit_FullMethodName = "/openctl.v1.RepoService/GetResourceAtCommit"
 )
 
 // RepoServiceClient is the client API for RepoService service.
@@ -1659,6 +1661,13 @@ type RepoServiceClient interface {
 	GetStatus(ctx context.Context, in *GetRepoStatusRequest, opts ...grpc.CallOption) (*GetRepoStatusResponse, error)
 	Push(ctx context.Context, in *PushRepoRequest, opts ...grpc.CallOption) (*PushRepoResponse, error)
 	Pull(ctx context.Context, in *PullRepoRequest, opts ...grpc.CallOption) (*PullRepoResponse, error)
+	// GetResourceHistory lists the git commits that touched a resource's
+	// mirrored manifest file, newest first. Empty when git tracking is off
+	// or the resource has no committed history.
+	GetResourceHistory(ctx context.Context, in *GetResourceHistoryRequest, opts ...grpc.CallOption) (*GetResourceHistoryResponse, error)
+	// GetResourceAtCommit returns a resource's mirrored manifest YAML as it
+	// existed at a given commit, for diffing against the current state.
+	GetResourceAtCommit(ctx context.Context, in *GetResourceAtCommitRequest, opts ...grpc.CallOption) (*GetResourceAtCommitResponse, error)
 }
 
 type repoServiceClient struct {
@@ -1699,6 +1708,26 @@ func (c *repoServiceClient) Pull(ctx context.Context, in *PullRepoRequest, opts 
 	return out, nil
 }
 
+func (c *repoServiceClient) GetResourceHistory(ctx context.Context, in *GetResourceHistoryRequest, opts ...grpc.CallOption) (*GetResourceHistoryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetResourceHistoryResponse)
+	err := c.cc.Invoke(ctx, RepoService_GetResourceHistory_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *repoServiceClient) GetResourceAtCommit(ctx context.Context, in *GetResourceAtCommitRequest, opts ...grpc.CallOption) (*GetResourceAtCommitResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetResourceAtCommitResponse)
+	err := c.cc.Invoke(ctx, RepoService_GetResourceAtCommit_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RepoServiceServer is the server API for RepoService service.
 // All implementations must embed UnimplementedRepoServiceServer
 // for forward compatibility.
@@ -1716,6 +1745,13 @@ type RepoServiceServer interface {
 	GetStatus(context.Context, *GetRepoStatusRequest) (*GetRepoStatusResponse, error)
 	Push(context.Context, *PushRepoRequest) (*PushRepoResponse, error)
 	Pull(context.Context, *PullRepoRequest) (*PullRepoResponse, error)
+	// GetResourceHistory lists the git commits that touched a resource's
+	// mirrored manifest file, newest first. Empty when git tracking is off
+	// or the resource has no committed history.
+	GetResourceHistory(context.Context, *GetResourceHistoryRequest) (*GetResourceHistoryResponse, error)
+	// GetResourceAtCommit returns a resource's mirrored manifest YAML as it
+	// existed at a given commit, for diffing against the current state.
+	GetResourceAtCommit(context.Context, *GetResourceAtCommitRequest) (*GetResourceAtCommitResponse, error)
 	mustEmbedUnimplementedRepoServiceServer()
 }
 
@@ -1734,6 +1770,12 @@ func (UnimplementedRepoServiceServer) Push(context.Context, *PushRepoRequest) (*
 }
 func (UnimplementedRepoServiceServer) Pull(context.Context, *PullRepoRequest) (*PullRepoResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Pull not implemented")
+}
+func (UnimplementedRepoServiceServer) GetResourceHistory(context.Context, *GetResourceHistoryRequest) (*GetResourceHistoryResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetResourceHistory not implemented")
+}
+func (UnimplementedRepoServiceServer) GetResourceAtCommit(context.Context, *GetResourceAtCommitRequest) (*GetResourceAtCommitResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetResourceAtCommit not implemented")
 }
 func (UnimplementedRepoServiceServer) mustEmbedUnimplementedRepoServiceServer() {}
 func (UnimplementedRepoServiceServer) testEmbeddedByValue()                     {}
@@ -1810,6 +1852,42 @@ func _RepoService_Pull_Handler(srv interface{}, ctx context.Context, dec func(in
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RepoService_GetResourceHistory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetResourceHistoryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RepoServiceServer).GetResourceHistory(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RepoService_GetResourceHistory_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RepoServiceServer).GetResourceHistory(ctx, req.(*GetResourceHistoryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RepoService_GetResourceAtCommit_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetResourceAtCommitRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RepoServiceServer).GetResourceAtCommit(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RepoService_GetResourceAtCommit_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RepoServiceServer).GetResourceAtCommit(ctx, req.(*GetResourceAtCommitRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RepoService_ServiceDesc is the grpc.ServiceDesc for RepoService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1828,6 +1906,14 @@ var RepoService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Pull",
 			Handler:    _RepoService_Pull_Handler,
+		},
+		{
+			MethodName: "GetResourceHistory",
+			Handler:    _RepoService_GetResourceHistory_Handler,
+		},
+		{
+			MethodName: "GetResourceAtCommit",
+			Handler:    _RepoService_GetResourceAtCommit_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

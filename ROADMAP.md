@@ -59,8 +59,11 @@ this session. Remaining candidates for the next round:
   skipped, never fatal. See `examples/user-template.cue`.
 - **Client-side CUE WASM validation** — faster editor diagnostics
   without a server roundtrip (from "Future goals").
-- **Historical diff** — diff a resource against arbitrary commits
-  in the manifest repo (from "Future goals").
+- **Historical diff** ✅ *done* — RepoService gained GetResourceHistory
+  (git log of a resource's mirrored manifest) + GetResourceAtCommit (its
+  YAML at a commit); Detail.svelte shows a History card with a commit
+  picker that diffs the selected revision against the current desired
+  manifest in the existing Monaco diff view. Requires `manifests.git`.
 
 ---
 
@@ -569,8 +572,9 @@ phase plan when ready to commit.
       proxmox and k3s providers. U7 only does `pending` cancel.
 - [ ] **Client-side CUE WASM validation** — faster editor diagnostics
       without a server roundtrip.
-- [ ] **Historical diff** — diff a resource against arbitrary commits
-      in the manifest repo.
+- [x] **Historical diff** — RepoService.GetResourceHistory +
+      GetResourceAtCommit; Detail.svelte History card with a commit picker
+      diffing a revision against the current desired manifest.
 - [ ] **UI for controller config** — tunable retention, dispatcher
       concurrency, etc.
 - [ ] **Mobile-friendly layout** — not v1 but worth flagging.

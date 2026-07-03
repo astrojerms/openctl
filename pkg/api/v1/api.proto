@@ -711,6 +711,17 @@ service RepoService {
   rpc Pull(PullRepoRequest) returns (PullRepoResponse) {
     option (google.api.http) = { post: "/v1/repo:pull" body: "*" };
   }
+  // GetResourceHistory lists the git commits that touched a resource's
+  // mirrored manifest file, newest first. Empty when git tracking is off
+  // or the resource has no committed history.
+  rpc GetResourceHistory(GetResourceHistoryRequest) returns (GetResourceHistoryResponse) {
+    option (google.api.http) = { post: "/v1/repo:history" body: "*" };
+  }
+  // GetResourceAtCommit returns a resource's mirrored manifest YAML as it
+  // existed at a given commit, for diffing against the current state.
+  rpc GetResourceAtCommit(GetResourceAtCommitRequest) returns (GetResourceAtCommitResponse) {
+    option (google.api.http) = { post: "/v1/repo:atCommit" body: "*" };
+  }
 }
 
 message GetRepoStatusRequest {}
@@ -741,4 +752,32 @@ message PushRepoResponse {
 message PullRepoRequest {}
 message PullRepoResponse {
   string message = 1;
+}
+
+// CommitInfo describes one commit that touched a resource's manifest file.
+message CommitInfo {
+  string sha = 1;          // full commit SHA
+  string author = 2;       // author name
+  string committed_at = 3; // ISO-8601 author date
+  string subject = 4;      // commit subject line
+}
+
+message GetResourceHistoryRequest {
+  string api_version = 1;
+  string kind = 2;
+  string name = 3;
+}
+message GetResourceHistoryResponse {
+  repeated CommitInfo commits = 1; // newest first; empty if no history
+}
+
+message GetResourceAtCommitRequest {
+  string api_version = 1;
+  string kind = 2;
+  string name = 3;
+  string sha = 4; // commit to read the manifest at
+}
+message GetResourceAtCommitResponse {
+  string yaml = 1;  // the manifest YAML at that commit ("" if it didn't exist)
+  bool existed = 2; // false when the file was absent at that commit
 }

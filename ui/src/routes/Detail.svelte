@@ -6,6 +6,7 @@
   import { routeHref, navigate } from '../lib/router';
   import { ops as opsStore } from '../lib/ops';
   import { resourceToYAML } from '../lib/yaml';
+  import HistoryDiff from '../components/HistoryDiff.svelte';
 
   export let apiVersion: string;
   export let kind: string;
@@ -359,6 +360,9 @@
     URL.revokeObjectURL(url);
   }
 
+  // Current desired manifest YAML — the right-hand side of the History diff.
+  $: appliedYamlStr = data ? manifestYAML() : '';
+
   // U6 aggregations: count children we've heard back from that are
   // drifted or in a non-good state. Reactive on childStates so the
   // numbers tick up as the fanout completes.
@@ -582,6 +586,8 @@
         </ul>
       </article>
     {/if}
+
+    <HistoryDiff {apiVersion} {kind} {resourceName} appliedYaml={appliedYamlStr} />
   {/if}
 </section>
 

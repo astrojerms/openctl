@@ -289,6 +289,74 @@ func (r *Repo) Status(ctx context.Context) (Status, error) {
 	return s, nil
 }
 
+// CommitInfo describes one commit that touched a tracked file.
+type CommitInfo struct {
+	SHA         string
+	Author      string
+	CommittedAt string // ISO-8601 (git %aI author date)
+	Subject     string
+}
+
+// ErrPathNotInCommit is returned by ShowAtCommit when the file did not exist
+// at the requested commit (git show exits non-zero for an absent path).
+var ErrPathNotInCommit = errors.New("path not present at commit")
+
+// LogForPath returns the commits that touched relPath, newest first. relPath
+// is repo-root-relative with forward slashes (see DiskMirror.RelPathFor). A
+// never-committed path — or a repo with no commits yet — yields an empty
+// slice, not an error.
+func (r *Repo) LogForPath(ctx context.Context, relPath string) ([]CommitInfo, error) {
+	if err := r.lock.acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer r.lock.release()
+
+	// No commits yet → no history (git log would fail with a fatal).
+	if _, err := r.run(ctx, "rev-parse", "--verify", "HEAD"); err != nil {
+		return nil, nil
+	}
+	// Unit-separated (0x1f) fields so subjects containing spaces/pipes parse
+	// cleanly; one record per line.
+	out, err := r.run(ctx, "log", "--format=%H%x1f%an%x1f%aI%x1f%s", "--", relPath)
+	if err != nil {
+		return nil, err
+	}
+	var commits []CommitInfo
+	for line := range strings.SplitSeq(strings.TrimRight(string(out), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		f := strings.Split(line, "\x1f")
+		if len(f) != 4 {
+			continue
+		}
+		commits = append(commits, CommitInfo{SHA: f[0], Author: f[1], CommittedAt: f[2], Subject: f[3]})
+	}
+	return commits, nil
+}
+
+// ShowAtCommit returns the bytes of relPath as it existed at commit sha.
+// Returns ErrPathNotInCommit when the file was absent at that commit. The
+// caller must validate sha (e.g. hex-only) before calling — it is passed to
+// git as `<sha>:<relPath>`.
+func (r *Repo) ShowAtCommit(ctx context.Context, sha, relPath string) ([]byte, error) {
+	if err := r.lock.acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer r.lock.release()
+	out, err := r.run(ctx, "show", sha+":"+relPath)
+	if err != nil {
+		msg := err.Error()
+		if strings.Contains(msg, "does not exist") ||
+			strings.Contains(msg, "exists on disk, but not in") ||
+			strings.Contains(msg, "fatal: path") {
+			return nil, ErrPathNotInCommit
+		}
+		return nil, err
+	}
+	return out, nil
+}
+
 // StartPeriodicPush spawns a background goroutine that pushes every
 // r.pushInterval. No-op if push mode isn't "periodic" or the interval is
 // zero or no remote is configured. Stops when ctx is canceled.
