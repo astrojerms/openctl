@@ -327,6 +327,34 @@ func TestVMSpec_ToProxmoxConfig(t *testing.T) {
 	if params["ipconfig1"] != "ip=192.168.1.100/24,gw=192.168.1.1" {
 		t.Errorf("expected ipconfig1 with static IP, got %v", params["ipconfig1"])
 	}
+	// Cloud-init present but PackageUpgrade unset ⇒ first-boot upgrade
+	// disabled (ciupgrade=0), overriding Proxmox 8.2+'s default of 1.
+	if params["ciupgrade"] != 0 {
+		t.Errorf("expected ciupgrade=0 by default, got %v", params["ciupgrade"])
+	}
+}
+
+func TestVMSpec_ToProxmoxConfig_PackageUpgrade(t *testing.T) {
+	enabled := true
+	disabled := false
+	cases := []struct {
+		name string
+		pu   *bool
+		want int
+	}{
+		{"default-nil-disables", nil, 0},
+		{"explicit-false-disables", &disabled, 0},
+		{"explicit-true-enables", &enabled, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := &VMSpec{CloudInit: &CloudInitSpec{User: "admin", PackageUpgrade: tc.pu}}
+			params := spec.ToProxmoxConfig()
+			if params["ciupgrade"] != tc.want {
+				t.Errorf("ciupgrade: want %d, got %v", tc.want, params["ciupgrade"])
+			}
+		})
+	}
 }
 
 func TestVMSpec_ToProxmoxConfig_Empty(t *testing.T) {
