@@ -90,6 +90,7 @@ func TestParseK3sNodeSpec_Agent(t *testing.T) {
 			"role":        "agent",
 			"joinFrom":    "K10::agent:token",
 			"joinURLFrom": "192.168.1.10",
+			"extraArgs":   []any{"--disable=traefik"},
 			"ssh":         map[string]any{"privateKeyPath": "/root/.ssh/id_ed25519"},
 		},
 	}
@@ -103,6 +104,9 @@ func TestParseK3sNodeSpec_Agent(t *testing.T) {
 	}
 	if !strings.Contains(cmd, "K3S_TOKEN=K10::agent:token") {
 		t.Errorf("agent command missing token: %s", cmd)
+	}
+	if strings.Contains(cmd, "--disable=traefik") {
+		t.Errorf("agent command should not include server-only extra args: %s", cmd)
 	}
 }
 
