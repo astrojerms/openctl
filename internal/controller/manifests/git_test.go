@@ -2,12 +2,103 @@ package manifests
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestDiskMirrorRelPathFor(t *testing.T) {
+	m := &DiskMirror{}
+	got := m.RelPathFor("proxmox.openctl.io/v1", "VirtualMachine", "foo")
+	if want := "proxmox.openctl.io/v1/VirtualMachine/foo.yaml"; got != want {
+		t.Errorf("RelPathFor = %q, want %q", got, want)
+	}
+	// A "/" in the name is scrubbed so it can't introduce a new path segment
+	// (which would let a resource name escape its kind directory).
+	if got := m.RelPathFor("k3s.openctl.io/v1", "Cluster", "a/b"); got != "k3s.openctl.io/v1/Cluster/a_b.yaml" {
+		t.Errorf("RelPathFor did not scrub name separator: %q", got)
+	}
+}
+
+func TestRepoLogForPathAndShowAtCommit(t *testing.T) {
+	r := newTestRepo(t)
+	ctx := context.Background()
+	rel := "proxmox.openctl.io/v1/VirtualMachine/foo.yaml"
+	abs := filepath.Join(r.Dir(), filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(abs), 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	writeCommit := func(body, subject string) {
+		if err := os.WriteFile(abs, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.CommitAll(ctx, subject); err != nil {
+			t.Fatalf("CommitAll %q: %v", subject, err)
+		}
+	}
+	writeCommit("kind: VM\nv: 1\n", "apply VM/foo v1")
+	writeCommit("kind: VM\nv: 2\n", "apply VM/foo v2")
+
+	commits, err := r.LogForPath(ctx, rel)
+	if err != nil {
+		t.Fatalf("LogForPath: %v", err)
+	}
+	if len(commits) != 2 {
+		t.Fatalf("want 2 commits, got %d", len(commits))
+	}
+	if commits[0].Subject != "apply VM/foo v2" || commits[1].Subject != "apply VM/foo v1" {
+		t.Errorf("commits not newest-first: %q, %q", commits[0].Subject, commits[1].Subject)
+	}
+	if commits[0].SHA == "" || commits[0].CommittedAt == "" || commits[0].Author == "" {
+		t.Errorf("commit fields incomplete: %+v", commits[0])
+	}
+
+	newest, err := r.ShowAtCommit(ctx, commits[0].SHA, rel)
+	if err != nil || !strings.Contains(string(newest), "v: 2") {
+		t.Errorf("ShowAtCommit newest: %q err=%v", newest, err)
+	}
+	oldest, err := r.ShowAtCommit(ctx, commits[1].SHA, rel)
+	if err != nil || !strings.Contains(string(oldest), "v: 1") {
+		t.Errorf("ShowAtCommit oldest: %q err=%v", oldest, err)
+	}
+
+	// A path absent at the first commit → ErrPathNotInCommit.
+	if err := os.WriteFile(filepath.Join(r.Dir(), "other.yaml"), []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CommitAll(ctx, "add other"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.ShowAtCommit(ctx, commits[1].SHA, "other.yaml"); !errors.Is(err, ErrPathNotInCommit) {
+		t.Errorf("want ErrPathNotInCommit for absent path, got %v", err)
+	}
+}
+
+func TestRepoLogForPathEmptyCases(t *testing.T) {
+	r := newTestRepo(t)
+	ctx := context.Background()
+
+	// No commits yet → empty, no error.
+	commits, err := r.LogForPath(ctx, "nope.yaml")
+	if err != nil || len(commits) != 0 {
+		t.Errorf("empty repo: commits=%d err=%v", len(commits), err)
+	}
+	// A commit exists, but the queried path was never tracked → empty.
+	if err := os.WriteFile(filepath.Join(r.Dir(), "a.yaml"), []byte("a\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CommitAll(ctx, "add a"); err != nil {
+		t.Fatal(err)
+	}
+	commits, err = r.LogForPath(ctx, "b.yaml")
+	if err != nil || len(commits) != 0 {
+		t.Errorf("untracked path: commits=%d err=%v", len(commits), err)
+	}
+}
 
 // requireGit skips the test if a git binary isn't on PATH. Lets the test
 // suite remain runnable in minimal environments while still exercising

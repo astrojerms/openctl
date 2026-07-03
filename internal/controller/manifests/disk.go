@@ -129,6 +129,19 @@ func (m *DiskMirror) pathFor(apiVersion, kind, name string) string {
 	return filepath.Join(parts...)
 }
 
+// RelPathFor returns the mirror-root-relative path (always forward slashes)
+// of a resource's manifest file — the form git log/show expect. Applies the
+// same safeSegment scrubbing as pathFor so the path matches the file that was
+// actually written, even for names with path-special characters.
+func (m *DiskMirror) RelPathFor(apiVersion, kind, name string) string {
+	var parts []string
+	for seg := range strings.SplitSeq(apiVersion, "/") {
+		parts = append(parts, safeSegment(seg))
+	}
+	parts = append(parts, safeSegment(kind), safeSegment(name)+".yaml")
+	return strings.Join(parts, "/")
+}
+
 // safeSegment scrubs a path component so it can't break out of the root
 // directory or collide with filesystem special names. Replaces all
 // path-traversal-shaped tokens; empties become "_" so the join doesn't

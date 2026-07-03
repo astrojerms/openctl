@@ -421,8 +421,34 @@ export interface RepoActionResponse {
   message?: string;
 }
 
+export interface CommitInfo {
+  sha?: string;
+  author?: string;
+  committedAt?: string;
+  subject?: string;
+}
+
+export interface ResourceHistory {
+  commits?: CommitInfo[];
+}
+
+export interface ResourceAtCommit {
+  yaml?: string;
+  existed?: boolean;
+}
+
+export interface ResourceRef {
+  apiVersion: string;
+  kind: string;
+  name: string;
+}
+
 export const repo = {
   status: () => api.get<RepoStatus>('/v1/repo/status'),
   push: () => api.post<RepoActionResponse>('/v1/repo:push'),
   pull: () => api.post<RepoActionResponse>('/v1/repo:pull'),
+  history: (r: ResourceRef) =>
+    api.post<ResourceHistory>('/v1/repo:history', r),
+  atCommit: (r: ResourceRef, sha: string) =>
+    api.post<ResourceAtCommit>('/v1/repo:atCommit', { ...r, sha }),
 };
