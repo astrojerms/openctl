@@ -5,15 +5,30 @@ delete) off the imperative `applyExisting` branch and onto the Plan-driven
 dispatcher model, then delete the legacy code. Tracked in ROADMAP under
 "Suggested next order → Retire `applyExisting`".
 
-Status: **cutover done; deletion pending.** PR 1 (`DeleteChild` channel),
-PR 2a/b/c (scale-down / count-up / respec via the dispatcher), and the
-homelab-found fixes have landed, and PR 3 has **flipped the default on**
-(the plan path is now the default; `OPENCTL_CONVERGE_VIA_PLAN=0` is the
-escape hatch). Validated on homelab: count-up, scale-down, and worker
-respec. **Still to do: PR 4** — delete the legacy executors
-(`countup.go`, `applyRespecs`, `pkg/k3s/cluster/join.go`). A **CP**
-respec (embedded-etcd membership) has not been specifically validated;
-worth a homelab check before deleting the fallback.
+Status: **DONE.** PR 1 (`DeleteChild` channel), PR 2a/b/c (scale-down /
+count-up / respec via the dispatcher), PR 3 (default flipped on), and now
+**PR 4 (this change) — the legacy imperative executors are deleted**: the
+Plan/dispatcher path is the sole existing-cluster converge path, and
+existing-cluster convergence requires a ChildDispatcher (always present on
+the controller path). `convergeViaPlanEnabled()` / `OPENCTL_CONVERGE_VIA_PLAN`
+is gone.
+
+Deleted: `applyCountUp` (`countup.go`), `applyRespecs` (`respec.go`),
+`runChildVMDelete` (`childops.go`), and all of `pkg/k3s/cluster/join.go`
+(the `Joiner`). Kept (shared): the diff/respec *analysis* helpers, the
+count-up/respec *plan* paths (`countup_plan.go`, `respec_plan.go`), the
+state helpers (`readAgentEndpoints`, `clusterBundleDir` — moved to
+`clusterstate.go`), `certs.*`, and `Creator`/`childops.go`/`ips.go` (still
+used by the exec'd plugin + the CLI-direct fresh-create fallback).
+
+Validated end-to-end on homelab before deletion: 3-CP embedded-etcd HA
+create **and a full control-plane respec** (4096→6144MB, one CP at a time,
+etcd quorum held throughout, clean rejoin — no node-password rejection, no
+stale Node objects). Prior bootstrap-hardening fixes that this depended on:
+cloud-init timeout (#30) + `ciupgrade=0` (#31), first-CP `--cluster-init`
+for embedded etcd (#32), and the post-start SSH verify-retry (#33). A static-IP-range collision with an
+existing LAN device (a Synology at .241) masqueraded as several of these
+failures during validation — pick a range that's ARP-verified free.
 
 Note: respec of the *sole* control plane is refused on the plan path —
 there's no peer for the recreated node to rejoin, and re-initializing it
@@ -151,21 +166,31 @@ Flip the branch at `provider.go:209` so Ready clusters converge via
 count-up, scale-down, and a cpu/mem respec. **Risk: medium — touches the
 live path; gated behind homelab sign-off.**
 
-### PR 4 — delete the legacy surface
+### PR 4 — delete the legacy surface ✅ DONE
 
-Remove `applyExisting`, `isProvisioningCluster`, `rewriteState`,
-`updateAgentEndpoints` (`provider.go`), all of `countup.go`,
-`applyRespecs` (`respec.go`), and all of `pkg/k3s/cluster/join.go`.
+Deleted `applyCountUp` (`countup.go`), `applyRespecs` (`respec.go`),
+`runChildVMDelete` (`childops.go`), the `convergeViaPlanEnabled()` gate,
+and all of `pkg/k3s/cluster/join.go`. `applyExisting` stays but is now
+plan-only: it requires a ChildDispatcher and routes removals/count-up/
+respec exclusively through the dispatcher.
 
-**Keep** (shared — do not delete): `diff.go`, the respec *analysis*
-helpers, `clusterBundleDir`, `readChildren`, the state read/write
-helpers, `certs.*`, and `Creator` / `childops.go` / `ips.go` (still used
-by the exec'd plugin `pkg/k3s/handler/handler.go` and the CLI-direct
-fresh-create fallback `provider.go:221-271`).
+Deviation from the original list: `applyExisting`, `isProvisioningCluster`,
+`rewriteState`, and `updateAgentEndpoints` were **kept** — they turned out
+to be live on the plan path (state persistence + Apply routing), not
+legacy-only. The original list was written before the plan converge was
+folded into `applyExisting`.
 
-**Risk: low** once PR 3 is validated — mechanical deletion + test cleanup
-(`provider_test.go`, `diff_test.go`, `respec_test.go`,
-`pkg/k3s/cluster/{create,delete}_test.go`, etc.).
+**Kept** (shared — do not delete): `diff.go`, the respec *analysis*
+helpers, `clusterBundleDir` + `readAgentEndpoints` (moved to
+`clusterstate.go`), `readChildren`, the state read/write helpers,
+`certs.*`, and `Creator` / `childops.go` / `ips.go` (still used by the
+exec'd plugin `pkg/k3s/handler/handler.go` and the CLI-direct fresh-create
+fallback).
+
+Test cleanup: rewrote the scale-down / catastrophic tests to the plan path
+(dispatcher-driven), deleted the tests that only exercised the removed
+VM-only fallback and legacy `applyCountUp` error paths (the plan path is
+covered by `countup_plan_test.go` / `respec_plan_test.go`).
 
 ---
 

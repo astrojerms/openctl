@@ -3,7 +3,6 @@ package k3s
 import (
 	"context"
 	"encoding/json"
-	"strings"
 
 	"github.com/openctl/openctl/internal/controller/operations"
 	"github.com/openctl/openctl/pkg/protocol"
@@ -32,25 +31,6 @@ func runChildVMApply(ctx context.Context, rec operations.ChildRecorder, vm *prot
 		resultJSON, _ = json.Marshal(result)
 	}
 	_ = rec.End(ctx, childID, true, "", string(resultJSON))
-	return nil
-}
-
-// runChildVMDelete records a child op around a VM Delete call. NotFound
-// from the underlying provider is treated as success (idempotent delete)
-// to match the previous inline behavior.
-func runChildVMDelete(ctx context.Context, rec operations.ChildRecorder, name string, vms VMApplier) error {
-	childID, _ := rec.Begin(ctx, &operations.Operation{
-		Type:         operations.TypeDelete,
-		APIVersion:   "proxmox.openctl.io/v1",
-		Kind:         "VirtualMachine",
-		ResourceName: name,
-	})
-	err := vms.Delete(ctx, "VirtualMachine", name)
-	if err != nil && !strings.Contains(err.Error(), "not found") {
-		_ = rec.End(ctx, childID, false, err.Error(), "")
-		return err
-	}
-	_ = rec.End(ctx, childID, true, "", "")
 	return nil
 }
 
