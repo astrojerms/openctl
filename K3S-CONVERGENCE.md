@@ -5,11 +5,15 @@ delete) off the imperative `applyExisting` branch and onto the Plan-driven
 dispatcher model, then delete the legacy code. Tracked in ROADMAP under
 "Suggested next order → Retire `applyExisting`".
 
-Status: **in progress.** PR 1 (`DeleteChild` channel), PR 2a (scale-down
-via `DeleteChild`), PR 2b (count-up via Plan children), and PR 2c (respec
-via destroy+recreate through the dispatcher) have landed, all behind the
-gate below. Cutover (3) and deletion (4) remain. Needs homelab validation
-before the final deletion.
+Status: **cutover done; deletion pending.** PR 1 (`DeleteChild` channel),
+PR 2a/b/c (scale-down / count-up / respec via the dispatcher), and the
+homelab-found fixes have landed, and PR 3 has **flipped the default on**
+(the plan path is now the default; `OPENCTL_CONVERGE_VIA_PLAN=0` is the
+escape hatch). Validated on homelab: count-up, scale-down, and worker
+respec. **Still to do: PR 4** — delete the legacy executors
+(`countup.go`, `applyRespecs`, `pkg/k3s/cluster/join.go`). A **CP**
+respec (embedded-etcd membership) has not been specifically validated;
+worth a homelab check before deleting the fallback.
 
 Note: respec of the *sole* control plane is refused on the plan path —
 there's no peer for the recreated node to rejoin, and re-initializing it

@@ -80,7 +80,8 @@ func writeClusterState(t *testing.T, home, name, body string) {
 // (AgentInstall + K3sNode + VM), workers before CPs, so the per-node state
 // files are cleaned up rather than orphaned.
 func TestRemoveNodes_DispatchesFullChildSet(t *testing.T) {
-	t.Setenv("OPENCTL_CONVERGE_VIA_PLAN", "1")
+	// Default (unset) now enables the plan path.
+	t.Setenv("OPENCTL_CONVERGE_VIA_PLAN", "")
 	cd := &recordingChildDispatcher{}
 	ctx := operations.WithChildDispatcher(context.Background(), cd)
 	p := New(&protocol.ProviderConfig{}, &fakeVMs{})
@@ -127,12 +128,11 @@ func TestRemoveNodes_FallsBackToVMOnlyWithoutDispatcher(t *testing.T) {
 }
 
 // TestRemoveNodes_GateOffUsesVMOnlyDespiteDispatcher: with the plan-based
-// converge gate off (the default), scale-down keeps the legacy VM-only
-// delete even when a ChildDispatcher is present — so the migration stays
-// dormant until OPENCTL_CONVERGE_VIA_PLAN is set.
+// converge explicitly opted out (OPENCTL_CONVERGE_VIA_PLAN=0), scale-down
+// keeps the legacy VM-only delete even when a ChildDispatcher is present —
+// the escape hatch back to the imperative path.
 func TestRemoveNodes_GateOffUsesVMOnlyDespiteDispatcher(t *testing.T) {
-	// Explicitly ensure the gate is off regardless of the ambient env.
-	t.Setenv("OPENCTL_CONVERGE_VIA_PLAN", "")
+	t.Setenv("OPENCTL_CONVERGE_VIA_PLAN", "0")
 	cd := &recordingChildDispatcher{}
 	ctx := operations.WithChildDispatcher(context.Background(), cd)
 	vms := &fakeVMs{}
