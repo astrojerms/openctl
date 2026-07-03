@@ -19,9 +19,15 @@ anyway.) Use the imperative path or a full recreate for that case.
 Homelab validation surfaced (and fixed): joining agents were getting
 server-only `k3s.extraArgs`; the Proxmox VM delete was async so a respec
 recreate raced the destroy (`DeleteVM` now waits for the destroy task);
-and scale-down left the departed node's Kubernetes Node object as
-NotReady — the plan-converge path now best-effort `k3s kubectl delete
-node`s it via a surviving CP.
+scale-down left the departed node's Kubernetes Node object as NotReady;
+and a respec's recreated same-hostname node was rejected with "Node
+password rejected, duplicate hostname" because the server still held its
+old `node-password` secret. The plan-converge path now evicts a node's
+Node object **and** node-password secret via a surviving CP — on
+scale-down (cleanup) and, crucially, between a respec's destroy and
+recreate (so the fresh node registers cleanly). This node-password gap
+existed in the legacy `applyRespecs` path too; it only surfaced once
+respec was actually validated end to end.
 
 ## Gating
 
