@@ -105,14 +105,16 @@ func (p *Provider) applyK3sNode(ctx context.Context, manifest *protocol.Resource
 		}
 		_ = client.Close()
 		client = nil
-		newClient, reconnectErr := ssh.WaitForSSH(spec.vmIP, sshPort, spec.sshUser, spec.sshKeyPath, sshWaitTimeout)
-		if reconnectErr != nil {
-			return nil, fmt.Errorf("k3s install: reconnect after transport drop failed on %s: %w", spec.vmIP, reconnectErr)
+		// k3s is still reconfiguring the network for several seconds
+		// after start, during which SSH may briefly refuse connections
+		// or channel-opens (and k3s.service reports "activating", not
+		// "active"). Retry reconnect+verify over a settling window
+		// instead of failing on the first transient miss.
+		verified, verifyErr := reconnectAndVerifyK3s(ctx, spec)
+		if verifyErr != nil {
+			return nil, fmt.Errorf("k3s install on %s: connection dropped and post-drop verify failed: %w", spec.vmIP, verifyErr)
 		}
-		client = newClient
-		if err := verifyK3sHealthy(client, spec.role); err != nil {
-			return nil, fmt.Errorf("k3s install on %s: connection dropped and post-drop verify failed: %w", spec.vmIP, err)
-		}
+		client = verified
 	}
 
 	// Populate state.
@@ -463,6 +465,11 @@ func isConnectionDropError(err error) bool {
 		"broken pipe",
 		"use of closed network connection",
 		"EOF",
+		// x/crypto/ssh surfaces this when a channel (session) open
+		// races the transport being torn down — e.g. opening a session
+		// while k3s is mid-reconfiguring iptables/CNI right after start.
+		// Same "transport is going away" class as the stream drops above.
+		"unexpected packet in response to channel open",
 	} {
 		if strings.Contains(msg, needle) {
 			return true
@@ -493,6 +500,59 @@ func verifyK3sHealthy(client *ssh.Client, role string) error {
 		return fmt.Errorf("k3s-agent.service not active: %w", err)
 	}
 	return nil
+}
+
+const (
+	// k3sSettleTimeout bounds how long the post-drop reconnect+verify
+	// loop waits for k3s to finish reconfiguring the network and reach
+	// an active state. A joining server also joins etcd here, so allow
+	// a generous window.
+	k3sSettleTimeout = 120 * time.Second
+	// k3sSettleInterval is the delay between verify attempts.
+	k3sSettleInterval = 5 * time.Second
+	// k3sReconnectTimeout bounds each reconnect attempt so a briefly
+	// unreachable sshd doesn't blow past the settle window on one try.
+	k3sReconnectTimeout = 20 * time.Second
+)
+
+// reconnectAndVerifyK3s reconnects to the node and confirms k3s came up,
+// retrying over a settling window. Used on the mid-install SSH-drop
+// recovery path: k3s reconfigures iptables/CNI when it starts, which
+// both severs the install session and, for a few seconds after,
+// intermittently refuses new SSH connections / channel-opens (surfacing
+// as "unexpected packet in response to channel open") and reports the
+// service as "activating" rather than "active". A single reconnect+
+// verify races that window; retrying rides it out. This is what turned
+// a transient post-start blip into a hard install failure on joining
+// control-plane nodes.
+//
+// Returns a live, verified client on success (caller owns closing it),
+// or the last error if k3s never became healthy within the window.
+func reconnectAndVerifyK3s(ctx context.Context, spec *k3sNodeSpec) (*ssh.Client, error) {
+	deadline := time.Now().Add(k3sSettleTimeout)
+	var lastErr error
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		client, err := ssh.WaitForSSH(spec.vmIP, sshPort, spec.sshUser, spec.sshKeyPath, k3sReconnectTimeout)
+		if err != nil {
+			lastErr = err
+		} else if verifyErr := verifyK3sHealthy(client, spec.role); verifyErr != nil {
+			lastErr = verifyErr
+			_ = client.Close()
+		} else {
+			return client, nil // healthy
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("k3s not healthy within %s: %w", k3sSettleTimeout, lastErr)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(k3sSettleInterval):
+		}
+	}
 }
 
 // nodeStateToResource projects the persisted state (and optionally
