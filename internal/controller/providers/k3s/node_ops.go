@@ -398,14 +398,31 @@ func buildNodeInstallCommand(s *k3sNodeSpec) string {
 	return wrapK3sInstall(inner)
 }
 
+// cloudInitWaitSeconds bounds the `cloud-init status --wait` gate. The
+// wait exists to avoid installing k3s against a system whose network/disk
+// config cloud-init hasn't finished applying — but those early modules
+// complete within seconds, whereas a template that runs
+// package_update_upgrade_install (apt upgrade, snap refresh) at first boot
+// can keep cloud-init "running" for many minutes, and a flaky download can
+// wedge it indefinitely. Without a bound, that hang is inherited by the
+// SSH install command (RunSudo has no per-command timeout), which stalls
+// the whole cluster apply until its outer deadline fires with no k3s
+// installed and no state persisted. Bounding the wait turns an indefinite
+// hang into a fast, loud failure (or a proceed-anyway that succeeds, since
+// the k3s installer downloads a binary and does not need apt).
+const cloudInitWaitSeconds = 180
+
 // wrapK3sInstall wraps the raw `curl | sh` k3s install pipeline with
-// (1) a `cloud-init status --wait` gate and (2) `set -o pipefail` so
-// curl failures propagate through the pipe instead of being masked by
-// `sh -s -` exiting 0. See buildNodeInstallCommand's doc comment for
-// the failure mode this covers.
+// (1) a bounded `cloud-init status --wait` gate and (2) `set -o pipefail`
+// so curl failures propagate through the pipe instead of being masked by
+// `sh -s -` exiting 0. See buildNodeInstallCommand's doc comment for the
+// failure mode this covers, and cloudInitWaitSeconds for why the wait is
+// bounded rather than open-ended.
 func wrapK3sInstall(inner string) string {
-	return "bash -c 'cloud-init status --wait >/dev/null 2>&1 || true; set -o pipefail; " +
-		inner + "'"
+	return fmt.Sprintf(
+		"bash -c 'timeout %d cloud-init status --wait >/dev/null 2>&1 || true; set -o pipefail; %s'",
+		cloudInitWaitSeconds, inner,
+	)
 }
 
 // isConnectionDropError returns true when err looks like the SSH

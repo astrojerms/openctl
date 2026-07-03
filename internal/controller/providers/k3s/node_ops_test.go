@@ -1,6 +1,7 @@
 package k3s
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -167,6 +168,12 @@ func TestBuildNodeInstallCommand_HardeningWrapper(t *testing.T) {
 			cmd := buildNodeInstallCommand(tc.spec)
 			if !strings.Contains(cmd, "cloud-init status --wait") {
 				t.Errorf("missing cloud-init wait: %s", cmd)
+			}
+			// The wait must be bounded (`timeout N`) so a template that
+			// wedges cloud-init in package_update_upgrade_install can't
+			// hang the whole apply. See cloudInitWaitSeconds.
+			if !strings.Contains(cmd, fmt.Sprintf("timeout %d cloud-init status --wait", cloudInitWaitSeconds)) {
+				t.Errorf("cloud-init wait is not bounded by timeout: %s", cmd)
 			}
 			if !strings.Contains(cmd, "set -o pipefail") {
 				t.Errorf("missing pipefail: %s", cmd)
