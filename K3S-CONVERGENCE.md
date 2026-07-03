@@ -16,6 +16,13 @@ there's no peer for the recreated node to rejoin, and re-initializing it
 would orphan every other node. (It's a catastrophic op gated upstream
 anyway.) Use the imperative path or a full recreate for that case.
 
+Homelab validation surfaced (and fixed): joining agents were getting
+server-only `k3s.extraArgs`; the Proxmox VM delete was async so a respec
+recreate raced the destroy (`DeleteVM` now waits for the destroy task);
+and scale-down left the departed node's Kubernetes Node object as
+NotReady — the plan-converge path now best-effort `k3s kubectl delete
+node`s it via a surviving CP.
+
 ## Gating
 
 The plan-based existing-cluster converge is **off by default** and opt-in
