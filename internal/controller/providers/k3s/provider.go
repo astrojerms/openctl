@@ -360,6 +360,16 @@ func (p *Provider) applyExisting(ctx context.Context, manifest *protocol.Resourc
 		}
 	}
 
+	// Tidy the departed nodes' Kubernetes Node objects so the cluster doesn't
+	// keep them around as NotReady. Only on the plan-converge path (which
+	// owns cluster-level cleanup); best-effort — see deleteDepartedK8sNodes.
+	if convergeViaPlanEnabled() && len(removed) > 0 {
+		if _, ok := operations.ChildDispatcherFrom(ctx); ok {
+			departed := append(append([]string{}, plan.removeWorkers...), plan.removeCPs...)
+			p.deleteDepartedK8sNodes(name, spec, departed, current, removed)
+		}
+	}
+
 	// Phase 5.x count-up: add new nodes against the live cluster. With the
 	// plan-based converge enabled and a ChildDispatcher present (controller
 	// path) the new nodes are applied as Plan()-emitted VM/K3sNode/
