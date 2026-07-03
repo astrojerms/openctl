@@ -93,6 +93,11 @@ func TestPlan_SingleCP_NoWorkers(t *testing.T) {
 	if k3s.Spec["role"] != "server" {
 		t.Errorf("first CP role should be server, got %q", k3s.Spec["role"])
 	}
+	// A single-CP cluster stays on the default SQLite datastore — no
+	// embedded etcd, so no --cluster-init.
+	if _, has := k3s.Spec["clusterInit"]; has {
+		t.Errorf("single-CP first server must not request clusterInit, got: %+v", k3s.Spec["clusterInit"])
+	}
 }
 
 func TestPlan_HAThreeControlPlane(t *testing.T) {
@@ -104,7 +109,15 @@ func TestPlan_HAThreeControlPlane(t *testing.T) {
 	if counts["VirtualMachine"] != 3 || counts[kindK3sNode] != 3 || counts[kindAgentInstall] != 3 {
 		t.Errorf("HA cluster: expected 3 each, got %+v", counts)
 	}
-	// Second + third CP: join the first CP.
+	// First CP bootstraps embedded etcd (HA); the others join it.
+	cp0 := findByKindName(children, kindK3sNode, "prod-cp-0")
+	if cp0 == nil {
+		t.Fatal("prod-cp-0 K3sNode missing")
+	}
+	if cp0.Spec["clusterInit"] != true {
+		t.Errorf("HA first server must request clusterInit=true, got: %+v", cp0.Spec["clusterInit"])
+	}
+	// Second + third CP: join the first CP, and must NOT re-init etcd.
 	for _, name := range []string{"prod-cp-1", "prod-cp-2"} {
 		k3s := findByKindName(children, kindK3sNode, name)
 		if k3s == nil {
@@ -112,6 +125,9 @@ func TestPlan_HAThreeControlPlane(t *testing.T) {
 		}
 		if k3s.Spec["role"] != "server" {
 			t.Errorf("%s role should be server, got %q", name, k3s.Spec["role"])
+		}
+		if _, has := k3s.Spec["clusterInit"]; has {
+			t.Errorf("joining CP %s must not request clusterInit, got: %+v", name, k3s.Spec["clusterInit"])
 		}
 		join, ok := k3s.Spec["joinFrom"].(map[string]any)
 		if !ok {

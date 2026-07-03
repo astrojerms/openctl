@@ -238,6 +238,13 @@ type k3sNodeSpec struct {
 	extraArgs     []string
 	sshUser       string
 	sshKeyPath    string
+	// clusterInit requests `--cluster-init` on the first server so it
+	// bootstraps with embedded etcd instead of the default SQLite
+	// datastore. Required for HA: additional control-plane servers can
+	// only join a cluster whose first server enabled etcd. Set by
+	// Cluster.Plan on the first CP when the cluster has more than one
+	// control-plane node; ignored on joining servers and agents.
+	clusterInit bool
 }
 
 func parseK3sNodeSpec(manifest *protocol.Resource) (*k3sNodeSpec, error) {
@@ -323,6 +330,9 @@ func parseK3sNodeSpec(manifest *protocol.Resource) (*k3sNodeSpec, error) {
 	if v, ok := manifest.Spec["version"].(string); ok {
 		out.version = v
 	}
+	if v, ok := manifest.Spec["clusterInit"].(bool); ok {
+		out.clusterInit = v
+	}
 	if v, ok := manifest.Spec["extraArgs"].([]any); ok {
 		for _, a := range v {
 			if s, ok := a.(string); ok {
@@ -372,12 +382,18 @@ func buildNodeInstallCommand(s *k3sNodeSpec) string {
 	if s.version != "" {
 		env = append(env, fmt.Sprintf("INSTALL_K3S_VERSION=%s", s.version))
 	}
-	// First server: no join token, no server URL.
+	// First server: no join token, no server URL. `--cluster-init`
+	// bootstraps embedded etcd so additional control-plane servers can
+	// join (HA); omitted for a single-CP cluster, which stays on the
+	// default SQLite datastore.
 	if s.role == "server" && s.joinFromToken == "" {
 		if len(env) > 0 {
 			inner += strings.Join(env, " ") + " "
 		}
 		inner += "sh -s -"
+		if s.clusterInit {
+			inner += " --cluster-init"
+		}
 		if len(s.extraArgs) > 0 {
 			inner += " " + strings.Join(s.extraArgs, " ")
 		}
