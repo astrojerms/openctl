@@ -210,6 +210,15 @@ type CloudInitSpec struct {
 	SearchDomain string              `json:"searchDomain"`
 	Nameservers  []string            `json:"nameservers"`
 	IPConfig     map[string]IPConfig `json:"ipConfig"`
+	// PackageUpgrade controls Proxmox's cloud-init `ciupgrade` — whether
+	// the guest runs a full `apt dist-upgrade` on first boot. Proxmox VE
+	// 8.2+ defaults this ON, which makes every fresh clone do a slow,
+	// network-dependent upgrade (and snap refresh) during cloud-init's
+	// final phase; on a flaky link that can wedge cloud-init indefinitely
+	// and stall provisioning. openctl defaults it OFF (nil ⇒ ciupgrade=0)
+	// so clones boot fast and deterministically. Set true to opt back in.
+	// Requires Proxmox VE 8.2 or newer (the param didn't exist before).
+	PackageUpgrade *bool `json:"packageUpgrade"`
 }
 
 // IPConfig defines IP configuration
@@ -397,6 +406,9 @@ func ParseVMSpec(r *protocol.Resource) (*VMSpec, error) {
 				}
 			}
 		}
+		if pu, ok := ci["packageUpgrade"].(bool); ok {
+			spec.CloudInit.PackageUpgrade = &pu
+		}
 		if sd, ok := ci["searchDomain"].(string); ok {
 			spec.CloudInit.SearchDomain = sd
 		}
@@ -477,6 +489,12 @@ func (s *VMSpec) ToProxmoxConfig() map[string]any {
 	}
 
 	if s.CloudInit != nil {
+		// Default first-boot package upgrade OFF (see CloudInitSpec.PackageUpgrade).
+		if s.CloudInit.PackageUpgrade != nil && *s.CloudInit.PackageUpgrade {
+			params["ciupgrade"] = 1
+		} else {
+			params["ciupgrade"] = 0
+		}
 		if s.CloudInit.User != "" {
 			params["ciuser"] = s.CloudInit.User
 		}
