@@ -40,11 +40,12 @@ const (
 	StatusSucceeded   = "succeeded"
 	StatusFailed      = "failed"
 	StatusInterrupted = "interrupted"
-	// StatusCancelled means a pending op was canceled before the
-	// dispatcher claimed it. Distinct from `failed` so the UI/CLI can
-	// distinguish intentional cancellation from provider errors. Running
-	// ops can't currently be canceled (cooperative cancellation deferred
-	// to the per-provider audits).
+	// StatusCancelled means an op was canceled by a user — either a pending
+	// op flipped before the dispatcher claimed it (CancelPending), or a
+	// running op whose context the dispatcher aborted (CancelRunning), in
+	// which case cancellation is cooperative: the op stops once its provider
+	// yields to the canceled context. Distinct from `failed` so the UI/CLI
+	// can tell intentional cancellation from provider errors.
 	StatusCancelled = "canceled"
 )
 
@@ -286,8 +287,12 @@ func (s *Store) ClaimNextPending(ctx context.Context) (*Operation, error) {
 // submissions all targeting the same resource (Submit's GC alone leaves
 // retain+1 because the just-inserted pending op isn't yet a completed op).
 func (s *Store) Complete(ctx context.Context, id, status, errMsg, resultJSON string) error {
-	if status != StatusSucceeded && status != StatusFailed {
-		return fmt.Errorf("complete: status must be %s or %s, got %s", StatusSucceeded, StatusFailed, status)
+	// Succeeded/Failed are the normal terminal states; Canceled is written
+	// here when a user cancels a *running* op (the dispatcher aborts its
+	// context and records the cancellation). Pending-op cancellation goes
+	// through CancelPending instead.
+	if status != StatusSucceeded && status != StatusFailed && status != StatusCancelled {
+		return fmt.Errorf("complete: status must be %s, %s, or %s, got %s", StatusSucceeded, StatusFailed, StatusCancelled, status)
 	}
 	if _, err := s.db.ExecContext(ctx,
 		`UPDATE operations SET status = ?, error = ?, result_json = ?, completed_at = ?

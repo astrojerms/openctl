@@ -568,8 +568,15 @@ phase plan when ready to commit.
       credential-per-provider case; secrets never leave the server
       (has_secret bool + edit-with-blank-preserves semantics).
       Multi-context configs still editable by hand.
-- [ ] **Cancel of `running` ops** — cooperative cancellation hooks in
-      proxmox and k3s providers. U7 only does `pending` cancel.
+- [x] **Cancel of `running` ops** — the dispatcher wraps each op in a
+      per-op cancelable context and registers a cancel func; CancelOperation
+      aborts a running op's context (CancelRunning), which the op completes
+      as `canceled` (Store.Complete now accepts the canceled terminal
+      status; the completion write is detached from the canceled context so
+      it still lands). Cancellation is cooperative — the op stops once its
+      provider yields (proxmox threads ctx through its HTTP client; k3s
+      checks ctx between install steps). The ops drawer's Cancel button now
+      shows on running rows too.
 - [ ] **Client-side CUE WASM validation** — faster editor diagnostics
       without a server roundtrip.
 - [x] **Historical diff** — RepoService.GetResourceHistory +

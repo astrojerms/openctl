@@ -115,7 +115,14 @@ func New(opts Options) (*Server, error) {
 	}
 	apiv1.RegisterResourceServiceServer(g, newResourceHandler(registry, opts.Operations, opts.Dispatcher, opts.Manifests))
 	if opts.Operations != nil {
-		apiv1.RegisterOperationServiceServer(g, newOperationHandler(opts.Operations))
+		// Guard against a nil *Dispatcher becoming a non-nil interface (which
+		// would make CancelOperation attempt to cancel running ops on a nil
+		// receiver). Pass a genuine nil interface when there's no dispatcher.
+		var canceler runningCanceler
+		if opts.Dispatcher != nil {
+			canceler = opts.Dispatcher
+		}
+		apiv1.RegisterOperationServiceServer(g, newOperationHandler(opts.Operations, canceler))
 	}
 	apiv1.RegisterSchemaServiceServer(g, newSchemaHandler())
 	if opts.Sessions != nil {

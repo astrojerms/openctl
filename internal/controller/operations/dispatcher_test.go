@@ -25,12 +25,28 @@ type fakeProvider struct {
 	deleteErr error
 	applyOut  *protocol.Resource
 	getOut    *protocol.Resource
+	// blockUntilCtx makes Apply block until its context is canceled, then
+	// return ctx.Err() — used to exercise running-op cancellation.
+	blockUntilCtx bool
+	// applyStarted, when non-nil, is signaled once as Apply is entered so a
+	// test can wait until the op is genuinely in flight.
+	applyStarted chan struct{}
 }
 
 func (f *fakeProvider) Name() string    { return f.name }
 func (f *fakeProvider) Kinds() []string { return f.kinds }
-func (f *fakeProvider) Apply(_ context.Context, m *protocol.Resource) (*protocol.Resource, error) {
+func (f *fakeProvider) Apply(ctx context.Context, m *protocol.Resource) (*protocol.Resource, error) {
 	f.applies.Add(1)
+	if f.applyStarted != nil {
+		select {
+		case f.applyStarted <- struct{}{}:
+		default:
+		}
+	}
+	if f.blockUntilCtx {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	if f.applyErr != nil {
 		return nil, f.applyErr
 	}
@@ -146,6 +162,53 @@ func TestDispatcherProcessesApplyOp(t *testing.T) {
 	}
 	if final.ResultJSON == "" {
 		t.Error("ResultJSON is empty")
+	}
+}
+
+func TestCancelRunningOpCompletesAsCancelled(t *testing.T) {
+	p := &fakeProvider{
+		name:          "fake",
+		kinds:         []string{"FakeKind"},
+		blockUntilCtx: true,
+		applyStarted:  make(chan struct{}, 1),
+	}
+	store, d := newDispatcherWithStore(t, p)
+	d.Start(context.Background())
+	t.Cleanup(d.Stop)
+
+	op, err := store.Submit(context.Background(), &Operation{
+		Type:         TypeApply,
+		APIVersion:   "fake.openctl.io/v1",
+		Kind:         "FakeKind",
+		ResourceName: "x",
+		ManifestJSON: `{"apiVersion":"fake.openctl.io/v1","kind":"FakeKind","metadata":{"name":"x"}}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Notify()
+
+	// Wait until the provider's Apply is genuinely in flight before canceling.
+	select {
+	case <-p.applyStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("op never entered Apply")
+	}
+
+	if !d.CancelRunning(op.ID) {
+		t.Fatal("CancelRunning returned false for an in-flight op")
+	}
+	got := waitForStatus(t, store, op.ID, StatusCancelled, 2*time.Second)
+	if got.Error != "canceled by user while running" {
+		t.Errorf("cancel message = %q, want the clean canceled message", got.Error)
+	}
+}
+
+func TestCancelRunningUnknownOpIsNoop(t *testing.T) {
+	p := &fakeProvider{name: "fake", kinds: []string{"FakeKind"}}
+	_, d := newDispatcherWithStore(t, p)
+	if d.CancelRunning("op-nonexistent") {
+		t.Error("CancelRunning should return false for an unknown op")
 	}
 }
 

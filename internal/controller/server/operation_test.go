@@ -32,7 +32,7 @@ func TestGetOperationOmitsChildrenByDefault(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	h := newOperationHandler(store)
+	h := newOperationHandler(store, nil)
 	got, err := h.GetOperation(ctx, &apiv1.GetOperationRequest{Id: parent.ID})
 	if err != nil {
 		t.Fatalf("GetOperation: %v", err)
@@ -65,7 +65,7 @@ func TestGetOperationIncludesChildrenWhenRequested(t *testing.T) {
 	})
 	_ = store.EndChild(ctx, step.ID, operations.StatusSucceeded, "", "")
 
-	h := newOperationHandler(store)
+	h := newOperationHandler(store, nil)
 	got, err := h.GetOperation(ctx, &apiv1.GetOperationRequest{
 		Id:              parent.ID,
 		IncludeChildren: true,
@@ -96,7 +96,7 @@ func TestCancelOperationCancelsPending(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := newOperationHandler(store)
+	h := newOperationHandler(store, nil)
 	resp, err := h.CancelOperation(ctx, &apiv1.CancelOperationRequest{Id: op.ID})
 	if err != nil {
 		t.Fatalf("CancelOperation: %v", err)
@@ -128,7 +128,7 @@ func TestCancelOperationRefusesRunningOp(t *testing.T) {
 	if _, err := store.ClaimNextPending(ctx); err != nil {
 		t.Fatal(err)
 	}
-	h := newOperationHandler(store)
+	h := newOperationHandler(store, nil)
 	_, err := h.CancelOperation(ctx, &apiv1.CancelOperationRequest{Id: op.ID})
 	if err == nil {
 		t.Fatal("want FailedPrecondition, got nil")
@@ -137,9 +137,62 @@ func TestCancelOperationRefusesRunningOp(t *testing.T) {
 
 func TestCancelOperationMissingReturnsNotFound(t *testing.T) {
 	store := openOpStore(t)
-	h := newOperationHandler(store)
+	h := newOperationHandler(store, nil)
 	_, err := h.CancelOperation(context.Background(), &apiv1.CancelOperationRequest{Id: "op-missing"})
 	if err == nil {
 		t.Fatal("want NotFound, got nil")
+	}
+}
+
+type fakeCanceler struct {
+	called []string
+	result bool
+}
+
+func (f *fakeCanceler) CancelRunning(id string) bool {
+	f.called = append(f.called, id)
+	return f.result
+}
+
+// With a canceler wired, canceling a running op requests cooperative
+// cancellation and succeeds (the op transitions to canceled asynchronously).
+func TestCancelOperationRequestsRunningCancel(t *testing.T) {
+	store := openOpStore(t)
+	ctx := context.Background()
+	op, _ := store.Submit(ctx, &operations.Operation{
+		Type: operations.TypeApply, APIVersion: "p.openctl.io/v1", Kind: "VM", ResourceName: "x",
+	})
+	if _, err := store.ClaimNextPending(ctx); err != nil {
+		t.Fatal(err)
+	}
+	fc := &fakeCanceler{result: true}
+	h := newOperationHandler(store, fc)
+	resp, err := h.CancelOperation(ctx, &apiv1.CancelOperationRequest{Id: op.ID})
+	if err != nil {
+		t.Fatalf("CancelOperation on running op with canceler: %v", err)
+	}
+	if len(fc.called) != 1 || fc.called[0] != op.ID {
+		t.Errorf("CancelRunning calls = %v, want [%s]", fc.called, op.ID)
+	}
+	if resp.GetStatus() != operations.StatusRunning {
+		t.Errorf("status = %q, want running (async transition to canceled)", resp.GetStatus())
+	}
+}
+
+// If the op is no longer running by the time we try (canceler returns false),
+// fall back to FailedPrecondition rather than reporting a phantom cancel.
+func TestCancelOperationRunningCancelRaceFallsBack(t *testing.T) {
+	store := openOpStore(t)
+	ctx := context.Background()
+	op, _ := store.Submit(ctx, &operations.Operation{
+		Type: operations.TypeApply, APIVersion: "p.openctl.io/v1", Kind: "VM", ResourceName: "x",
+	})
+	if _, err := store.ClaimNextPending(ctx); err != nil {
+		t.Fatal(err)
+	}
+	fc := &fakeCanceler{result: false}
+	h := newOperationHandler(store, fc)
+	if _, err := h.CancelOperation(ctx, &apiv1.CancelOperationRequest{Id: op.ID}); err == nil {
+		t.Fatal("want FailedPrecondition when canceler reports not-running")
 	}
 }
