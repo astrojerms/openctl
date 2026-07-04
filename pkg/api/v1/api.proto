@@ -395,6 +395,23 @@ service ConfigService {
   rpc DeleteProvider(DeleteProviderRequest) returns (DeleteProviderResponse) {
     option (google.api.http) = { delete: "/v1/config/providers/{name}" };
   }
+
+  // GetControllerConfig returns the editable controller-behavior tunables
+  // from ~/.openctl/config.yaml (reconciler + operation retention), with
+  // built-in defaults filled in for any omitted block. These are read once
+  // at controller startup, so changes need a restart to take effect — the
+  // response's restart_required flag is always true, for the UI banner.
+  rpc GetControllerConfig(GetControllerConfigRequest) returns (GetControllerConfigResponse) {
+    option (google.api.http) = { get: "/v1/config/controller" };
+  }
+
+  // UpdateControllerConfig writes the tunables back to config.yaml, merging
+  // into (not replacing) the existing file so provider/manifests blocks are
+  // preserved. Validates reconciler_interval as a Go duration and rejects a
+  // negative retention. Returns the persisted, defaulted values.
+  rpc UpdateControllerConfig(UpdateControllerConfigRequest) returns (UpdateControllerConfigResponse) {
+    option (google.api.http) = { put: "/v1/config/controller" body: "*" };
+  }
 }
 
 message ListProvidersRequest {}
@@ -436,6 +453,38 @@ message DeleteProviderRequest {
 }
 
 message DeleteProviderResponse {}
+
+// ControllerConfig carries the editable controller-behavior tunables. All
+// are startup-only (baked into their components at construction), so a
+// controller restart is needed for a change to take effect.
+message ControllerConfig {
+  // reconciler.enabled — the background drift ticker. Defaults to true.
+  bool reconciler_enabled = 1;
+  // reconciler.interval — Go duration between reconcile passes (e.g. "5m",
+  // "30s"). Defaults to "5m".
+  string reconciler_interval = 2;
+  // operations.retainPerResource — completed-op rows kept per resource
+  // before pruning. Defaults to 50; must be non-negative.
+  int32 op_retain_per_resource = 3;
+}
+
+message GetControllerConfigRequest {}
+
+message GetControllerConfigResponse {
+  ControllerConfig config = 1;
+  // Always true today: every tunable in ControllerConfig is read once at
+  // startup, so the UI should tell the user changes apply after a restart.
+  bool restart_required = 2;
+}
+
+message UpdateControllerConfigRequest {
+  ControllerConfig config = 1;
+}
+
+message UpdateControllerConfigResponse {
+  ControllerConfig config = 1;
+  bool restart_required = 2;
+}
 
 // TemplateService exposes parameterized starters — templates declare
 // a small set of user-fillable parameters and render into a full

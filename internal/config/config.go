@@ -17,8 +17,25 @@ type Config struct {
 	Controller *Controller          `yaml:"controller,omitempty"`
 	Manifests  *Manifests           `yaml:"manifests,omitempty"`
 	Reconciler *Reconciler          `yaml:"reconciler,omitempty"`
+	Operations *Operations          `yaml:"operations,omitempty"`
 	Templates  *Templates           `yaml:"templates,omitempty"`
 }
+
+// Operations configures the controller's operation store. nil/omitted →
+// built-in defaults. Like the other controller-behavior blocks, changes
+// here only take effect on the next controller start.
+type Operations struct {
+	// RetainPerResource caps how many completed operation rows the GC keeps
+	// per resource; older ones are pruned. 0/omitted → the built-in default
+	// (DefaultRetainPerResource). Must be non-negative.
+	RetainPerResource int `yaml:"retainPerResource,omitempty"`
+}
+
+// DefaultRetainPerResource is the built-in cap on retained completed ops per
+// resource, used when config omits operations.retainPerResource. Kept here
+// (not in the operations package) so both the controller entrypoint and the
+// ConfigService can agree on the fallback without an import cycle.
+const DefaultRetainPerResource = 50
 
 // Templates configures where the controller scans for user-authored CUE
 // templates, served alongside the compiled-in starters through the same

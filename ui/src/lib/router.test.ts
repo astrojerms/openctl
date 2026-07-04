@@ -43,4 +43,9 @@ describe('routeHref', () => {
       }),
     ).toBe('#/k/k3s.openctl.io/v1/Cluster/dev/edit');
   });
+
+  it('routes settings and providers to their flat hashes', () => {
+    expect(routeHref({ name: 'providers' })).toBe('#/providers');
+    expect(routeHref({ name: 'settings' })).toBe('#/settings');
+  });
 });
