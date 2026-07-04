@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { statusBadge } from './format';
+import { operationStatusBadge, statusBadge } from './format';
 
 describe('statusBadge', () => {
   it('returns unknown for missing status', () => {
@@ -32,5 +32,27 @@ describe('statusBadge', () => {
       label: 'running',
       tone: 'good',
     });
+  });
+});
+
+describe('operationStatusBadge', () => {
+  it('maps active operation states to warn', () => {
+    expect(operationStatusBadge('pending')).toEqual({ label: 'pending', tone: 'warn' });
+    expect(operationStatusBadge('running')).toEqual({ label: 'running', tone: 'warn' });
+  });
+
+  it('maps succeeded operations to good', () => {
+    expect(operationStatusBadge('succeeded')).toEqual({ label: 'succeeded', tone: 'good' });
+  });
+
+  it('maps failed terminal operation states to bad using backend spelling', () => {
+    expect(operationStatusBadge('failed')).toEqual({ label: 'failed', tone: 'bad' });
+    expect(operationStatusBadge('interrupted')).toEqual({ label: 'interrupted', tone: 'bad' });
+    expect(operationStatusBadge('canceled')).toEqual({ label: 'canceled', tone: 'bad' });
+  });
+
+  it('keeps unknown operation states visible', () => {
+    expect(operationStatusBadge('queued-ish')).toEqual({ label: 'queued-ish', tone: 'unknown' });
+    expect(operationStatusBadge(undefined)).toEqual({ label: '—', tone: 'unknown' });
   });
 });

@@ -33,3 +33,19 @@ export function statusBadge(status: Record<string, unknown> | undefined): Status
   const lower = raw.toLowerCase();
   return { label: raw, tone: TONE_BY_LABEL[lower] ?? 'unknown' };
 }
+
+export function operationStatusBadge(status: string | undefined): StatusBadge {
+  switch (status) {
+    case 'succeeded':
+      return { label: status, tone: 'good' };
+    case 'pending':
+    case 'running':
+      return { label: status, tone: 'warn' };
+    case 'failed':
+    case 'interrupted':
+    case 'canceled':
+      return { label: status, tone: 'bad' };
+    default:
+      return { label: status || '—', tone: 'unknown' };
+  }
+}

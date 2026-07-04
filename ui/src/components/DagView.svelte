@@ -1,6 +1,9 @@
 <script lang="ts">
   import { resources, type GraphNode, type GraphEdge } from '../lib/api';
-  import { routeHref } from '../lib/router';
+  import { operationStatusBadge } from '../lib/format';
+  import { ops as opsStore } from '../lib/ops';
+  import { focusOpsDrawer } from '../lib/opsDrawer';
+  import type { OperationRow } from '../lib/watch';
 
   export let apiVersion: string;
   export let kind: string;
@@ -42,7 +45,7 @@
   // source; capping the relaxation at |V| passes keeps it terminating even
   // if a malformed graph ever contained a cycle.
   const BOX_W = 150;
-  const BOX_H = 46;
+  const BOX_H = 58;
   const GAP_X = 28;
   const GAP_Y = 56;
   const PAD = 20;
@@ -53,8 +56,10 @@
   let posById: Record<string, Placed> = {};
   let width = 0;
   let height = 0;
+  let opsByResource: Record<string, OperationRow> = {};
 
   $: layout(nodes, edges);
+  $: opsByResource = indexOpsByResource($opsStore);
 
   function layout(ns: GraphNode[], es: GraphEdge[]) {
     if (ns.length === 0) {
@@ -151,13 +156,62 @@
     }
   }
 
-  function href(node: GraphNode): string {
-    return routeHref({
-      name: 'detail',
+  const INTERESTING_OP_STATUSES = new Set(['pending', 'running', 'failed', 'interrupted', 'canceled']);
+
+  function resourceKey(apiVersion: string | undefined, k: string | undefined, name: string | undefined): string {
+    if (!apiVersion || !k || !name) return '';
+    return `${apiVersion}/${k}/${name}`;
+  }
+
+  function flattenOps(list: OperationRow[]): OperationRow[] {
+    const out: OperationRow[] = [];
+    for (const op of list) {
+      out.push(op);
+      if (op.children?.length) out.push(...flattenOps(op.children));
+    }
+    return out;
+  }
+
+  function opTime(op: OperationRow): number {
+    const raw = op.completedAt || op.startedAt || op.submittedAt || '';
+    const t = Date.parse(raw);
+    return Number.isFinite(t) ? t : 0;
+  }
+
+  function indexOpsByResource(list: OperationRow[]): Record<string, OperationRow> {
+    const next: Record<string, OperationRow> = {};
+    for (const op of flattenOps(list)) {
+      if (!INTERESTING_OP_STATUSES.has(op.status)) continue;
+      const key = resourceKey(op.apiVersion, op.kind, op.resourceName);
+      if (!key) continue;
+      const current = next[key];
+      if (!current || opTime(op) >= opTime(current)) {
+        next[key] = op;
+      }
+    }
+    return next;
+  }
+
+  function opFor(node: GraphNode): OperationRow | null {
+    return opsByResource[resourceKey(node.apiVersion, node.kind, node.name)] ?? null;
+  }
+
+  function opTone(op: OperationRow | null): string {
+    return operationStatusBadge(op?.status).tone;
+  }
+
+  function openNodeOps(node: GraphNode) {
+    focusOpsDrawer({
       apiVersion: node.apiVersion,
       kind: node.kind,
       resourceName: node.name,
     });
+  }
+
+  function onNodeKeydown(event: KeyboardEvent, node: GraphNode) {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    openNodeOps(node);
   }
 </script>
 
@@ -198,16 +252,33 @@
         {/each}
 
         {#each placed as p}
-          <a href={href(p.node)} class="node-link">
-            <g class="node {toneClass(p.node)}" class:root={p.node.root} transform="translate({p.x},{p.y})">
-              <rect width={BOX_W} height={BOX_H} rx="7" />
-              <text class="kind" x="10" y="19">{p.node.kind}</text>
-              <text class="name" x="10" y="35">{p.node.name}</text>
-              <circle class="pill" cx={BOX_W - 14} cy="16" r="5" />
-              {#if !p.node.managed}<text class="ro" x={BOX_W - 10} y="39" text-anchor="end">read-only</text>{/if}
-              <title>{p.node.kind}/{p.node.name} · {p.node.managed ? p.node.status : 'observed (unmanaged)'}</title>
-            </g>
-          </a>
+          {@const op = opFor(p.node)}
+          <g
+            class="node node-click {toneClass(p.node)}"
+            class:root={p.node.root}
+            transform="translate({p.x},{p.y})"
+            role="button"
+            tabindex="0"
+            on:click={() => openNodeOps(p.node)}
+            on:keydown={(event) => onNodeKeydown(event, p.node)}
+          >
+            <rect width={BOX_W} height={BOX_H} rx="7" />
+            <text class="kind" x="10" y="18">{p.node.kind}</text>
+            <text class="name" x="10" y="34">{p.node.name}</text>
+            <circle class="pill" cx={BOX_W - 14} cy="15" r="5" />
+            {#if op}
+              <g class="op op-{opTone(op)}" transform="translate(10,40)">
+                <rect width="78" height="14" rx="7" />
+                <text x="39" y="10" text-anchor="middle">{op.status}</text>
+              </g>
+            {:else if !p.node.managed}
+              <text class="ro" x="10" y="50">read-only</text>
+            {/if}
+            <title>
+              {p.node.kind}/{p.node.name} · {p.node.managed ? p.node.status : 'observed (unmanaged)'}
+              {op ? ` · op ${op.status} ${op.id.slice(0, 12)}` : ' · click for operations'}
+            </title>
+          </g>
         {/each}
       </svg>
     </div>
@@ -277,8 +348,9 @@
     stroke: #4a8ef0;
   }
 
-  .node-link {
+  .node-click {
     cursor: pointer;
+    outline: none;
   }
   .node rect {
     fill: #2c2c2c;
@@ -286,7 +358,8 @@
     stroke-width: 1.5;
     transition: stroke 120ms, fill 120ms;
   }
-  .node-link:hover rect {
+  .node-click:hover > rect,
+  .node-click:focus > rect {
     stroke: #4a8ef0;
     fill: #313131;
   }
@@ -332,8 +405,22 @@
   .node.dim .pill {
     fill: #555;
   }
-  /* SVG anchor styling: strip the default underline/colour. */
-  a.node-link {
-    text-decoration: none;
+  .op rect {
+    stroke: none;
+  }
+  .op text {
+    font-size: 9px;
+    font-weight: 600;
+  }
+  .op-good rect { fill: rgba(46, 160, 67, 0.24); }
+  .op-good text { fill: #5fdb78; }
+  .op-warn rect { fill: rgba(255, 184, 0, 0.24); }
+  .op-warn text { fill: #ffce4d; }
+  .op-bad rect { fill: rgba(248, 81, 73, 0.24); }
+  .op-bad text { fill: #ff8980; }
+  .op-unknown rect { fill: rgba(127, 127, 127, 0.24); }
+  .op-unknown text { fill: #aaa; }
+  .node-click:focus > rect {
+    stroke-width: 2;
   }
 </style>

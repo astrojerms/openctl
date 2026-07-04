@@ -43,8 +43,9 @@ this session. Remaining candidates for the next round:
 - **UI DAG view for composite resources** ✅ *done* —
   `Detail.svelte` for a Cluster (or any composite) renders the
   parent + children as an SVG topology graph via the new
-  `GetChildrenGraph` RPC + `DagView.svelte`. Phase U9 below
-  (U9.1/U9.2/U9.4 shipped; U9.3 ops-overlay is a follow-up).
+  `GetChildrenGraph` RPC + `DagView.svelte`, including live operation
+  overlays and click-through into the ops drawer. Phase U9 below is
+  complete.
 - **Retire `applyExisting`** ✅ *done* — count-up / respec / delete now
   run exclusively through the Plan/dispatcher model; the legacy
   imperative executors (`applyCountUp`, `applyRespecs`, and
@@ -502,7 +503,7 @@ Punch list (unstarted, prioritized):
       left-border rail. Fixes the awkward alignment on things like
       `cloudInit.ipConfig`.
 
-### Phase U9 — Composite DAG visualization (mostly shipped)
+### Phase U9 — Composite DAG visualization (shipped)
 
 Now that arch Phase 8 has landed the plumbing (Plan output, child
 owner labels, per-child ops rows via the dispatcher refactor),
@@ -526,12 +527,14 @@ the flat children list.
       and the strict CSP disfavors CDN libs). Node = kind + name +
       status pill; `owns` edges dashed-gray, `ref` edges accent-blue
       with the source field on hover. Click a node to open its Detail.
-- [~] **U9.3** — Live status: `DagView` re-fetches the graph on every
-      Watch-driven reload (Detail bumps a `version` prop), so status
-      pills track observed state live. NOT yet done: overlaying the
-      per-child *ops* row (running/failed from the operations table)
-      and click-through into the ops drawer — the pill reflects
-      observed provider state, not the in-flight op. Follow-up.
+- [x] **U9.3** — Live operation overlay. `DagView` joins graph nodes
+      against the live operations store by `apiVersion/kind/name`,
+      flattens parent + child op rows, and shows the latest
+      pending/running/failed/interrupted/canceled op as a compact node
+      pill. Clicking a graph node now opens the ops drawer focused on
+      that resource, auto-expanding parent rows when the matching op is
+      a child step. Operation status tone mapping is centralized in
+      `format.ts`, including the backend's `canceled` spelling.
 - [x] **U9.4** — Observed-only / unmanaged children (no applied
       manifest, not Planner-authored) render dim with a "read-only"
       badge and no `ref` edges, since no `$ref` metadata exists.

@@ -1,8 +1,10 @@
 <script lang="ts">
   import { ops, opsError } from '../lib/ops';
+  import { clearOpsDrawerFocus, opsDrawerFocus, type OpsDrawerFocus } from '../lib/opsDrawer';
   import { routeHref, navigate } from '../lib/router';
   import { operations as opsApi } from '../lib/api';
   import type { OperationRow } from '../lib/watch';
+  import { operationStatusBadge } from '../lib/format';
 
   // Persisted across re-renders inside the shell. Collapsed by default
   // so it doesn't eat screen real estate on first visit.
@@ -20,6 +22,7 @@
   let filterStatus = '';
   let filterSource = '';
   let filterText = '';
+  let lastAppliedFocus = '';
 
   function toggle() {
     open = !open;
@@ -41,15 +44,7 @@
   }
 
   function statusTone(s: string): string {
-    switch (s) {
-      case 'succeeded': return 'good';
-      case 'failed':
-      case 'interrupted': return 'bad';
-      case 'cancelled': return 'unknown';
-      case 'running':
-      case 'pending': return 'warn';
-      default: return 'unknown';
-    }
+    return operationStatusBadge(s).tone;
   }
 
   // Both pending and running ops can be canceled: pending ones flip
@@ -60,7 +55,7 @@
   }
 
   function isReapplicable(s: string): boolean {
-    return s === 'failed' || s === 'interrupted' || s === 'cancelled';
+    return s === 'failed' || s === 'interrupted' || s === 'canceled';
   }
 
   async function doCancel(id: string) {
@@ -92,8 +87,73 @@
   // Recent activity badge: count of ops still in flight.
   $: inflight = $ops.filter((o) => o.status === 'pending' || o.status === 'running').length;
 
+  function focusKey(f: OpsDrawerFocus | null): string {
+    if (!f) return '';
+    return [f.apiVersion ?? '', f.kind ?? '', f.resourceName ?? '', f.opId ?? ''].join('/');
+  }
+
+  function opMatchesFocus(op: OperationRow, f: OpsDrawerFocus | null): boolean {
+    if (!f) return true;
+    if (f.opId) return op.id === f.opId;
+    if (f.apiVersion && op.apiVersion !== f.apiVersion) return false;
+    if (f.kind && op.kind !== f.kind) return false;
+    if (f.resourceName && op.resourceName !== f.resourceName) return false;
+    return true;
+  }
+
+  function opOrChildMatchesFocus(op: OperationRow, f: OpsDrawerFocus | null): boolean {
+    if (!f) return true;
+    if (opMatchesFocus(op, f)) return true;
+    return (op.children ?? []).some((ch) => opMatchesFocus(ch, f));
+  }
+
+  function opIsFocused(op: OperationRow, f: OpsDrawerFocus | null): boolean {
+    return !!f && opMatchesFocus(op, f);
+  }
+
+  function focusLabel(f: OpsDrawerFocus | null): string {
+    if (!f) return '';
+    if (f.kind && f.resourceName) return `${f.kind}/${f.resourceName}`;
+    if (f.opId) return f.opId.slice(0, 12);
+    return 'operation';
+  }
+
+  $: {
+    const focus = $opsDrawerFocus;
+    const key = focusKey(focus);
+    if (key && key !== lastAppliedFocus) {
+      open = true;
+      filterStatus = '';
+      filterSource = '';
+      filterText = '';
+      const nextExpanded = { ...expanded };
+      for (const op of $ops) {
+        if ((op.children ?? []).some((ch) => opMatchesFocus(ch, focus))) {
+          nextExpanded[op.id] = true;
+        }
+      }
+      expanded = nextExpanded;
+      lastAppliedFocus = key;
+    } else if (!key) {
+      lastAppliedFocus = '';
+    }
+  }
+
+  $: if ($opsDrawerFocus) {
+    const nextExpanded = { ...expanded };
+    let changed = false;
+    for (const op of $ops) {
+      if ((op.children ?? []).some((ch) => opMatchesFocus(ch, $opsDrawerFocus)) && !nextExpanded[op.id]) {
+        nextExpanded[op.id] = true;
+        changed = true;
+      }
+    }
+    if (changed) expanded = nextExpanded;
+  }
+
   // Apply the U7 filter set against the in-memory ops list.
   $: visible = $ops.filter((o) => {
+    if (!opOrChildMatchesFocus(o, $opsDrawerFocus)) return false;
     if (filterStatus && o.status !== filterStatus) return false;
     if (filterSource && (o.source || '') !== filterSource) return false;
     if (filterText) {
@@ -130,7 +190,7 @@
             <option value="succeeded">succeeded</option>
             <option value="failed">failed</option>
             <option value="interrupted">interrupted</option>
-            <option value="cancelled">cancelled</option>
+            <option value="canceled">canceled</option>
           </select>
         </label>
         <label>
@@ -149,6 +209,12 @@
           <button class="clear-filters" on:click={() => { filterStatus=''; filterSource=''; filterText=''; }}>Clear</button>
         {/if}
       </div>
+      {#if $opsDrawerFocus}
+        <div class="focus-bar">
+          <span>Focused on {focusLabel($opsDrawerFocus)}</span>
+          <button type="button" on:click={clearOpsDrawerFocus}>Show all</button>
+        </div>
+      {/if}
 
       {#if $ops.length === 0}
         <p class="muted">No operations yet. Apply a resource via CLI or UI to see one here.</p>
@@ -171,7 +237,7 @@
           <tbody>
             {#each visible as op (op.id)}
               {@const hasChildren = (op.children?.length ?? 0) > 0}
-              <tr>
+              <tr class:focused={opIsFocused(op, $opsDrawerFocus)}>
                 <td class="expand-cell">
                   {#if hasChildren}
                     <button class="expand-btn" on:click={() => toggleRow(op.id)} aria-expanded={!!expanded[op.id]}>
@@ -227,7 +293,7 @@
                   <td colspan="7">
                     <ul class="children-list">
                       {#each op.children ?? [] as ch (ch.id)}
-                        <li>
+                        <li class:focused={opIsFocused(ch, $opsDrawerFocus)}>
                           <span class="status status-{statusTone(ch.status)} child-status">{ch.status}</span>
                           <span class="mono small">{ch.type}{ch.label ? `: ${ch.label}` : ''}</span>
                           {#if ch.kind && ch.resourceName}
@@ -416,6 +482,37 @@
     color: inherit;
     border-radius: 4px;
     cursor: pointer;
+  }
+  .focus-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin: 0 0 0.65rem;
+    padding: 0.45rem 0.65rem;
+    border: 1px solid rgba(110, 168, 255, 0.28);
+    border-radius: 6px;
+    background: rgba(74, 142, 240, 0.1);
+    color: #b9d3ff;
+    font-size: 0.82rem;
+  }
+  .focus-bar button {
+    border: 1px solid rgba(110, 168, 255, 0.35);
+    border-radius: 4px;
+    background: transparent;
+    color: #8db8ff;
+    cursor: pointer;
+    padding: 0.2em 0.65em;
+    font-size: 0.78rem;
+  }
+  tr.focused > td {
+    background: rgba(74, 142, 240, 0.12);
+  }
+  .children-list li.focused {
+    background: rgba(74, 142, 240, 0.12);
+    border-radius: 4px;
+    margin-left: -0.35rem;
+    padding-left: 0.35rem;
   }
   .expand-cell { width: 1.5rem; }
   .expand-btn {
