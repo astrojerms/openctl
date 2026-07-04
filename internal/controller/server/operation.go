@@ -15,16 +15,26 @@ import (
 	"github.com/openctl/openctl/pkg/protocol"
 )
 
-// operationHandler implements apiv1.OperationServiceServer. Read-only
-// surface — no mutations beyond what Apply/Delete already enqueue via the
-// resource handler.
-type operationHandler struct {
-	apiv1.UnimplementedOperationServiceServer
-	store *operations.Store
+// runningCanceler aborts an in-flight op's context. Implemented by the
+// dispatcher. Nil when no dispatcher is wired (some unit tests) — running
+// ops then stay non-cancelable (FailedPrecondition), preserving the
+// pending-only behavior.
+type runningCanceler interface {
+	CancelRunning(id string) bool
 }
 
-func newOperationHandler(store *operations.Store) *operationHandler {
-	return &operationHandler{store: store}
+// operationHandler implements apiv1.OperationServiceServer. Mostly a
+// read-only surface; CancelOperation is the one mutation — it cancels a
+// pending op (store) or requests cooperative cancellation of a running one
+// (canceler).
+type operationHandler struct {
+	apiv1.UnimplementedOperationServiceServer
+	store    *operations.Store
+	canceler runningCanceler
+}
+
+func newOperationHandler(store *operations.Store, canceler runningCanceler) *operationHandler {
+	return &operationHandler{store: store, canceler: canceler}
 }
 
 func (h *operationHandler) GetOperation(ctx context.Context, req *apiv1.GetOperationRequest) (*apiv1.Operation, error) {
@@ -102,14 +112,26 @@ func (h *operationHandler) CancelOperation(ctx context.Context, req *apiv1.Cance
 		}
 		return nil, status.Errorf(codes.Internal, "cancel: %v", err)
 	}
-	if res.Status != operations.StatusCancelled {
-		return nil, status.Errorf(codes.FailedPrecondition,
-			"operation %s status=%s: %s", req.GetId(), res.Status, res.Reason)
+	// Pending op was flipped to canceled synchronously.
+	if res.Status == operations.StatusCancelled {
+		return &apiv1.CancelOperationResponse{
+			Status:  res.Status,
+			Message: fmt.Sprintf("operation %s canceled", req.GetId()),
+		}, nil
 	}
-	return &apiv1.CancelOperationResponse{
-		Status:  res.Status,
-		Message: fmt.Sprintf("operation %s canceled", req.GetId()),
-	}, nil
+	// Running op: request cooperative cancellation via the dispatcher. The op
+	// transitions to canceled asynchronously once its provider yields to the
+	// aborted context; the client observes that via Watch.
+	if res.Status == operations.StatusRunning && h.canceler != nil {
+		if h.canceler.CancelRunning(req.GetId()) {
+			return &apiv1.CancelOperationResponse{
+				Status:  res.Status,
+				Message: fmt.Sprintf("cancellation requested for running operation %s; it will stop when the provider yields", req.GetId()),
+			}, nil
+		}
+	}
+	return nil, status.Errorf(codes.FailedPrecondition,
+		"operation %s status=%s: %s", req.GetId(), res.Status, res.Reason)
 }
 
 // opToProto converts the in-process Operation into the wire form. The

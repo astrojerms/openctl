@@ -59,6 +59,15 @@ type Dispatcher struct {
 	done    chan struct{}
 	stopMu  sync.Mutex
 	stopped bool
+
+	// runMu guards running + userCancelled. running holds a cancel func per
+	// in-flight op so a user CancelOperation can abort a running op's
+	// context. userCancelled records the ids a user explicitly canceled (vs.
+	// a controller shutdown), so execute() completes those as Canceled
+	// rather than Failed.
+	runMu         sync.Mutex
+	running       map[string]context.CancelFunc
+	userCancelled map[string]bool
 }
 
 // NewDispatcher constructs a Dispatcher. pollInterval==0 uses
@@ -68,13 +77,35 @@ func NewDispatcher(store *Store, registry *providers.Registry, manifests Manifes
 		pollInterval = DefaultPollInterval
 	}
 	return &Dispatcher{
-		store:        store,
-		registry:     registry,
-		manifests:    manifests,
-		pollInterval: pollInterval,
-		notify:       make(chan struct{}, 1),
-		done:         make(chan struct{}),
+		store:         store,
+		registry:      registry,
+		manifests:     manifests,
+		pollInterval:  pollInterval,
+		notify:        make(chan struct{}, 1),
+		done:          make(chan struct{}),
+		running:       make(map[string]context.CancelFunc),
+		userCancelled: make(map[string]bool),
 	}
+}
+
+// CancelRunning aborts the context of an in-flight op, if one with this id is
+// currently executing, and marks it as user-canceled so execute() records it
+// as Canceled rather than Failed. Returns true when a running op was
+// signaled. Cancellation is cooperative — the op stops as soon as its
+// provider yields to the canceled context (proxmox threads ctx through its
+// HTTP client; k3s checks ctx between install steps), so a long SSH step may
+// run to completion before the cancel takes effect.
+func (d *Dispatcher) CancelRunning(id string) bool {
+	d.runMu.Lock()
+	cancel, ok := d.running[id]
+	if ok {
+		d.userCancelled[id] = true
+	}
+	d.runMu.Unlock()
+	if ok {
+		cancel()
+	}
+	return ok
 }
 
 // Start launches the dispatcher goroutine. It runs until ctx cancels or
@@ -265,10 +296,45 @@ func (d *Dispatcher) DeleteManifest(ctx context.Context, raw *protocol.Resource)
 	return nil
 }
 
+// terminalOutcome maps a provider error to the op's terminal status +
+// message: StatusCancelled with a clean message when the op was canceled by
+// a user while running (its context was aborted), else StatusFailed with the
+// underlying error.
+func (d *Dispatcher) terminalOutcome(id string, err error) (status, message string) {
+	d.runMu.Lock()
+	canceled := d.userCancelled[id]
+	d.runMu.Unlock()
+	if canceled {
+		return StatusCancelled, "canceled by user while running"
+	}
+	return StatusFailed, err.Error()
+}
+
 func (d *Dispatcher) execute(ctx context.Context, op *Operation) {
+	// Per-op cancelable context so a user CancelOperation can abort this
+	// specific in-flight op (see CancelRunning). Registered for the op's
+	// lifetime; cleaned up on return.
+	ctx, cancel := context.WithCancel(ctx)
+	d.runMu.Lock()
+	d.running[op.ID] = cancel
+	d.runMu.Unlock()
+	defer func() {
+		cancel()
+		d.runMu.Lock()
+		delete(d.running, op.ID)
+		delete(d.userCancelled, op.ID)
+		d.runMu.Unlock()
+	}()
+
+	// completeCtx detaches the terminal bookkeeping write from cancellation:
+	// when a user cancels a running op we cancel `ctx`, which makes the
+	// provider return — but the Complete() that records the canceled status
+	// must still run, so it can't share the canceled context.
+	completeCtx := context.WithoutCancel(ctx)
+
 	p, err := d.registry.For(op.APIVersion)
 	if err != nil {
-		_ = d.store.Complete(ctx, op.ID, StatusFailed, err.Error(), "")
+		_ = d.store.Complete(completeCtx, op.ID, StatusFailed, err.Error(), "")
 		return
 	}
 
@@ -281,7 +347,7 @@ func (d *Dispatcher) execute(ctx context.Context, op *Operation) {
 	case TypeApply:
 		var rawManifest protocol.Resource
 		if err := json.Unmarshal([]byte(op.ManifestJSON), &rawManifest); err != nil {
-			_ = d.store.Complete(ctx, op.ID, StatusFailed, fmt.Sprintf("decode manifest: %v", err), "")
+			_ = d.store.Complete(completeCtx, op.ID, StatusFailed, fmt.Sprintf("decode manifest: %v", err), "")
 			return
 		}
 		// Wire a ChildDispatcher and manifest-source label onto ctx so
@@ -302,7 +368,7 @@ func (d *Dispatcher) execute(ctx context.Context, op *Operation) {
 					if cached, hit := d.tryCacheHitInline(applyCtx, p, &rawManifest, &resolved); hit {
 						_ = d.store.SetLabel(applyCtx, op.ID, "cached: input+refs hashes unchanged since last apply")
 						cachedJSON, _ := json.Marshal(cached)
-						_ = d.store.Complete(applyCtx, op.ID, StatusSucceeded, "", string(cachedJSON))
+						_ = d.store.Complete(completeCtx, op.ID, StatusSucceeded, "", string(cachedJSON))
 						return
 					}
 				}
@@ -310,18 +376,20 @@ func (d *Dispatcher) execute(ctx context.Context, op *Operation) {
 		}
 		result, err := d.ApplyManifest(applyCtx, &rawManifest)
 		if err != nil {
-			_ = d.store.Complete(applyCtx, op.ID, StatusFailed, err.Error(), "")
+			st, msg := d.terminalOutcome(op.ID, err)
+			_ = d.store.Complete(completeCtx, op.ID, st, msg, "")
 			return
 		}
 		var resultJSON []byte
 		if result != nil {
 			resultJSON, _ = json.Marshal(result)
 		}
-		_ = d.store.Complete(applyCtx, op.ID, StatusSucceeded, "", string(resultJSON))
+		_ = d.store.Complete(completeCtx, op.ID, StatusSucceeded, "", string(resultJSON))
 
 	case TypeDelete:
 		if err := p.Delete(ctx, op.Kind, op.ResourceName); err != nil {
-			_ = d.store.Complete(ctx, op.ID, StatusFailed, err.Error(), "")
+			st, msg := d.terminalOutcome(op.ID, err)
+			_ = d.store.Complete(completeCtx, op.ID, st, msg, "")
 			return
 		}
 		if d.manifests != nil {
@@ -330,9 +398,9 @@ func (d *Dispatcher) execute(ctx context.Context, op *Operation) {
 				log.Printf("dispatcher: delete manifest for %s %q: %v", op.Kind, op.ResourceName, err)
 			}
 		}
-		_ = d.store.Complete(ctx, op.ID, StatusSucceeded, "", "")
+		_ = d.store.Complete(completeCtx, op.ID, StatusSucceeded, "", "")
 
 	default:
-		_ = d.store.Complete(ctx, op.ID, StatusFailed, fmt.Sprintf("unknown op type %q", op.Type), "")
+		_ = d.store.Complete(completeCtx, op.ID, StatusFailed, fmt.Sprintf("unknown op type %q", op.Type), "")
 	}
 }

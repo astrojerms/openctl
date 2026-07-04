@@ -52,8 +52,11 @@
     }
   }
 
-  function isPending(s: string): boolean {
-    return s === 'pending';
+  // Both pending and running ops can be canceled: pending ones flip
+  // immediately; running ones request cooperative cancellation (the op stops
+  // once its provider yields, then transitions to canceled via Watch).
+  function isCancelable(s: string): boolean {
+    return s === 'pending' || s === 'running';
   }
 
   function isReapplicable(s: string): boolean {
@@ -206,7 +209,7 @@
                   {/if}
                 </td>
                 <td class="actions-cell">
-                  {#if isPending(op.status)}
+                  {#if isCancelable(op.status)}
                     <button class="row-btn cancel" on:click={() => doCancel(op.id)} disabled={cancelling[op.id]}>
                       {cancelling[op.id] ? 'cancelling…' : 'cancel'}
                     </button>
