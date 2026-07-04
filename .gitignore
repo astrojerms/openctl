@@ -44,3 +44,6 @@ secrets/
 # Local cluster manifests (contain personal env: IPs, SSH keys, template names)
 .cluster.yaml
 .cluster*.yaml
+
+# AI
+.claude
