@@ -31,9 +31,17 @@ import (
 	"github.com/openctl/openctl/pkg/protocol"
 )
 
-// retainPerResource controls how many completed ops per resource the GC
-// keeps around. Reasonable for a homelab; configurable later if needed.
-const retainPerResource = 50
+// resolveRetainPerResource reads operations.retainPerResource from config,
+// falling back to config.DefaultRetainPerResource. Startup-only: the value is
+// baked into the operations store at construction, so editing it via the
+// ConfigService takes effect on the next controller start.
+func resolveRetainPerResource() int {
+	cfg, err := config.Load()
+	if err != nil || cfg == nil || cfg.Operations == nil || cfg.Operations.RetainPerResource <= 0 {
+		return config.DefaultRetainPerResource
+	}
+	return cfg.Operations.RetainPerResource
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -135,7 +143,7 @@ func runServe(args []string) error {
 	// Operations store + dispatcher. On startup, mark any ops that were
 	// running when the previous controller died as `interrupted` — this is
 	// the "no auto-resume" half of the operation-model decision.
-	opStore := operations.New(db, retainPerResource)
+	opStore := operations.New(db, resolveRetainPerResource())
 	if n, err := opStore.MarkRunningInterrupted(ctx); err != nil {
 		return fmt.Errorf("mark interrupted ops: %w", err)
 	} else if n > 0 {

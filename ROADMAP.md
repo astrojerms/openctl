@@ -29,9 +29,11 @@ hardening (#17) all shipped. **Retire `applyExisting`** is now complete
 too — the imperative convergence executors are deleted and the
 Plan/dispatcher path is the sole existing-cluster converge path,
 validated on homelab (3-CP embedded-etcd HA create + full control-plane
-respec). The **UI DAG view** (Phase U9) has now shipped too —
-composite Detail pages render a real topology graph. The next candidate
-is the **UI for controller config** (see Suggested next order).
+respec). The **UI DAG view** (Phase U9) and the **UI for controller
+config** (Settings page + GetControllerConfig/UpdateControllerConfig
+RPCs) have both shipped. Remaining parked candidates: multi-user auth
+(OIDC/RBAC), client-side CUE WASM validation, mobile layout,
+plugin-defined CLI subcommands (see Future goals).
 
 ## Suggested next order
 
@@ -587,8 +589,19 @@ phase plan when ready to commit.
 - [x] **Historical diff** — RepoService.GetResourceHistory +
       GetResourceAtCommit; Detail.svelte History card with a commit picker
       diffing a revision against the current desired manifest.
-- [ ] **UI for controller config** — tunable retention, dispatcher
-      concurrency, etc.
+- [x] **UI for controller config** — new ConfigService
+      GetControllerConfig / UpdateControllerConfig RPCs
+      (`/v1/config/controller`) read/write the controller-behavior
+      blocks of `config.yaml`: reconciler (enabled + interval) and a
+      new `operations.retainPerResource` field (wired into
+      `operations.New` via `resolveRetainPerResource`). UI "Settings"
+      page (Providers-page-style form) with a persistent "restart
+      required to apply" banner — every tunable is read once at
+      startup, so there's no hot-reload. *Dispatcher concurrency* was
+      intentionally NOT exposed: the dispatcher is a single-loop,
+      one-op-per-resource design with no worker-count knob to tune.
+      Follow-up if ever wanted: a config-watch/SIGHUP reload path so
+      changes apply without a restart.
 - [ ] **Mobile-friendly layout** — not v1 but worth flagging.
 - [ ] **Plugin-defined CLI subcommands** — deferred from agent work,
       see DESIGN.md "TODO: Plugin-defined CLI subcommands."

@@ -2,12 +2,20 @@ package server
 
 import (
 	"context"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"github.com/openctl/openctl/internal/config"
 	apiv1 "github.com/openctl/openctl/pkg/api/v1"
+)
+
+// Defaults surfaced when a config block is omitted. Kept in sync with the
+// controller entrypoint (reconciler.DefaultInterval, config.DefaultRetainPerResource)
+// so Get returns the same values the controller would actually run with.
+const (
+	defaultReconcilerInterval = "5m"
 )
 
 // configHandler implements apiv1.ConfigServiceServer. Reads and
@@ -104,6 +112,95 @@ func (h *configHandler) DeleteProvider(_ context.Context, req *apiv1.DeleteProvi
 		return nil, status.Errorf(codes.Internal, "save config: %v", err)
 	}
 	return &apiv1.DeleteProviderResponse{}, nil
+}
+
+// GetControllerConfig returns the editable controller tunables with defaults
+// filled in for omitted blocks, so the UI always renders concrete values.
+func (h *configHandler) GetControllerConfig(_ context.Context, _ *apiv1.GetControllerConfigRequest) (*apiv1.GetControllerConfigResponse, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "load config: %v", err)
+	}
+	return &apiv1.GetControllerConfigResponse{
+		Config:          controllerConfigEntry(cfg),
+		RestartRequired: true,
+	}, nil
+}
+
+// UpdateControllerConfig merges the submitted tunables into config.yaml and
+// saves. Validates the reconcile interval as a Go duration and rejects a
+// negative retention. Only the reconciler + operations blocks are touched;
+// everything else in the file is preserved.
+func (h *configHandler) UpdateControllerConfig(_ context.Context, req *apiv1.UpdateControllerConfigRequest) (*apiv1.UpdateControllerConfigResponse, error) {
+	in := req.GetConfig()
+	if in == nil {
+		return nil, status.Error(codes.InvalidArgument, "config is required")
+	}
+	interval := in.GetReconcilerInterval()
+	if interval != "" {
+		if _, perr := time.ParseDuration(interval); perr != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "reconciler_interval %q is not a valid duration: %v", interval, perr)
+		}
+	}
+	if in.GetOpRetainPerResource() < 0 {
+		return nil, status.Error(codes.InvalidArgument, "op_retain_per_resource must be non-negative")
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "load config: %v", err)
+	}
+
+	// Reconciler block: always materialize it so an explicit enabled=false or
+	// a custom interval round-trips (the pointer distinguishes unset).
+	enabled := in.GetReconcilerEnabled()
+	if cfg.Reconciler == nil {
+		cfg.Reconciler = &config.Reconciler{}
+	}
+	cfg.Reconciler.Enabled = &enabled
+	cfg.Reconciler.Interval = interval // "" is fine — means "use default"
+
+	// Operations block: 0 means "use the default", so drop the block to keep
+	// the file clean rather than persisting a misleading literal 0.
+	retain := int(in.GetOpRetainPerResource())
+	if retain > 0 {
+		cfg.Operations = &config.Operations{RetainPerResource: retain}
+	} else {
+		cfg.Operations = nil
+	}
+
+	if err := cfg.Save(); err != nil {
+		return nil, status.Errorf(codes.Internal, "save config: %v", err)
+	}
+	return &apiv1.UpdateControllerConfigResponse{
+		Config:          controllerConfigEntry(cfg),
+		RestartRequired: true,
+	}, nil
+}
+
+// controllerConfigEntry projects the controller-behavior blocks of a Config
+// into the wire shape, filling built-in defaults for omitted blocks.
+func controllerConfigEntry(cfg *config.Config) *apiv1.ControllerConfig {
+	out := &apiv1.ControllerConfig{
+		ReconcilerEnabled:   true,
+		ReconcilerInterval:  defaultReconcilerInterval,
+		OpRetainPerResource: int32(config.DefaultRetainPerResource),
+	}
+	if cfg == nil {
+		return out
+	}
+	if r := cfg.Reconciler; r != nil {
+		if r.Enabled != nil {
+			out.ReconcilerEnabled = *r.Enabled
+		}
+		if r.Interval != "" {
+			out.ReconcilerInterval = r.Interval
+		}
+	}
+	if o := cfg.Operations; o != nil && o.RetainPerResource > 0 {
+		out.OpRetainPerResource = int32(o.RetainPerResource)
+	}
+	return out
 }
 
 // providerEntry projects a config.Provider into the wire shape,

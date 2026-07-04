@@ -76,6 +76,8 @@ export const api = {
     request<T>('GET', path, undefined, opts),
   post: <T>(path: string, body?: unknown, opts?: RequestOptions) =>
     request<T>('POST', path, body ?? {}, opts),
+  put: <T>(path: string, body?: unknown, opts?: RequestOptions) =>
+    request<T>('PUT', path, body ?? {}, opts),
   delete: <T>(path: string, opts?: RequestOptions) =>
     request<T>('DELETE', path, undefined, opts),
 };
@@ -345,6 +347,25 @@ export const providersApi = {
     api.post<{ provider: ProviderEntry }>('/v1/config/providers', req),
   delete: (name: string) =>
     api.delete<Record<string, never>>('/v1/config/providers/' + encodeURIComponent(name)),
+};
+
+// Controller-behavior tunables (reconciler + operation retention). All are
+// read once at controller startup, so restartRequired is always true.
+export interface ControllerConfig {
+  reconcilerEnabled?: boolean;
+  reconcilerInterval?: string;   // Go duration string, e.g. "5m"
+  opRetainPerResource?: number;
+}
+
+export interface ControllerConfigResponse {
+  config?: ControllerConfig;
+  restartRequired?: boolean;
+}
+
+export const controllerConfigApi = {
+  get: () => api.get<ControllerConfigResponse>('/v1/config/controller'),
+  update: (config: ControllerConfig) =>
+    api.put<ControllerConfigResponse>('/v1/config/controller', { config }),
 };
 
 export const templates = {

@@ -631,9 +631,11 @@ var ResourceService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	ConfigService_ListProviders_FullMethodName  = "/openctl.v1.ConfigService/ListProviders"
-	ConfigService_UpsertProvider_FullMethodName = "/openctl.v1.ConfigService/UpsertProvider"
-	ConfigService_DeleteProvider_FullMethodName = "/openctl.v1.ConfigService/DeleteProvider"
+	ConfigService_ListProviders_FullMethodName          = "/openctl.v1.ConfigService/ListProviders"
+	ConfigService_UpsertProvider_FullMethodName         = "/openctl.v1.ConfigService/UpsertProvider"
+	ConfigService_DeleteProvider_FullMethodName         = "/openctl.v1.ConfigService/DeleteProvider"
+	ConfigService_GetControllerConfig_FullMethodName    = "/openctl.v1.ConfigService/GetControllerConfig"
+	ConfigService_UpdateControllerConfig_FullMethodName = "/openctl.v1.ConfigService/UpdateControllerConfig"
 )
 
 // ConfigServiceClient is the client API for ConfigService service.
@@ -657,6 +659,17 @@ type ConfigServiceClient interface {
 	// DeleteProvider removes a provider entry entirely. Idempotent —
 	// deleting a missing provider succeeds.
 	DeleteProvider(ctx context.Context, in *DeleteProviderRequest, opts ...grpc.CallOption) (*DeleteProviderResponse, error)
+	// GetControllerConfig returns the editable controller-behavior tunables
+	// from ~/.openctl/config.yaml (reconciler + operation retention), with
+	// built-in defaults filled in for any omitted block. These are read once
+	// at controller startup, so changes need a restart to take effect — the
+	// response's restart_required flag is always true, for the UI banner.
+	GetControllerConfig(ctx context.Context, in *GetControllerConfigRequest, opts ...grpc.CallOption) (*GetControllerConfigResponse, error)
+	// UpdateControllerConfig writes the tunables back to config.yaml, merging
+	// into (not replacing) the existing file so provider/manifests blocks are
+	// preserved. Validates reconciler_interval as a Go duration and rejects a
+	// negative retention. Returns the persisted, defaulted values.
+	UpdateControllerConfig(ctx context.Context, in *UpdateControllerConfigRequest, opts ...grpc.CallOption) (*UpdateControllerConfigResponse, error)
 }
 
 type configServiceClient struct {
@@ -697,6 +710,26 @@ func (c *configServiceClient) DeleteProvider(ctx context.Context, in *DeleteProv
 	return out, nil
 }
 
+func (c *configServiceClient) GetControllerConfig(ctx context.Context, in *GetControllerConfigRequest, opts ...grpc.CallOption) (*GetControllerConfigResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetControllerConfigResponse)
+	err := c.cc.Invoke(ctx, ConfigService_GetControllerConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *configServiceClient) UpdateControllerConfig(ctx context.Context, in *UpdateControllerConfigRequest, opts ...grpc.CallOption) (*UpdateControllerConfigResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateControllerConfigResponse)
+	err := c.cc.Invoke(ctx, ConfigService_UpdateControllerConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ConfigServiceServer is the server API for ConfigService service.
 // All implementations must embed UnimplementedConfigServiceServer
 // for forward compatibility.
@@ -718,6 +751,17 @@ type ConfigServiceServer interface {
 	// DeleteProvider removes a provider entry entirely. Idempotent —
 	// deleting a missing provider succeeds.
 	DeleteProvider(context.Context, *DeleteProviderRequest) (*DeleteProviderResponse, error)
+	// GetControllerConfig returns the editable controller-behavior tunables
+	// from ~/.openctl/config.yaml (reconciler + operation retention), with
+	// built-in defaults filled in for any omitted block. These are read once
+	// at controller startup, so changes need a restart to take effect — the
+	// response's restart_required flag is always true, for the UI banner.
+	GetControllerConfig(context.Context, *GetControllerConfigRequest) (*GetControllerConfigResponse, error)
+	// UpdateControllerConfig writes the tunables back to config.yaml, merging
+	// into (not replacing) the existing file so provider/manifests blocks are
+	// preserved. Validates reconciler_interval as a Go duration and rejects a
+	// negative retention. Returns the persisted, defaulted values.
+	UpdateControllerConfig(context.Context, *UpdateControllerConfigRequest) (*UpdateControllerConfigResponse, error)
 	mustEmbedUnimplementedConfigServiceServer()
 }
 
@@ -736,6 +780,12 @@ func (UnimplementedConfigServiceServer) UpsertProvider(context.Context, *UpsertP
 }
 func (UnimplementedConfigServiceServer) DeleteProvider(context.Context, *DeleteProviderRequest) (*DeleteProviderResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteProvider not implemented")
+}
+func (UnimplementedConfigServiceServer) GetControllerConfig(context.Context, *GetControllerConfigRequest) (*GetControllerConfigResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetControllerConfig not implemented")
+}
+func (UnimplementedConfigServiceServer) UpdateControllerConfig(context.Context, *UpdateControllerConfigRequest) (*UpdateControllerConfigResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateControllerConfig not implemented")
 }
 func (UnimplementedConfigServiceServer) mustEmbedUnimplementedConfigServiceServer() {}
 func (UnimplementedConfigServiceServer) testEmbeddedByValue()                       {}
@@ -812,6 +862,42 @@ func _ConfigService_DeleteProvider_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ConfigService_GetControllerConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetControllerConfigRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConfigServiceServer).GetControllerConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConfigService_GetControllerConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConfigServiceServer).GetControllerConfig(ctx, req.(*GetControllerConfigRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ConfigService_UpdateControllerConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateControllerConfigRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConfigServiceServer).UpdateControllerConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConfigService_UpdateControllerConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConfigServiceServer).UpdateControllerConfig(ctx, req.(*UpdateControllerConfigRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ConfigService_ServiceDesc is the grpc.ServiceDesc for ConfigService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -830,6 +916,14 @@ var ConfigService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteProvider",
 			Handler:    _ConfigService_DeleteProvider_Handler,
+		},
+		{
+			MethodName: "GetControllerConfig",
+			Handler:    _ConfigService_GetControllerConfig_Handler,
+		},
+		{
+			MethodName: "UpdateControllerConfig",
+			Handler:    _ConfigService_UpdateControllerConfig_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
