@@ -220,6 +220,33 @@ export interface FieldError {
   message?: string;
 }
 
+// --- Composite DAG (Phase U9) --------------------------------------------
+
+export interface GraphNode {
+  id: string;         // "kind/name" — matches GraphEdge.from / .to
+  apiVersion: string;
+  kind: string;
+  name: string;
+  // "applied" | "pending" | "observed" | "missing"
+  status: string;
+  // false = observed-only / no applied manifest — render dim.
+  managed?: boolean;
+  // true for the composite resource the graph was requested for.
+  root?: boolean;
+}
+
+export interface GraphEdge {
+  from: string;       // GraphNode.id
+  to: string;         // GraphNode.id
+  relation: string;   // "owns" | "ref"
+  field?: string;     // dotted ref source path, "ref" edges only
+}
+
+export interface ChildrenGraphResponse {
+  nodes?: GraphNode[];
+  edges?: GraphEdge[];
+}
+
 export interface GetResourceResponse {
   resource: Resource;
   // Desired manifest currently on file in applied_manifests; unset when
@@ -336,6 +363,8 @@ export const resources = {
     api.post<ListResourcesResponse>('/v1/resources:list', { apiVersion, kind }),
   get: (apiVersion: string, kind: string, name: string) =>
     api.post<GetResourceResponse>('/v1/resources:get', { apiVersion, kind, name }),
+  childrenGraph: (apiVersion: string, kind: string, name: string) =>
+    api.post<ChildrenGraphResponse>('/v1/resources:childrenGraph', { apiVersion, kind, name }),
   dryRunApply: (resource: Resource | Partial<Resource>) =>
     api.post<DryRunApplyResponse>('/v1/resources:dryRunApply', { resource }),
   apply: (req: ApplyRequest) =>

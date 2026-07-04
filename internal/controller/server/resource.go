@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"slices"
 	"strings"
 	"time"
@@ -377,6 +378,200 @@ func (h *resourceHandler) InvokeAction(ctx context.Context, req *apiv1.InvokeAct
 		DownloadContent:  result.DownloadContent,
 		DownloadFilename: result.DownloadFilename,
 	}, nil
+}
+
+// GetChildrenGraph expands a composite resource into a {nodes, edges} DAG
+// for the UI (Phase U9). The structural source is the provider's Planner
+// output when it implements one (k3s Cluster → VMs + K3sNodes +
+// AgentInstalls, each carrying $ref pointers) — that gives both the full
+// child set and the child→child ref edges. Providers that don't plan fall
+// back to registry.ChildrenOf, which yields owns edges only. Node status is
+// a coarse pill derived from applied-manifest presence; observed-only nodes
+// (no applied manifest) come back managed=false so the UI dims them (U9.4).
+func (h *resourceHandler) GetChildrenGraph(ctx context.Context, req *apiv1.GetChildrenGraphRequest) (*apiv1.GetChildrenGraphResponse, error) {
+	if req.GetApiVersion() == "" || req.GetKind() == "" || req.GetName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "api_version, kind, and name are required")
+	}
+	p, err := h.registry.For(req.GetApiVersion())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
+	g := newGraphBuilder(h)
+	root := g.addNode(req.GetApiVersion(), req.GetKind(), req.GetName())
+	root.Root = true
+	root.Managed = true // the queried resource is always the managed root
+
+	// Preferred structural source: the Planner. Its children carry $ref
+	// pointers, so we get owns edges (root → child) and ref edges (child →
+	// sibling) in one pass. Planner children are authored by openctl, so
+	// they're all "managed" regardless of whether each has its own applied
+	// manifest (k3s writes only the parent Cluster to applied_manifests).
+	// A Plan failure (e.g. no applied manifest yet, empty spec) degrades to
+	// the ChildrenOf fallback rather than failing the whole graph.
+	planned := false
+	if planner, ok := p.(providers.Planner); ok {
+		parent := &protocol.Resource{
+			APIVersion: req.GetApiVersion(),
+			Kind:       req.GetKind(),
+			Metadata:   protocol.ResourceMetadata{Name: req.GetName()},
+		}
+		// Feed the applied spec to Plan when we have it — the plan's child
+		// set (node count, join topology) is a function of the parent spec.
+		if h.manifests != nil {
+			if applied, lerr := h.manifests.Load(ctx, req.GetApiVersion(), req.GetKind(), req.GetName()); lerr == nil && applied != nil {
+				parent.Spec = applied.Spec
+			}
+		}
+		if plan, perr := planner.Plan(ctx, parent); perr != nil {
+			log.Printf("childrengraph: plan %s %q failed, falling back to ChildrenOf: %v",
+				req.GetKind(), req.GetName(), perr)
+		} else if plan != nil {
+			planned = true
+			for _, child := range plan.Children {
+				n := g.addNode(child.APIVersion, child.Kind, child.Metadata.Name)
+				g.planned[n.Id] = true
+				g.addEdge(root.Id, n.Id, "owns", "")
+				// Child → sibling ref edges from the child's own spec.
+				for _, ref := range refs.Collect(child.Spec) {
+					target := g.addNode(ref.APIVersion, ref.Kind, ref.Name)
+					g.addEdge(n.Id, target.Id, "ref", ref.Field)
+				}
+			}
+		}
+	}
+	if !planned {
+		// Fallback for non-Planner composites (and observed-only parents):
+		// registry.ChildrenOf reports direct children without ref metadata,
+		// so we can only draw owns edges. These aren't marked planned, so
+		// resolveStatus decides managed-ness from applied-manifest presence.
+		for _, c := range h.registry.ChildrenOf(req.GetKind(), req.GetName()) {
+			n := g.addNode(c.APIVersion, c.Kind, c.Name)
+			g.addEdge(root.Id, n.Id, "owns", "")
+		}
+	}
+
+	g.resolveStatus(ctx)
+	return g.response(), nil
+}
+
+// graphBuilder accumulates nodes (deduplicated by "kind/name" id) and edges
+// while GetChildrenGraph walks a composite resource, then resolves each
+// node's coarse status pill in one pass at the end.
+type graphBuilder struct {
+	h       *resourceHandler
+	order   []string
+	nodes   map[string]*apiv1.GraphNode
+	edges   []*apiv1.GraphEdge
+	seen    map[string]bool // dedup edges by "from|to|relation|field"
+	planned map[string]bool // node ids that came from the Planner (openctl-authored)
+}
+
+func newGraphBuilder(h *resourceHandler) *graphBuilder {
+	return &graphBuilder{
+		h:       h,
+		nodes:   map[string]*apiv1.GraphNode{},
+		seen:    map[string]bool{},
+		planned: map[string]bool{},
+	}
+}
+
+// graphNodeID is the stable per-node key GraphEdge.from/.to reference.
+// kind+name is unique within a single composite's expansion (a Cluster
+// never has two children of the same kind sharing a name).
+func graphNodeID(kind, name string) string { return kind + "/" + name }
+
+// addNode returns the existing node for (kind, name) or creates one. New
+// nodes default to unmanaged/missing; resolveStatus fixes them up later.
+func (g *graphBuilder) addNode(apiVersion, kind, name string) *apiv1.GraphNode {
+	id := graphNodeID(kind, name)
+	if n, ok := g.nodes[id]; ok {
+		return n
+	}
+	n := &apiv1.GraphNode{
+		Id:         id,
+		ApiVersion: apiVersion,
+		Kind:       kind,
+		Name:       name,
+	}
+	g.nodes[id] = n
+	g.order = append(g.order, id)
+	return n
+}
+
+func (g *graphBuilder) addEdge(from, to, relation, field string) {
+	if from == to {
+		return // self-edges are noise (a ref whose target dedups to itself)
+	}
+	key := from + "|" + to + "|" + relation + "|" + field
+	if g.seen[key] {
+		return
+	}
+	g.seen[key] = true
+	g.edges = append(g.edges, &apiv1.GraphEdge{From: from, To: to, Relation: relation, Field: field})
+}
+
+// resolveStatus stamps each non-root node's managed flag + status pill.
+// Managed-ness: planned nodes (Planner-authored) are always managed;
+// fallback nodes are managed iff they have an applied manifest on file
+// (U9.4 dims the rest). Status comes from a live provider Get so the pill
+// reflects reality: present → "applied", not-found → "pending" for planned
+// nodes (expected mid-create) or "missing" for managed-but-gone fallback
+// nodes, and "observed" for unmanaged nodes. One Get per node — fine for
+// the 5–15-node graphs U9 targets.
+func (g *graphBuilder) resolveStatus(ctx context.Context) {
+	for _, id := range g.order {
+		n := g.nodes[id]
+		if n.Root {
+			if n.Status == "" {
+				n.Status = "applied"
+			}
+			continue
+		}
+		managed := g.planned[id]
+		if !managed && g.h.manifests != nil {
+			if m, err := g.h.manifests.Load(ctx, n.ApiVersion, n.Kind, n.Name); err == nil && m != nil {
+				managed = true
+			}
+		}
+		n.Managed = managed
+		if !managed {
+			n.Status = "observed"
+			continue
+		}
+		// Managed node: ask the provider whether the live resource exists.
+		_, err := g.h.registry.Get(ctx, n.ApiVersion, n.Kind, n.Name)
+		switch {
+		case err == nil:
+			n.Status = "applied"
+		case isNotFound(err):
+			// Planned but not yet created → still converging; managed but
+			// gone → drifted away underneath us.
+			if g.planned[id] {
+				n.Status = "pending"
+			} else {
+				n.Status = "missing"
+			}
+		default:
+			// Provider error (transient, or kind has no Get) — don't invent a
+			// scary pill; treat the node as applied since it's managed.
+			n.Status = "applied"
+		}
+	}
+}
+
+// isNotFound reports whether err is (or wraps) a provider not-found error.
+func isNotFound(err error) bool {
+	var nf *providers.NotFoundError
+	return errors.As(err, &nf)
+}
+
+func (g *graphBuilder) response() *apiv1.GetChildrenGraphResponse {
+	nodes := make([]*apiv1.GraphNode, 0, len(g.order))
+	for _, id := range g.order {
+		nodes = append(nodes, g.nodes[id])
+	}
+	return &apiv1.GetChildrenGraphResponse{Nodes: nodes, Edges: g.edges}
 }
 
 // summarizeDryRun builds a default one-line summary when the provider

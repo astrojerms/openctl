@@ -24,6 +24,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/openctl/openctl/pkg/protocol"
@@ -151,6 +152,52 @@ func extractRef(m map[string]any) (*Ref, bool, error) {
 		return nil, true, fmt.Errorf("ref: apiVersion, kind, and name are required (got %+v)", ref)
 	}
 	return ref, true, nil
+}
+
+// Collect walks a spec tree and returns every ResourceRef it finds,
+// without resolving any of them (no Getter, no provider calls). Malformed
+// $ref objects are skipped rather than erroring — Collect is a best-effort
+// read used by the UI graph endpoint, not the Apply path, so a bad ref
+// should degrade to a missing edge rather than fail the whole request. The
+// result is sorted (kind, name, field, apiVersion) so callers get a stable
+// order regardless of Go's map-iteration randomness. Returns nil for a nil
+// or ref-free spec.
+func Collect(spec map[string]any) []Ref {
+	if spec == nil {
+		return nil
+	}
+	var out []Ref
+	var visit func(v any)
+	visit = func(v any) {
+		switch x := v.(type) {
+		case map[string]any:
+			if ref, isRef, err := extractRef(x); err == nil && isRef {
+				out = append(out, *ref)
+				return
+			}
+			for _, v2 := range x {
+				visit(v2)
+			}
+		case []any:
+			for _, item := range x {
+				visit(item)
+			}
+		}
+	}
+	visit(spec)
+	slices.SortFunc(out, func(a, b Ref) int {
+		if c := strings.Compare(a.Kind, b.Kind); c != 0 {
+			return c
+		}
+		if c := strings.Compare(a.Name, b.Name); c != 0 {
+			return c
+		}
+		if c := strings.Compare(a.Field, b.Field); c != 0 {
+			return c
+		}
+		return strings.Compare(a.APIVersion, b.APIVersion)
+	})
+	return out
 }
 
 // resolveRef calls Get on the referenced resource and, if field is

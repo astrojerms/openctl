@@ -7,6 +7,7 @@
   import { ops as opsStore } from '../lib/ops';
   import { resourceToYAML } from '../lib/yaml';
   import HistoryDiff from '../components/HistoryDiff.svelte';
+  import DagView from '../components/DagView.svelte';
 
   export let apiVersion: string;
   export let kind: string;
@@ -15,6 +16,9 @@
   let data: GetResourceResponse | null = null;
   let loading = true;
   let error = '';
+  // U9.3: bumped on every successful (re)load so the topology graph re-fetches
+  // node status alongside the Watch-driven Get. Reset per resource switch.
+  let graphVersion = 0;
 
   let controller: AbortController | null = null;
   let watching = '';
@@ -52,6 +56,7 @@
     try {
       data = await resources.get(av, k, n);
       error = '';
+      graphVersion += 1;
       // Fan out one Get per child to populate per-row badges.
       void loadChildStates(data.resource);
     } catch (err) {
@@ -554,6 +559,8 @@
     {/if}
 
     {#if children.length > 0}
+      <DagView {apiVersion} {kind} {resourceName} version={graphVersion} />
+
       <article class="card">
         <h3>Children ({children.length})</h3>
         <p class="muted small">

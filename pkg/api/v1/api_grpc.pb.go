@@ -131,14 +131,15 @@ var PingService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	ResourceService_Apply_FullMethodName        = "/openctl.v1.ResourceService/Apply"
-	ResourceService_Get_FullMethodName          = "/openctl.v1.ResourceService/Get"
-	ResourceService_List_FullMethodName         = "/openctl.v1.ResourceService/List"
-	ResourceService_Delete_FullMethodName       = "/openctl.v1.ResourceService/Delete"
-	ResourceService_Watch_FullMethodName        = "/openctl.v1.ResourceService/Watch"
-	ResourceService_DryRunApply_FullMethodName  = "/openctl.v1.ResourceService/DryRunApply"
-	ResourceService_ListActions_FullMethodName  = "/openctl.v1.ResourceService/ListActions"
-	ResourceService_InvokeAction_FullMethodName = "/openctl.v1.ResourceService/InvokeAction"
+	ResourceService_Apply_FullMethodName            = "/openctl.v1.ResourceService/Apply"
+	ResourceService_Get_FullMethodName              = "/openctl.v1.ResourceService/Get"
+	ResourceService_List_FullMethodName             = "/openctl.v1.ResourceService/List"
+	ResourceService_Delete_FullMethodName           = "/openctl.v1.ResourceService/Delete"
+	ResourceService_Watch_FullMethodName            = "/openctl.v1.ResourceService/Watch"
+	ResourceService_DryRunApply_FullMethodName      = "/openctl.v1.ResourceService/DryRunApply"
+	ResourceService_ListActions_FullMethodName      = "/openctl.v1.ResourceService/ListActions"
+	ResourceService_InvokeAction_FullMethodName     = "/openctl.v1.ResourceService/InvokeAction"
+	ResourceService_GetChildrenGraph_FullMethodName = "/openctl.v1.ResourceService/GetChildrenGraph"
 )
 
 // ResourceServiceClient is the client API for ResourceService service.
@@ -188,6 +189,17 @@ type ResourceServiceClient interface {
 	// provider's short human-readable success text (e.g. a Proxmox task
 	// UPID).
 	InvokeAction(ctx context.Context, in *InvokeActionRequest, opts ...grpc.CallOption) (*InvokeActionResponse, error)
+	// GetChildrenGraph returns the composite resource's expansion as a
+	// {nodes, edges} DAG for the UI to render. Nodes are the resource itself
+	// (root) plus each child the provider's Planner emits (or, for non-Planner
+	// composites, the children the provider reports via ChildrenOf). Edges are
+	// of two kinds: "owns" (root → each direct child) and "ref" (a child's
+	// $ref pointer to a sibling, e.g. a K3sNode's join token → the first
+	// server). Node status is a coarse lifecycle pill ("applied" | "pending" |
+	// "observed" | "missing"); managed=false marks observed-only nodes with no
+	// applied manifest so the UI can render them dim (Phase U9). Returns an
+	// empty graph (root node only) for atomic resources.
+	GetChildrenGraph(ctx context.Context, in *GetChildrenGraphRequest, opts ...grpc.CallOption) (*GetChildrenGraphResponse, error)
 }
 
 type resourceServiceClient struct {
@@ -287,6 +299,16 @@ func (c *resourceServiceClient) InvokeAction(ctx context.Context, in *InvokeActi
 	return out, nil
 }
 
+func (c *resourceServiceClient) GetChildrenGraph(ctx context.Context, in *GetChildrenGraphRequest, opts ...grpc.CallOption) (*GetChildrenGraphResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetChildrenGraphResponse)
+	err := c.cc.Invoke(ctx, ResourceService_GetChildrenGraph_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ResourceServiceServer is the server API for ResourceService service.
 // All implementations must embed UnimplementedResourceServiceServer
 // for forward compatibility.
@@ -334,6 +356,17 @@ type ResourceServiceServer interface {
 	// provider's short human-readable success text (e.g. a Proxmox task
 	// UPID).
 	InvokeAction(context.Context, *InvokeActionRequest) (*InvokeActionResponse, error)
+	// GetChildrenGraph returns the composite resource's expansion as a
+	// {nodes, edges} DAG for the UI to render. Nodes are the resource itself
+	// (root) plus each child the provider's Planner emits (or, for non-Planner
+	// composites, the children the provider reports via ChildrenOf). Edges are
+	// of two kinds: "owns" (root → each direct child) and "ref" (a child's
+	// $ref pointer to a sibling, e.g. a K3sNode's join token → the first
+	// server). Node status is a coarse lifecycle pill ("applied" | "pending" |
+	// "observed" | "missing"); managed=false marks observed-only nodes with no
+	// applied manifest so the UI can render them dim (Phase U9). Returns an
+	// empty graph (root node only) for atomic resources.
+	GetChildrenGraph(context.Context, *GetChildrenGraphRequest) (*GetChildrenGraphResponse, error)
 	mustEmbedUnimplementedResourceServiceServer()
 }
 
@@ -367,6 +400,9 @@ func (UnimplementedResourceServiceServer) ListActions(context.Context, *ListActi
 }
 func (UnimplementedResourceServiceServer) InvokeAction(context.Context, *InvokeActionRequest) (*InvokeActionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method InvokeAction not implemented")
+}
+func (UnimplementedResourceServiceServer) GetChildrenGraph(context.Context, *GetChildrenGraphRequest) (*GetChildrenGraphResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetChildrenGraph not implemented")
 }
 func (UnimplementedResourceServiceServer) mustEmbedUnimplementedResourceServiceServer() {}
 func (UnimplementedResourceServiceServer) testEmbeddedByValue()                         {}
@@ -526,6 +562,24 @@ func _ResourceService_InvokeAction_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ResourceService_GetChildrenGraph_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetChildrenGraphRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ResourceServiceServer).GetChildrenGraph(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ResourceService_GetChildrenGraph_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ResourceServiceServer).GetChildrenGraph(ctx, req.(*GetChildrenGraphRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ResourceService_ServiceDesc is the grpc.ServiceDesc for ResourceService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -560,6 +614,10 @@ var ResourceService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "InvokeAction",
 			Handler:    _ResourceService_InvokeAction_Handler,
+		},
+		{
+			MethodName: "GetChildrenGraph",
+			Handler:    _ResourceService_GetChildrenGraph_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
