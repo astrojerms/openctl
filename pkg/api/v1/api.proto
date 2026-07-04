@@ -102,6 +102,20 @@ service ResourceService {
   rpc InvokeAction(InvokeActionRequest) returns (InvokeActionResponse) {
     option (google.api.http) = { post: "/v1/resources:invokeAction" body: "*" };
   }
+
+  // GetChildrenGraph returns the composite resource's expansion as a
+  // {nodes, edges} DAG for the UI to render. Nodes are the resource itself
+  // (root) plus each child the provider's Planner emits (or, for non-Planner
+  // composites, the children the provider reports via ChildrenOf). Edges are
+  // of two kinds: "owns" (root → each direct child) and "ref" (a child's
+  // $ref pointer to a sibling, e.g. a K3sNode's join token → the first
+  // server). Node status is a coarse lifecycle pill ("applied" | "pending" |
+  // "observed" | "missing"); managed=false marks observed-only nodes with no
+  // applied manifest so the UI can render them dim (Phase U9). Returns an
+  // empty graph (root node only) for atomic resources.
+  rpc GetChildrenGraph(GetChildrenGraphRequest) returns (GetChildrenGraphResponse) {
+    option (google.api.http) = { post: "/v1/resources:childrenGraph" body: "*" };
+  }
 }
 
 message ListActionsRequest {
@@ -130,6 +144,48 @@ message InvokeActionResponse {
   // download_filename with the given content.
   string download_content  = 3;
   string download_filename = 4;
+}
+
+message GetChildrenGraphRequest {
+  string api_version = 1;
+  string kind = 2;
+  string name = 3;
+}
+
+// GraphNode is one vertex in the composite DAG. id is the stable "kind/name"
+// key edges reference; api_version/kind/name carry the full ref so the UI can
+// navigate to the node's Detail page on click.
+message GraphNode {
+  string id = 1;           // "kind/name" — matches GraphEdge.from / .to
+  string api_version = 2;
+  string kind = 3;
+  string name = 4;
+  // Coarse lifecycle pill: "applied" (has an applied manifest / observed
+  // present), "pending" (planned but not yet applied), "observed"
+  // (reported by the provider but not authored by openctl), "missing"
+  // (referenced but not found).
+  string status = 5;
+  // false = observed-only / no applied manifest — the UI renders it dim
+  // with a read-only badge (Phase U9.4).
+  bool managed = 6;
+  // true for the composite resource the request was made against.
+  bool root = 7;
+}
+
+// GraphEdge connects two nodes by their id. relation is "owns" (root → direct
+// child) or "ref" ($ref pointer between children). field, set only for "ref"
+// edges, is the dotted source path the ref reads (e.g. "status.nodeToken");
+// empty for whole-resource refs and all "owns" edges.
+message GraphEdge {
+  string from = 1;         // GraphNode.id of the source
+  string to = 2;           // GraphNode.id of the target
+  string relation = 3;     // "owns" | "ref"
+  string field = 4;        // dotted ref field, "ref" edges only
+}
+
+message GetChildrenGraphResponse {
+  repeated GraphNode nodes = 1;
+  repeated GraphEdge edges = 2;
 }
 
 message DryRunApplyRequest {

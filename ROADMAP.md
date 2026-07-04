@@ -29,19 +29,20 @@ hardening (#17) all shipped. **Retire `applyExisting`** is now complete
 too — the imperative convergence executors are deleted and the
 Plan/dispatcher path is the sole existing-cluster converge path,
 validated on homelab (3-CP embedded-etcd HA create + full control-plane
-respec). The next candidate is the **UI DAG view** (see Suggested next
-order).
+respec). The **UI DAG view** (Phase U9) has now shipped too —
+composite Detail pages render a real topology graph. The next candidate
+is the **UI for controller config** (see Suggested next order).
 
 ## Suggested next order
 
 Full arch Phase 8 (steps 1–5 + dispatcher refactor) closed out
 this session. Remaining candidates for the next round:
 
-- **UI DAG view for composite resources** — `Detail.svelte` for a
-  Cluster (or any composite) renders the parent + children as a
-  graph rather than the current flat children list. Now that
-  Plan output + child ownership labels + child ops rows all
-  exist, this is a frontend job. Broken out as Phase U9 below.
+- **UI DAG view for composite resources** ✅ *done* —
+  `Detail.svelte` for a Cluster (or any composite) renders the
+  parent + children as an SVG topology graph via the new
+  `GetChildrenGraph` RPC + `DagView.svelte`. Phase U9 below
+  (U9.1/U9.2/U9.4 shipped; U9.3 ops-overlay is a follow-up).
 - **Retire `applyExisting`** ✅ *done* — count-up / respec / delete now
   run exclusively through the Plan/dispatcher model; the legacy
   imperative executors (`applyCountUp`, `applyRespecs`, and
@@ -499,35 +500,39 @@ Punch list (unstarted, prioritized):
       left-border rail. Fixes the awkward alignment on things like
       `cloudInit.ipConfig`.
 
-### Phase U9 — Composite DAG visualization (pending)
+### Phase U9 — Composite DAG visualization (mostly shipped)
 
 Now that arch Phase 8 has landed the plumbing (Plan output, child
 owner labels, per-child ops rows via the dispatcher refactor),
-Detail for composite resources can render a real graph instead of
-the current flat children list. Rough breakdown — refine when
-picking up:
+Detail for composite resources renders a real graph instead of just
+the flat children list.
 
-- [ ] **U9.1** — Server-side DAG endpoint. Reuse `providers.Planner`
-      output plus the `applied_manifests` store to synthesize a
-      `{nodes, edges}` graph for a given composite resource. Edges
-      come from `$ref` sources parsed out of each child's saved
-      spec; node status comes from each child's current op /
-      applied manifest state. New RPC on `ResourceService`
-      (`GetChildrenGraph` or similar) so the UI doesn't have to
-      re-implement ref parsing.
-- [ ] **U9.2** — Svelte graph renderer in Detail. Pick a small
-      DAG-layout library (dagre-d3, elkjs, or hand-rolled since
-      the graphs are tiny — 5–15 nodes typical). Node = kind +
-      name + status pill; edge = ref direction + resolved value on
-      hover. Click a node to navigate to its Detail.
-- [ ] **U9.3** — Live status via existing Watch stream. Overlay
-      each node's ops state (pending / running / failed / cached)
-      so a mid-apply cluster shows which phase is in flight. Ties
-      into the ops drawer for click-through to the underlying op.
-- [ ] **U9.4** — Fallback for observed-only + unmanaged parents
-      (Proxmox nodes with children not authored via openctl). Nodes
-      that have no applied manifest render dim / with a "read
-      only" badge; edges are absent since no `$ref` metadata exists.
+- [x] **U9.1** — Server-side DAG endpoint. `GetChildrenGraph` on
+      `ResourceService` (`/v1/resources:childrenGraph`) synthesizes a
+      `{nodes, edges}` graph. Structural source is the provider's
+      `Planner` output (k3s Cluster → VMs + K3sNodes + AgentInstalls,
+      each carrying `$ref` pointers), falling back to
+      `registry.ChildrenOf` for non-Planner composites. Edges: `owns`
+      (root → child) + `ref` (child → sibling), the latter parsed via
+      the new `refs.Collect` walker so the UI never re-implements ref
+      parsing. Node status is a coarse pill (`applied` / `pending` /
+      `observed` / `missing`) derived from a live provider `Get`;
+      planned children are always `managed`, observed-only children
+      come back `managed=false`.
+- [x] **U9.2** — Svelte graph renderer (`DagView.svelte`). Hand-rolled
+      longest-path layered SVG layout (no new dep — graphs are tiny
+      and the strict CSP disfavors CDN libs). Node = kind + name +
+      status pill; `owns` edges dashed-gray, `ref` edges accent-blue
+      with the source field on hover. Click a node to open its Detail.
+- [~] **U9.3** — Live status: `DagView` re-fetches the graph on every
+      Watch-driven reload (Detail bumps a `version` prop), so status
+      pills track observed state live. NOT yet done: overlaying the
+      per-child *ops* row (running/failed from the operations table)
+      and click-through into the ops drawer — the pill reflects
+      observed provider state, not the in-flight op. Follow-up.
+- [x] **U9.4** — Observed-only / unmanaged children (no applied
+      manifest, not Planner-authored) render dim with a "read-only"
+      badge and no `ref` edges, since no `$ref` metadata exists.
 
 ---
 

@@ -217,3 +217,54 @@ func TestResolveNoRefsAtAll(t *testing.T) {
 		t.Error("input should be unchanged")
 	}
 }
+
+func TestCollectGathersAllRefsSorted(t *testing.T) {
+	ref := func(av, kind, name, field string) map[string]any {
+		inner := map[string]any{"apiVersion": av, "kind": kind, "name": name}
+		if field != "" {
+			inner["field"] = field
+		}
+		return map[string]any{RefMarker: inner}
+	}
+	spec := map[string]any{
+		"joinFrom": ref("k3s.openctl.io/v1", "K3sNode", "cp-0", "status.nodeToken"),
+		"vmRef":    ref("proxmox.openctl.io/v1", "VirtualMachine", "cp-1", ""),
+		"nested": map[string]any{
+			"list": []any{
+				ref("k3s.openctl.io/v1", "K3sNode", "cp-0", "status.vmIP"),
+				map[string]any{"plain": "value"},
+			},
+		},
+	}
+	got := Collect(spec)
+	want := []Ref{
+		{APIVersion: "k3s.openctl.io/v1", Kind: "K3sNode", Name: "cp-0", Field: "status.nodeToken"},
+		{APIVersion: "k3s.openctl.io/v1", Kind: "K3sNode", Name: "cp-0", Field: "status.vmIP"},
+		{APIVersion: "proxmox.openctl.io/v1", Kind: "VirtualMachine", Name: "cp-1"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Collect() =\n  %+v\nwant\n  %+v", got, want)
+	}
+}
+
+func TestCollectNilAndRefFreeSpecs(t *testing.T) {
+	if got := Collect(nil); got != nil {
+		t.Errorf("Collect(nil) = %+v, want nil", got)
+	}
+	if got := Collect(map[string]any{"a": 1, "b": map[string]any{"c": "d"}}); got != nil {
+		t.Errorf("Collect(ref-free) = %+v, want nil", got)
+	}
+}
+
+func TestCollectSkipsMalformedRefs(t *testing.T) {
+	// A $ref missing required fields is skipped (best-effort), not an error.
+	spec := map[string]any{
+		"bad":  map[string]any{RefMarker: map[string]any{"kind": "K3sNode"}}, // no apiVersion/name
+		"good": map[string]any{RefMarker: map[string]any{"apiVersion": "k3s.openctl.io/v1", "kind": "K3sNode", "name": "cp-0"}},
+	}
+	got := Collect(spec)
+	want := []Ref{{APIVersion: "k3s.openctl.io/v1", Kind: "K3sNode", Name: "cp-0"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Collect() = %+v, want %+v", got, want)
+	}
+}

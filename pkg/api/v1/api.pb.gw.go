@@ -282,6 +282,33 @@ func local_request_ResourceService_InvokeAction_0(ctx context.Context, marshaler
 	return msg, metadata, err
 }
 
+func request_ResourceService_GetChildrenGraph_0(ctx context.Context, marshaler runtime.Marshaler, client ResourceServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq GetChildrenGraphRequest
+		metadata runtime.ServerMetadata
+	)
+	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if req.Body != nil {
+		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	msg, err := client.GetChildrenGraph(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	return msg, metadata, err
+}
+
+func local_request_ResourceService_GetChildrenGraph_0(ctx context.Context, marshaler runtime.Marshaler, server ResourceServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq GetChildrenGraphRequest
+		metadata runtime.ServerMetadata
+	)
+	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	msg, err := server.GetChildrenGraph(ctx, &protoReq)
+	return msg, metadata, err
+}
+
 func request_ConfigService_ListProviders_0(ctx context.Context, marshaler runtime.Marshaler, client ConfigServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
 		protoReq ListProvidersRequest
@@ -1111,6 +1138,26 @@ func RegisterResourceServiceHandlerServer(ctx context.Context, mux *runtime.Serv
 		}
 		forward_ResourceService_InvokeAction_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
+	mux.Handle(http.MethodPost, pattern_ResourceService_GetChildrenGraph_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		var stream runtime.ServerTransportStream
+		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/openctl.v1.ResourceService/GetChildrenGraph", runtime.WithHTTPPathPattern("/v1/resources:childrenGraph"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := local_request_ResourceService_GetChildrenGraph_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_ResourceService_GetChildrenGraph_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
 
 	return nil
 }
@@ -1838,29 +1885,48 @@ func RegisterResourceServiceHandlerClient(ctx context.Context, mux *runtime.Serv
 		}
 		forward_ResourceService_InvokeAction_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
+	mux.Handle(http.MethodPost, pattern_ResourceService_GetChildrenGraph_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/openctl.v1.ResourceService/GetChildrenGraph", runtime.WithHTTPPathPattern("/v1/resources:childrenGraph"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := request_ResourceService_GetChildrenGraph_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_ResourceService_GetChildrenGraph_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
 	return nil
 }
 
 var (
-	pattern_ResourceService_Apply_0        = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"v1", "resources"}, "apply"))
-	pattern_ResourceService_Get_0          = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"v1", "resources"}, "get"))
-	pattern_ResourceService_List_0         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"v1", "resources"}, "list"))
-	pattern_ResourceService_Delete_0       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"v1", "resources"}, "delete"))
-	pattern_ResourceService_Watch_0        = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"v1", "resources"}, "watch"))
-	pattern_ResourceService_DryRunApply_0  = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"v1", "resources"}, "dryRunApply"))
-	pattern_ResourceService_ListActions_0  = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"v1", "resources"}, "listActions"))
-	pattern_ResourceService_InvokeAction_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"v1", "resources"}, "invokeAction"))
+	pattern_ResourceService_Apply_0            = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"v1", "resources"}, "apply"))
+	pattern_ResourceService_Get_0              = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"v1", "resources"}, "get"))
+	pattern_ResourceService_List_0             = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"v1", "resources"}, "list"))
+	pattern_ResourceService_Delete_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"v1", "resources"}, "delete"))
+	pattern_ResourceService_Watch_0            = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"v1", "resources"}, "watch"))
+	pattern_ResourceService_DryRunApply_0      = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"v1", "resources"}, "dryRunApply"))
+	pattern_ResourceService_ListActions_0      = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"v1", "resources"}, "listActions"))
+	pattern_ResourceService_InvokeAction_0     = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"v1", "resources"}, "invokeAction"))
+	pattern_ResourceService_GetChildrenGraph_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"v1", "resources"}, "childrenGraph"))
 )
 
 var (
-	forward_ResourceService_Apply_0        = runtime.ForwardResponseMessage
-	forward_ResourceService_Get_0          = runtime.ForwardResponseMessage
-	forward_ResourceService_List_0         = runtime.ForwardResponseMessage
-	forward_ResourceService_Delete_0       = runtime.ForwardResponseMessage
-	forward_ResourceService_Watch_0        = runtime.ForwardResponseStream
-	forward_ResourceService_DryRunApply_0  = runtime.ForwardResponseMessage
-	forward_ResourceService_ListActions_0  = runtime.ForwardResponseMessage
-	forward_ResourceService_InvokeAction_0 = runtime.ForwardResponseMessage
+	forward_ResourceService_Apply_0            = runtime.ForwardResponseMessage
+	forward_ResourceService_Get_0              = runtime.ForwardResponseMessage
+	forward_ResourceService_List_0             = runtime.ForwardResponseMessage
+	forward_ResourceService_Delete_0           = runtime.ForwardResponseMessage
+	forward_ResourceService_Watch_0            = runtime.ForwardResponseStream
+	forward_ResourceService_DryRunApply_0      = runtime.ForwardResponseMessage
+	forward_ResourceService_ListActions_0      = runtime.ForwardResponseMessage
+	forward_ResourceService_InvokeAction_0     = runtime.ForwardResponseMessage
+	forward_ResourceService_GetChildrenGraph_0 = runtime.ForwardResponseMessage
 )
 
 // RegisterConfigServiceHandlerFromEndpoint is same as RegisterConfigServiceHandler but
