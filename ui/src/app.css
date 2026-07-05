@@ -4,6 +4,12 @@
   color-scheme: light dark;
   color: rgba(255, 255, 255, 0.87);
   background-color: #1a1a1a;
+
+  /* Layout tokens. The sidebar collapses into an off-canvas drawer at or
+     below --bp-mobile (CSS can't read a var inside @media, so the same value
+     is written literally as 48rem in the media queries that use it). */
+  --sidebar-width: 18rem;
+  --bp-mobile: 48rem;
 }
 
 body {

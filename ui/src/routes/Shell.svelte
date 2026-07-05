@@ -26,6 +26,15 @@
 
   let busy = false;
 
+  // On mobile the sidebar is an off-canvas drawer (see the styles below).
+  // It's hidden by default and toggled by the hamburger in the header.
+  let sidebarOpen = false;
+
+  // Close the drawer whenever the route changes, so tapping a nav link on a
+  // phone navigates AND dismisses the menu. No-op on desktop where the
+  // sidebar is always visible regardless of this flag.
+  $: if ($route) sidebarOpen = false;
+
   // Version pill in the header. Fetched once on mount so the user can
   // see at a glance which controller build (git SHA + build time) is
   // running — sidesteps "is my UI change even deployed?" without
@@ -64,7 +73,19 @@
       : '';
 </script>
 
+<svelte:window on:keydown={(e) => { if (e.key === 'Escape') sidebarOpen = false; }} />
+
 <header>
+  <button
+    class="menu-toggle"
+    aria-label="Toggle navigation menu"
+    aria-expanded={sidebarOpen}
+    on:click={() => (sidebarOpen = !sidebarOpen)}
+  >
+    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+      <path d="M2 5h16M2 10h16M2 15h16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+    </svg>
+  </button>
   <a class="brand" href={routeHref({ name: 'home' })}>openctl</a>
   {#if pong?.gitCommit}
     <span class="build-pill" title={pong.buildTime && pong.buildTime !== 'dev' ? `built ${pong.buildTime}` : 'commit / build info'}>
@@ -83,7 +104,17 @@
 </header>
 
 <div class="shell">
-  <aside>
+  <!-- Backdrop dims the content behind the off-canvas drawer on mobile and
+       closes it on tap. A button (not a div) so it's keyboard-focusable.
+       Hidden on desktop via CSS regardless of sidebarOpen. -->
+  {#if sidebarOpen}
+    <button
+      class="backdrop"
+      aria-label="Close navigation menu"
+      on:click={() => (sidebarOpen = false)}
+    ></button>
+  {/if}
+  <aside class:open={sidebarOpen}>
     <a
       class="sidebar-link"
       class:active={$route.name === 'templates' || $route.name === 'template'}
@@ -150,7 +181,7 @@
   header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 0.6rem;
     padding: 0.5rem 1.25rem;
     border-bottom: 1px solid #2a2a2a;
     height: 3rem;
@@ -161,6 +192,19 @@
     color: inherit;
     text-decoration: none;
     font-size: 1rem;
+  }
+  /* Hamburger is desktop-hidden; the media query below reveals it. */
+  .menu-toggle {
+    display: none;
+    padding: 0.3rem;
+    line-height: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: inherit;
+  }
+  .backdrop {
+    display: none;
   }
   .build-pill {
     margin-left: 0.6rem;
@@ -176,6 +220,8 @@
     display: flex;
     align-items: center;
     gap: 1rem;
+    /* Pushes the meta group to the far right of the gap-based header row. */
+    margin-left: auto;
   }
   .who {
     color: #888;
@@ -183,7 +229,7 @@
   }
   .shell {
     display: grid;
-    grid-template-columns: 18rem 1fr;
+    grid-template-columns: var(--sidebar-width) 1fr;
     min-height: calc(100vh - 3rem);
   }
   aside {
@@ -227,6 +273,68 @@
     header,
     aside {
       border-color: #e6e6e6;
+    }
+  }
+
+  /* --- Mobile: collapse the sidebar into an off-canvas drawer.
+     Keep this in sync with --bp-mobile (48rem) in app.css. --- */
+  @media (max-width: 48rem) {
+    .menu-toggle {
+      display: inline-flex;
+      align-items: center;
+    }
+    header {
+      padding: 0.5rem 0.9rem;
+    }
+    /* Drop the session line on narrow screens; the Sign out button and
+       the Home tab still convey identity. */
+    .who {
+      display: none;
+    }
+    .meta {
+      gap: 0.6rem;
+    }
+
+    .shell {
+      grid-template-columns: 1fr;
+    }
+    aside {
+      position: fixed;
+      top: 3rem;
+      bottom: 0;
+      left: 0;
+      width: min(var(--sidebar-width), 82vw);
+      box-sizing: border-box;
+      background: #1a1a1a;
+      z-index: 30;
+      transform: translateX(-100%);
+      transition: transform 180ms ease;
+      will-change: transform;
+    }
+    aside.open {
+      transform: translateX(0);
+      box-shadow: 0 0 2rem rgba(0, 0, 0, 0.5);
+    }
+    .backdrop {
+      display: block;
+      position: fixed;
+      inset: 3rem 0 0 0;
+      /* Reset the global button chrome — this is an invisible overlay. */
+      padding: 0;
+      margin: 0;
+      border: none;
+      border-radius: 0;
+      background: rgba(0, 0, 0, 0.45);
+      z-index: 20;
+      cursor: default;
+    }
+    main {
+      padding: 1rem 1rem 4rem;
+    }
+  }
+  @media (max-width: 48rem) and (prefers-color-scheme: light) {
+    aside {
+      background: #fafafa;
     }
   }
 </style>
