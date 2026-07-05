@@ -46,6 +46,16 @@ in. Any change requires re-opening the discussion.
 - **Parent-child operations.** A composite-resource apply (Cluster) spawns
   child ops (one per VM, plus k3s install + agent install). `get
   operation <id>` shows one level of children.
+- **Child ordering is a dependency DAG.** Within a single composite apply, the
+  children are ordered by a real dependency graph (`operations.RunGraph`:
+  topological execution + cycle detection), not hand-coded phase loops. Edges
+  are derived from `$ref`s between children (`RefChildEdges`) plus explicit
+  barrier edges for non-ref constraints (e.g. every AgentInstall waits on the
+  CA bundle, which aggregates all K3sNode states). Serial by default (preserves
+  SSH-install semantics); `OPENCTL_APPLY_CONCURRENCY=N` applies independent
+  children in parallel. Ordering *across* separate top-level operations is still
+  FIFO — cross-op scheduling is future work. See `DESIGN.md` §"Dependencies,
+  Value-Passing & Ordering" for the `$ref`/resolver model.
 - **Success criteria:** end-to-end verification. Cluster apply is
   `succeeded` only when all VMs are running, k3s is responding, and agents
   are reachable. Reuse the existing Phase 3 reachability probe.

@@ -323,6 +323,94 @@ Dispatch requests can include wait conditions:
 
 The CLI will poll the resource until the condition is met or timeout occurs.
 
+## Dependencies, Value-Passing & Ordering (controller)
+
+> The Cross-Plugin Dispatch section above describes the **legacy CLI** protocol
+> (continuation tokens, `dispatchRequests`). The **controller** composes
+> resources differently: a composite provider's `Plan()` emits child manifests,
+> and the controller's dispatcher applies them. Dependence, value-passing, and
+> ordering all rest on one primitive — the `$ref`.
+
+### `$ref`: the dependency + value primitive
+
+A resource declares that it depends on another by embedding a `$ref` marker
+anywhere in its spec:
+
+```yaml
+spec:
+  joinURLFrom:
+    $ref: { apiVersion: k3s.openctl.io/v1, kind: K3sNode, name: dev-cp-0, field: status.vmIP }
+```
+
+Shape: `{"$ref": {apiVersion, kind, name, field?}}`. `field` is an optional
+dot-path (`status.vmIP`, `status.nodeToken`); **omit it to substitute the whole
+resource** (`{apiVersion, kind, metadata, spec, status}`). Refs may appear
+anywhere in the spec tree — nested maps and arrays are traversed. A single
+`$ref` both **declares a dependency edge** (this resource needs that one) and
+**names a value to pull** from it.
+
+This is distinct from **owner references** (`openctl.io/owner-kind` /
+`openctl.io/owner-name` labels), which express parent→child *composition* for
+lifecycle (block deleting a VM a Cluster owns) and carry no data.
+
+### Value-passing: lazy, apply-time, cross-provider
+
+Values flow through the **resolver** (`internal/controller/refs`). Every
+manifest passes through `Dispatcher.ApplyManifest`, which — right before calling
+the provider's `Apply` — replaces each `$ref` with a live value:
+
+1. Walk the spec; for each `$ref`, call `Get(apiVersion, kind, name)` on the
+   referenced resource.
+2. Read the `field` path off the returned resource's `status`/`spec`.
+3. Hand the provider the **resolved** spec — it never sees a raw `$ref`.
+
+A resource "exposes an output" simply by putting it in its `status`, which
+`Get` returns. A K3sNode exposes `status.nodeToken` / `status.vmIP`; a Proxmox
+VM exposes `status.ip` from the guest agent.
+
+**Cross-provider is transparent.** The resolver's data source is the provider
+**Registry**, and `Registry.Get` routes by the `apiVersion` prefix to whichever
+provider owns that kind. So a k3s `K3sNode` referencing a `proxmox`
+`VirtualMachine`'s `status.ip` is byte-for-byte identical to a same-provider
+ref — the resolver never knows or cares they're different providers, and it
+reads **live provider state** via `Get` (not a cached copy). There is no
+separate "outputs" channel between providers.
+
+Two value-flow styles coexist:
+
+- **Static bake at plan time.** For deterministic values (e.g. a static IP from
+  `AllocateIPs`), `Plan()` writes the value straight into the child's spec.
+- **Dynamic `$ref` at apply time.** For values that only exist after a
+  dependency is applied (a DHCP IP, a join token), the ref is resolved lazily
+  when the dependent is dispatched.
+
+### Ordering: a dependency DAG
+
+Composite `Apply` orders its Plan children with a real dependency graph
+(`operations.RunGraph`) — **topological execution with cycle detection** —
+rather than hand-coded phase loops. Edges come from two sources:
+
+- **`$ref` edges** (`operations.RefChildEdges`): if child B's spec references
+  child A, B depends on A. A K3sNode thus depends on its VM (`vmRef`) and — for
+  joiners — the first control plane (`joinFrom`), so the VM is created before
+  the node and the first CP initializes before joiners resolve its token.
+- **Explicit barrier edges** for constraints that are *not* `$ref`s: e.g. the
+  k3s CA bundle is an aggregation over *all* K3sNode states that every
+  AgentInstall consumes, so every AgentInstall depends on the bundle task,
+  which depends on all K3sNodes.
+
+Ordering is therefore **data-driven**: it falls out of the graph and adapts to
+new kinds/edges automatically. A dependency cycle is a hard error naming the
+stuck tasks.
+
+Execution is **serial by default** (one child at a time), which preserves
+SSH-install semantics. Set `OPENCTL_APPLY_CONCURRENCY=N` to apply independent
+nodes in parallel (VMs concurrently; joiners concurrently after the first CP).
+
+> **Scope.** This DAG governs ordering *within a single composite Apply*. The
+> top-level dispatcher still processes *separate* operations FIFO — cross-op
+> dependency scheduling is future work (see ROADMAP).
+
 ## State Management
 
 Plugins can request the CLI to persist state for tracking complex resources.
