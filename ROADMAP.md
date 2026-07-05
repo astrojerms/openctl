@@ -715,6 +715,10 @@ with the commit hash for at-a-glance history. Trim to the last 10.
   `disk-storage=` actually controls the target storage for self-hosting
   installs. `--ssh-key ~/...` is also expanded consistently for SSH installs
   and the Proxmox handoff path.
+- fix: **Proxmox bootstrap SSH readiness** — after VM creation the
+  `proxmox://` installer now waits for TCP/22 on the selected VM IP before
+  handing off to the SSH Linux installer, avoiding a race with cloud-init and
+  sshd startup. IPv6 SSH target formatting is covered too.
 - (#42–#45) — feat: **external plugin protocol (Tier 1 item 1)**, shipped
   in four phases. #42 `pkg/pluginproto` (persistent-process, id-correlated
   JSON-over-stdio protocol + Client + Handler SDK). #43 external provider

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -204,5 +205,47 @@ func TestWaitForProxmoxBootstrapIPUsesObservedIP(t *testing.T) {
 	}
 	if ip != "192.0.2.60" {
 		t.Fatalf("ip = %q", ip)
+	}
+}
+
+func TestWaitForTCPListenerSucceeds(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	if err := waitForTCPListener(context.Background(), ln.Addr().String(), 200*time.Millisecond, 10*time.Millisecond); err != nil {
+		t.Fatalf("waitForTCPListener: %v", err)
+	}
+}
+
+func TestWaitForTCPListenerTimesOut(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+
+	start := time.Now()
+	err = waitForTCPListener(context.Background(), addr, 50*time.Millisecond, 10*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("timeout took %s, want bounded wait", elapsed)
+	}
+}
+
+func TestSSHInstallTarget(t *testing.T) {
+	cases := map[string]string{
+		"192.0.2.50":  "ssh://ubuntu@192.0.2.50",
+		"2001:db8::1": "ssh://ubuntu@[2001:db8::1]",
+	}
+	for host, want := range cases {
+		if got := sshInstallTarget("ubuntu", host); got != want {
+			t.Errorf("sshInstallTarget(%q) = %q, want %q", host, got, want)
+		}
 	}
 }

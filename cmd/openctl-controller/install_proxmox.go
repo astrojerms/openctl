@@ -16,12 +16,14 @@ import (
 )
 
 const (
-	defaultBootstrapVMName = "openctl-controller"
-	defaultBootstrapUser   = "ubuntu"
-	defaultBootstrapCores  = 2
-	defaultBootstrapMemory = 4096
-	defaultBootstrapDiskGB = 32
-	defaultBootstrapBridge = "vmbr0"
+	defaultBootstrapVMName        = "openctl-controller"
+	defaultBootstrapUser          = "ubuntu"
+	defaultBootstrapCores         = 2
+	defaultBootstrapMemory        = 4096
+	defaultBootstrapDiskGB        = 32
+	defaultBootstrapBridge        = "vmbr0"
+	defaultBootstrapSSHWait       = 10 * time.Minute
+	defaultBootstrapProbeInterval = 5 * time.Second
 )
 
 type proxmoxInstallTarget struct {
@@ -327,8 +329,13 @@ func runInstallProxmox(rawTarget, sshKeyFlag string) error {
 	if host == "" {
 		return fmt.Errorf("controller VM has unusable IP %q", ip)
 	}
+	sshAddr := net.JoinHostPort(host, "22")
+	fmt.Printf("Waiting for SSH on controller VM %s ...\n", sshAddr)
+	if err := waitForTCPListener(ctx, sshAddr, defaultBootstrapSSHWait, defaultBootstrapProbeInterval); err != nil {
+		return fmt.Errorf("wait for controller VM SSH: %w", err)
+	}
 	fmt.Printf("Controller VM is reachable as %s; installing Linux controller over SSH ...\n", host)
-	return runInstallRemote("ssh://"+opts.SSHUser+"@"+host, sshKeyFlag)
+	return runInstallRemote(sshInstallTarget(opts.SSHUser, host), sshKeyFlag)
 }
 
 type proxmoxVMGetter interface {
@@ -378,4 +385,56 @@ func sshHostFromIP(ip string) string {
 		return host.String()
 	}
 	return ip
+}
+
+func waitForTCPListener(ctx context.Context, addr string, budget, interval time.Duration) error {
+	if budget <= 0 {
+		return fmt.Errorf("wait budget must be positive")
+	}
+	if interval <= 0 {
+		interval = time.Second
+	}
+	deadline := time.Now().Add(budget)
+	var lastErr error
+	for {
+		conn, err := net.DialTimeout("tcp", addr, minDuration(interval, time.Second))
+		if err == nil {
+			_ = conn.Close()
+			return nil
+		}
+		lastErr = err
+
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		sleep := minDuration(interval, remaining)
+		timer := time.NewTimer(sleep)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return fmt.Errorf("%s did not accept TCP within %s: %w", addr, budget, lastErr)
+}
+
+func sshInstallTarget(user, host string) string {
+	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
+		host = "[" + host + "]"
+	}
+	return "ssh://" + user + "@" + host
+}
+
+func minDuration(a, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+	return b
 }
