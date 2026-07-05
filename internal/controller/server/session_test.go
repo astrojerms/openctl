@@ -42,12 +42,54 @@ func TestSessionHandlerLoginMintsUsableToken(t *testing.T) {
 	}
 }
 
+func TestSessionHandlerLoginInheritsCallerRole(t *testing.T) {
+	store := newSessionStoreForTest(t)
+	h := newSessionHandler(store)
+
+	// Caller authenticated as a viewer (principal injected by the interceptor).
+	ctx := auth.ContextWithPrincipal(context.Background(),
+		auth.Principal{UserID: "alice", Role: auth.RoleViewer})
+	resp, err := h.Login(ctx, &apiv1.LoginRequest{DisplayName: "alice-laptop"})
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	sess, err := store.Lookup(context.Background(), resp.GetToken())
+	if err != nil || sess == nil {
+		t.Fatalf("Lookup: %v", err)
+	}
+	if sess.UserID != "alice" {
+		t.Errorf("session UserID = %q, want alice", sess.UserID)
+	}
+	if sess.Role != auth.RoleViewer {
+		t.Errorf("session role = %q, want viewer (inherited from caller)", sess.Role)
+	}
+	if p := sess.Principal(); p.Role != auth.RoleViewer {
+		t.Errorf("session principal role = %q, want viewer", p.Role)
+	}
+}
+
+func TestSessionHandlerLoginNoAuthDefaultsAdmin(t *testing.T) {
+	store := newSessionStoreForTest(t)
+	h := newSessionHandler(store)
+
+	// No principal in ctx (--no-auth): fall back to the admin default.
+	resp, err := h.Login(context.Background(), &apiv1.LoginRequest{})
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	sess, _ := store.Lookup(context.Background(), resp.GetToken())
+	if sess == nil || sess.Role != auth.RoleAdmin || sess.UserID != auth.DefaultUserID {
+		t.Errorf("no-auth login session = %+v, want default/admin", sess)
+	}
+}
+
 func TestSessionHandlerLogoutRevokesCallersToken(t *testing.T) {
 	store := newSessionStoreForTest(t)
 	h := newSessionHandler(store)
 
 	// Pre-mint a session and then call Logout with that token in metadata.
-	sess, _ := store.Create(context.Background(), "", "x", 0)
+	sess, _ := store.Create(context.Background(), "", "x", auth.RoleAdmin, 0)
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
 		"authorization", "Bearer "+sess.Token,
 	))
@@ -65,7 +107,7 @@ func TestSessionHandlerWhoAmIIdentifiesSessionVsRoot(t *testing.T) {
 	h := newSessionHandler(store)
 
 	// Session-token caller: WhoAmI returns user_id + session_id.
-	sess, _ := store.Create(context.Background(), "", "", 0)
+	sess, _ := store.Create(context.Background(), "", "", auth.RoleAdmin, 0)
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
 		"authorization", "Bearer "+sess.Token,
 	))

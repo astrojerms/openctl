@@ -32,16 +32,22 @@ type Session struct {
 	DisplayName string
 	CreatedAt   string
 	ExpiresAt   string
+	// Role is the session's permission level, inherited from the caller who
+	// created it. Persisted in the sessions.role column (defaults 'admin').
+	Role Role
 	// Token is the raw session token. Set only by Create; nil on lookups.
 	Token string
 }
 
-// Principal returns the authenticated principal for this session. Every
-// session today is minted from the root credential and is therefore admin;
-// once a non-admin identity source (named tokens / OIDC) lands, the session
-// row will carry the creator's role and this reads it instead.
+// Principal returns the authenticated principal for this session — the
+// creator's user and role. An empty/unknown stored role falls back to admin
+// (the pre-roles default), so old rows keep working.
 func (s *Session) Principal() Principal {
-	return Principal{UserID: s.UserID, Role: RoleAdmin}
+	role := s.Role
+	if role.rank() == 0 {
+		role = RoleAdmin
+	}
+	return Principal{UserID: s.UserID, Role: role}
 }
 
 // SessionStore is the sessions data layer. Backed by SQLite.
@@ -55,12 +61,16 @@ func NewSessionStore(db *sql.DB) *SessionStore {
 	return &SessionStore{db: db}
 }
 
-// Create mints a new session for userID with the given displayName and TTL.
-// Returns the Session (with the raw token populated). TTL <= 0 uses
-// DefaultSessionTTL.
-func (s *SessionStore) Create(ctx context.Context, userID, displayName string, ttl time.Duration) (*Session, error) {
+// Create mints a new session for userID with the given displayName, role, and
+// TTL. Returns the Session (with the raw token populated). TTL <= 0 uses
+// DefaultSessionTTL; an empty/unknown role defaults to admin (the pre-roles
+// behavior).
+func (s *SessionStore) Create(ctx context.Context, userID, displayName string, role Role, ttl time.Duration) (*Session, error) {
 	if userID == "" {
 		userID = DefaultUserID
+	}
+	if role.rank() == 0 {
+		role = RoleAdmin
 	}
 	if ttl <= 0 {
 		ttl = DefaultSessionTTL
@@ -74,15 +84,16 @@ func (s *SessionStore) Create(ctx context.Context, userID, displayName string, t
 		ID:          newSessionID(),
 		UserID:      userID,
 		DisplayName: displayName,
+		Role:        role,
 		CreatedAt:   now.Format(time.RFC3339Nano),
 		ExpiresAt:   now.Add(ttl).Format(time.RFC3339Nano),
 		Token:       token,
 	}
 	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO sessions (id, user_id, token_hash, display_name, created_at, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO sessions (id, user_id, token_hash, display_name, role, created_at, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		sess.ID, sess.UserID, hashToken(token), nullableString(displayName),
-		sess.CreatedAt, sess.ExpiresAt,
+		string(role), sess.CreatedAt, sess.ExpiresAt,
 	); err != nil {
 		return nil, fmt.Errorf("insert session: %w", err)
 	}
@@ -98,17 +109,19 @@ func (s *SessionStore) Lookup(ctx context.Context, token string) (*Session, erro
 	}
 	h := hashToken(token)
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, user_id, COALESCE(display_name, ''), created_at, expires_at
+		`SELECT id, user_id, COALESCE(display_name, ''), COALESCE(role, 'admin'), created_at, expires_at
 		 FROM sessions WHERE token_hash = ?`,
 		h,
 	)
 	var sess Session
-	if err := row.Scan(&sess.ID, &sess.UserID, &sess.DisplayName, &sess.CreatedAt, &sess.ExpiresAt); err != nil {
+	var role string
+	if err := row.Scan(&sess.ID, &sess.UserID, &sess.DisplayName, &role, &sess.CreatedAt, &sess.ExpiresAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("lookup session: %w", err)
 	}
+	sess.Role = Role(role)
 	// Expiry check.
 	expiry, err := time.Parse(time.RFC3339Nano, sess.ExpiresAt)
 	if err == nil && time.Now().UTC().After(expiry) {

@@ -636,11 +636,13 @@ phase plan when ready to commit.
         RBAC is now **live** for token/CLI callers (a viewer token is genuinely
         read-only). Chosen for lowest lock-in (no external IdP; OIDC can layer
         on later).
-      - *Next — session role inheritance:* add a `role` column to `sessions`
-        (defaulting admin) so `Session.Principal()` reads it, and have
-        `SessionService.Login` mint sessions carrying the caller's role. Then
-        browser logins are also role-scoped.
-      - *Then:* OIDC integration + named sessions surfaced in the UI.
+      - *Session role inheritance shipped:* the `sessions.role` column
+        (migration 0010, defaulting admin) + `SessionService.Login` reads the
+        caller's principal and mints the session with their user+role, so a
+        viewer-token holder who logs in gets a viewer-scoped cookie.
+        `--no-auth` still mints admin. Browser logins are now role-scoped.
+      - *Next — OIDC:* external IdP → claims → role, plus surfacing the
+        logged-in user's role in `WhoAmI`/the UI.
 - [x] **Terraform / OpenTofu provider host** *(Tier 1 — see
       [docs/direction.md](docs/direction.md))* — consume the existing
       Terraform provider ecosystem (AWS, GCP, Azure, Cloudflare, …)

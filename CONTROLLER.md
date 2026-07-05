@@ -89,8 +89,8 @@ in. Any change requires re-opening the discussion.
 
   `ResourceService` enforces the role: mutations (Apply/Delete/InvokeAction)
   need `editor`+, reads (Get/List/DryRun/…) need `viewer`+. Browser sessions
-  minted via `SessionService.Login` currently inherit admin (per-session roles
-  land with the session `role` column follow-up).
+  minted via `SessionService.Login` inherit the caller's role (a viewer-token
+  holder who logs in gets a viewer-scoped cookie); `--no-auth` mints admin.
 - **CLI is a thin gRPC client.** Always requires a controller. The existing
   exec-plugin model in the CLI is removed. The per-node
   `openctl-k3s-agent` is unaffected — different boundary, different threat
