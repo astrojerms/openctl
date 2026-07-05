@@ -114,6 +114,7 @@
     {#if entries.length === 0}
       <p class="muted">No providers configured yet. Click <strong>Add provider</strong> to configure one.</p>
     {:else}
+      <div class="table-scroll">
       <table>
         <thead>
           <tr>
@@ -149,6 +150,7 @@
           {/each}
         </tbody>
       </table>
+      </div>
     {/if}
 
     {#if editing}
