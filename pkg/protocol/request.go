@@ -7,6 +7,7 @@ type Request struct {
 	ResourceType string         `json:"resourceType"`
 	ResourceName string         `json:"resourceName,omitempty"`
 	Manifest     *Resource      `json:"manifest,omitempty"`
+	Args         map[string]any `json:"args,omitempty"`
 	Config       ProviderConfig `json:"config"`
 
 	// DispatchResults contains results from previous dispatch operations

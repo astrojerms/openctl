@@ -63,11 +63,42 @@ type Error struct {
 
 // Capabilities represents the capabilities response from a plugin
 type Capabilities struct {
-	ProviderName     string               `json:"providerName"`
-	ProtocolVersion  string               `json:"protocolVersion"`
-	Resources        []ResourceDefinition `json:"resources"`
-	ComputeProvider  *ComputeCapability   `json:"computeProvider,omitempty"`
-	SupportsDispatch bool                 `json:"supportsDispatch,omitempty"`
+	ProviderName     string                 `json:"providerName"`
+	ProtocolVersion  string                 `json:"protocolVersion"`
+	Resources        []ResourceDefinition   `json:"resources"`
+	ComputeProvider  *ComputeCapability     `json:"computeProvider,omitempty"`
+	SupportsDispatch bool                   `json:"supportsDispatch,omitempty"`
+	Subcommands      []SubcommandDefinition `json:"subcommands,omitempty"`
+}
+
+// SubcommandDefinition describes a provider-specific CLI subcommand exposed
+// alongside the standard get/create/delete/apply commands.
+type SubcommandDefinition struct {
+	Name           string     `json:"name"`
+	Short          string     `json:"short"`
+	Long           string     `json:"long,omitempty"`
+	Action         string     `json:"action"`
+	PositionalArgs []ArgSpec  `json:"positionalArgs,omitempty"`
+	Flags          []FlagSpec `json:"flags,omitempty"`
+}
+
+// ArgSpec describes one positional argument accepted by a plugin-defined
+// subcommand. Values are sent in Request.Args under Name.
+type ArgSpec struct {
+	Name     string `json:"name"`
+	Required bool   `json:"required,omitempty"`
+	Help     string `json:"help,omitempty"`
+}
+
+// FlagSpec describes one flag accepted by a plugin-defined subcommand. Values
+// are sent in Request.Args under Name.
+type FlagSpec struct {
+	Name     string `json:"name"`
+	Short    string `json:"short,omitempty"`
+	Type     string `json:"type"` // string | int | bool
+	Default  string `json:"default,omitempty"`
+	Required bool   `json:"required,omitempty"`
+	Help     string `json:"help,omitempty"`
 }
 
 // ComputeCapability describes compute provider capabilities

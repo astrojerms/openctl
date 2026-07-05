@@ -827,18 +827,24 @@ The agent reports its version in `/v1/info`. If it differs from what the plugin 
 - [ ] Additional compute providers (AWS, Azure, GCP)
 - [ ] K3s cluster upgrades (will use the agent's service control + future binary-swap endpoint)
 - [ ] Certificate rotation for K3s clusters (agent + new endpoint)
-- [ ] **Plugin-defined CLI subcommands** (see TODO below)
+- [~] **Plugin-defined CLI subcommands** (generic protocol + CLI surface
+      landed; k3s handlers remain — see TODO below)
 
 ## TODO: Plugin-defined CLI subcommands
 
-**Status:** deferred during the k3s agent rollout. The k3s plugin now has agent-backed operations (`Logs`, future `Restart`/`Upgrade`) that have no CLI surface — they're only reachable from Go code via `internal/agent/client.Client`. The core CLI in `internal/cli/` only knows the fixed set of actions (`get`/`create`/`delete`/`apply`). We deferred designing the extension surface until we have at least two agent-driven commands to design against, so the API is shaped by real use, not a single example.
+**Status:** the generic CLI capability layer has landed. `protocol.Capabilities`
+now carries `subcommands`, `protocol.Request` carries `args`, and
+`internal/cli/provider.go` registers plugin-defined Cobra commands alongside
+`get`/`create`/`delete`/`apply`. The remaining work is plugin-specific:
+advertise k3s commands and implement their handler actions against the
+agent client.
 
 **Goal:** make agent-backed plugin operations callable as first-class CLI commands, e.g.:
 - `openctl k3s logs <cluster> [--node <name>] [--lines N]`
 - `openctl k3s restart <cluster> --node <name>`
 - `openctl k3s upgrade <cluster> --to <version>` (future)
 
-**Recommended approach (option 3 from the rollout discussion):** extend `protocol.Capabilities` with a list of plugin-defined subcommands, and have `internal/cli/provider.go` register them as cobra commands alongside `get`/`create`/`delete`/`apply`.
+**Implemented approach (option 3 from the rollout discussion):** extend `protocol.Capabilities` with a list of plugin-defined subcommands, and have `internal/cli/provider.go` register them as cobra commands alongside `get`/`create`/`delete`/`apply`.
 
 ```go
 // pkg/protocol/response.go
@@ -866,7 +872,7 @@ type FlagSpec struct {
 }
 ```
 
-**CLI side:** in `internal/cli/provider.go`, after registering the standard commands, iterate `caps.Subcommands` and register a cobra command per entry. The command's `RunE` builds a `protocol.Request` with `Action: subcmd.Action`, packs positional args + flag values into a new `Request.Args map[string]any` field (or into `Request.Manifest.Spec` — pick one), and dispatches via the existing executor. Output formatting: text/plain bodies print as-is; structured responses go through the existing `formatter`.
+**CLI side:** in `internal/cli/provider.go`, after registering the standard commands, iterate `caps.Subcommands` and register a cobra command per entry. The command's `RunE` builds a `protocol.Request` with `Action: subcmd.Action`, packs positional args + flag values into `Request.Args map[string]any`, and dispatches via the existing executor. Structured responses go through the existing `formatter`; message-only responses print the message.
 
 **Plugin side:** the k3s plugin's `handler.Handle` already dispatches on `req.Action`. Add cases for the new action names (`"logs"`, `"restart"`, etc.) that:
 1. Load the cluster's saved state file (existing helper).
@@ -874,13 +880,9 @@ type FlagSpec struct {
 3. Build an `agentclient.Client` for the right node.
 4. Call the typed method (`c.Logs(ctx, lines)`) and return the result.
 
-**Files that will change:**
-- `pkg/protocol/response.go` — add `Subcommands` to `Capabilities`, add `SubcommandDefinition`/`ArgSpec`/`FlagSpec`.
-- `pkg/protocol/request.go` — add `Args map[string]any` (or repurpose Manifest).
-- `internal/cli/provider.go` — register subcommands from caps.
-- `plugins/k3s/cmd/openctl-k3s/main.go` — declare subcommands in `printCapabilities()`.
-- `plugins/k3s/internal/handler/handler.go` — dispatch new actions to agent client.
-- `DESIGN.md` — document the new `Subcommands` capability under Plugin Protocol.
+**Remaining plugin-side files:**
+- k3s plugin capabilities — declare `logs` / `restart` subcommands.
+- k3s handler — dispatch new action names (`"logs"`, `"restart"`, etc.) to the agent client.
 
 **Until this lands, the manual workaround** for inspecting agent endpoints is to invoke the typed client directly from a tiny Go program, or to `curl` the agent with the cluster's mTLS material:
 
