@@ -66,7 +66,7 @@ func parseSSHTarget(raw string) (*sshTarget, error) {
 // otherwise the first of ~/.ssh/id_ed25519, ~/.ssh/id_rsa that exists.
 func resolveSSHKey(flagKey string) (string, error) {
 	if flagKey != "" {
-		return flagKey, nil
+		return expandHomePath(flagKey)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -79,6 +79,23 @@ func resolveSSHKey(flagKey string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no SSH key found (tried ~/.ssh/id_ed25519, ~/.ssh/id_rsa); pass --ssh-key PATH")
+}
+
+func expandHomePath(path string) (string, error) {
+	if path == "" || path[0] != '~' {
+		return path, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	if path == "~" {
+		return home, nil
+	}
+	if strings.HasPrefix(path, "~/") {
+		return filepath.Join(home, path[2:]), nil
+	}
+	return "", fmt.Errorf("unsupported home-relative path %q", path)
 }
 
 // sshRunner is the subset of *ssh.Client the remote install uses. Narrowing to

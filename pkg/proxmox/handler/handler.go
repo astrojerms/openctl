@@ -273,6 +273,9 @@ func (h *Handler) createVMFromTemplate(ctx context.Context, name, node string, s
 	if node != templateNode {
 		cloneParams["target"] = node
 	}
+	if storage := primaryDiskStorage(spec); storage != "" {
+		cloneParams["storage"] = storage
+	}
 
 	vmid, upid, err := h.client.CloneVM(ctx, templateNode, templateID, name, cloneParams)
 	if err != nil {
@@ -335,6 +338,18 @@ func (h *Handler) createVMFromTemplate(ctx context.Context, name, node string, s
 		Status:  protocol.StatusSuccess,
 		Message: fmt.Sprintf("VM %s created (vmid: %d)", name, vmid),
 	}, nil
+}
+
+func primaryDiskStorage(spec *resources.VMSpec) string {
+	if spec == nil {
+		return ""
+	}
+	for _, disk := range spec.Disks {
+		if disk.Storage != "" {
+			return disk.Storage
+		}
+	}
+	return ""
 }
 
 func (h *Handler) createVMFromCloudImage(ctx context.Context, name, node string, spec *resources.VMSpec) (*protocol.Response, error) {

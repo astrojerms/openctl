@@ -60,6 +60,19 @@ func TestResolveSSHKeyPrefersFlag(t *testing.T) {
 	}
 }
 
+func TestResolveSSHKeyExpandsFlagHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	got, err := resolveSSHKey("~/.ssh/custom")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(home, ".ssh", "custom")
+	if got != want {
+		t.Errorf("key = %q, want %q", got, want)
+	}
+}
+
 func TestResolveSSHKeyFindsDefault(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

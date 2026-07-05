@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -280,6 +281,73 @@ func TestApplyVM_NotFoundTakesCreatePath(t *testing.T) {
 	if !strings.Contains(resp.Error.Message, "template") {
 		t.Errorf("expected the create path's template-not-found message, got: %s", resp.Error.Message)
 	}
+}
+
+func TestCreateVMFromTemplatePassesDiskStorageToClone(t *testing.T) {
+	var cloneForm url.Values
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api2/json/nodes" && r.Method == "GET":
+			json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"node": "pve1"}}})
+		case r.URL.Path == "/api2/json/nodes/pve1/qemu" && r.Method == "GET":
+			json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{
+				{"vmid": 9000, "name": "ubuntu-template", "template": 1, "status": "stopped"},
+			}})
+		case r.URL.Path == "/api2/json/cluster/nextid" && r.Method == "GET":
+			json.NewEncoder(w).Encode(map[string]any{"data": "200"})
+		case r.URL.Path == "/api2/json/nodes/pve1/qemu/9000/clone" && r.Method == "POST":
+			if err := r.ParseForm(); err != nil {
+				t.Fatalf("ParseForm: %v", err)
+			}
+			cloneForm = cloneValues(r.Form)
+			json.NewEncoder(w).Encode(map[string]any{"data": ""})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	h := New(&protocol.ProviderConfig{Endpoint: server.URL, TokenID: "t", TokenSecret: "s", Node: "pve1"})
+	resp, err := h.Handle(context.Background(), &protocol.Request{
+		Version:      protocol.ProtocolVersion,
+		Action:       protocol.ActionCreate,
+		ResourceType: "VirtualMachine",
+		Manifest: &protocol.Resource{
+			APIVersion: "proxmox.openctl.io/v1",
+			Kind:       "VirtualMachine",
+			Metadata:   protocol.ResourceMetadata{Name: "controller-vm"},
+			Spec: map[string]any{
+				"node":     "pve1",
+				"template": map[string]any{"name": "ubuntu-template"},
+				"disks": []any{
+					map[string]any{
+						"name":    "scsi0",
+						"storage": "local-lvm",
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if resp.Status != protocol.StatusSuccess {
+		t.Fatalf("status = %s, resp=%+v", resp.Status, resp)
+	}
+	if cloneForm.Get("storage") != "local-lvm" {
+		t.Fatalf("clone storage = %q, want local-lvm (form=%v)", cloneForm.Get("storage"), cloneForm)
+	}
+	if cloneForm.Get("newid") != "200" || cloneForm.Get("name") != "controller-vm" || cloneForm.Get("full") != "1" {
+		t.Fatalf("clone form missing default params: %v", cloneForm)
+	}
+}
+
+func cloneValues(in url.Values) url.Values {
+	out := make(url.Values, len(in))
+	for k, values := range in {
+		out[k] = append([]string(nil), values...)
+	}
+	return out
 }
 
 func TestGenerateTemplateNameFromURL(t *testing.T) {

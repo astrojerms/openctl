@@ -710,6 +710,11 @@ with the commit hash for at-a-glance history. Trim to the last 10.
   provider, waits for a static or guest-agent-reported IP, then reuses the
   SSH Linux installer for the controller deployment. Homelab validation still
   gates marking the roadmap item complete.
+- fix: **Proxmox bootstrap install hardening** — template-based VM clones now
+  pass `disks[0].storage` through to the Proxmox clone `storage` parameter, so
+  `disk-storage=` actually controls the target storage for self-hosting
+  installs. `--ssh-key ~/...` is also expanded consistently for SSH installs
+  and the Proxmox handoff path.
 - (#42–#45) — feat: **external plugin protocol (Tier 1 item 1)**, shipped
   in four phases. #42 `pkg/pluginproto` (persistent-process, id-correlated
   JSON-over-stdio protocol + Client + Handler SDK). #43 external provider
