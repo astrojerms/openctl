@@ -619,9 +619,23 @@ phase plan when ready to commit.
       source="gitops" so the audit trail is honest. Opt-in via
       `manifests.gitops.enabled: true`. Debounces rapid successive
       writes (500ms) to handle editor truncate+write patterns.
-- [ ] **Multi-user auth** — OIDC integration, named sessions, RBAC on
+- [~] **Multi-user auth** — OIDC integration, named sessions, RBAC on
       `ResourceService`. Cookie/session layer from U1 is the
       foundation.
+      - *RBAC spine shipped:* the auth interceptors now resolve an
+        `auth.Principal{UserID, Role}` (roles: viewer ⊂ editor ⊂ admin) and
+        inject it into the request context; `ResourceService` mutations
+        (Apply/Delete/InvokeAction) require editor+, reads (Get/List/DryRun/
+        ListActions/GetChildrenGraph) require viewer+. The root token and all
+        current sessions resolve to admin, so enforcement is a no-op in
+        production until a non-admin identity source exists; `--no-auth`
+        skips the interceptor entirely (every caller trusted).
+      - *Next — identity source (design fork, get a steer):* how non-admin
+        principals are minted — named API tokens with roles, static
+        users-in-config, or OIDC-first. Adds a `role` column to `sessions`
+        (defaulting admin) so `Session.Principal()` reads it, and a
+        login/token path that assigns roles.
+      - *Then:* OIDC integration + named sessions surfaced in the UI.
 - [x] **Terraform / OpenTofu provider host** *(Tier 1 — see
       [docs/direction.md](docs/direction.md))* — consume the existing
       Terraform provider ecosystem (AWS, GCP, Azure, Cloudflare, …)

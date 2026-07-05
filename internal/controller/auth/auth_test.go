@@ -83,8 +83,12 @@ func TestValidatorAcceptsCorrectBearer(t *testing.T) {
 	v := NewValidator("secret-token")
 	ctx := metadata.NewIncomingContext(context.Background(),
 		metadata.Pairs("authorization", "Bearer secret-token"))
-	if err := v.check(ctx); err != nil {
+	p, err := v.check(ctx)
+	if err != nil {
 		t.Errorf("want nil, got %v", err)
+	}
+	if p.Role != RoleAdmin || !p.Root {
+		t.Errorf("root token should map to admin RootPrincipal, got %+v", p)
 	}
 }
 
@@ -105,7 +109,7 @@ func TestValidatorRejectsCases(t *testing.T) {
 			if c.md != nil {
 				ctx = metadata.NewIncomingContext(ctx, c.md)
 			}
-			err := v.check(ctx)
+			_, err := v.check(ctx)
 			if err == nil {
 				t.Fatal("want error, got nil")
 			}
