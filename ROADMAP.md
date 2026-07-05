@@ -52,10 +52,13 @@ direction.md):
 
 **Tier 1 — the spine (roughly in sequence):**
 
-1. **External plugin protocol** — the generic, reusable provider
-   interface; the "wide" ecosystem foundation and what contributors
-   need. Design it with the Terraform host as an explicit second
-   consumer. See [docs/plugin-architecture.md](docs/plugin-architecture.md).
+1. **External plugin protocol** — ✅ **shipped** (PRs #42–#45). The generic,
+   reusable provider interface serialized as the v2 pluginproto protocol:
+   protocol + SDK, external provider adapter + registry/config wiring,
+   plugin-supplied CUE schemas, and the `plugins/example` reference
+   provider. Author reference: [docs/plugin-protocol.md](docs/plugin-protocol.md).
+   Shaped with the Terraform host as an explicit second consumer (opaque
+   state/private blobs already carried on the wire).
 2. **Terraform / OpenTofu provider host** — a second implementer of that
    interface; the breadth multiplier that unlocks the whole provider
    registry (AWS/GKE/…). Design + honest hard-parts analysis in
@@ -104,8 +107,14 @@ plan/state); harden the provider contract before the ecosystem widens.
 
 ### Followups (post-Phase-6, parked)
 
-- [ ] External plugin protocol (3rd-party providers as exec'd binaries
-      over the existing JSON-over-stdio protocol).
+- [x] External plugin protocol — shipped as the **v2 pluginproto**
+      protocol (persistent process, id-correlated JSON-over-stdio, one-time
+      configure, opaque state/private blobs) plus an external provider
+      adapter, plugin-supplied CUE schemas, and the `plugins/example`
+      reference provider. This is Tier 1 item 1; see
+      [docs/plugin-protocol.md](docs/plugin-protocol.md) for the author
+      reference and [docs/plugin-architecture.md](docs/plugin-architecture.md)
+      for the design.
 - [ ] Linux install via SSH (`openctl-controller install --target
       ssh://user@host`).
 - [ ] Proxmox bootstrap install (`openctl-controller install --target
@@ -647,6 +656,16 @@ When phases or followups land, move them up out of "pending" into their
 detail doc's marked-complete section, then leave a one-line entry here
 with the commit hash for at-a-glance history. Trim to the last 10.
 
+- (#42–#45) — feat: **external plugin protocol (Tier 1 item 1)**, shipped
+  in four phases. #42 `pkg/pluginproto` (persistent-process, id-correlated
+  JSON-over-stdio protocol + Client + Handler SDK). #43 external provider
+  adapter + registry/config `command:` wiring (capability-gated optional
+  interfaces; only Planner needs a wrapper). #44 plugin-supplied CUE
+  schemas threaded through validation + SchemaService. #45 the
+  `plugins/example` reference provider (file-backed Note), a real-subprocess
+  e2e test, and `docs/plugin-protocol.md`. Opaque state/private blobs are
+  carried on the wire now so the Terraform host (item 2) needs no protocol
+  change; their persistence store lands with item 2.
 - `aa7b2a0` (#17) — fix: harden the proxmox provider: thread
   `context.Context` through the whole client (cancelable HTTP; polling
   loops honor `ctx.Done()`) and stop collapsing every lookup error to
