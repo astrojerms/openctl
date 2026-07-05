@@ -177,6 +177,7 @@
     {#if visibleRows.length === 0}
       <p class="muted">No matches for "{filter}".</p>
     {:else}
+    <div class="table-scroll">
     <table>
       <thead>
         <tr>
@@ -223,6 +224,7 @@
         {/each}
       </tbody>
     </table>
+    </div>
     {/if}
   {/if}
 </section>

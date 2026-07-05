@@ -704,9 +704,11 @@ phase plan when ready to commit.
       wraps, and `main` goes full-width. Layout tokens (`--sidebar-width`,
       `--bp-mobile`) added to app.css. The side-by-side editor/preview panes
       (Edit form-view + TemplateWizard) now stack into a single column below
-      48rem (preview un-stickied). Remaining follow-up: wrap the data tables
-      (ResourceList/Providers/Detail/OpsDrawer) in contained horizontal-scroll
-      regions so wide tables scroll within their card rather than the page.
+      48rem (preview un-stickied). The content tables (ResourceList, Providers,
+      Detail) are wrapped in a `.table-scroll` container (app.css) so wide
+      tables scroll within their region instead of the page; OpsDrawer is left
+      as-is (its own vertical-scroll + sticky-header + ellipsized cells already
+      contain it). The mobile-friendly layout is now functionally complete.
 - [x] **Plugin-defined CLI subcommands** — generic protocol + CLI
       registration landed, and the k3s plugin ships `logs`/`restart`/`upgrade`
       handlers backed by the per-node agent client (`upgrade` is a

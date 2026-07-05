@@ -61,6 +61,14 @@ a {
   color: #6ea8ff;
 }
 
+/* Contains a wide table's horizontal scroll within its own region so the
+   table scrolls instead of the whole page (crucial on mobile). No-op when
+   the table already fits. Global so any view can wrap a <table> in it. */
+.table-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
 @media (prefers-color-scheme: light) {
   :root {
     color: #1a1a1a;

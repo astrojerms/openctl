@@ -485,6 +485,7 @@
     {#if drift.length > 0}
       <article class="card drift-card">
         <h3>Drift ({drift.length})</h3>
+        <div class="table-scroll">
         <table>
           <thead>
             <tr><th>Path</th><th>Desired</th><th>Observed</th></tr>
@@ -499,6 +500,7 @@
             {/each}
           </tbody>
         </table>
+        </div>
       </article>
     {/if}
 
