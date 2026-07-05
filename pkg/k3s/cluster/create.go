@@ -48,6 +48,7 @@ func NewCreator(name string, spec *resources.ClusterSpec, config *protocol.Provi
 func (c *Creator) GenerateDispatchRequests() []*protocol.DispatchRequest {
 	cpNodes, workerNodes := resources.NodeNames(c.name, c.spec)
 	allNodes := append(cpNodes, workerNodes...)
+	placement := resources.PlacementHosts(c.name, c.spec)
 
 	requests := make([]*protocol.DispatchRequest, 0, len(allNodes))
 
@@ -132,6 +133,13 @@ func (c *Creator) GenerateDispatchRequests() []*protocol.DispatchRequest {
 					"ipConfig": ipConfig,
 				},
 			},
+		}
+
+		// Place this VM on a specific provider host when the pool
+		// defines one; otherwise leave spec.node unset so the compute
+		// provider uses its configured default host.
+		if host := placement[nodeName]; host != "" {
+			manifest.Spec["node"] = host
 		}
 
 		// Add image source

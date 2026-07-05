@@ -76,3 +76,38 @@ func TestValidateRejectsNil(t *testing.T) {
 		t.Error("want error for nil resource")
 	}
 }
+
+// TestValidatePassesClusterWithNodePlacement proves the k3s Cluster CUE
+// schema accepts the placement host lists at all three levels
+// (compute-wide, control-plane, worker pool).
+func TestValidatePassesClusterWithNodePlacement(t *testing.T) {
+	r := &protocol.Resource{
+		APIVersion: "k3s.openctl.io/v1",
+		Kind:       "Cluster",
+		Metadata:   protocol.ResourceMetadata{Name: "ha"},
+		Spec: map[string]any{
+			"compute": map[string]any{
+				"provider": "proxmox",
+				"image":    map[string]any{"template": "ubuntu-2204"},
+				"nodes":    []any{"pve1", "pve2", "pve3"},
+			},
+			"nodes": map[string]any{
+				"controlPlane": map[string]any{
+					"count": 3,
+					"nodes": []any{"pve1", "pve2", "pve3"},
+				},
+				"workers": []any{
+					map[string]any{
+						"name":  "gpu",
+						"count": 1,
+						"nodes": []any{"pve3"},
+					},
+				},
+			},
+			"ssh": map[string]any{"privateKeyPath": "/root/.ssh/id_ed25519"},
+		},
+	}
+	if err := Validate(r); err != nil {
+		t.Errorf("want nil for cluster with node placement, got: %v", err)
+	}
+}
