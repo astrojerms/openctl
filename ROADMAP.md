@@ -69,9 +69,13 @@ direction.md):
      launches a real tfplugin6 provider over HashiCorp go-plugin and fetches
      its schema (vendored stubs in `pkg/tfplugin6`, tested against the in-repo
      `plugins/tf-fake` provider — no external download needed).
-   - *Remaining:* the `providers.Provider` adapter (Apply→Plan+Apply,
-     Get→Read, Delete→Apply(null)) with tftypes/DynamicValue + provider_state;
-     tfplugin6-schema → CUE translation; config + registration wiring.
+   - *Adapter lifecycle shipped:* `internal/controller/providers/tfhost`
+     now exposes a `providers.Provider` adapter for explicit Kind →
+     Terraform type mappings: Apply→Plan+Apply, Get→Read, and
+     Delete→Plan+Apply(null), threading opaque `DynamicValue` + private blobs
+     through `provider_state`.
+   - *Remaining:* tfplugin6-schema → CUE translation; config + registration
+     wiring for operator-configured Terraform provider binaries.
 3. **Run-anywhere: portable Linux daemon + `install --target ssh://`** — ✅
    **shipped** (PRs #47–#48). systemd support (user unit local + system unit
    remote) behind a `serviceManager` abstraction; `make build-controller-linux`
@@ -680,6 +684,12 @@ with the commit hash for at-a-glance history. Trim to the last 10.
   Apply/Get/Delete), so stateful external providers are fully supported. This
   is the controller-side prerequisite the Terraform host (Tier 1 item 2)
   reuses. Stateless plugins are unaffected.
+- feat: **TF host provider adapter lifecycle** — explicit Kind → Terraform
+  resource type mappings now satisfy the openctl `providers.Provider` contract:
+  Apply runs `PlanResourceChange` + `ApplyResourceChange`, Get runs
+  `ReadResource`, and Delete applies a null planned state while persisting
+  opaque `DynamicValue` + private blobs in `provider_state`. Tests exercise the
+  path against the in-repo `tf6server` fake provider and SQLite state store.
 - (#42–#45) — feat: **external plugin protocol (Tier 1 item 1)**, shipped
   in four phases. #42 `pkg/pluginproto` (persistent-process, id-correlated
   JSON-over-stdio protocol + Client + Handler SDK). #43 external provider
