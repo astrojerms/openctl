@@ -1,0 +1,191 @@
+# Writing an external provider (v2 plugin protocol)
+
+openctl can drive **out-of-process provider plugins** — separate binaries that
+satisfy the same provider contract the built-in Proxmox and k3s providers do,
+without being compiled into the controller. This is the "wide, any-provider
+ecosystem" foundation from [direction.md](direction.md); the
+[plugin-architecture.md](plugin-architecture.md) doc explains where it sits in
+the design. This page is the practical reference for **authoring** one.
+
+A complete, runnable reference plugin lives in
+[`plugins/example`](../plugins/example) (a file-backed `Note` provider). Read
+it alongside this page.
+
+---
+
+## How it works
+
+The controller spawns your binary once and keeps it alive, exchanging
+**id-correlated JSON messages over stdio** (`pkg/pluginproto`):
+
+- **stdin** — requests from the controller (`handshake`, `configure`, `apply`, …)
+- **stdout** — your responses (the protocol channel — never print to it directly)
+- **stderr** — free-form diagnostics; forwarded into the controller log
+
+One process serves many calls. It is configured once (after the handshake) and
+then handles resource operations until the controller shuts it down.
+
+> This is a different protocol from the legacy one-shot exec plugins in
+> `pkg/protocol` (a fresh process per request). New providers should use the v2
+> protocol described here.
+
+## The fastest path: implement `pluginproto.Handler`
+
+You do **not** parse the wire format yourself. Implement the `Handler`
+interface and call `pluginproto.Serve`:
+
+```go
+package main
+
+import (
+	"os"
+
+	"github.com/openctl/openctl/pkg/pluginproto"
+)
+
+func main() {
+	if len(os.Args) < 2 || os.Args[1] != "plugin-serve" {
+		os.Exit(2)
+	}
+	_ = pluginproto.Serve(myProvider{})
+}
+```
+
+`Handler` (see `pkg/pluginproto/server.go`) has five **required** methods and
+several optional ones. Embed `pluginproto.UnimplementedHandler` to inherit safe
+defaults for everything optional, then override what you support:
+
+| Method | Required | Purpose |
+|---|---|---|
+| `Handshake` | ✅ | Announce provider name, kinds, capabilities, and (optionally) per-kind CUE schema |
+| `Apply` | ✅ | Create/converge a resource |
+| `Get` | ✅ | Observed state of one resource (`pluginproto.NotFound(...)` for a genuine miss) |
+| `List` | ✅ | Observed state of all resources of a kind |
+| `Delete` | ✅ | Idempotent removal (missing == deleted, return nil) |
+| `Configure` | optional | One-time provider config injection |
+| `Plan` | optional | Composite expansion into child manifests |
+| `DryRun` | optional | Preview an Apply |
+| `DoAction` | optional | Runtime actions on a live resource |
+| `OwnerOf` / `ChildrenOf` | optional | Ownership / composition relationships |
+
+## The handshake — declare who you are
+
+`Handshake` returns a `HandshakeResult`:
+
+```go
+func (myProvider) Handshake(context.Context) (*pluginproto.HandshakeResult, error) {
+	return &pluginproto.HandshakeResult{
+		ProviderName:    "example",                 // → apiVersion "example.openctl.io/v1"
+		ProtocolVersion: pluginproto.ProtocolVersion,
+		Capabilities:    []string{pluginproto.CapabilitySchema, pluginproto.CapabilityActions},
+		Kinds: []pluginproto.KindInfo{
+			{Kind: "Note", Schema: noteSchema, Actions: []string{"touch"}},
+		},
+	}, nil
+}
+```
+
+- **`ProviderName`** must match the apiVersion prefix the controller routes on:
+  name `example` ⇒ resources are `example.openctl.io/v1`.
+- **`ProtocolVersion`** must equal `pluginproto.ProtocolVersion` or the
+  controller rejects the plugin at load.
+- **`Kinds`** lists every resource kind you handle. `Observed: true` marks a
+  platform-discovered kind (bypasses the managed-only filter). `Actions`
+  lists per-kind runtime actions.
+
+### Capabilities
+
+Advertise a capability only if you implement it. Their effect:
+
+| Capability | Effect |
+|---|---|
+| `CapabilitySchema` | Your `KindInfo.Schema` CUE is registered for validation + UI listing |
+| `CapabilityActions` | `DoAction` is reachable for kinds that list actions |
+| `CapabilityDryRun` | `DryRun` is used; otherwise the controller does a spec-level diff |
+| `CapabilityPlan` | Your provider is treated as a composite **Planner** |
+| `CapabilityOwnership` | `OwnerOf` is consulted before deletes |
+| `CapabilityChildren` | `ChildrenOf` is used to build the composition/DAG view |
+| `CapabilityState` | You round-trip opaque state/private blobs (see below) |
+
+The controller only round-trips to your plugin for a capability you actually
+advertised — an un-advertised `OwnerOf`, for instance, is answered locally as
+"unowned" without a call.
+
+## Supplying a schema
+
+If you advertise `CapabilitySchema`, put a **standalone** CUE document in each
+`KindInfo.Schema`. It is compiled on its own (no openctl module imports), so it
+must define a top-level definition named `#<Kind>` describing the whole
+resource. Keep it open (`...`) so controller-managed fields aren't rejected:
+
+```cue
+#Note: {
+	apiVersion: "example.openctl.io/v1"
+	kind:       "Note"
+	metadata: { name: string, ... }
+	spec: { content: string }
+	...
+}
+```
+
+Resources are then validated against this at apply time, and the schema shows
+up in the UI's schema list and editor. (Typed *form* generation for external
+kinds isn't wired yet — the UI falls back to the YAML editor for them.)
+
+## Configuration
+
+If you implement `Configure`, the controller calls it once after the handshake
+with an **opaque JSON bag** it built from your `providers:` entry in
+`config.yaml`. Unmarshal it into whatever shape you expect. The built-in
+config maps `defaults:` into `protocol.ProviderConfig.Defaults`, so:
+
+```yaml
+providers:
+  example:
+    command: openctl-example
+    args: [plugin-serve]
+    defaults:
+      dir: /var/lib/openctl-example
+```
+
+reaches your plugin as `{"defaults":{"dir":"/var/lib/openctl-example"}}`.
+
+## State (stateful providers)
+
+`Apply`/`Get`/`Delete` carry optional opaque **state** and **private** blobs
+(`ApplyParams.State`, `ApplyResult.State`, …). A stateless provider (like the
+example, which reads files back off disk) ignores them. Providers that need to
+persist opaque per-resource state across calls — most notably the forthcoming
+Terraform/OpenTofu host — return updated blobs and read them back next call.
+
+> The wire format carries these blobs today, but the controller-side
+> `provider_state` store that persists them lands with Tier 1 item 2. Until
+> then, author **stateless** providers (re-read observed state from the world).
+
+## Installing your plugin
+
+1. Build your binary (any name; the example uses `openctl-example`).
+2. Put it on `PATH` or reference it by absolute path.
+3. Add a `providers:` entry with `command:` (and optional `args:`/`defaults:`):
+
+   ```yaml
+   providers:
+     example:
+       command: openctl-example
+       args: [plugin-serve]
+   ```
+
+4. Restart the controller. It spawns the plugin, handshakes, and registers your
+   kinds — they now flow through apply/get/list/delete, drift reconciliation,
+   the git mirror, and the UI exactly like built-in kinds. A plugin that fails
+   to load is logged and skipped (it can't stop the controller), and built-in
+   provider names (`proxmox`, `k3s`) always win a name collision.
+
+## Testing tips
+
+- Unit-test your `Handler` directly (no process needed) — call its methods, or
+  wire it to a `pluginproto.Client` over an `io.Pipe` with
+  `pluginproto.ServeConn`. See `pkg/pluginproto/pluginproto_test.go`.
+- For an end-to-end check, build your binary and load it through
+  `internal/controller/providers/external.Load`. See
+  `internal/controller/providers/external/e2e_test.go`.
