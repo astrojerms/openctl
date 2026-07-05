@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -124,7 +125,7 @@ func newAdapter(t *testing.T, h *testHandler) (providers.Provider, func()) {
 	if err != nil {
 		t.Fatalf("handshake: %v", err)
 	}
-	prov := New(client, hs)
+	prov := New(client, hs, nil)
 	teardown := func() {
 		_ = client.Close(context.Background())
 		_ = c2sW.Close()
@@ -325,5 +326,182 @@ func TestAdapterThroughRegistry(t *testing.T) {
 	}
 	if got, err := reg.Get(context.Background(), "acme.openctl.io/v1", "Thing", "r1"); err != nil || got.Metadata.Name != "r1" {
 		t.Fatalf("get via registry = %v, %v", got, err)
+	}
+}
+
+// --- stateful adapter (CapabilityState) ---
+
+// memStore is an in-memory StateStore for testing state round-tripping.
+type memStore struct {
+	mu      sync.Mutex
+	state   map[string][]byte
+	private map[string][]byte
+}
+
+func newMemStore() *memStore {
+	return &memStore{state: map[string][]byte{}, private: map[string][]byte{}}
+}
+
+func (m *memStore) key(a, k, n string) string { return a + "/" + k + "/" + n }
+
+func (m *memStore) LoadState(_ context.Context, a, k, n string) ([]byte, []byte, int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.state[m.key(a, k, n)], m.private[m.key(a, k, n)], 0, nil
+}
+
+func (m *memStore) SaveState(_ context.Context, a, k, n string, state, private []byte, _ int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.state[m.key(a, k, n)] = state
+	m.private[m.key(a, k, n)] = private
+	return nil
+}
+
+func (m *memStore) DeleteState(_ context.Context, a, k, n string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.state, m.key(a, k, n))
+	delete(m.private, m.key(a, k, n))
+	return nil
+}
+
+// statefulHandler records the prior state it received on each Apply and echoes
+// a new state back, so the test can prove the adapter loaded-before and
+// saved-after each call.
+type statefulHandler struct {
+	pluginproto.UnimplementedHandler
+	mu        sync.Mutex
+	priorSeen []string // JSON of the state blob seen on each Apply, in order
+	applies   int
+}
+
+func (h *statefulHandler) Handshake(context.Context) (*pluginproto.HandshakeResult, error) {
+	return &pluginproto.HandshakeResult{
+		ProviderName:    "stateful",
+		ProtocolVersion: pluginproto.ProtocolVersion,
+		Capabilities:    []string{pluginproto.CapabilityState},
+		Kinds:           []pluginproto.KindInfo{{Kind: "Thing"}},
+	}, nil
+}
+
+func (h *statefulHandler) Apply(_ context.Context, p pluginproto.ApplyParams) (*pluginproto.ApplyResult, error) {
+	h.mu.Lock()
+	h.applies++
+	n := h.applies
+	h.priorSeen = append(h.priorSeen, string(p.State))
+	h.mu.Unlock()
+	r := *p.Manifest
+	return &pluginproto.ApplyResult{
+		Resource: &r,
+		State:    json.RawMessage(`{"generation":` + itoa(n) + `}`),
+		Private:  json.RawMessage(`"priv"`),
+	}, nil
+}
+
+func (h *statefulHandler) Get(_ context.Context, p pluginproto.GetParams) (*pluginproto.GetResult, error) {
+	r := &protocol.Resource{APIVersion: "stateful.openctl.io/v1", Kind: p.Kind}
+	r.Metadata.Name = p.Name
+	// Echo back a refreshed state so the adapter persists it.
+	return &pluginproto.GetResult{Resource: r, State: json.RawMessage(`{"refreshed":true}`)}, nil
+}
+
+func (h *statefulHandler) Delete(context.Context, pluginproto.DeleteParams) error { return nil }
+func (h *statefulHandler) List(context.Context, string) ([]*protocol.Resource, error) {
+	return nil, nil
+}
+
+func itoa(n int) string { return string(rune('0' + n)) }
+
+func newStatefulAdapter(t *testing.T, h pluginproto.Handler, store StateStore) (providers.Provider, func()) {
+	t.Helper()
+	c2sR, c2sW := io.Pipe()
+	s2cR, s2cW := io.Pipe()
+	serveDone := make(chan struct{})
+	go func() {
+		defer close(serveDone)
+		_ = pluginproto.ServeConn(context.Background(), c2sR, s2cW, h)
+		_ = s2cW.Close()
+	}()
+	client := pluginproto.NewClient(s2cR, c2sW)
+	hs, err := client.Handshake(context.Background())
+	if err != nil {
+		t.Fatalf("handshake: %v", err)
+	}
+	prov := New(client, hs, store)
+	return prov, func() {
+		_ = client.Close(context.Background())
+		_ = c2sW.Close()
+		<-serveDone
+	}
+}
+
+func TestStatefulAdapterRoundTripsState(t *testing.T) {
+	store := newMemStore()
+	h := &statefulHandler{}
+	prov, done := newStatefulAdapter(t, h, store)
+	defer done()
+	ctx := context.Background()
+
+	m := &protocol.Resource{APIVersion: "stateful.openctl.io/v1", Kind: "Thing"}
+	m.Metadata.Name = "t1"
+
+	// First Apply: no prior state, provider returns generation 1.
+	if _, err := prov.Apply(ctx, m); err != nil {
+		t.Fatalf("apply 1: %v", err)
+	}
+	st, priv, _, _ := store.LoadState(ctx, "stateful.openctl.io/v1", "Thing", "t1")
+	if string(st) != `{"generation":1}` {
+		t.Errorf("stored state after apply 1 = %s", st)
+	}
+	if string(priv) != `"priv"` {
+		t.Errorf("stored private = %s", priv)
+	}
+
+	// Second Apply: the adapter must have loaded the saved state and handed it
+	// to the plugin as prior state.
+	if _, err := prov.Apply(ctx, m); err != nil {
+		t.Fatalf("apply 2: %v", err)
+	}
+	h.mu.Lock()
+	seen := append([]string(nil), h.priorSeen...)
+	h.mu.Unlock()
+	if len(seen) != 2 || seen[0] != "" || seen[1] != `{"generation":1}` {
+		t.Errorf("prior state seen by plugin = %v (want [\"\", generation1])", seen)
+	}
+
+	// Get persists refreshed state.
+	if _, err := prov.Get(ctx, "Thing", "t1"); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	st, _, _, _ = store.LoadState(ctx, "stateful.openctl.io/v1", "Thing", "t1")
+	if string(st) != `{"refreshed":true}` {
+		t.Errorf("state after Get = %s", st)
+	}
+
+	// Delete clears the stored state.
+	if err := prov.Delete(ctx, "Thing", "t1"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	st, _, _, _ = store.LoadState(ctx, "stateful.openctl.io/v1", "Thing", "t1")
+	if st != nil {
+		t.Errorf("state after Delete = %s, want nil", st)
+	}
+}
+
+func TestStatelessAdapterIgnoresStore(t *testing.T) {
+	// A plugin WITHOUT CapabilityState must not touch the store even if one is
+	// provided (the demo handler doesn't advertise state).
+	store := newMemStore()
+	h := newTestHandler("demo") // no CapabilityState
+	prov, done := newStatefulAdapter(t, h, store)
+	defer done()
+	m := &protocol.Resource{APIVersion: "demo.openctl.io/v1", Kind: "Thing"}
+	m.Metadata.Name = "t1"
+	if _, err := prov.Apply(context.Background(), m); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if len(store.state) != 0 {
+		t.Errorf("stateless plugin should not write to the store, got %d entries", len(store.state))
 	}
 }

@@ -16,6 +16,7 @@ package external
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/openctl/openctl/internal/controller/providers"
@@ -28,6 +29,18 @@ import (
 // request forever. These calls are cheap; 30s is generous.
 const metaCallTimeout = 30 * time.Second
 
+// StateStore persists opaque per-resource provider state for stateful external
+// plugins (those advertising CapabilityState). Satisfied by
+// internal/controller/providerstate.Store. When a plugin is stateful and a
+// store is present, the adapter loads prior state before each Apply/Get/Delete
+// and saves the returned state after — so openctl holds the blob the plugin
+// hands back and replays it verbatim next call.
+type StateStore interface {
+	LoadState(ctx context.Context, apiVersion, kind, name string) (state, private []byte, schemaVersion int, err error)
+	SaveState(ctx context.Context, apiVersion, kind, name string, state, private []byte, schemaVersion int) error
+	DeleteState(ctx context.Context, apiVersion, kind, name string) error
+}
+
 // Provider is the base adapter. It owns one long-lived plugin Client.
 type Provider struct {
 	client   *pluginproto.Client
@@ -36,6 +49,7 @@ type Provider struct {
 	observed []string            // kinds flagged observed-only in the handshake
 	actions  map[string][]string // kind -> supported action names
 	caps     map[string]bool     // advertised capability set
+	store    StateStore          // nil for stateless plugins / when unset
 }
 
 // plannerProvider is the Planner-capable variant, returned by New only when
@@ -43,14 +57,17 @@ type Provider struct {
 type plannerProvider struct{ *Provider }
 
 // New builds a providers.Provider from a handshaked, configured Client and
-// its HandshakeResult. Returns a plannerProvider when the plugin advertises
+// its HandshakeResult. store persists opaque provider state for stateful
+// plugins (CapabilityState); pass nil for stateless plugins or when no store
+// is available. Returns a plannerProvider when the plugin advertises
 // CapabilityPlan, otherwise the base Provider.
-func New(client *pluginproto.Client, hs *pluginproto.HandshakeResult) providers.Provider {
+func New(client *pluginproto.Client, hs *pluginproto.HandshakeResult, store StateStore) providers.Provider {
 	p := &Provider{
 		client:  client,
 		name:    hs.ProviderName,
 		caps:    make(map[string]bool, len(hs.Capabilities)),
 		actions: map[string][]string{},
+		store:   store,
 	}
 	for _, c := range hs.Capabilities {
 		p.caps[c] = true
@@ -75,20 +92,57 @@ func New(client *pluginproto.Client, hs *pluginproto.HandshakeResult) providers.
 func (p *Provider) Name() string    { return p.name }
 func (p *Provider) Kinds() []string { return p.kinds }
 
+// apiVersion is the canonical apiVersion this provider's kinds live under,
+// used to key the state store.
+func (p *Provider) apiVersion() string { return p.name + ".openctl.io/v1" }
+
+// stateful reports whether the adapter should round-trip opaque state through
+// the store — i.e. the plugin advertised CapabilityState and a store is set.
+func (p *Provider) stateful() bool {
+	return p.store != nil && p.caps[pluginproto.CapabilityState]
+}
+
 func (p *Provider) Apply(ctx context.Context, manifest *protocol.Resource) (*protocol.Resource, error) {
-	res, err := p.client.Apply(ctx, pluginproto.ApplyParams{Manifest: manifest})
+	params := pluginproto.ApplyParams{Manifest: manifest}
+	if p.stateful() {
+		state, private, _, err := p.store.LoadState(ctx, p.apiVersion(), manifest.Kind, manifest.Metadata.Name)
+		if err != nil {
+			return nil, err
+		}
+		params.State, params.Private = state, private
+	}
+	res, err := p.client.Apply(ctx, params)
 	if err != nil {
 		return nil, err
 	}
-	// State/private persistence lands with the provider_state store (Tier 1
-	// item 2); item 1 supports stateless providers, which return nil blobs.
+	if p.stateful() {
+		if err := p.store.SaveState(ctx, p.apiVersion(), manifest.Kind, manifest.Metadata.Name, res.State, res.Private, 0); err != nil {
+			return nil, fmt.Errorf("persist provider state: %w", err)
+		}
+	}
 	return res.Resource, nil
 }
 
 func (p *Provider) Get(ctx context.Context, kind, name string) (*protocol.Resource, error) {
-	res, err := p.client.Get(ctx, pluginproto.GetParams{Kind: kind, Name: name})
+	params := pluginproto.GetParams{Kind: kind, Name: name}
+	if p.stateful() {
+		state, _, _, err := p.store.LoadState(ctx, p.apiVersion(), kind, name)
+		if err != nil {
+			return nil, err
+		}
+		params.State = state
+	}
+	res, err := p.client.Get(ctx, params)
 	if err != nil {
 		return nil, mapErr(kind, name, err)
+	}
+	// Persist refreshed state (Terraform ReadResource semantics) so drift
+	// checks compare against the provider's latest view. Only when the plugin
+	// actually returned refreshed state.
+	if p.stateful() && len(res.State) > 0 {
+		if err := p.store.SaveState(ctx, p.apiVersion(), kind, name, res.State, nil, 0); err != nil {
+			return nil, fmt.Errorf("persist refreshed provider state: %w", err)
+		}
 	}
 	return res.Resource, nil
 }
@@ -98,7 +152,23 @@ func (p *Provider) List(ctx context.Context, kind string) ([]*protocol.Resource,
 }
 
 func (p *Provider) Delete(ctx context.Context, kind, name string) error {
-	return p.client.Delete(ctx, pluginproto.DeleteParams{Kind: kind, Name: name})
+	params := pluginproto.DeleteParams{Kind: kind, Name: name}
+	if p.stateful() {
+		state, private, _, err := p.store.LoadState(ctx, p.apiVersion(), kind, name)
+		if err != nil {
+			return err
+		}
+		params.State, params.Private = state, private
+	}
+	if err := p.client.Delete(ctx, params); err != nil {
+		return err
+	}
+	if p.stateful() {
+		if err := p.store.DeleteState(ctx, p.apiVersion(), kind, name); err != nil {
+			return fmt.Errorf("delete provider state: %w", err)
+		}
+	}
+	return nil
 }
 
 // mapErr translates a plugin CodeNotFound error into providers.NotFoundError

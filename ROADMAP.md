@@ -62,7 +62,10 @@ direction.md):
 2. **Terraform / OpenTofu provider host** — a second implementer of that
    interface; the breadth multiplier that unlocks the whole provider
    registry (AWS/GKE/…). Design + honest hard-parts analysis in
-   [docs/plugin-architecture.md](docs/plugin-architecture.md).
+   [docs/plugin-architecture.md](docs/plugin-architecture.md). **Prereq
+   shipped:** the `provider_state` opaque per-resource store (migration 0009 +
+   `internal/controller/providerstate`), wired so stateful external plugins
+   round-trip state — the TF host reuses this store directly.
 3. **Run-anywhere: portable Linux daemon + `install --target ssh://`** —
    independent of 1–2, can proceed in parallel.
 
@@ -656,6 +659,13 @@ When phases or followups land, move them up out of "pending" into their
 detail doc's marked-complete section, then leave a one-line entry here
 with the commit hash for at-a-glance history. Trim to the last 10.
 
+- feat: **`provider_state` opaque store** — migration 0009 +
+  `internal/controller/providerstate` (per-resource state/private/schema_version
+  blobs, keyed like applied_manifests). The external adapter now round-trips
+  state for plugins advertising `CapabilityState` (load-before/save-after each
+  Apply/Get/Delete), so stateful external providers are fully supported. This
+  is the controller-side prerequisite the Terraform host (Tier 1 item 2)
+  reuses. Stateless plugins are unaffected.
 - (#42–#45) — feat: **external plugin protocol (Tier 1 item 1)**, shipped
   in four phases. #42 `pkg/pluginproto` (persistent-process, id-correlated
   JSON-over-stdio protocol + Client + Handler SDK). #43 external provider

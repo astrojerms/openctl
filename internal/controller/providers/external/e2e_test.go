@@ -38,7 +38,8 @@ func TestExampleProviderEndToEnd(t *testing.T) {
 	cmd := exec.CommandContext(ctx, bin, "plugin-serve")
 	cfg := &protocol.ProviderConfig{Defaults: map[string]string{"dir": notesDir}}
 
-	prov, hs, client, err := external.Load(ctx, cmd, cfg)
+	// The example provider is stateless, so no state store is needed.
+	prov, hs, client, err := external.Load(ctx, cmd, cfg, nil)
 	if err != nil {
 		t.Fatalf("load example plugin: %v", err)
 	}

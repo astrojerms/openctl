@@ -25,6 +25,7 @@ import (
 	externalprovider "github.com/openctl/openctl/internal/controller/providers/external"
 	k3sprovider "github.com/openctl/openctl/internal/controller/providers/k3s"
 	pmprovider "github.com/openctl/openctl/internal/controller/providers/proxmox"
+	"github.com/openctl/openctl/internal/controller/providerstate"
 	"github.com/openctl/openctl/internal/controller/reconciler"
 	"github.com/openctl/openctl/internal/controller/server"
 	"github.com/openctl/openctl/internal/controller/storage"
@@ -139,7 +140,7 @@ func runServe(args []string) error {
 	}
 	defer func() { _ = db.Close() }()
 
-	registry, registered, closePlugins, err := buildRegistry(ctx)
+	registry, registered, closePlugins, err := buildRegistry(ctx, providerstate.New(db))
 	if err != nil {
 		return err
 	}
@@ -546,7 +547,7 @@ func buildTemplateRegistry() *templates.Registry {
 // If the config file is missing, the registry is left empty — the controller
 // still starts; resource RPCs will return errors pointing the user at the
 // missing config.
-func buildRegistry(ctx context.Context) (*providers.Registry, []string, func(), error) {
+func buildRegistry(ctx context.Context, stateStore externalprovider.StateStore) (*providers.Registry, []string, func(), error) {
 	registry := providers.NewRegistry()
 	var names []string
 	var clients []*pluginproto.Client
@@ -597,7 +598,7 @@ func buildRegistry(ctx context.Context) (*providers.Registry, []string, func(), 
 		if pc.Command == "" || registered[name] {
 			continue
 		}
-		prov, hs, client, err := loadExternalProvider(ctx, cfg, name, pc)
+		prov, hs, client, err := loadExternalProvider(ctx, cfg, name, pc, stateStore)
 		if err != nil {
 			log.Printf("  plugin %q: load failed, skipping: %v", name, err)
 			continue
@@ -639,11 +640,11 @@ func providerAPIVersion(name string) string {
 // loadExternalProvider spawns and handshakes one external plugin, passing the
 // provider's default-context config (endpoint/token/defaults) as the opaque
 // configure bag.
-func loadExternalProvider(ctx context.Context, cfg *config.Config, name string, pc *config.Provider) (providers.Provider, *pluginproto.HandshakeResult, *pluginproto.Client, error) {
+func loadExternalProvider(ctx context.Context, cfg *config.Config, name string, pc *config.Provider, stateStore externalprovider.StateStore) (providers.Provider, *pluginproto.HandshakeResult, *pluginproto.Client, error) {
 	pcfg, err := cfg.GetProviderConfig(name, "")
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("resolve config: %w", err)
 	}
 	cmd := exec.CommandContext(ctx, pc.Command, pc.Args...) //nolint:gosec // G204: plugin command is operator-configured in config.yaml
-	return externalprovider.Load(ctx, cmd, pcfg)
+	return externalprovider.Load(ctx, cmd, pcfg, stateStore)
 }
