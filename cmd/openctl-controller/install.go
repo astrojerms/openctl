@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -116,29 +118,42 @@ func serviceManagerFor(goos string) (serviceManager, error) {
 	}
 }
 
-// runInstall handles `openctl-controller install --local`. It copies the
-// current binary into a per-user tree, writes a service definition (launchd
-// plist on macOS, systemd user unit on Linux), starts it, waits for the
-// controller to come up, and ensures the CLI config has a controller section.
-//
-// Remote installs (`--target ssh://user@host`) are handled separately.
+// runInstall dispatches `openctl-controller install`:
+//   - `--local` installs on this machine as a per-user background service.
+//   - `--target ssh://user@host` deploys the cross-built Linux controller to
+//     a remote host as a system systemd service (see install_ssh.go).
 func runInstall(args []string) error {
-	var local bool
-	for _, a := range args {
-		switch a {
-		case "--local":
-			local = true
-		case "-h", "--help":
+	fs := flag.NewFlagSet("install", flag.ContinueOnError)
+	fs.SetOutput(io.Discard) // we print our own usage on -h
+	local := fs.Bool("local", false, "install on this machine")
+	target := fs.String("target", "", "remote target, e.g. ssh://user@host[:port]")
+	sshKey := fs.String("ssh-key", "", "SSH private key for --target ssh:// (default: ~/.ssh/id_ed25519 or id_rsa)")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
 			fmt.Println(installUsage)
 			return nil
-		default:
-			return fmt.Errorf("unknown install flag %q", a)
 		}
-	}
-	if !local {
-		return fmt.Errorf("--local is required (remote install via --target ssh:// is separate)")
+		return err
 	}
 
+	switch {
+	case *target != "":
+		if *local {
+			return fmt.Errorf("--local and --target are mutually exclusive")
+		}
+		return runInstallRemote(*target, *sshKey)
+	case *local:
+		return runInstallLocal()
+	default:
+		return fmt.Errorf("one of --local or --target ssh://user@host is required")
+	}
+}
+
+// runInstallLocal copies the current binary into a per-user tree, writes a
+// service definition (launchd plist on macOS, systemd user unit on Linux),
+// starts it, waits for the controller to come up, and ensures the CLI config
+// has a controller section.
+func runInstallLocal() error {
 	mgr, err := serviceManagerFor(runtime.GOOS)
 	if err != nil {
 		return err
@@ -368,21 +383,27 @@ controller:
 	return os.WriteFile(path, []byte(stub), 0o600)
 }
 
-const installUsage = `usage: openctl-controller install --local
+const installUsage = `usage: openctl-controller install (--local | --target ssh://user@host[:port])
 
-Installs the controller as a per-user background service:
+--local: installs the controller as a per-user background service on this
+machine:
   macOS  — a LaunchAgent (~/Library/LaunchAgents/io.openctl.controller.plist)
   Linux  — a systemd user unit (~/.config/systemd/user/openctl-controller.service)
-
-It copies this binary + the k3s agent binaries into a per-user tree, writes
-and starts the service (start-now + restart-on-death), verifies the
-controller responds on 127.0.0.1:9444, and writes a stub ~/.openctl/config.yaml
-if none exists.
-
+It copies this binary + the k3s agent binaries into a per-user tree, starts
+the service (start-now + restart-on-death), verifies the controller responds
+on 127.0.0.1:9444, and writes a stub ~/.openctl/config.yaml if none exists.
 Logs: macOS → ~/Library/Logs/openctl/controller.{out,err}.log;
       Linux → journalctl --user -u openctl-controller.service.
 
-Run 'openctl-controller uninstall' to remove.`
+--target ssh://user@host[:port]: deploys the cross-built Linux controller to a
+remote host as a system systemd service. Requires 'make build-controller-linux'
+first (produces bin/openctl-controller-linux-<arch>). Flags:
+  --ssh-key PATH   SSH private key (default: ~/.ssh/id_ed25519, then id_rsa)
+The remote user needs passwordless sudo. The service listens on the host's
+network (protected by the controller's token auth + TLS); copy the remote
+token (/var/lib/openctl/controller/token) and CA to point your CLI at it.
+
+Run 'openctl-controller uninstall' to remove a local install.`
 
 const uninstallUsage = `usage: openctl-controller uninstall [--purge]
 
