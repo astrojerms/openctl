@@ -118,8 +118,12 @@ plan/state); harden the provider contract before the ecosystem widens.
       [docs/plugin-protocol.md](docs/plugin-protocol.md) for the author
       reference and [docs/plugin-architecture.md](docs/plugin-architecture.md)
       for the design.
-- [ ] Linux install via SSH (`openctl-controller install --target
-      ssh://user@host`).
+- [~] **Run-anywhere: Linux daemon** (Tier 1 item 3). Local install now
+      works on Linux too: `install`/`uninstall` dispatch by GOOS through a
+      `serviceManager` abstraction (launchd on macOS, **systemd user unit** on
+      Linux). `make build-controller-linux` cross-compiles a static ELF
+      controller (CGO_ENABLED=0; pure-Go SQLite makes this trivial). Remaining:
+      `install --target ssh://user@host` remote deploy (next).
 - [ ] Proxmox bootstrap install (`openctl-controller install --target
       proxmox://homelab`).
 - [ ] Plugin-defined CLI subcommands (`openctl k3s logs/restart/upgrade`).
