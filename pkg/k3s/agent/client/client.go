@@ -76,8 +76,8 @@ func New(opts Options) (*Client, error) {
 
 // StartK3s, StopK3s, and RestartK3s call POST /v1/service/k3s/{action}. They
 // return nil on the agent's 204 No Content; otherwise they wrap the body.
-//
-// TODO: no CLI surface yet — see DESIGN.md "Plugin-defined CLI subcommands".
+// RestartK3s backs `openctl k3s restart` (see DESIGN.md "Plugin-defined CLI
+// subcommands"); Start/Stop have no CLI surface yet.
 func (c *Client) StartK3s(ctx context.Context) error   { return c.serviceAction(ctx, "start") }
 func (c *Client) StopK3s(ctx context.Context) error    { return c.serviceAction(ctx, "stop") }
 func (c *Client) RestartK3s(ctx context.Context) error { return c.serviceAction(ctx, "restart") }
@@ -100,9 +100,8 @@ func (c *Client) serviceAction(ctx context.Context, action string) error {
 }
 
 // Logs calls GET /v1/logs/k3s. lines == 0 lets the agent pick its default.
-//
-// TODO: no CLI surface yet — see DESIGN.md "Plugin-defined CLI subcommands"
-// for the deferred design that exposes this as `openctl k3s logs <cluster>`.
+// It backs `openctl k3s logs <cluster>` (see DESIGN.md "Plugin-defined CLI
+// subcommands").
 func (c *Client) Logs(ctx context.Context, lines int) (string, error) {
 	u := c.baseURL + "/v1/logs/k3s"
 	if lines > 0 {

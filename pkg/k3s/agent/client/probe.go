@@ -32,6 +32,42 @@ type ProbeOptions struct {
 	Timeout        time.Duration // per-node; default 2s
 }
 
+// NewFromProbeOptions builds a Client for a single endpoint using the cert
+// file paths in opts — the same material ProbeNodes reads. It reads the PEM
+// files eagerly so config errors surface here rather than on first request.
+// endpoint is host[:port]; if it carries no port, opts.Port (or the agent's
+// default) is applied.
+func NewFromProbeOptions(opts ProbeOptions, endpoint string) (*Client, error) {
+	caPEM, err := os.ReadFile(opts.CAPath) // #nosec G304 -- path comes from saved cluster state, not user input
+	if err != nil {
+		return nil, fmt.Errorf("read CA: %w", err)
+	}
+	certPEM, err := os.ReadFile(opts.ClientCertPath) // #nosec G304 -- saved cluster state
+	if err != nil {
+		return nil, fmt.Errorf("read client cert: %w", err)
+	}
+	keyPEM, err := os.ReadFile(opts.ClientKeyPath) // #nosec G304 -- saved cluster state
+	if err != nil {
+		return nil, fmt.Errorf("read client key: %w", err)
+	}
+
+	if _, _, err := net.SplitHostPort(endpoint); err != nil {
+		port := opts.Port
+		if port == 0 {
+			port = 9443
+		}
+		endpoint = net.JoinHostPort(endpoint, strconv.Itoa(port))
+	}
+
+	return New(Options{
+		Endpoint:      endpoint,
+		CACertPEM:     caPEM,
+		ClientCertPEM: certPEM,
+		ClientKeyPEM:  keyPEM,
+		Timeout:       opts.Timeout,
+	})
+}
+
 // ProbeNodes calls /v1/info on every endpoint in parallel. Per-node failures
 // are folded into NodeStatus.Error; the function only returns an error if it
 // cannot read the cert files (a configuration problem affecting all nodes).

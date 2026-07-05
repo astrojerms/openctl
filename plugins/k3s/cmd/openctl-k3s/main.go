@@ -33,6 +33,33 @@ func printCapabilities() {
 				Actions: []string{"get", "list", "create", "delete"},
 			},
 		},
+		Subcommands: []protocol.SubcommandDefinition{
+			{
+				Name:   "logs",
+				Short:  "Fetch k3s service logs from a cluster node",
+				Long:   "Fetch the k3s systemd journal from a node's agent over mTLS. If the cluster has one node it is chosen automatically; otherwise pass --node.",
+				Action: "logs",
+				PositionalArgs: []protocol.ArgSpec{
+					{Name: "cluster", Required: true, Help: "cluster name"},
+				},
+				Flags: []protocol.FlagSpec{
+					{Name: "node", Short: "n", Type: "string", Help: "node to read logs from (defaults to the only node)"},
+					{Name: "lines", Short: "l", Type: "int", Help: "number of trailing log lines (0 = agent default)"},
+				},
+			},
+			{
+				Name:   "restart",
+				Short:  "Restart the k3s service on a cluster node",
+				Long:   "Restart the k3s systemd service on a specific node via its agent over mTLS.",
+				Action: "restart",
+				PositionalArgs: []protocol.ArgSpec{
+					{Name: "cluster", Required: true, Help: "cluster name"},
+				},
+				Flags: []protocol.FlagSpec{
+					{Name: "node", Short: "n", Type: "string", Required: true, Help: "node to restart k3s on"},
+				},
+			},
+		},
 	}
 
 	encoder := json.NewEncoder(os.Stdout)

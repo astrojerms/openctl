@@ -827,22 +827,33 @@ The agent reports its version in `/v1/info`. If it differs from what the plugin 
 - [ ] Additional compute providers (AWS, Azure, GCP)
 - [ ] K3s cluster upgrades (will use the agent's service control + future binary-swap endpoint)
 - [ ] Certificate rotation for K3s clusters (agent + new endpoint)
-- [~] **Plugin-defined CLI subcommands** (generic protocol + CLI surface
-      landed; k3s handlers remain — see TODO below)
+- [x] **Plugin-defined CLI subcommands** (generic protocol + CLI surface,
+      plus the k3s `logs`/`restart` handlers — see below)
 
-## TODO: Plugin-defined CLI subcommands
+## Plugin-defined CLI subcommands
 
-**Status:** the generic CLI capability layer has landed. `protocol.Capabilities`
-now carries `subcommands`, `protocol.Request` carries `args`, and
-`internal/cli/provider.go` registers plugin-defined Cobra commands alongside
-`get`/`create`/`delete`/`apply`. The remaining work is plugin-specific:
-advertise k3s commands and implement their handler actions against the
-agent client.
+**Status: shipped.** The generic CLI capability layer landed first
+(`protocol.Capabilities.Subcommands`, `protocol.Request.Args`, and
+`internal/cli/provider.go` registering plugin-defined Cobra commands alongside
+`get`/`create`/`delete`/`apply`), and the k3s plugin now advertises and
+implements the first two agent-backed subcommands:
 
-**Goal:** make agent-backed plugin operations callable as first-class CLI commands, e.g.:
-- `openctl k3s logs <cluster> [--node <name>] [--lines N]`
-- `openctl k3s restart <cluster> --node <name>`
-- `openctl k3s upgrade <cluster> --to <version>` (future)
+- `openctl k3s logs <cluster> [--node <name>] [--lines N]` — fetches the k3s
+  journal from a node's agent. Single-node clusters pick the node
+  automatically; multi-node clusters require `--node`.
+- `openctl k3s restart <cluster> --node <name>` — restarts the k3s service on
+  a node via its agent.
+- `openctl k3s upgrade <cluster> --to <version>` (future — needs a
+  binary-swap agent endpoint).
+
+Handler dispatch lives in `pkg/k3s/handler/handler.go` (`handleLogs`,
+`handleRestart`), which load the cluster state, reuse `extractAgentProbeConfig`
+to locate the agent bundle, build a per-node `agentclient.Client` via
+`client.NewFromProbeOptions`, and call the typed `Logs`/`RestartK3s` methods.
+Subcommand requests arrive with an agent `Action` and no `ResourceType`, so
+`Handle` routes on the action name before the resource-kind switch.
+
+**Original design (option 3 from the rollout discussion):** extend `protocol.Capabilities` with a list of plugin-defined subcommands, and have `internal/cli/provider.go` register them as cobra commands alongside `get`/`create`/`delete`/`apply`.
 
 **Implemented approach (option 3 from the rollout discussion):** extend `protocol.Capabilities` with a list of plugin-defined subcommands, and have `internal/cli/provider.go` register them as cobra commands alongside `get`/`create`/`delete`/`apply`.
 
@@ -874,29 +885,24 @@ type FlagSpec struct {
 
 **CLI side:** in `internal/cli/provider.go`, after registering the standard commands, iterate `caps.Subcommands` and register a cobra command per entry. The command's `RunE` builds a `protocol.Request` with `Action: subcmd.Action`, packs positional args + flag values into `Request.Args map[string]any`, and dispatches via the existing executor. Structured responses go through the existing `formatter`; message-only responses print the message.
 
-**Plugin side:** the k3s plugin's `handler.Handle` already dispatches on `req.Action`. Add cases for the new action names (`"logs"`, `"restart"`, etc.) that:
-1. Load the cluster's saved state file (existing helper).
-2. Pull the agent block from `status.outputs.agent` (existing helper `extractAgentProbeConfig` is close — extract into a shared helper).
-3. Build an `agentclient.Client` for the right node.
-4. Call the typed method (`c.Logs(ctx, lines)`) and return the result.
+**Plugin side (implemented):** the k3s plugin's `handler.Handle` dispatches new
+action names (`"logs"`, `"restart"`) that:
+1. Load the cluster's saved state file (`loadClusterStatus`).
+2. Pull the agent block from `status.outputs.agent` (`extractAgentProbeConfig`).
+3. Build an `agentclient.Client` for the selected node (`agentClientForNode` →
+   `client.NewFromProbeOptions`).
+4. Call the typed method (`c.Logs(ctx, lines)` / `c.RestartK3s(ctx)`) and return
+   the result as a `Message`.
 
-**Remaining plugin-side files:**
-- k3s plugin capabilities — declare `logs` / `restart` subcommands.
-- k3s handler — dispatch new action names (`"logs"`, `"restart"`, etc.) to the agent client.
+**Follow-ups still open:**
+- `upgrade` subcommand — blocked on a binary-swap agent endpoint.
+- Streaming logs — the current path buffers the whole body; large journals
+  could stream (chunked transfer + line-by-line print) later.
 
-**Until this lands, the manual workaround** for inspecting agent endpoints is to invoke the typed client directly from a tiny Go program, or to `curl` the agent with the cluster's mTLS material:
-
-```sh
-CLUSTER=mycluster
-DIR=~/.openctl/state/k3s/$CLUSTER
-NODE_IP=$(yq '.status.outputs.agent.endpoints | to_entries | .[0].value' \
-  ~/.openctl/state/k3s/$CLUSTER.yaml)
-curl --cacert $DIR/ca.pem --cert $DIR/client.pem --key $DIR/client.key \
-  https://$NODE_IP:9443/v1/logs/k3s?lines=200
-```
-
-**Design considerations to revisit before implementing:**
-- Streaming vs buffered responses (logs could be large — do we want chunked transfer + line-by-line print?).
-- Authentication carryover (subcommands inherit `--context` etc. — should be free if we use the same dispatch path).
-- How to expose sub-resource help in `openctl k3s --help` (cobra handles this if we register cleanly).
-- Error response format consistency (the structured `protocol.Error` vs text/plain bodies from `/v1/logs/k3s`).
+**Design considerations addressed:**
+- Authentication carryover — subcommands inherit `--context` via the same
+  dispatch path (provider config is resolved from `contextName`).
+- Sub-resource help in `openctl k3s --help` — cobra registers cleanly from the
+  advertised `Short`/`Long`.
+- Error response format — agent text bodies (e.g. `/v1/logs/k3s`) are wrapped
+  into a structured `protocol.Error` by the handler.
