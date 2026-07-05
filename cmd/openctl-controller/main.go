@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
@@ -21,6 +22,7 @@ import (
 	"github.com/openctl/openctl/internal/controller/manifests"
 	"github.com/openctl/openctl/internal/controller/operations"
 	"github.com/openctl/openctl/internal/controller/providers"
+	externalprovider "github.com/openctl/openctl/internal/controller/providers/external"
 	k3sprovider "github.com/openctl/openctl/internal/controller/providers/k3s"
 	pmprovider "github.com/openctl/openctl/internal/controller/providers/proxmox"
 	"github.com/openctl/openctl/internal/controller/reconciler"
@@ -28,6 +30,7 @@ import (
 	"github.com/openctl/openctl/internal/controller/storage"
 	tlspkg "github.com/openctl/openctl/internal/controller/tls"
 	"github.com/openctl/openctl/internal/templates"
+	"github.com/openctl/openctl/pkg/pluginproto"
 	"github.com/openctl/openctl/pkg/protocol"
 )
 
@@ -135,10 +138,11 @@ func runServe(args []string) error {
 	}
 	defer func() { _ = db.Close() }()
 
-	registry, registered, err := buildRegistry()
+	registry, registered, closePlugins, err := buildRegistry(ctx)
 	if err != nil {
 		return err
 	}
+	defer closePlugins()
 
 	// Operations store + dispatcher. On startup, mark any ops that were
 	// running when the previous controller died as `interrupted` — this is
@@ -532,28 +536,40 @@ func buildTemplateRegistry() *templates.Registry {
 }
 
 // buildRegistry constructs the Provider registry from ~/.openctl/config.yaml.
-// Currently registers only the proxmox provider, using the default context's
-// credentials. Returns the registry plus a list of registered provider names
-// for logging.
+// Registers the built-in proxmox/k3s providers, then loads any config entries
+// that declare an external plugin `command:` (see internal/controller/
+// providers/external). Returns the registry, the registered provider names
+// (for logging), and a cleanup func the caller must defer to reap spawned
+// plugin processes on shutdown.
 //
-// If the config file or proxmox section is missing, the registry is left
-// empty — the controller still starts; resource RPCs will return errors
-// pointing the user at the missing config.
-func buildRegistry() (*providers.Registry, []string, error) {
+// If the config file is missing, the registry is left empty — the controller
+// still starts; resource RPCs will return errors pointing the user at the
+// missing config.
+func buildRegistry(ctx context.Context) (*providers.Registry, []string, func(), error) {
 	registry := providers.NewRegistry()
 	var names []string
+	var clients []*pluginproto.Client
+	cleanup := func() {
+		for _, c := range clients {
+			// Best-effort reap; use a fresh short context since the root ctx
+			// is already canceled by the time cleanup runs on shutdown.
+			cc, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = c.Close(cc)
+			cancel()
+		}
+	}
 
 	cfg, err := config.Load()
 	if err != nil {
 		// Missing config file is acceptable — controller starts empty.
-		return registry, nil, nil
+		return registry, nil, cleanup, nil
 	}
 
 	var pmp *pmprovider.Provider
 	if _, ok := cfg.Providers["proxmox"]; ok {
 		pcfg, err := cfg.GetProviderConfig("proxmox", "")
 		if err != nil {
-			return nil, nil, fmt.Errorf("load proxmox config: %w", err)
+			return nil, nil, cleanup, fmt.Errorf("load proxmox config: %w", err)
 		}
 		if pcfg.Endpoint != "" {
 			pmp = pmprovider.New(pcfg)
@@ -569,5 +585,43 @@ func buildRegistry() (*providers.Registry, []string, error) {
 		names = append(names, "k3s")
 	}
 
-	return registry, names, nil
+	// External plugins: any provider entry with a `command:` whose name isn't
+	// already registered (built-ins win). A plugin that fails to load is
+	// logged and skipped — one bad plugin must not stop the controller.
+	registered := map[string]bool{}
+	for _, n := range names {
+		registered[n] = true
+	}
+	for name, pc := range cfg.Providers {
+		if pc.Command == "" || registered[name] {
+			continue
+		}
+		prov, client, err := loadExternalProvider(ctx, cfg, name, pc)
+		if err != nil {
+			log.Printf("  plugin %q: load failed, skipping: %v", name, err)
+			continue
+		}
+		if prov.Name() != name {
+			log.Printf("  plugin %q: handshake reported name %q; registering under %q",
+				name, prov.Name(), prov.Name())
+		}
+		registry.Register(prov)
+		clients = append(clients, client)
+		registered[prov.Name()] = true
+		names = append(names, prov.Name())
+	}
+
+	return registry, names, cleanup, nil
+}
+
+// loadExternalProvider spawns and handshakes one external plugin, passing the
+// provider's default-context config (endpoint/token/defaults) as the opaque
+// configure bag.
+func loadExternalProvider(ctx context.Context, cfg *config.Config, name string, pc *config.Provider) (providers.Provider, *pluginproto.Client, error) {
+	pcfg, err := cfg.GetProviderConfig(name, "")
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve config: %w", err)
+	}
+	cmd := exec.CommandContext(ctx, pc.Command, pc.Args...) //nolint:gosec // G204: plugin command is operator-configured in config.yaml
+	return externalprovider.Load(ctx, cmd, pcfg)
 }

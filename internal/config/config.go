@@ -137,6 +137,16 @@ type Provider struct {
 	Contexts       map[string]*Context    `yaml:"contexts"`
 	Credentials    map[string]*Credential `yaml:"credentials"`
 	Defaults       map[string]string      `yaml:"defaults"`
+
+	// Command, when set, marks this provider as an external plugin: the
+	// controller spawns `Command Args...`, speaks the v2 pluginproto protocol
+	// to it, and registers the resulting adapter as a Provider. The built-in
+	// providers (proxmox, k3s) are registered first and take precedence, so a
+	// Command on one of those names is ignored. Endpoint/token/defaults for
+	// the provider's default context are passed to the plugin via configure.
+	Command string `yaml:"command,omitempty"`
+	// Args are the arguments passed to Command (e.g. ["plugin-serve"]).
+	Args []string `yaml:"args,omitempty"`
 }
 
 // Context represents a provider context (like a cluster or endpoint)
