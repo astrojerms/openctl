@@ -298,7 +298,7 @@ VMs are named based on the cluster name:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `provider` | string | Yes | Compute provider name (e.g., "proxmox") |
-| `context` | string | No | Provider context to use |
+| `context` | string | No | Cluster-wide default provider endpoint. Stamped onto each VM's `spec.context`; a pool `context` or target overrides it. |
 | `image.url` | string | One of | Cloud image URL to download |
 | `image.template` | string | One of | Existing template name |
 | `default.cpus` | int | No | Default CPU cores (default: 2) |
@@ -312,16 +312,52 @@ VMs are named based on the cluster name:
 |-------|------|----------|-------------|
 | `controlPlane.count` | int | No | Control plane nodes (default: 1) |
 | `controlPlane.size` | object | No | Override default sizing |
+| `controlPlane.context` | string | No | Endpoint for the control-plane pool; overrides `compute.context` |
 | `controlPlane.nodes` | []string | No | Hosts to spread control-plane VMs across; overrides `compute.nodes` |
+| `controlPlane.targets` | [][{context,node}] | No | Explicit `{context, node}` slots the CP is spread across round-robin; spread across endpoints for cross-endpoint HA quorum. Overrides `context`/`nodes`. |
 | `workers[].name` | string | Yes | Worker pool name |
 | `workers[].count` | int | Yes | Workers in pool |
 | `workers[].size` | object | No | Override default sizing |
+| `workers[].context` | string | No | Endpoint for this worker pool; overrides `compute.context` |
 | `workers[].nodes` | []string | No | Hosts to spread this pool's VMs across; overrides `compute.nodes` |
+| `workers[].targets` | [][{context,node}] | No | Explicit `{context, node}` slots this pool is spread across round-robin. Overrides `context`/`nodes`. |
 
-> **Node placement.** Host lists cover different physical nodes within a
-> single Proxmox endpoint (one `compute.provider` + `context`). Spreading a
-> cluster across *separate* Proxmox endpoints is not yet supported — a
-> cluster carries one provider/context for all nodes.
+#### Placement: hosts and endpoints
+
+Placement decides **which endpoint** and **which host** each node's VM lands on:
+
+- **`context`** selects a Proxmox **endpoint** (a named context from the
+  controller config). Set `compute.context` cluster-wide, or override per pool.
+- **`nodes`** spreads a pool's VMs across **hosts within one endpoint**,
+  round-robin.
+- **`targets`** is the general form: a list of `{context, node}` slots a pool
+  spreads across round-robin. Use it to spread the **control plane across
+  endpoints** — three replicas over three endpoints keep etcd quorum alive
+  when a whole Proxmox server dies:
+
+```yaml
+nodes:
+  controlPlane:
+    count: 3
+    targets:
+      - { context: siteA, node: pve }
+      - { context: siteB, node: pve }
+      - { context: siteC, node: pve }
+  workers:
+    - name: gpu
+      count: 2
+      context: siteB      # whole pool on one endpoint
+```
+
+Every context must be configured for the `proxmox` provider in the
+controller config (each with its own `endpoint`/`credentials`).
+
+> **Same-L2 requirement.** Cross-endpoint placement assumes the endpoints
+> share one L2 network — one `network.bridge`, one static-IP range, and
+> mutual IP reachability (nodes join the first control plane by its private
+> IP). This fits multiple Proxmox hosts on one homelab LAN. Spanning
+> *separate* L2 networks (per-endpoint subnets/bridges, routable join) is not
+> yet supported.
 
 ### spec.network Options
 

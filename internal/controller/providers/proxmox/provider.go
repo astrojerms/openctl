@@ -10,6 +10,9 @@ package proxmox
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
+	"sync"
 
 	"github.com/openctl/openctl/internal/controller/providers"
 	"github.com/openctl/openctl/pkg/protocol"
@@ -28,14 +31,112 @@ const (
 // (per-context credentials, etc).
 type Config = protocol.ProviderConfig
 
-// Provider implements providers.Provider for Proxmox.
+// Provider implements providers.Provider for Proxmox. It can route resources
+// to one of several Proxmox endpoints ("contexts"): a resource's
+// spec.context selects the endpoint, and reads that arrive without a context
+// (Get/List/DoAction by name) resolve the owning endpoint by consulting an
+// in-process index populated on Apply/List, falling back to querying every
+// endpoint. With a single configured context this collapses to the original
+// single-endpoint behavior.
 type Provider struct {
-	handler *pmhandler.Handler
+	handlers   map[string]*pmhandler.Handler // context name -> handler
+	order      []string                      // context names, sorted, for stable read scans
+	defaultCtx string                        // context used when a manifest omits spec.context
+	index      sync.Map                      // VM name -> context name (read-routing cache)
 }
 
-// New constructs a Provider with the given Proxmox endpoint configuration.
+// New constructs a single-context Provider from one endpoint configuration.
+// Kept for the common single-endpoint case, tests, and CLI direct-apply.
 func New(cfg *Config) *Provider {
-	return &Provider{handler: pmhandler.New(cfg)}
+	return NewMulti(map[string]*Config{"": cfg}, "")
+}
+
+// NewMulti constructs a Provider spanning several Proxmox endpoints, keyed by
+// context name. A resource's spec.context selects its endpoint; an empty
+// context selects defaultContext (or the sole context when only one is
+// configured). Reads by name resolve the endpoint via the index/full-scan.
+func NewMulti(configs map[string]*Config, defaultContext string) *Provider {
+	handlers := make(map[string]*pmhandler.Handler, len(configs))
+	order := make([]string, 0, len(configs))
+	for name, cfg := range configs {
+		handlers[name] = pmhandler.New(cfg)
+		order = append(order, name)
+	}
+	sort.Strings(order)
+	// A single configured context is unambiguously the default.
+	if defaultContext == "" && len(order) == 1 {
+		defaultContext = order[0]
+	}
+	return &Provider{handlers: handlers, order: order, defaultCtx: defaultContext}
+}
+
+// handlerForContext resolves the handler for a manifest's spec.context. An
+// empty name selects the default context. Errors when the named context
+// isn't configured, so a typo'd or missing endpoint fails fast at apply.
+func (p *Provider) handlerForContext(name string) (*pmhandler.Handler, string, error) {
+	if name == "" {
+		name = p.defaultCtx
+	}
+	h, ok := p.handlers[name]
+	if !ok {
+		return nil, "", fmt.Errorf("proxmox: no configured context %q (have: %s)", name, strings.Join(p.order, ", "))
+	}
+	return h, name, nil
+}
+
+// getFrom performs a single-endpoint Get, translating a not-found response
+// into (nil, nil) so callers can distinguish "absent here" from a real error.
+func getFrom(ctx context.Context, h *pmhandler.Handler, kind, name string) (*protocol.Resource, error) {
+	resp, err := h.Handle(ctx, &protocol.Request{
+		Version:      protocol.ProtocolVersion,
+		Action:       protocol.ActionGet,
+		ResourceType: kind,
+		ResourceName: name,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Status == protocol.StatusError {
+		if resp.Error.Code == protocol.ErrorCodeNotFound {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("%s: %s", resp.Error.Code, resp.Error.Message)
+	}
+	return resp.Resource, nil
+}
+
+// locate finds the endpoint owning a named resource: it tries the cached
+// context first, then scans every endpoint. Returns found=false (nil error)
+// when no endpoint has the resource. A per-endpoint error doesn't abort the
+// scan — a healthy endpoint can still resolve the resource — but is surfaced
+// if no endpoint ultimately has it.
+func (p *Provider) locate(ctx context.Context, kind, name string) (h *pmhandler.Handler, res *protocol.Resource, found bool, err error) {
+	if v, ok := p.index.Load(name); ok {
+		cached := v.(string)
+		if hh, present := p.handlers[cached]; present {
+			r, gErr := getFrom(ctx, hh, kind, name)
+			if gErr == nil && r != nil {
+				return hh, r, true, nil
+			}
+			// Stale or transient — fall through to a full scan.
+		}
+	}
+	var firstErr error
+	for _, c := range p.order {
+		hh := p.handlers[c]
+		r, gErr := getFrom(ctx, hh, kind, name)
+		if gErr != nil {
+			if firstErr == nil {
+				firstErr = gErr
+			}
+			continue
+		}
+		if r != nil {
+			p.index.Store(name, c)
+			return hh, r, true, nil
+		}
+	}
+	return nil, nil, false, firstErr
 }
 
 func (p *Provider) Name() string    { return providerName }
@@ -66,11 +167,18 @@ func (p *Provider) DoAction(ctx context.Context, kind, name, action string) (*pr
 	if kind != kindVM {
 		return nil, fmt.Errorf("no actions for kind %q", kind)
 	}
-	vm, err := p.handler.Client().GetVM(ctx, name)
+	h, _, found, err := p.locate(ctx, kindVM, name)
+	if err != nil {
+		return nil, fmt.Errorf("locate VM %q: %w", name, err)
+	}
+	if !found {
+		return nil, fmt.Errorf("get VM %q: %w", name, providers.NotFound(kindVM, name))
+	}
+	vm, err := h.Client().GetVM(ctx, name)
 	if err != nil {
 		return nil, fmt.Errorf("get VM %q: %w", name, err)
 	}
-	client := p.handler.Client()
+	client := h.Client()
 	switch action {
 	case "start":
 		upid, err := client.StartVM(ctx, vm.Node, vm.VMID)
@@ -100,7 +208,7 @@ func (p *Provider) DoAction(ctx context.Context, kind, name, action string) (*pr
 		// Proxmox noVNC URL. User must already be logged into the
 		// Proxmox web UI (openctl doesn't proxy the session). The URL
 		// is what Proxmox's own web UI generates when you click Console.
-		endpoint := p.handler.Config().Endpoint
+		endpoint := h.Config().Endpoint
 		url := fmt.Sprintf("%s/?console=kvm&novnc=1&vmid=%d&node=%s", endpoint, vm.VMID, vm.Node)
 		return &providers.ActionResult{URL: url, Message: "Opening Proxmox noVNC console…"}, nil
 	default:
@@ -118,7 +226,13 @@ func (p *Provider) Apply(ctx context.Context, manifest *protocol.Resource) (*pro
 	if err := requireKindVM(manifest.Kind); err != nil {
 		return nil, err
 	}
-	resp, err := p.handler.Handle(ctx, &protocol.Request{
+	// spec.context selects the endpoint this VM lands on. Empty = default.
+	ctxName, _ := manifest.Spec["context"].(string)
+	h, resolved, err := p.handlerForContext(ctxName)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := h.Handle(ctx, &protocol.Request{
 		Version:      protocol.ProtocolVersion,
 		Action:       protocol.ActionApply,
 		ResourceType: manifest.Kind,
@@ -131,6 +245,8 @@ func (p *Provider) Apply(ctx context.Context, manifest *protocol.Resource) (*pro
 	if resp.Status == protocol.StatusError {
 		return nil, fmt.Errorf("%s: %s", resp.Error.Code, resp.Error.Message)
 	}
+	// Remember where this VM lives so later reads route directly.
+	p.index.Store(manifest.Metadata.Name, resolved)
 	return resp.Resource, nil
 }
 
@@ -141,41 +257,45 @@ func (p *Provider) Get(ctx context.Context, kind, name string) (*protocol.Resour
 	if err := requireKnownKind(kind); err != nil {
 		return nil, err
 	}
-	resp, err := p.handler.Handle(ctx, &protocol.Request{
-		Version:      protocol.ProtocolVersion,
-		Action:       protocol.ActionGet,
-		ResourceType: kind,
-		ResourceName: name,
-	})
+	_, res, found, err := p.locate(ctx, kind, name)
 	if err != nil {
 		return nil, err
 	}
-	if resp.Status == protocol.StatusError {
-		if resp.Error.Code == protocol.ErrorCodeNotFound {
-			return nil, providers.NotFound(kind, name)
-		}
-		return nil, fmt.Errorf("%s: %s", resp.Error.Code, resp.Error.Message)
+	if !found {
+		return nil, providers.NotFound(kind, name)
 	}
-	return resp.Resource, nil
+	return res, nil
 }
 
-// List returns all observed resources of the given kind.
+// List returns all observed resources of the given kind across every
+// configured endpoint, merged. Listing is a completeness-sensitive query, so
+// a failing endpoint aborts the call rather than silently dropping its
+// resources. Each VM found also refreshes the read-routing index.
 func (p *Provider) List(ctx context.Context, kind string) ([]*protocol.Resource, error) {
 	if err := requireKnownKind(kind); err != nil {
 		return nil, err
 	}
-	resp, err := p.handler.Handle(ctx, &protocol.Request{
-		Version:      protocol.ProtocolVersion,
-		Action:       protocol.ActionList,
-		ResourceType: kind,
-	})
-	if err != nil {
-		return nil, err
+	var out []*protocol.Resource
+	for _, c := range p.order {
+		resp, err := p.handlers[c].Handle(ctx, &protocol.Request{
+			Version:      protocol.ProtocolVersion,
+			Action:       protocol.ActionList,
+			ResourceType: kind,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if resp.Status == protocol.StatusError {
+			return nil, fmt.Errorf("%s: %s", resp.Error.Code, resp.Error.Message)
+		}
+		for _, r := range resp.Resources {
+			if kind == kindVM && r != nil {
+				p.index.Store(r.Metadata.Name, c)
+			}
+			out = append(out, r)
+		}
 	}
-	if resp.Status == protocol.StatusError {
-		return nil, fmt.Errorf("%s: %s", resp.Error.Code, resp.Error.Message)
-	}
-	return resp.Resources, nil
+	return out, nil
 }
 
 // Delete removes a VM. Idempotent — delete on a missing VM returns nil.
@@ -187,7 +307,16 @@ func (p *Provider) Delete(ctx context.Context, kind, name string) error {
 	if err := requireKindVM(kind); err != nil {
 		return err
 	}
-	resp, err := p.handler.Handle(ctx, &protocol.Request{
+	// Find which endpoint owns the VM, then delete there. Absent from every
+	// endpoint → nothing to do (idempotent).
+	h, _, found, err := p.locate(ctx, kindVM, name)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+	resp, err := h.Handle(ctx, &protocol.Request{
 		Version:      protocol.ProtocolVersion,
 		Action:       protocol.ActionDelete,
 		ResourceType: kind,
@@ -196,6 +325,7 @@ func (p *Provider) Delete(ctx context.Context, kind, name string) error {
 	if err != nil {
 		return err
 	}
+	p.index.Delete(name)
 	if resp.Status == protocol.StatusError {
 		if resp.Error.Code == protocol.ErrorCodeNotFound {
 			return nil // idempotent

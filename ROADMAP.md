@@ -731,6 +731,20 @@ When phases or followups land, move them up out of "pending" into their
 detail doc's marked-complete section, then leave a one-line entry here
 with the commit hash for at-a-glance history. Trim to the last 10.
 
+- feat: **k3s node placement across Proxmox _endpoints_** — a k3s `Cluster`
+  can now spread its VMs across separate Proxmox endpoints, not just hosts
+  within one. Mechanism (Proxmox provider): the controller loads every
+  configured proxmox context and `pmprovider.NewMulti` holds a client per
+  endpoint; a VM's `spec.context` selects its endpoint, and reads by name
+  resolve the owning endpoint via an index/full-scan. Policy (k3s): pools gain
+  `context` and a general `targets: [{context, node}]` list; `PlacementTargets`
+  stamps `spec.context`+`spec.node` onto each VM child, which rides the
+  ChildDispatcher to the provider unchanged (routing spine untouched).
+  Spreading the control plane over per-endpoint targets keeps etcd quorum when
+  a whole Proxmox server dies. Scoped to endpoints sharing one L2 (single
+  bridge / IP range / mutual reachability); separate-L2 spread (per-endpoint
+  subnets, routable join) is the documented follow-on. CUE schema + README +
+  tests; single-endpoint configs behave exactly as before.
 - feat: **k3s node placement across Proxmox hosts** — a k3s `Cluster` can
   now spread its VMs across multiple provider hosts instead of piling every
   node onto one. `spec.compute.nodes` sets a cluster-wide host pool and

@@ -111,3 +111,59 @@ func TestValidatePassesClusterWithNodePlacement(t *testing.T) {
 		t.Errorf("want nil for cluster with node placement, got: %v", err)
 	}
 }
+
+// TestValidatePassesClusterWithCrossEndpointPlacement proves the CUE schema
+// accepts per-pool context and the {context, node} targets list used to
+// spread a cluster across Proxmox endpoints.
+func TestValidatePassesClusterWithCrossEndpointPlacement(t *testing.T) {
+	r := &protocol.Resource{
+		APIVersion: "k3s.openctl.io/v1",
+		Kind:       "Cluster",
+		Metadata:   protocol.ResourceMetadata{Name: "ha"},
+		Spec: map[string]any{
+			"compute": map[string]any{
+				"provider": "proxmox",
+				"context":  "siteA",
+				"image":    map[string]any{"template": "ubuntu-2204"},
+			},
+			"nodes": map[string]any{
+				"controlPlane": map[string]any{
+					"count": 3,
+					"targets": []any{
+						map[string]any{"context": "siteA", "node": "pve"},
+						map[string]any{"context": "siteB", "node": "pve"},
+						map[string]any{"context": "siteC", "node": "pve"},
+					},
+				},
+				"workers": []any{
+					map[string]any{"name": "gpu", "count": 1, "context": "siteB"},
+				},
+			},
+			"ssh": map[string]any{"privateKeyPath": "/root/.ssh/id_ed25519"},
+		},
+	}
+	if err := Validate(r); err != nil {
+		t.Errorf("want nil for cross-endpoint cluster, got: %v", err)
+	}
+}
+
+// TestValidatePassesVMWithContext proves the Proxmox VirtualMachine schema
+// accepts spec.context (the endpoint selector) so standalone VMs can target
+// a specific endpoint too.
+func TestValidatePassesVMWithContext(t *testing.T) {
+	r := &protocol.Resource{
+		APIVersion: "proxmox.openctl.io/v1",
+		Kind:       "VirtualMachine",
+		Metadata:   protocol.ResourceMetadata{Name: "vm-01"},
+		Spec: map[string]any{
+			"context":  "siteB",
+			"node":     "pve",
+			"template": map[string]any{"name": "ubuntu-2204"},
+			"cpu":      map[string]any{"cores": 2},
+			"memory":   map[string]any{"size": 4096},
+		},
+	}
+	if err := Validate(r); err != nil {
+		t.Errorf("want nil for VM with context, got: %v", err)
+	}
+}

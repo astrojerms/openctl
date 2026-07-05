@@ -584,14 +584,26 @@ func buildRegistry(ctx context.Context, stateStore externalprovider.StateStore) 
 
 	var pmp *pmprovider.Provider
 	if _, ok := cfg.Providers["proxmox"]; ok {
-		pcfg, err := cfg.GetProviderConfig("proxmox", "")
+		// Load every configured Proxmox context, not just the default, so a
+		// single k3s cluster can spread its VMs across endpoints. Each VM's
+		// spec.context selects its endpoint; the provider routes accordingly.
+		ctxConfigs, defaultCtx, err := cfg.ProviderContextConfigs("proxmox")
 		if err != nil {
 			return nil, nil, cleanup, fmt.Errorf("load proxmox config: %w", err)
 		}
-		if pcfg.Endpoint != "" {
-			pmp = pmprovider.New(pcfg)
+		valid := make(map[string]*protocol.ProviderConfig, len(ctxConfigs))
+		for name, pc := range ctxConfigs {
+			if pc.Endpoint != "" {
+				valid[name] = pc
+			}
+		}
+		if len(valid) > 0 {
+			pmp = pmprovider.NewMulti(valid, defaultCtx)
 			registry.Register(pmp)
 			names = append(names, "proxmox")
+			if len(valid) > 1 {
+				log.Printf("  provider \"proxmox\": %d endpoints configured (default context %q)", len(valid), defaultCtx)
+			}
 		}
 	}
 

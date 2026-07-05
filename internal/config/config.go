@@ -273,6 +273,29 @@ func (c *Config) GetProviderConfig(providerName, contextName string) (*protocol.
 	return cfg, nil
 }
 
+// ProviderContextConfigs resolves every named context of a provider into a
+// ProviderConfig, keyed by context name, and returns the provider's default
+// context name alongside. Providers with no contexts yield an empty map.
+//
+// This is the multi-endpoint counterpart to GetProviderConfig: the controller
+// uses it to build one client per Proxmox endpoint, so a single set of
+// resources can span endpoints by selecting one via a per-manifest context.
+func (c *Config) ProviderContextConfigs(providerName string) (map[string]*protocol.ProviderConfig, string, error) {
+	provider, ok := c.Providers[providerName]
+	if !ok {
+		return map[string]*protocol.ProviderConfig{}, "", nil
+	}
+	out := make(map[string]*protocol.ProviderConfig, len(provider.Contexts))
+	for name := range provider.Contexts {
+		cfg, err := c.GetProviderConfig(providerName, name)
+		if err != nil {
+			return nil, "", fmt.Errorf("resolve context %q: %w", name, err)
+		}
+		out[name] = cfg
+	}
+	return out, provider.DefaultContext, nil
+}
+
 func readSecretFile(path string) (string, error) {
 	expandedPath, err := ExpandPath(path)
 	if err != nil {

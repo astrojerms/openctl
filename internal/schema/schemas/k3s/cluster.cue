@@ -21,6 +21,18 @@ import "openctl.io/schemas/base"
 	diskGB?: int & >=1
 }
 
+// #PlacementTarget is one {endpoint, host} slot a node pool spreads across.
+// A pool's nodes are assigned to its targets round-robin. Naming different
+// contexts spreads the pool across provider endpoints — a control plane
+// spread this way keeps etcd quorum when a whole endpoint fails.
+#PlacementTarget: {
+	// Provider context (endpoint). Empty inherits the pool's / cluster's.
+	context?: string
+	// Host within that endpoint (e.g. a Proxmox node name). Empty uses the
+	// endpoint's default host.
+	node?: string
+}
+
 #ClusterSpec: {
 	// Which infrastructure provider runs the VMs. Currently only
 	// "proxmox" is implemented; other providers may follow.
@@ -63,10 +75,17 @@ import "openctl.io/schemas/base"
 			count: int & >=1 | *1
 			// Optional size override for the control-plane pool.
 			size?: #NodeSize
+			// Provider endpoint for the control-plane pool. Overrides
+			// compute.context; places all CP VMs on this endpoint.
+			context?: string
 			// Provider hosts to spread control-plane VMs across, round-robin.
 			// Overrides compute.nodes for this pool. Three replicas over
 			// three hosts land one each, keeping etcd quorum across hosts.
 			nodes?: [...string]
+			// General placement: {context, node} slots the control plane is
+			// spread across round-robin. Use this to spread the CP across
+			// endpoints (cross-endpoint HA quorum). Overrides context/nodes.
+			targets?: [...#PlacementTarget]
 		}
 		// Worker (agent) node pools. Each pool can have its own size.
 		workers?: [...{
@@ -76,9 +95,14 @@ import "openctl.io/schemas/base"
 			count: int & >=1
 			// Optional size override for this pool.
 			size?: #NodeSize
+			// Provider endpoint for this worker pool. Overrides compute.context.
+			context?: string
 			// Provider hosts to spread this pool's VMs across, round-robin.
 			// Overrides compute.nodes for this pool.
 			nodes?: [...string]
+			// General placement: {context, node} slots this pool is spread
+			// across round-robin. Overrides context/nodes.
+			targets?: [...#PlacementTarget]
 		}]
 	}
 
