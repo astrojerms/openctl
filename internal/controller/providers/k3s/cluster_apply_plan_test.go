@@ -148,6 +148,42 @@ func TestApplyClusterViaPlan_DispatchOrder(t *testing.T) {
 	}
 }
 
+// TestApplyClusterViaPlan_FirstControlPlaneBeforeJoiners locks in the DAG's
+// core guarantee: among K3sNode applies, the first control plane (dev-cp-0)
+// runs first because every joiner's joinFrom $ref depends on it. This is now
+// derived from the dependency edge, not from a hand-ordered loop.
+func TestApplyClusterViaPlan_FirstControlPlaneBeforeJoiners(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	cd := &recordingChildDispatcher{writeK3s: true}
+	p := &Provider{}
+	m := clusterManifest("dev", func(r *protocol.Resource) {
+		r.Spec["nodes"].(map[string]any)["controlPlane"].(map[string]any)["count"] = float64(3)
+		r.Spec["nodes"].(map[string]any)["workers"] = []any{
+			map[string]any{"name": "worker", "count": float64(2)},
+		}
+	})
+	if _, err := p.applyClusterViaPlan(context.Background(), m, cd); err != nil {
+		t.Fatalf("applyClusterViaPlan: %v", err)
+	}
+
+	var k3sNames []string
+	cd.mu.Lock()
+	for _, c := range cd.calls {
+		if c.Kind == kindK3sNode {
+			k3sNames = append(k3sNames, c.Metadata.Name)
+		}
+	}
+	cd.mu.Unlock()
+
+	if len(k3sNames) != 5 {
+		t.Fatalf("expected 5 K3sNode dispatches, got %d: %v", len(k3sNames), k3sNames)
+	}
+	if k3sNames[0] != "dev-cp-0" {
+		t.Errorf("first K3sNode = %q, want dev-cp-0 (joiners depend on it), order: %v", k3sNames[0], k3sNames)
+	}
+}
+
 func TestApplyClusterViaPlan_MaterializesCABundle(t *testing.T) {
 	// Verify the CA bundle actually shows up on disk between K3sNodes
 	// and AgentInstalls. Without this file, AgentInstall.LoadBundle

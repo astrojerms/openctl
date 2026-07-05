@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -16,22 +17,34 @@ import (
 	"github.com/openctl/openctl/pkg/protocol"
 )
 
-// applyClusterViaPlan is the Plan-driven Apply path for a first-time
-// Cluster create. Dispatches Plan()-emitted children through the
-// dispatcher's inline pipeline in three phases:
+// Synthetic (non-resource) barrier task IDs in the apply graph. Prefixed
+// with '@' so they never collide with a child's "Kind/Name" ChildKey.
+const (
+	taskStateStub = "@state-stub"
+	taskCABundle  = "@ca-bundle"
+)
+
+// applyClusterViaPlan is the Plan-driven Apply path for a first-time Cluster
+// create. It builds a dependency DAG over the Plan()-emitted children and
+// applies them in dependency order via operations.RunGraph, instead of
+// hand-ordered phase loops.
 //
-//  1. VMs — dispatched via the ChildDispatcher so the proxmox provider
-//     creates each one and QGA populates status.ip asynchronously.
-//  2. K3sNodes — each polls its vmRef for status.ip (waitForVMIP),
-//     SSH-installs k3s, saves state file. The first CP's state carries
-//     status.nodeToken which subsequent K3sNodes resolve via $ref.
-//  3. AgentInstalls — after all K3sNodes finish, generate the cluster
-//     CA bundle from the observed node IPs, then dispatch each agent
-//     install. The bundle path matches what applyAgentInstall reads.
+// Edges come from two sources:
+//   - The children's own $refs (operations.RefChildEdges): each K3sNode refs
+//     its VM (vmRef) and — for joiners — the first control plane (joinFrom);
+//     each AgentInstall refs its VM. So a node's VM applies before it, and
+//     the first CP applies before the joiners that resolve its nodeToken.
+//   - Two barriers that are NOT $refs and so are added explicitly: an interim
+//     state stub that must follow every VM (crash recovery walks the stub's
+//     children[] to clean up VMs if a later step fails), and the cluster CA
+//     bundle, an aggregation over ALL K3sNode states that every AgentInstall
+//     consumes.
 //
-// After all children succeed, writes the legacy cluster state YAML so
-// applyExisting (count-up/respec/delete) keeps working unchanged.
-// Callers who invoke this without a ChildDispatcher (unit tests, CLI
+// Execution is serial by default (OPENCTL_APPLY_CONCURRENCY overrides), which
+// preserves SSH-install semantics; the graph is fully parallel-capable once
+// concurrent provisioning is validated. After the graph completes, the legacy
+// cluster state YAML is written so applyExisting (count-up/respec/delete)
+// keeps working unchanged. Callers without a ChildDispatcher (unit tests, CLI
 // direct-apply) fall back to the imperative path at Cluster.Apply.
 func (p *Provider) applyClusterViaPlan(ctx context.Context, manifest *protocol.Resource, cd operations.ChildDispatcher) (*protocol.Resource, error) {
 	name := manifest.Metadata.Name
@@ -58,56 +71,87 @@ func (p *Provider) applyClusterViaPlan(ctx context.Context, manifest *protocol.R
 		return nil, fmt.Errorf("plan produced no K3sNode children")
 	}
 
-	// Phase 1: VMs. Each ApplyChild call fans through the standard
-	// dispatcher pipeline (resolve/cache/save). Ordering is stable —
-	// Plan emits VMs in NodeNames order.
+	refEdges := operations.RefChildEdges(plan.Children)
+	tasks := make([]operations.Task, 0, len(plan.Children)+2)
+
+	// applyChildTask wraps one child's ApplyChild as a graph task, seeding
+	// its dependencies with the child's $ref edges plus any extra barriers.
+	applyChildTask := func(child *protocol.Resource, extraDeps ...string) operations.Task {
+		key := operations.ChildKey(child)
+		deps := append(append([]string{}, extraDeps...), refEdges[key]...)
+		return operations.Task{
+			ID:        key,
+			DependsOn: deps,
+			Run: func(ctx context.Context) error {
+				if _, err := cd.ApplyChild(ctx, child); err != nil {
+					return fmt.Errorf("apply %s %s: %w", child.Kind, child.Metadata.Name, err)
+				}
+				return nil
+			},
+		}
+	}
+
+	vmKeys := make([]string, 0, len(vms))
 	for _, vm := range vms {
-		if _, err := cd.ApplyChild(ctx, vm); err != nil {
-			return nil, fmt.Errorf("apply VM %s: %w", vm.Metadata.Name, err)
-		}
+		vmKeys = append(vmKeys, operations.ChildKey(vm))
+		tasks = append(tasks, applyChildTask(vm))
 	}
 
-	// Save an interim cluster state stub as soon as all VMs exist.
-	// Without this, a Phase 2/3 failure leaves live VMs on the
-	// hypervisor but Cluster.Delete can't find them because it
-	// walks the cluster state file's children[]. The stub carries
-	// the VM refs and a "Provisioning" phase so the operator sees
-	// the partial success and Delete can clean up. The final
-	// saveClusterStateFromChildren call overwrites this with the
-	// full Ready state once everything succeeds.
-	if err := p.saveClusterStateStub(name, manifest, vms, "Provisioning", "VMs created; installing k3s"); err != nil {
-		return nil, fmt.Errorf("save interim cluster state: %w", err)
-	}
+	// Interim stub: after every VM, before any k3s install.
+	tasks = append(tasks, operations.Task{
+		ID:        taskStateStub,
+		DependsOn: vmKeys,
+		Run: func(context.Context) error {
+			if err := p.saveClusterStateStub(name, manifest, vms, "Provisioning", "VMs created; installing k3s"); err != nil {
+				return fmt.Errorf("save interim cluster state: %w", err)
+			}
+			return nil
+		},
+	})
 
-	// Phase 2: K3sNodes. First CP is initialized (no joinFrom in
-	// spec — Plan deleted it); subsequent K3sNodes have joinFrom
-	// $refs that resolve at dispatch time against the first CP's
-	// just-saved status.nodeToken. Serial execution matches SSH-
-	// install semantics.
+	k3sKeys := make([]string, 0, len(k3sNodes))
 	for _, k := range k3sNodes {
-		if _, err := cd.ApplyChild(ctx, k); err != nil {
-			return nil, fmt.Errorf("apply K3sNode %s: %w", k.Metadata.Name, err)
-		}
+		k3sKeys = append(k3sKeys, operations.ChildKey(k))
+		tasks = append(tasks, applyChildTask(k, taskStateStub))
 	}
 
-	// Phase 3a: Materialize the cluster CA bundle to the on-disk
-	// path AgentInstall reads from. Uses the K3sNode states that
-	// were just written by phase 2 (each has vmName + vmIP).
-	if err := p.materializeClusterCABundle(name, k3sNodes); err != nil {
-		return nil, fmt.Errorf("materialize CA bundle: %w", err)
-	}
+	// CA bundle: aggregates every K3sNode's observed state; gates all agents.
+	tasks = append(tasks, operations.Task{
+		ID:        taskCABundle,
+		DependsOn: k3sKeys,
+		Run: func(context.Context) error {
+			if err := p.materializeClusterCABundle(name, k3sNodes); err != nil {
+				return fmt.Errorf("materialize CA bundle: %w", err)
+			}
+			return nil
+		},
+	})
 
-	// Phase 3b: AgentInstalls. Each SSH-installs the openctl-k3s-
-	// agent using its per-node server cert minted from the bundle.
 	for _, a := range agents {
-		if _, err := cd.ApplyChild(ctx, a); err != nil {
-			return nil, fmt.Errorf("apply AgentInstall %s: %w", a.Metadata.Name, err)
-		}
+		tasks = append(tasks, applyChildTask(a, taskCABundle))
 	}
 
-	// Finally save cluster state in the legacy YAML shape so
-	// applyExisting can operate on it later.
+	if err := operations.RunGraph(ctx, applyConcurrency(), tasks); err != nil {
+		return nil, err
+	}
+
+	// Finally save cluster state in the legacy YAML shape so applyExisting
+	// can operate on it later.
 	return p.saveClusterStateFromChildren(name, manifest, vms, k3sNodes)
+}
+
+// applyConcurrency is the max number of plan children applied in parallel.
+// Defaults to 1 (serial) — the safe, validated default that preserves the
+// original phase-loop semantics. OPENCTL_APPLY_CONCURRENCY=N opts into
+// parallel provisioning of independent nodes once a deployment has validated
+// it, matching the repo's env-gated rollout convention.
+func applyConcurrency() int {
+	if v := os.Getenv("OPENCTL_APPLY_CONCURRENCY"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 1
 }
 
 // materializeClusterCABundle mints a fresh per-cluster CA and per-

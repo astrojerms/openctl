@@ -731,6 +731,21 @@ When phases or followups land, move them up out of "pending" into their
 detail doc's marked-complete section, then leave a one-line entry here
 with the commit hash for at-a-glance history. Trim to the last 10.
 
+- feat: **dependency-DAG apply ordering** — composite Apply now orders its
+  children with a real dependency graph + topological sort instead of
+  hand-coded kind phases. New generic scheduler `operations.RunGraph`
+  (topo order, cycle detection, bounded concurrency) driven by
+  `operations.RefChildEdges`, which derives edges from the children's `$ref`s
+  (a K3sNode depends on its VM and — for joiners — the first control plane).
+  Two non-`$ref` constraints are added as explicit barrier edges: the interim
+  state stub (after all VMs) and the CA-bundle aggregation (after all
+  K3sNodes, gating agents). `applyClusterViaPlan` reduces to building tasks;
+  ordering falls out of the graph. Serial by default (preserves SSH-install
+  semantics + the existing dispatch-order test); `OPENCTL_APPLY_CONCURRENCY=N`
+  opts into parallel provisioning of independent nodes. Graph is generic and
+  reusable by any composite provider. Adds cycle detection the phase loops
+  lacked. Tests: topo/cycle/unknown-dep/dup/error-propagation/parallelism +
+  k3s first-CP-before-joiners.
 - feat: **k3s node placement across Proxmox _endpoints_** — a k3s `Cluster`
   can now spread its VMs across separate Proxmox endpoints, not just hosts
   within one. Mechanism (Proxmox provider): the controller loads every
