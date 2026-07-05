@@ -24,7 +24,10 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 - No active roadmap branch. `main` is clean. The dispatcher refactor
   shipped and was homelab-validated with the `validate-3`
-  single-control-plane k3s apply path.
+  single-control-plane k3s apply path. **k3s multi-endpoint placement**
+  (#64/#65) and the **composite-apply dependency DAG** (#66) shipped on
+  top; cross-op dependency scheduling is the next natural lift (see
+  Followups).
 
 The whole `no route to host` / connection-resilience thread is now
 closed: watch-release-on-outage (#14), macOS code signing (#15),
@@ -125,6 +128,31 @@ plan/state); harden the provider contract before the ecosystem widens.
       (destroy+recreate of a node whose cpu/memory drifted; one at a
       time, rejoined via the Joiner). Disk respec deferred — observed
       VM spec doesn't surface disk size.
+- [x] **k3s multi-endpoint placement** (#64, #65). Spread cluster nodes
+      across Proxmox hosts (per-pool `nodes` lists) and across separate
+      Proxmox endpoints (per-pool `context` + a general `targets:
+      [{context, node}]` list). Context routing lives inside the proxmox
+      provider (`NewMulti(map[ctx]*Config, defaultCtx)`, `sync.Map`
+      endpoint index); k3s just stamps `spec.context`/`spec.node` on each
+      VM child. Scoped to endpoints sharing one L2 network — separate-L2
+      spread (per-pool subnets, routable join URL, wireguard flannel) is a
+      parked epic.
+- [x] **Composite-apply dependency DAG** (#66). Ordering within a single
+      composite `Apply` is now a real dependency graph
+      (`operations.RunGraph`: topological execution + cycle detection),
+      replacing hand-coded phase loops. Edges derive from `$ref`s between
+      children (`RefChildEdges`) plus explicit barrier edges (CA bundle).
+      Serial by default; `OPENCTL_APPLY_CONCURRENCY=N` runs independent
+      children in parallel. See `DESIGN.md` §"Dependencies, Value-Passing
+      & Ordering".
+- [ ] **Cross-op dependency scheduling.** The composite-apply DAG orders
+      children *within* one operation; the top-level dispatcher still
+      processes *separate* operations FIFO (with fail-fast on same-resource
+      collision). A future scheduler could run independent operations
+      concurrently and order dependent ones by their `$ref` edges — the
+      same graph machinery, hoisted one level up. Aligns with the arch
+      Phase 9-10 typed-task-IR + DAG-scheduler sketch in
+      [docs/target-architecture.html](docs/target-architecture.html).
 
 ### Followups (post-Phase-6, parked)
 
