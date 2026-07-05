@@ -59,6 +59,19 @@ func printCapabilities() {
 					{Name: "node", Short: "n", Type: "string", Required: true, Help: "node to restart k3s on"},
 				},
 			},
+			{
+				Name:   "upgrade",
+				Short:  "Upgrade k3s on a cluster node to a target version",
+				Long:   "Swap the k3s binary on a node to the target release via its agent over mTLS, then restart the service. Per-node: run once per node (control plane first).",
+				Action: "upgrade",
+				PositionalArgs: []protocol.ArgSpec{
+					{Name: "cluster", Required: true, Help: "cluster name"},
+				},
+				Flags: []protocol.FlagSpec{
+					{Name: "node", Short: "n", Type: "string", Required: true, Help: "node to upgrade"},
+					{Name: "to", Type: "string", Required: true, Help: "target k3s version, e.g. v1.30.5+k3s1"},
+				},
+			},
 		},
 	}
 

@@ -149,13 +149,15 @@ plan/state); harden the provider contract before the ecosystem widens.
       target parsing, bootstrap VM manifest generation, VM create/poll
       through the existing Proxmox provider, then handoff to the SSH
       Linux installer. Still needs homelab validation before marking done.
-- [x] Plugin-defined CLI subcommands (`openctl k3s logs/restart`).
+- [x] Plugin-defined CLI subcommands (`openctl k3s logs/restart/upgrade`).
       Generic protocol + CLI registration shipped: plugins advertise typed
       subcommands in capabilities, and the CLI dispatches them with
-      positional/flag values in `Request.Args`. The k3s plugin now advertises
-      and implements `logs` (fetch a node's k3s journal) and `restart`
-      (restart k3s on a node) against the per-node agent client. `upgrade`
-      remains a follow-up (needs a binary-swap agent endpoint).
+      positional/flag values in `Request.Args`. The k3s plugin advertises and
+      implements `logs` (fetch a node's k3s journal), `restart` (restart k3s
+      on a node), and `upgrade` (binary-swap a node to a target k3s version:
+      the agent downloads + sha256-verifies the release, atomically swaps the
+      binary, and restarts). All run against the per-node agent client.
+      Cluster-wide rolling upgrade (drain/cordon ordering) remains a follow-up.
 - [x] Bug fix: the proxmox handler collapsed any `GetVM`/`GetNode`/
       `GetTemplate` error to NotFound — a network timeout produced a false
       "VM gone" result, and `applyVM` treated it as "doesn't exist" and
@@ -674,8 +676,9 @@ phase plan when ready to commit.
       changes apply without a restart.
 - [ ] **Mobile-friendly layout** — not v1 but worth flagging.
 - [x] **Plugin-defined CLI subcommands** — generic protocol + CLI
-      registration landed, and the k3s plugin ships `logs`/`restart`
-      handlers backed by the per-node agent client.
+      registration landed, and the k3s plugin ships `logs`/`restart`/`upgrade`
+      handlers backed by the per-node agent client (`upgrade` is a
+      sha256-verified binary swap).
       See DESIGN.md "Plugin-defined CLI subcommands."
 - [x] **Default-timeout problem** — verified. The controller's
       submit-returns-immediately model means the global `--timeout` (300s,

@@ -40,6 +40,8 @@ func (h *Handler) Handle(req *protocol.Request) (*protocol.Response, error) {
 		return h.handleLogs(req)
 	case "restart":
 		return h.handleRestart(req)
+	case "upgrade":
+		return h.handleUpgrade(req)
 	}
 
 	switch req.ResourceType {
@@ -363,9 +365,11 @@ func (h *Handler) loadClusterStatus(name string) (map[string]any, *protocol.Resp
 
 // agentClientForNode builds a typed agent client for a single node of a
 // cluster. node selects the target endpoint; when empty it is allowed only if
-// the cluster has exactly one node. It returns an error Response (resp != nil)
-// for the caller to return directly when selection or config fails.
-func (h *Handler) agentClientForNode(status map[string]any, node string) (*agentclient.Client, string, *protocol.Response, error) {
+// the cluster has exactly one node. timeout caps each request the client makes
+// (a long-running op like upgrade needs a generous value). It returns an error
+// Response (resp != nil) for the caller to return directly when selection or
+// config fails.
+func (h *Handler) agentClientForNode(status map[string]any, node string, timeout time.Duration) (*agentclient.Client, string, *protocol.Response, error) {
 	endpoints, opts, ok := extractAgentProbeConfig(status)
 	if !ok {
 		return nil, "", &protocol.Response{
@@ -382,6 +386,7 @@ func (h *Handler) agentClientForNode(status map[string]any, node string) (*agent
 		return nil, "", errResp, nil
 	}
 
+	opts.Timeout = timeout
 	c, err := agentclient.NewFromProbeOptions(opts, ip)
 	if err != nil {
 		return nil, "", nil, err
@@ -436,7 +441,7 @@ func (h *Handler) handleLogs(req *protocol.Request) (*protocol.Response, error) 
 	if err != nil || errResp != nil {
 		return errResp, err
 	}
-	c, node, errResp, err := h.agentClientForNode(status, argString(req.Args, "node"))
+	c, node, errResp, err := h.agentClientForNode(status, argString(req.Args, "node"), 15*time.Second)
 	if err != nil || errResp != nil {
 		return errResp, err
 	}
@@ -463,7 +468,7 @@ func (h *Handler) handleRestart(req *protocol.Request) (*protocol.Response, erro
 	if err != nil || errResp != nil {
 		return errResp, err
 	}
-	c, node, errResp, err := h.agentClientForNode(status, argString(req.Args, "node"))
+	c, node, errResp, err := h.agentClientForNode(status, argString(req.Args, "node"), 30*time.Second)
 	if err != nil || errResp != nil {
 		return errResp, err
 	}
@@ -482,6 +487,53 @@ func (h *Handler) handleRestart(req *protocol.Request) (*protocol.Response, erro
 	return &protocol.Response{
 		Status:  protocol.StatusSuccess,
 		Message: fmt.Sprintf("restarted k3s on node %q", node),
+	}, nil
+}
+
+// upgradeTimeout bounds the whole upgrade RPC (binary download + swap +
+// service restart); the agent may spend minutes downloading a k3s release.
+const upgradeTimeout = 10 * time.Minute
+
+// handleUpgrade implements
+// `openctl k3s upgrade <cluster> --node <name> --to <version>`: it swaps the
+// k3s binary on one node to the target version via its agent. Per-node by
+// design — cluster-wide rolling upgrades (drain/cordon ordering) are a
+// follow-up.
+func (h *Handler) handleUpgrade(req *protocol.Request) (*protocol.Response, error) {
+	version := argString(req.Args, "to")
+	if version == "" {
+		return &protocol.Response{
+			Status: protocol.StatusError,
+			Error: &protocol.Error{
+				Code:    protocol.ErrorCodeInvalidRequest,
+				Message: "upgrade requires a target version via --to (e.g. --to v1.30.5+k3s1)",
+			},
+		}, nil
+	}
+
+	status, errResp, err := h.loadClusterStatus(argString(req.Args, "cluster"))
+	if err != nil || errResp != nil {
+		return errResp, err
+	}
+	c, node, errResp, err := h.agentClientForNode(status, argString(req.Args, "node"), upgradeTimeout)
+	if err != nil || errResp != nil {
+		return errResp, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), upgradeTimeout)
+	defer cancel()
+	if err := c.UpgradeK3s(ctx, version); err != nil {
+		return &protocol.Response{
+			Status: protocol.StatusError,
+			Error: &protocol.Error{
+				Code:    protocol.ErrorCodeInternal,
+				Message: fmt.Sprintf("upgrade k3s on node %q to %q: %v", node, version, err),
+			},
+		}, nil
+	}
+	return &protocol.Response{
+		Status:  protocol.StatusSuccess,
+		Message: fmt.Sprintf("upgraded k3s on node %q to %q", node, version),
 	}, nil
 }
 
