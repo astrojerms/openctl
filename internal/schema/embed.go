@@ -2,6 +2,7 @@ package schema
 
 import (
 	"embed"
+	"fmt"
 	"io/fs"
 	"path/filepath"
 	"strings"
@@ -21,12 +22,13 @@ type Info struct {
 	FileName   string // relative path under schemas/ (e.g. "proxmox/vm.cue")
 }
 
-// Registry returns the list of (apiVersion, kind) pairs that have an
-// embedded CUE schema. Mirrors the explicit mapping in schemaSelector —
-// adding a new kind requires updating both. Keeping the mapping explicit
-// avoids over-trusting filesystem layout.
+// Registry returns the list of (apiVersion, kind) pairs that have a schema —
+// the embedded built-ins plus any external schemas registered at runtime by
+// provider plugins (RegisterExternal). The embedded mapping mirrors
+// schemaSelector — adding a new built-in kind requires updating both. Keeping
+// the mapping explicit avoids over-trusting filesystem layout.
 func Registry() []Info {
-	return []Info{
+	infos := []Info{
 		{
 			APIVersion: "proxmox.openctl.io/v1",
 			Kind:       "VirtualMachine",
@@ -58,11 +60,21 @@ func Registry() []Info {
 			FileName:   "k3s/agentinstall.cue",
 		},
 	}
+	return append(infos, externalInfos()...)
 }
 
 // SourceFor returns the raw CUE text for the given schema. Used by
-// SchemaService.GetSchema to feed the editor.
+// SchemaService.GetSchema to feed the editor. External schemas (empty
+// FileName) come from the runtime plugin registry; embedded schemas are read
+// from the embedded FS.
 func SourceFor(info Info) ([]byte, error) {
+	if info.FileName == "" {
+		s, ok := lookupExternal(info.APIVersion, info.Kind)
+		if !ok {
+			return nil, fmt.Errorf("no external schema registered for %s/%s", info.APIVersion, info.Kind)
+		}
+		return []byte(s.source), nil
+	}
 	return schemasFS.ReadFile("schemas/" + info.FileName)
 }
 
