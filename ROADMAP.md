@@ -702,9 +702,11 @@ phase plan when ready to commit.
       the fixed 18rem sidebar collapses into a hamburger-toggled off-canvas
       drawer (backdrop + Esc to close; closes on navigation), the header
       wraps, and `main` goes full-width. Layout tokens (`--sidebar-width`,
-      `--bp-mobile`) added to app.css. Follow-ups: stack the side-by-side
-      editor/preview panes (Edit/TemplateWizard) and wrap the data tables in
-      contained horizontal-scroll regions on narrow screens.
+      `--bp-mobile`) added to app.css. The side-by-side editor/preview panes
+      (Edit form-view + TemplateWizard) now stack into a single column below
+      48rem (preview un-stickied). Remaining follow-up: wrap the data tables
+      (ResourceList/Providers/Detail/OpsDrawer) in contained horizontal-scroll
+      regions so wide tables scroll within their card rather than the page.
 - [x] **Plugin-defined CLI subcommands** — generic protocol + CLI
       registration landed, and the k3s plugin ships `logs`/`restart`/`upgrade`
       handlers backed by the per-node agent client (`upgrade` is a

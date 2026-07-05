@@ -1210,4 +1210,13 @@
   .op-card p {
     margin: 0;
   }
+
+  /* Mobile: stack the form editor and its live preview instead of the
+     side-by-side 2fr/1fr split, which is unusable at phone width. Keep in
+     sync with --bp-mobile (48rem) in app.css. */
+  @media (max-width: 48rem) {
+    .editor-wrap.form-view {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
 </style>
