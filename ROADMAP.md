@@ -144,8 +144,11 @@ plan/state); harden the provider contract before the ecosystem widens.
       a remote host and installs it as a **system** systemd service (reuses
       `pkg/k3s/ssh`; uploads binary + unit, `systemctl enable --now`). The
       orchestration is unit-tested against a fake SSH runner.
-- [ ] Proxmox bootstrap install (`openctl-controller install --target
-      proxmox://homelab`).
+- [~] Proxmox bootstrap install (`openctl-controller install --target
+      proxmox://homelab`). First slice shipped: `proxmox://context`
+      target parsing, bootstrap VM manifest generation, VM create/poll
+      through the existing Proxmox provider, then handoff to the SSH
+      Linux installer. Still needs homelab validation before marking done.
 - [ ] Plugin-defined CLI subcommands (`openctl k3s logs/restart/upgrade`).
 - [x] Bug fix: the proxmox handler collapsed any `GetVM`/`GetNode`/
       `GetTemplate` error to NotFound — a network timeout produced a false
@@ -701,6 +704,12 @@ with the commit hash for at-a-glance history. Trim to the last 10.
   TF-host provider construction. Generated schemas validate desired `spec`
   fields, omit computed-only provider outputs from desired input, and surface
   through the same registry/SchemaService path as plugin-supplied schemas.
+- feat: **Proxmox bootstrap install plumbing** — `openctl-controller install
+  --target proxmox://context?...` now has a tested target parser/defaulting
+  contract, creates an openctl controller VM through the existing Proxmox
+  provider, waits for a static or guest-agent-reported IP, then reuses the
+  SSH Linux installer for the controller deployment. Homelab validation still
+  gates marking the roadmap item complete.
 - (#42–#45) — feat: **external plugin protocol (Tier 1 item 1)**, shipped
   in four phases. #42 `pkg/pluginproto` (persistent-process, id-correlated
   JSON-over-stdio protocol + Client + Handler SDK). #43 external provider

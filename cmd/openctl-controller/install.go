@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -141,11 +142,14 @@ func runInstall(args []string) error {
 		if *local {
 			return fmt.Errorf("--local and --target are mutually exclusive")
 		}
+		if strings.HasPrefix(*target, "proxmox://") {
+			return runInstallProxmox(*target, *sshKey)
+		}
 		return runInstallRemote(*target, *sshKey)
 	case *local:
 		return runInstallLocal()
 	default:
-		return fmt.Errorf("one of --local or --target ssh://user@host is required")
+		return fmt.Errorf("one of --local, --target ssh://user@host, or --target proxmox://context is required")
 	}
 }
 
@@ -383,7 +387,7 @@ controller:
 	return os.WriteFile(path, []byte(stub), 0o600)
 }
 
-const installUsage = `usage: openctl-controller install (--local | --target ssh://user@host[:port])
+const installUsage = `usage: openctl-controller install (--local | --target ssh://user@host[:port] | --target proxmox://context?... )
 
 --local: installs the controller as a per-user background service on this
 machine:
@@ -402,6 +406,16 @@ first (produces bin/openctl-controller-linux-<arch>). Flags:
 The remote user needs passwordless sudo. The service listens on the host's
 network (protected by the controller's token auth + TLS); copy the remote
 token (/var/lib/openctl/controller/token) and CA to point your CLI at it.
+
+--target proxmox://context?...: creates a controller VM through the named
+Proxmox config context, waits for its IP, then reuses the SSH installer.
+Required via query params or provider defaults: node, and exactly one of
+template or cloud-image. Common params:
+  name=openctl-controller  template=ubuntu-22.04  cloud-image=https://...
+  storage=local            disk-storage=local-lvm node=pve1
+  ssh-user=ubuntu          ssh-public-key=~/.ssh/id_ed25519.pub
+  cores=2                  memory=4096            disk-gb=32
+  bridge=vmbr0             ip=dhcp|192.0.2.50/24 gateway=192.0.2.1
 
 Run 'openctl-controller uninstall' to remove a local install.`
 
