@@ -36,6 +36,14 @@ type Session struct {
 	Token string
 }
 
+// Principal returns the authenticated principal for this session. Every
+// session today is minted from the root credential and is therefore admin;
+// once a non-admin identity source (named tokens / OIDC) lands, the session
+// row will carry the creator's role and this reads it instead.
+func (s *Session) Principal() Principal {
+	return Principal{UserID: s.UserID, Role: RoleAdmin}
+}
+
 // SessionStore is the sessions data layer. Backed by SQLite.
 type SessionStore struct {
 	db *sql.DB

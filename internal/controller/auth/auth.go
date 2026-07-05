@@ -83,48 +83,64 @@ func (v *Validator) WithSessions(s *SessionStore) *Validator {
 }
 
 // UnaryInterceptor returns a gRPC unary interceptor that validates the
-// bearer token on every request. Failed checks return Unauthenticated.
+// bearer token on every request and injects the resolved Principal into the
+// context. Failed checks return Unauthenticated.
 func (v *Validator) UnaryInterceptor() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		if err := v.check(ctx); err != nil {
+		p, err := v.check(ctx)
+		if err != nil {
 			return nil, err
 		}
-		return handler(ctx, req)
+		return handler(ContextWithPrincipal(ctx, p), req)
 	}
 }
 
 // StreamInterceptor mirrors UnaryInterceptor for server-streaming RPCs
-// like ResourceService.Watch. Same token semantics.
+// like ResourceService.Watch. Same token semantics; the resolved Principal is
+// injected into the stream's context via a wrapper.
 func (v *Validator) StreamInterceptor() grpc.StreamServerInterceptor {
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		if err := v.check(ss.Context()); err != nil {
+		p, err := v.check(ss.Context())
+		if err != nil {
 			return err
 		}
-		return handler(srv, ss)
+		return handler(srv, &principalStream{ServerStream: ss, ctx: ContextWithPrincipal(ss.Context(), p)})
 	}
 }
 
-func (v *Validator) check(ctx context.Context) error {
+// principalStream overrides Context so downstream handlers see the injected
+// Principal on server-streaming RPCs.
+type principalStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (s *principalStream) Context() context.Context { return s.ctx }
+
+// check validates the bearer token and returns the caller's Principal. The
+// root token maps to the admin RootPrincipal; a session token maps to a
+// principal carrying the session's user and role.
+func (v *Validator) check(ctx context.Context) (Principal, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		return status.Error(codes.Unauthenticated, "missing metadata")
+		return Principal{}, status.Error(codes.Unauthenticated, "missing metadata")
 	}
 	auths := md.Get("authorization")
 	if len(auths) == 0 {
-		return status.Error(codes.Unauthenticated, "missing authorization header")
+		return Principal{}, status.Error(codes.Unauthenticated, "missing authorization header")
 	}
 	tok, ok := strings.CutPrefix(auths[0], bearerPrefix)
 	if !ok {
-		return status.Error(codes.Unauthenticated, "authorization header must start with Bearer")
+		return Principal{}, status.Error(codes.Unauthenticated, "authorization header must start with Bearer")
 	}
 	if subtle.ConstantTimeCompare([]byte(tok), v.expected) == 1 {
-		return nil
+		return RootPrincipal(), nil
 	}
 	if v.sessions != nil {
 		sess, err := v.sessions.Lookup(ctx, tok)
 		if err == nil && sess != nil {
-			return nil
+			return sess.Principal(), nil
 		}
 	}
-	return status.Error(codes.Unauthenticated, "invalid token")
+	return Principal{}, status.Error(codes.Unauthenticated, "invalid token")
 }

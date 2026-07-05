@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	"github.com/openctl/openctl/internal/controller/auth"
 	"github.com/openctl/openctl/internal/controller/manifests"
 	"github.com/openctl/openctl/internal/controller/operations"
 	"github.com/openctl/openctl/internal/controller/providers"
@@ -65,6 +66,9 @@ func newResourceHandler(reg *providers.Registry, ops *operations.Store, d *opera
 }
 
 func (h *resourceHandler) Apply(ctx context.Context, req *apiv1.ApplyRequest) (*apiv1.ApplyResponse, error) {
+	if err := authorize(ctx, auth.RoleEditor); err != nil {
+		return nil, err
+	}
 	if req.GetResource() == nil {
 		return nil, status.Error(codes.InvalidArgument, "resource is required")
 	}
@@ -146,6 +150,9 @@ func (h *resourceHandler) applySync(ctx context.Context, manifest *protocol.Reso
 }
 
 func (h *resourceHandler) Get(ctx context.Context, req *apiv1.GetRequest) (*apiv1.GetResponse, error) {
+	if err := authorize(ctx, auth.RoleViewer); err != nil {
+		return nil, err
+	}
 	p, err := h.registry.For(req.GetApiVersion())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -240,6 +247,9 @@ func attachRelationships(reg *providers.Registry, out *apiv1.Resource) {
 // the currently-applied manifest, and asks any DryRunner-capable provider
 // for the per-child action list + required-gate set.
 func (h *resourceHandler) DryRunApply(ctx context.Context, req *apiv1.DryRunApplyRequest) (*apiv1.DryRunApplyResponse, error) {
+	if err := authorize(ctx, auth.RoleViewer); err != nil {
+		return nil, err
+	}
 	if req.GetResource() == nil {
 		return nil, status.Error(codes.InvalidArgument, "resource is required")
 	}
@@ -341,7 +351,10 @@ func (h *resourceHandler) DryRunApply(ctx context.Context, req *apiv1.DryRunAppl
 // supports for (apiVersion, kind). Empty response when the provider has
 // no Actioner interface. Never errors on "no actions" — the UI treats
 // that as "hide the action bar" rather than a failure.
-func (h *resourceHandler) ListActions(_ context.Context, req *apiv1.ListActionsRequest) (*apiv1.ListActionsResponse, error) {
+func (h *resourceHandler) ListActions(ctx context.Context, req *apiv1.ListActionsRequest) (*apiv1.ListActionsResponse, error) {
+	if err := authorize(ctx, auth.RoleViewer); err != nil {
+		return nil, err
+	}
 	if req.GetApiVersion() == "" || req.GetKind() == "" {
 		return nil, status.Error(codes.InvalidArgument, "api_version and kind are required")
 	}
@@ -356,6 +369,9 @@ func (h *resourceHandler) ListActions(_ context.Context, req *apiv1.ListActionsR
 // failures (Proxmox API errors, etc). Success returns the provider's
 // short text — typically a task UPID for Proxmox.
 func (h *resourceHandler) InvokeAction(ctx context.Context, req *apiv1.InvokeActionRequest) (*apiv1.InvokeActionResponse, error) {
+	if err := authorize(ctx, auth.RoleEditor); err != nil {
+		return nil, err
+	}
 	if req.GetApiVersion() == "" || req.GetKind() == "" || req.GetResourceName() == "" || req.GetAction() == "" {
 		return nil, status.Error(codes.InvalidArgument, "api_version, kind, resource_name, and action are required")
 	}
@@ -389,6 +405,9 @@ func (h *resourceHandler) InvokeAction(ctx context.Context, req *apiv1.InvokeAct
 // a coarse pill derived from applied-manifest presence; observed-only nodes
 // (no applied manifest) come back managed=false so the UI dims them (U9.4).
 func (h *resourceHandler) GetChildrenGraph(ctx context.Context, req *apiv1.GetChildrenGraphRequest) (*apiv1.GetChildrenGraphResponse, error) {
+	if err := authorize(ctx, auth.RoleViewer); err != nil {
+		return nil, err
+	}
 	if req.GetApiVersion() == "" || req.GetKind() == "" || req.GetName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "api_version, kind, and name are required")
 	}
@@ -591,6 +610,9 @@ func summarizeDryRun(r *apiv1.DryRunApplyResponse) string {
 }
 
 func (h *resourceHandler) List(ctx context.Context, req *apiv1.ListRequest) (*apiv1.ListResponse, error) {
+	if err := authorize(ctx, auth.RoleViewer); err != nil {
+		return nil, err
+	}
 	p, err := h.registry.For(req.GetApiVersion())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -717,6 +739,9 @@ func (h *resourceHandler) attachDrift(ctx context.Context, out *apiv1.Resource, 
 }
 
 func (h *resourceHandler) Delete(ctx context.Context, req *apiv1.DeleteRequest) (*apiv1.DeleteResponse, error) {
+	if err := authorize(ctx, auth.RoleEditor); err != nil {
+		return nil, err
+	}
 	if _, err := h.registry.For(req.GetApiVersion()); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}

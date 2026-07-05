@@ -150,5 +150,6 @@ func TestValidatorAcceptsSessionTokenViaWithSessions(t *testing.T) {
 func (v *Validator) checkRaw(authHeader string) error {
 	md := metadata.Pairs("authorization", authHeader)
 	ctx := metadata.NewIncomingContext(context.Background(), md)
-	return v.check(ctx)
+	_, err := v.check(ctx)
+	return err
 }
