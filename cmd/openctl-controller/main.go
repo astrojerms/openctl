@@ -114,6 +114,11 @@ func runServe(args []string) error {
 		return err
 	}
 
+	users, err := auth.LoadUsers(*dir)
+	if err != nil {
+		return err
+	}
+
 	host, _, err := net.SplitHostPort(*listen)
 	if err != nil {
 		return fmt.Errorf("parse listen %q: %w", *listen, err)
@@ -308,6 +313,7 @@ func runServe(args []string) error {
 	}
 	if !*noAuth {
 		opts.Token = token
+		opts.Users = users
 	}
 
 	srv, err := server.New(opts)
@@ -321,7 +327,10 @@ func runServe(args []string) error {
 	if *noAuth {
 		log.Printf("  auth:        DISABLED (--no-auth)")
 	} else {
-		log.Printf("  token:       %s", tokenPath)
+		log.Printf("  token:       %s (root/admin)", tokenPath)
+		for _, u := range users {
+			log.Printf("  user:        %s (%s)", u.UserID, u.Role)
+		}
 	}
 	if len(registered) == 0 {
 		log.Printf("  providers:   (none — add a `proxmox:` section to ~/.openctl/config.yaml to enable)")

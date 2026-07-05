@@ -72,7 +72,25 @@ in. Any change requires re-opening the discussion.
   wire (`apiVersion`, `kind`, `metadata`, `spec`, `status`). Debug with
   `grpcurl`.
 - **Auth:** API token (`Authorization: Bearer <token>`). `--no-auth` flag
-  required for explicit localhost-only setups.
+  required for explicit localhost-only setups. The install-time root token
+  (`<state-dir>/token`) is admin. **Named users with roles** can be added in
+  `<state-dir>/users.yaml`; each authenticates with its own bearer token and
+  is subject to RBAC (roles: `viewer` ⊂ `editor` ⊂ `admin`):
+
+  ```yaml
+  users:
+    - name: alice
+      role: editor
+      tokenFile: alice.token   # relative → resolved under the state dir; minted 0600 if absent
+    - name: bob
+      role: viewer
+      tokenFile: bob.token
+  ```
+
+  `ResourceService` enforces the role: mutations (Apply/Delete/InvokeAction)
+  need `editor`+, reads (Get/List/DryRun/…) need `viewer`+. Browser sessions
+  minted via `SessionService.Login` currently inherit admin (per-session roles
+  land with the session `role` column follow-up).
 - **CLI is a thin gRPC client.** Always requires a controller. The existing
   exec-plugin model in the CLI is removed. The per-node
   `openctl-k3s-agent` is unaffected — different boundary, different threat

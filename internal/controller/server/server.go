@@ -45,10 +45,13 @@ var BuildTime = "dev"
 // nil, Apply/Delete fall back to the Phase 2 synchronous behavior — useful
 // for tests that don't want to spin up the full dispatcher loop.
 type Options struct {
-	Listen     string
-	CertFile   string
-	KeyFile    string
-	Token      string
+	Listen   string
+	CertFile string
+	KeyFile  string
+	Token    string
+	// Users are named non-root principals authenticated by their own tokens
+	// (loaded from the controller's users.yaml). Empty = root-only.
+	Users      []auth.User
 	Registry   *providers.Registry
 	Operations *operations.Store
 	Dispatcher *operations.Dispatcher
@@ -97,6 +100,9 @@ func New(opts Options) (*Server, error) {
 	}
 	if opts.Token != "" {
 		v := auth.NewValidator(opts.Token)
+		if len(opts.Users) > 0 {
+			v = v.WithUsers(opts.Users)
+		}
 		if opts.Sessions != nil {
 			v = v.WithSessions(opts.Sessions)
 		}

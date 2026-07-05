@@ -630,11 +630,16 @@ phase plan when ready to commit.
         current sessions resolve to admin, so enforcement is a no-op in
         production until a non-admin identity source exists; `--no-auth`
         skips the interceptor entirely (every caller trusted).
-      - *Next — identity source (design fork, get a steer):* how non-admin
-        principals are minted — named API tokens with roles, static
-        users-in-config, or OIDC-first. Adds a `role` column to `sessions`
-        (defaulting admin) so `Session.Principal()` reads it, and a
-        login/token path that assigns roles.
+      - *Identity source shipped — named API tokens:* `<state-dir>/users.yaml`
+        defines named users with a role and a `tokenFile`; the auth interceptor
+        resolves a user's bearer token to its `{UserID, role}` principal, so
+        RBAC is now **live** for token/CLI callers (a viewer token is genuinely
+        read-only). Chosen for lowest lock-in (no external IdP; OIDC can layer
+        on later).
+      - *Next — session role inheritance:* add a `role` column to `sessions`
+        (defaulting admin) so `Session.Principal()` reads it, and have
+        `SessionService.Login` mint sessions carrying the caller's role. Then
+        browser logins are also role-scoped.
       - *Then:* OIDC integration + named sessions surfaced in the UI.
 - [x] **Terraform / OpenTofu provider host** *(Tier 1 — see
       [docs/direction.md](docs/direction.md))* — consume the existing
