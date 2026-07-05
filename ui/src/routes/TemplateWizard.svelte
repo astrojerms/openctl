@@ -451,4 +451,17 @@
     font-size: 0.8rem;
     color: #ff8980;
   }
+
+  /* Mobile: stack the params form above its preview instead of side-by-side,
+     and let the preview flow instead of sticking. Keep in sync with
+     --bp-mobile (48rem) in app.css. */
+  @media (max-width: 48rem) {
+    .wizard {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .preview {
+      position: static;
+      max-height: none;
+    }
+  }
 </style>
