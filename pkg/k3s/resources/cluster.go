@@ -38,15 +38,30 @@ type StaticIPSpec struct {
 
 // ComputeSpec defines the compute provider configuration
 type ComputeSpec struct {
-	Provider string          `json:"provider"` // e.g., "proxmox"
-	Context  string          `json:"context,omitempty"`
-	Image    ImageSpec       `json:"image"`
-	Default  DefaultSizeSpec `json:"default"`
+	Provider string `json:"provider"` // e.g., "proxmox"
+	// Context is the cluster-wide default provider endpoint (e.g. a named
+	// Proxmox context). Stamped onto each VM's spec.context so the provider
+	// routes it to that endpoint. A per-pool Context or a target's Context
+	// overrides it; empty uses the provider's default context.
+	Context string          `json:"context,omitempty"`
+	Image   ImageSpec       `json:"image"`
+	Default DefaultSizeSpec `json:"default"`
 	// Nodes is the cluster-wide default pool of provider hosts (e.g.
 	// Proxmox node names) to spread VMs across, round-robin within each
 	// node pool. Empty means the provider's configured default host.
 	// A per-pool Nodes list overrides this for that pool.
 	Nodes []string `json:"nodes,omitempty"`
+}
+
+// PlacementTarget is one {endpoint, host} slot a node pool can be spread
+// across. Context selects the provider endpoint (empty = the pool's or
+// cluster default); Node selects the host within that endpoint (empty = the
+// endpoint's default host). A pool's VMs are assigned to its targets
+// round-robin, so listing three targets spreads a 3-replica control plane
+// one-per-target — across endpoints, that survives a whole endpoint failing.
+type PlacementTarget struct {
+	Context string `json:"context,omitempty"`
+	Node    string `json:"node,omitempty"`
 }
 
 // ImageSpec defines the VM image to use
@@ -74,11 +89,19 @@ type NodesSpec struct {
 type ControlPlaneSpec struct {
 	Count int              `json:"count"`
 	Size  *DefaultSizeSpec `json:"size,omitempty"`
+	// Context overrides Compute.Context for the control-plane pool, placing
+	// all CP VMs on one provider endpoint.
+	Context string `json:"context,omitempty"`
 	// Nodes overrides Compute.Nodes for the control-plane pool. When set,
 	// control-plane VMs are spread round-robin across these provider
 	// hosts — three CP replicas over three hosts land one each, keeping
 	// etcd quorum across failure domains.
 	Nodes []string `json:"nodes,omitempty"`
+	// Targets is the general placement form: explicit {context, node} slots
+	// the CP is spread across round-robin. Set this to spread the control
+	// plane across endpoints (cross-endpoint HA quorum). Overrides
+	// Context/Nodes for this pool.
+	Targets []PlacementTarget `json:"targets,omitempty"`
 }
 
 // WorkerSpec defines a worker node pool
@@ -86,9 +109,14 @@ type WorkerSpec struct {
 	Name  string           `json:"name"`
 	Count int              `json:"count"`
 	Size  *DefaultSizeSpec `json:"size,omitempty"`
+	// Context overrides Compute.Context for this worker pool.
+	Context string `json:"context,omitempty"`
 	// Nodes overrides Compute.Nodes for this worker pool, spreading the
 	// pool's VMs round-robin across these provider hosts.
 	Nodes []string `json:"nodes,omitempty"`
+	// Targets is the general placement form for this pool: explicit
+	// {context, node} slots spread round-robin. Overrides Context/Nodes.
+	Targets []PlacementTarget `json:"targets,omitempty"`
 }
 
 // K3sSpec defines K3s configuration
@@ -159,7 +187,11 @@ func ParseClusterSpec(r *protocol.Resource) (*ClusterSpec, error) {
 			if size, ok := cp["size"].(map[string]any); ok {
 				spec.Nodes.ControlPlane.Size = parseSizeSpec(size)
 			}
+			if cpContext, ok := cp["context"].(string); ok {
+				spec.Nodes.ControlPlane.Context = cpContext
+			}
 			spec.Nodes.ControlPlane.Nodes = parseStringSlice(cp["nodes"])
+			spec.Nodes.ControlPlane.Targets = parsePlacementTargets(cp["targets"])
 		}
 		if workers, ok := nodes["workers"].([]any); ok {
 			for _, w := range workers {
@@ -174,7 +206,11 @@ func ParseClusterSpec(r *protocol.Resource) (*ClusterSpec, error) {
 					if size, ok := worker["size"].(map[string]any); ok {
 						ws.Size = parseSizeSpec(size)
 					}
+					if wContext, ok := worker["context"].(string); ok {
+						ws.Context = wContext
+					}
 					ws.Nodes = parseStringSlice(worker["nodes"])
+					ws.Targets = parsePlacementTargets(worker["targets"])
 					spec.Nodes.Workers = append(spec.Nodes.Workers, ws)
 				}
 			}
@@ -269,6 +305,35 @@ func parseStringSlice(v any) []string {
 	return out
 }
 
+// parsePlacementTargets coerces a spec value into []PlacementTarget from the
+// []any-of-map shape JSON/YAML decoding produces. Entries missing both
+// context and node are dropped. Returns nil when absent or wrong-shaped.
+func parsePlacementTargets(v any) []PlacementTarget {
+	items, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	var out []PlacementTarget
+	for _, item := range items {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		t := PlacementTarget{}
+		if c, ok := m["context"].(string); ok {
+			t.Context = c
+		}
+		if n, ok := m["node"].(string); ok {
+			t.Node = n
+		}
+		if t.Context == "" && t.Node == "" {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
 func parseSizeSpec(m map[string]any) *DefaultSizeSpec {
 	size := &DefaultSizeSpec{}
 	if cpus, ok := m["cpus"].(float64); ok {
@@ -346,36 +411,33 @@ func NodeNames(clusterName string, spec *ClusterSpec) (controlPlanes []string, w
 	return
 }
 
-// PlacementHosts returns a map of node name -> target provider host
-// (e.g. a Proxmox node name) for every node whose pool defines a host
-// list. A pool uses its own Nodes list when set, else Compute.Nodes;
-// if both are empty the pool's nodes are omitted from the map, leaving
-// the compute provider to fall back to its configured default host.
+// PlacementTargets returns a map of node name -> PlacementTarget ({endpoint
+// context, host}) for every node whose pool defines placement. A pool with
+// no placement is omitted, leaving the compute provider to use its default
+// context and host.
 //
-// Hosts are assigned round-robin WITHIN each pool, so the control
-// plane and each worker pool spread independently — three CP replicas
-// over [pve1,pve2,pve3] land one per host, keeping etcd quorum across
-// failure domains. The node names match NodeNames exactly.
-func PlacementHosts(clusterName string, spec *ClusterSpec) map[string]string {
-	hosts := make(map[string]string)
+// Targets are assigned round-robin WITHIN each pool, so the control plane
+// and each worker pool spread independently — three control-plane replicas
+// over three targets land one each. When those targets name different
+// provider endpoints, the etcd quorum survives an entire endpoint failing.
+// Node names match NodeNames exactly.
+func PlacementTargets(clusterName string, spec *ClusterSpec) map[string]PlacementTarget {
+	out := make(map[string]PlacementTarget)
 
-	cpHosts := spec.Nodes.ControlPlane.Nodes
-	if len(cpHosts) == 0 {
-		cpHosts = spec.Compute.Nodes
-	}
-	if len(cpHosts) > 0 {
+	cpTargets := resolvePoolTargets(
+		spec.Nodes.ControlPlane.Targets, spec.Nodes.ControlPlane.Context,
+		spec.Nodes.ControlPlane.Nodes, spec.Compute.Context, spec.Compute.Nodes)
+	if len(cpTargets) > 0 {
 		for i := 0; i < spec.Nodes.ControlPlane.Count; i++ {
 			name := fmt.Sprintf("%s-cp-%d", clusterName, i)
-			hosts[name] = cpHosts[i%len(cpHosts)]
+			out[name] = cpTargets[i%len(cpTargets)]
 		}
 	}
 
 	for _, pool := range spec.Nodes.Workers {
-		poolHosts := pool.Nodes
-		if len(poolHosts) == 0 {
-			poolHosts = spec.Compute.Nodes
-		}
-		if len(poolHosts) == 0 {
+		targets := resolvePoolTargets(
+			pool.Targets, pool.Context, pool.Nodes, spec.Compute.Context, spec.Compute.Nodes)
+		if len(targets) == 0 {
 			continue
 		}
 		poolName := pool.Name
@@ -384,11 +446,54 @@ func PlacementHosts(clusterName string, spec *ClusterSpec) map[string]string {
 		}
 		for i := 0; i < pool.Count; i++ {
 			name := fmt.Sprintf("%s-%s-%d", clusterName, poolName, i)
-			hosts[name] = poolHosts[i%len(poolHosts)]
+			out[name] = targets[i%len(targets)]
 		}
 	}
 
-	return hosts
+	return out
+}
+
+// resolvePoolTargets desugars a pool's placement into an ordered target list.
+// Precedence: explicit targets > (pool context + pool/compute node list) >
+// cluster compute context. Empty context inherits the pool's, then the
+// cluster default. Returns nil when the pool has no placement at all (neither
+// a context nor a host anywhere applies), so its nodes stay fully default.
+func resolvePoolTargets(targets []PlacementTarget, poolContext string, poolNodes []string, computeContext string, computeNodes []string) []PlacementTarget {
+	ctxName := poolContext
+	if ctxName == "" {
+		ctxName = computeContext
+	}
+
+	if len(targets) > 0 {
+		out := make([]PlacementTarget, len(targets))
+		for i, t := range targets {
+			c := t.Context
+			if c == "" {
+				c = ctxName
+			}
+			out[i] = PlacementTarget{Context: c, Node: t.Node}
+		}
+		return out
+	}
+
+	hosts := poolNodes
+	if len(hosts) == 0 {
+		hosts = computeNodes
+	}
+	if len(hosts) == 0 {
+		// No host list. If an endpoint context applies, that alone is a
+		// placement (one target, provider-default host). Otherwise nothing.
+		if ctxName == "" {
+			return nil
+		}
+		return []PlacementTarget{{Context: ctxName}}
+	}
+
+	out := make([]PlacementTarget, len(hosts))
+	for i, h := range hosts {
+		out[i] = PlacementTarget{Context: ctxName, Node: h}
+	}
+	return out
 }
 
 // AllocateIPs generates IP allocations for all nodes in the cluster

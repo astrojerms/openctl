@@ -9,6 +9,11 @@ import "openctl.io/schemas/base"
 }
 
 #VMSpec: {
+	// Provider context selecting which configured Proxmox endpoint hosts
+	// this VM. Omit to use the controller's default context. Lets a single
+	// set of resources (e.g. a k3s cluster) span multiple Proxmox endpoints.
+	context?: string
+
 	// Proxmox node (host) the VM lives on, e.g. "pve1". The UI resolves
 	// this against the ProxmoxNode kind (observed from the Proxmox API)
 	// and renders a dropdown of available nodes.

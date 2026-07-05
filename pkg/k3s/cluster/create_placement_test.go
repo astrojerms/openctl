@@ -49,6 +49,50 @@ func TestGenerateDispatchRequests_Placement(t *testing.T) {
 	}
 }
 
+// TestGenerateDispatchRequests_CrossEndpoint verifies control-plane targets
+// spread each VM across provider endpoints via spec.context (+ spec.node),
+// so the multi-context Proxmox provider routes each replica to its endpoint.
+func TestGenerateDispatchRequests_CrossEndpoint(t *testing.T) {
+	spec := &resources.ClusterSpec{
+		Compute: resources.ComputeSpec{
+			Provider: "proxmox",
+			Image:    resources.ImageSpec{Template: "ubuntu-template"},
+			Default:  resources.DefaultSizeSpec{CPUs: 2, MemoryMB: 4096, DiskGB: 40},
+		},
+		Nodes: resources.NodesSpec{
+			ControlPlane: resources.ControlPlaneSpec{
+				Count: 3,
+				Targets: []resources.PlacementTarget{
+					{Context: "siteA", Node: "pve"},
+					{Context: "siteB", Node: "pve"},
+					{Context: "siteC", Node: "pve"},
+				},
+			},
+		},
+		SSH: resources.SSHSpec{User: "ubuntu"},
+	}
+
+	requests := NewCreator("dev", spec, &protocol.ProviderConfig{}).GenerateDispatchRequests()
+
+	wantCtx := map[string]string{
+		"vm-dev-cp-0": "siteA",
+		"vm-dev-cp-1": "siteB",
+		"vm-dev-cp-2": "siteC",
+	}
+	if len(requests) != len(wantCtx) {
+		t.Fatalf("expected %d requests, got %d", len(wantCtx), len(requests))
+	}
+	for _, req := range requests {
+		ctx, _ := req.Manifest.Spec["context"].(string)
+		if ctx != wantCtx[req.ID] {
+			t.Errorf("%s: spec.context = %q, want %q", req.ID, ctx, wantCtx[req.ID])
+		}
+		if node, _ := req.Manifest.Spec["node"].(string); node != "pve" {
+			t.Errorf("%s: spec.node = %q, want pve", req.ID, node)
+		}
+	}
+}
+
 // TestGenerateDispatchRequests_NoPlacement verifies backward
 // compatibility: with no host list, spec.node is left unset so the
 // provider falls back to its configured default node.
@@ -71,5 +115,8 @@ func TestGenerateDispatchRequests_NoPlacement(t *testing.T) {
 	}
 	if _, ok := requests[0].Manifest.Spec["node"]; ok {
 		t.Errorf("expected spec.node to be unset without placement, got %v", requests[0].Manifest.Spec["node"])
+	}
+	if _, ok := requests[0].Manifest.Spec["context"]; ok {
+		t.Errorf("expected spec.context to be unset without placement, got %v", requests[0].Manifest.Spec["context"])
 	}
 }
