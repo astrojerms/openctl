@@ -31,8 +31,16 @@ var migrationsFS embed.FS
 //     read+write throughput.
 //   - foreign_keys=on: SQLite defaults to off for backward compatibility;
 //     we want enforcement.
+//
+// _txlock=immediate makes every transaction BEGIN IMMEDIATE, taking the write
+// lock up front. Without it, a transaction that starts as a reader and later
+// writes must *upgrade* the lock; if another writer holds it, SQLite returns
+// SQLITE_BUSY instantly — busy_timeout does not cover lock upgrades. Starting
+// immediate means the writer waits (up to busy_timeout) for the lock instead
+// of erroring, which is what eliminates the "database is locked" races between
+// the dispatcher's op-claim and the handlers' inserts.
 func Open(ctx context.Context, path string) (*sql.DB, error) {
-	dsn := path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)"
+	dsn := path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)&_txlock=immediate"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
