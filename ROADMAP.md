@@ -10,6 +10,10 @@ of truth.
   — speculative Phase 7–10 (verifying-trace cache, K3sNode, typed task
   IR, DAG scheduler). Sketch, not committed plan.
 - **UI rollout:** [UI.md](UI.md) — Phases U1–U7. Not started.
+- **Strategic direction:** [docs/direction.md](docs/direction.md) — the
+  wedge, audience, scope decisions, and priority tiers the next epics
+  serve. [docs/plugin-architecture.md](docs/plugin-architecture.md) is
+  the technical spine (plugin interface + Terraform host).
 
 Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 `[d]` deferred / parked.
@@ -31,43 +35,43 @@ Plan/dispatcher path is the sole existing-cluster converge path,
 validated on homelab (3-CP embedded-etcd HA create + full control-plane
 respec). The **UI DAG view** (Phase U9) and the **UI for controller
 config** (Settings page + GetControllerConfig/UpdateControllerConfig
-RPCs) have both shipped. Remaining parked candidates: multi-user auth
-(OIDC/RBAC), client-side CUE WASM validation, mobile layout,
-plugin-defined CLI subcommands (see Future goals).
+RPCs) have both shipped. With the feature build-out essentially
+complete, direction now shifts to **breadth + reach**: the external
+plugin protocol → Terraform/OpenTofu host → run-anywhere Linux daemon
+(Tier 1 in [docs/direction.md](docs/direction.md)). Multi-user auth,
+CUE-WASM validation, and mobile layout are parked behind that.
 
 ## Suggested next order
 
-Full arch Phase 8 (steps 1–5 + dispatcher refactor) closed out
-this session. Remaining candidates for the next round:
+The UI/controller feature build-out is essentially complete (all UI
+phases + arch Phase 8 shipped). The next round is driven by the
+strategic direction in [docs/direction.md](docs/direction.md) — go
+**wide** (any-provider ecosystem) and **run-anywhere**, while preserving
+the per-resource-independence wedge. Priority tiers (full rationale in
+direction.md):
 
-- **UI DAG view for composite resources** ✅ *done* —
-  `Detail.svelte` for a Cluster (or any composite) renders the
-  parent + children as an SVG topology graph via the new
-  `GetChildrenGraph` RPC + `DagView.svelte`, including live operation
-  overlays and click-through into the ops drawer. Phase U9 below is
-  complete.
-- **Retire `applyExisting`** ✅ *done* — count-up / respec / delete now
-  run exclusively through the Plan/dispatcher model; the legacy
-  imperative executors (`applyCountUp`, `applyRespecs`, and
-  `pkg/k3s/cluster/join.go`'s `Joiner`) are deleted, along with the
-  `OPENCTL_CONVERGE_VIA_PLAN` gate. Validated on homelab (3-CP HA create
-  + full CP respec) before removal. Details:
-  [K3S-CONVERGENCE.md](K3S-CONVERGENCE.md).
-- **Multi-user auth** — OIDC + RBAC (from "Future goals").
-- **User-authored CUE templates** ✅ *done* — the controller now scans
-  `~/.openctl/templates/*.cue` (override via `templates.dir`) and serves
-  them through the existing TemplateService alongside the compiled-in
-  starters. Each file declares a concrete `template:` metadata block +
-  `params:` + a `resource:` that references `params.<name>`; a
-  same-named file overrides a built-in. Malformed files are logged and
-  skipped, never fatal. See `examples/user-template.cue`.
-- **Client-side CUE WASM validation** — faster editor diagnostics
-  without a server roundtrip (from "Future goals").
-- **Historical diff** ✅ *done* — RepoService gained GetResourceHistory
-  (git log of a resource's mirrored manifest) + GetResourceAtCommit (its
-  YAML at a commit); Detail.svelte shows a History card with a commit
-  picker that diffs the selected revision against the current desired
-  manifest in the existing Monaco diff view. Requires `manifests.git`.
+**Tier 1 — the spine (roughly in sequence):**
+
+1. **External plugin protocol** — the generic, reusable provider
+   interface; the "wide" ecosystem foundation and what contributors
+   need. Design it with the Terraform host as an explicit second
+   consumer. See [docs/plugin-architecture.md](docs/plugin-architecture.md).
+2. **Terraform / OpenTofu provider host** — a second implementer of that
+   interface; the breadth multiplier that unlocks the whole provider
+   registry (AWS/GKE/…). Design + honest hard-parts analysis in
+   [docs/plugin-architecture.md](docs/plugin-architecture.md).
+3. **Run-anywhere: portable Linux daemon + `install --target ssh://`** —
+   independent of 1–2, can proceed in parallel.
+
+**Tier 2 — natural follow-ons:** self-hosting bootstrap
+(`install --target proxmox://`); multi-user auth (OIDC/RBAC, downstream
+of adoption).
+
+**Tier 3 — parked:** client-side CUE WASM validation; mobile layout.
+Workloads/PaaS is vetoed by scope.
+
+**Cross-cutting:** test every capability against the wedge (no global
+plan/state); harden the provider contract before the ecosystem widens.
 
 ---
 
@@ -571,6 +575,24 @@ phase plan when ready to commit.
 - [ ] **Multi-user auth** — OIDC integration, named sessions, RBAC on
       `ResourceService`. Cookie/session layer from U1 is the
       foundation.
+- [ ] **Terraform / OpenTofu provider host** *(Tier 1 — see
+      [docs/direction.md](docs/direction.md))* — consume the existing
+      Terraform provider ecosystem (AWS, GCP, Azure, Cloudflare, …)
+      instead of hand-writing every provider, by adding a *second
+      implementer* of the openctl provider interface that delegates to
+      any `terraform-provider-*` binary over tfplugin6 gRPC. One adapter
+      → the whole registry (the breadth multiplier for the north-star
+      demo). Full design — the layering, RPC mapping, the "wrap providers
+      not the orchestrator" subtlety, and the three hard parts honestly
+      assessed (schema overlays; the new `provider_state` opaque-blob
+      store as openctl's fifth persistence store, distinct from
+      `applied_manifests`; and unknown/"known after apply" support
+      contained to `refs` + `DryRun`) — is in
+      [docs/plugin-architecture.md](docs/plugin-architecture.md).
+      Sequence: ship the native external plugin protocol first with the
+      TF host as an explicit second consumer, so the interface is shaped
+      right. Precedent: Crossplane Upjet, Pulumi TF Bridge, Flux
+      tf-controller. Target OpenTofu for the license story.
 - [x] **Provider credential editing** — new ConfigService RPCs
       (ListProviders / UpsertProvider / DeleteProvider) that read/
       write ~/.openctl/config.yaml. UI Providers page with add /
