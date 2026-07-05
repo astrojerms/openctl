@@ -56,6 +56,43 @@ providers:
 	}
 }
 
+func TestLoadFromFile_ExternalPluginProvider(t *testing.T) {
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `
+providers:
+  acme:
+    command: openctl-acme
+    args:
+      - plugin-serve
+      - --verbose
+    defaults:
+      region: us-east-1
+`
+	if err := os.WriteFile(configFile, []byte(configContent), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFromFile(configFile)
+	if err != nil {
+		t.Fatalf("LoadFromFile: %v", err)
+	}
+	acme, ok := cfg.Providers["acme"]
+	if !ok {
+		t.Fatal("expected acme provider")
+	}
+	if acme.Command != "openctl-acme" {
+		t.Errorf("command = %q, want openctl-acme", acme.Command)
+	}
+	if len(acme.Args) != 2 || acme.Args[0] != "plugin-serve" || acme.Args[1] != "--verbose" {
+		t.Errorf("args = %v", acme.Args)
+	}
+	if acme.Defaults["region"] != "us-east-1" {
+		t.Errorf("defaults[region] = %q", acme.Defaults["region"])
+	}
+}
+
 func TestLoadFromFile_NotExists(t *testing.T) {
 	cfg, err := LoadFromFile("/nonexistent/config.yaml")
 	if err != nil {
