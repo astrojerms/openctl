@@ -65,13 +65,35 @@ func LoadOrCreateToken(path string) (string, error) {
 // SessionService.Login (UI Phase U1.4 — sessions optional, nil to disable).
 type Validator struct {
 	expected []byte
+	users    []userCred    // named user tokens (WithUsers); may be empty
 	sessions *SessionStore // optional; nil disables session-token auth
+}
+
+// userCred is a resolved named-user token and the principal it authenticates.
+type userCred struct {
+	token     []byte
+	principal Principal
 }
 
 // NewValidator builds a Validator that accepts requests presenting the given
 // token in the Authorization header as `Bearer <token>`.
 func NewValidator(token string) *Validator {
 	return &Validator{expected: []byte(token)}
+}
+
+// WithUsers attaches named-user tokens: a request presenting one authenticates
+// as that user with its role (rather than the admin root principal).
+// Idempotent — repeated calls overwrite.
+func (v *Validator) WithUsers(users []User) *Validator {
+	creds := make([]userCred, 0, len(users))
+	for _, u := range users {
+		creds = append(creds, userCred{
+			token:     []byte(u.Token),
+			principal: Principal{UserID: u.UserID, Role: u.Role},
+		})
+	}
+	v.users = creds
+	return v
 }
 
 // WithSessions attaches a SessionStore so the validator accepts session
@@ -135,6 +157,12 @@ func (v *Validator) check(ctx context.Context) (Principal, error) {
 	}
 	if subtle.ConstantTimeCompare([]byte(tok), v.expected) == 1 {
 		return RootPrincipal(), nil
+	}
+	tokBytes := []byte(tok)
+	for _, u := range v.users {
+		if subtle.ConstantTimeCompare(tokBytes, u.token) == 1 {
+			return u.principal, nil
+		}
 	}
 	if v.sessions != nil {
 		sess, err := v.sessions.Lookup(ctx, tok)
