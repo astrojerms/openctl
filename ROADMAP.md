@@ -62,10 +62,16 @@ direction.md):
 2. **Terraform / OpenTofu provider host** — a second implementer of that
    interface; the breadth multiplier that unlocks the whole provider
    registry (AWS/GKE/…). Design + honest hard-parts analysis in
-   [docs/plugin-architecture.md](docs/plugin-architecture.md). **Prereq
-   shipped:** the `provider_state` opaque per-resource store (migration 0009 +
-   `internal/controller/providerstate`), wired so stateful external plugins
-   round-trip state — the TF host reuses this store directly.
+   [docs/plugin-architecture.md](docs/plugin-architecture.md). **In progress:**
+   - *Prereq shipped:* the `provider_state` opaque store (migration 0009 +
+     `internal/controller/providerstate`) — the TF host reuses it directly.
+   - *Phase A shipped:* the transport — `internal/controller/providers/tfhost`
+     launches a real tfplugin6 provider over HashiCorp go-plugin and fetches
+     its schema (vendored stubs in `pkg/tfplugin6`, tested against the in-repo
+     `plugins/tf-fake` provider — no external download needed).
+   - *Remaining:* the `providers.Provider` adapter (Apply→Plan+Apply,
+     Get→Read, Delete→Apply(null)) with tftypes/DynamicValue + provider_state;
+     tfplugin6-schema → CUE translation; config + registration wiring.
 3. **Run-anywhere: portable Linux daemon + `install --target ssh://`** — ✅
    **shipped** (PRs #47–#48). systemd support (user unit local + system unit
    remote) behind a `serviceManager` abstraction; `make build-controller-linux`
