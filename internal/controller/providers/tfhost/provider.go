@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 
@@ -375,9 +376,7 @@ func observedResource(apiVersion, kind, name string, spec map[string]any, schema
 	if len(observedSpec) == 0 {
 		observedSpec = cloneMap(spec)
 	}
-	for k, v := range computed {
-		status[k] = v
-	}
+	maps.Copy(status, computed)
 	return &protocol.Resource{
 		APIVersion: apiVersion,
 		Kind:       kind,
@@ -422,9 +421,7 @@ func cloneMap(in map[string]any) map[string]any {
 		return nil
 	}
 	out := make(map[string]any, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
+	maps.Copy(out, in)
 	return out
 }
 

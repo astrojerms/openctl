@@ -249,7 +249,7 @@ func writeDescription(b *strings.Builder, desc string, indent int) {
 	if desc == "" {
 		return
 	}
-	for _, line := range strings.Split(desc, "\n") {
+	for line := range strings.SplitSeq(desc, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue

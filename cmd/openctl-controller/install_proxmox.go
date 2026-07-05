@@ -172,7 +172,7 @@ func applyProxmoxBootstrapDefaults(opts proxmoxBootstrapOptions, cfg *protocol.P
 		return opts, fmt.Errorf("proxmox bootstrap requires node=... or a Proxmox context/default node")
 	}
 	if (opts.Template == "") == (opts.CloudImage == "") {
-		return opts, fmt.Errorf("proxmox bootstrap requires exactly one of template=... or cloud-image=...")
+		return opts, fmt.Errorf("proxmox bootstrap requires exactly one of template=... or cloud-image=... to be set")
 	}
 	if opts.CloudImage != "" && opts.Storage == "" {
 		return opts, fmt.Errorf("proxmox bootstrap with cloud-image requires storage=... or defaults.storage")
