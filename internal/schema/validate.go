@@ -23,64 +23,103 @@ type ValidationError struct {
 	Message string
 }
 
-// Validate checks a resource against its embedded CUE schema. Returns nil if
-// the resource matches the schema for its apiVersion+kind, or if no schema
-// is registered for that apiVersion+kind (best-effort: unknown resource
-// types pass through unvalidated rather than blocking unknown providers).
+// Validate checks a resource against its CUE schema. Returns nil if the
+// resource matches the schema for its apiVersion+kind, or if no schema is
+// registered for that apiVersion+kind (best-effort: unknown resource types
+// pass through unvalidated rather than blocking unknown providers).
 //
-// The CUE schema is the same one embedded in the controller binary, so the
-// CLI and controller both use this function to validate the same way.
+// Both embedded (built-in) and external (plugin-supplied) schemas are
+// consulted, embedded first. The CLI and controller both use this function so
+// they validate the same way.
 func Validate(r *protocol.Resource) error {
+	if err := checkResourceMeta(r); err != nil {
+		return err
+	}
+	ctx := cuecontext.New()
+	defVal, label, ok, err := schemaDefValue(ctx, r.APIVersion, r.Kind)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil // no schema — pass through
+	}
+	resourceVal, err := compileResource(ctx, r)
+	if err != nil {
+		return err
+	}
+	unified := defVal.Unify(resourceVal)
+	if err := unified.Validate(cue.Concrete(true)); err != nil {
+		return fmt.Errorf("does not match schema %s: %w", label, err)
+	}
+	return nil
+}
+
+// checkResourceMeta rejects a nil resource or one missing apiVersion/kind.
+func checkResourceMeta(r *protocol.Resource) error {
 	if r == nil {
 		return fmt.Errorf("resource is nil")
 	}
 	if r.APIVersion == "" || r.Kind == "" {
 		return fmt.Errorf("resource missing apiVersion or kind")
 	}
+	return nil
+}
 
-	pkg, def, ok := SchemaSelector(r.APIVersion, r.Kind)
-	if !ok {
-		// No embedded schema for this apiVersion+kind — pass through.
-		return nil
-	}
-
-	ctx := cuecontext.New()
-	const overlayDir = "/openctl-validate"
-	cfg := &load.Config{
-		Dir:     overlayDir,
-		Overlay: GetOverlay(overlayDir),
-	}
-	insts := load.Instances([]string{"openctl.io/schemas/" + pkg}, cfg)
-	if len(insts) == 0 {
-		return fmt.Errorf("no CUE instance for schema package %q", pkg)
-	}
-	if insts[0].Err != nil {
-		return fmt.Errorf("load schema package %q: %w", pkg, insts[0].Err)
-	}
-
-	schemaVal := ctx.BuildInstance(insts[0])
-	if err := schemaVal.Err(); err != nil {
-		return fmt.Errorf("build schema: %w", err)
-	}
-	defVal := schemaVal.LookupPath(cue.ParsePath(def))
-	if !defVal.Exists() {
-		return fmt.Errorf("schema %s.%s not found in package", pkg, def)
-	}
-
+// compileResource marshals the resource to JSON and compiles it to a CUE value.
+func compileResource(ctx *cue.Context, r *protocol.Resource) (cue.Value, error) {
 	data, err := json.Marshal(r)
 	if err != nil {
-		return fmt.Errorf("marshal resource: %w", err)
+		return cue.Value{}, fmt.Errorf("marshal resource: %w", err)
 	}
-	resourceVal := ctx.CompileBytes(data)
-	if err := resourceVal.Err(); err != nil {
-		return fmt.Errorf("parse resource: %w", err)
+	v := ctx.CompileBytes(data)
+	if err := v.Err(); err != nil {
+		return cue.Value{}, fmt.Errorf("parse resource: %w", err)
+	}
+	return v, nil
+}
+
+// schemaDefValue resolves the CUE definition to validate a resource against.
+// It consults the embedded built-in mapping first, then the runtime external
+// registry. Returns (def, label, true, nil) when a schema is found, where
+// label identifies the schema for error messages; (_, _, false, nil) when no
+// schema is registered (caller passes through); or a non-nil error only for
+// schema-loading failures.
+func schemaDefValue(ctx *cue.Context, apiVersion, kind string) (cue.Value, string, bool, error) {
+	if pkg, def, ok := SchemaSelector(apiVersion, kind); ok {
+		const overlayDir = "/openctl-validate"
+		cfg := &load.Config{Dir: overlayDir, Overlay: GetOverlay(overlayDir)}
+		insts := load.Instances([]string{"openctl.io/schemas/" + pkg}, cfg)
+		if len(insts) == 0 {
+			return cue.Value{}, "", false, fmt.Errorf("no CUE instance for schema package %q", pkg)
+		}
+		if insts[0].Err != nil {
+			return cue.Value{}, "", false, fmt.Errorf("load schema package %q: %w", pkg, insts[0].Err)
+		}
+		schemaVal := ctx.BuildInstance(insts[0])
+		if err := schemaVal.Err(); err != nil {
+			return cue.Value{}, "", false, fmt.Errorf("build schema: %w", err)
+		}
+		defVal := schemaVal.LookupPath(cue.ParsePath(def))
+		if !defVal.Exists() {
+			return cue.Value{}, "", false, fmt.Errorf("schema %s.%s not found in package", pkg, def)
+		}
+		return defVal, pkg + "." + def, true, nil
 	}
 
-	unified := defVal.Unify(resourceVal)
-	if err := unified.Validate(cue.Concrete(true)); err != nil {
-		return fmt.Errorf("does not match schema %s.%s: %w", pkg, def, err)
+	if s, ok := lookupExternal(apiVersion, kind); ok {
+		schemaVal := ctx.CompileString(s.source)
+		if err := schemaVal.Err(); err != nil {
+			return cue.Value{}, "", false, fmt.Errorf("compile external schema for %s/%s: %w", apiVersion, kind, err)
+		}
+		defName := "#" + kind
+		defVal := schemaVal.LookupPath(cue.ParsePath(defName))
+		if !defVal.Exists() {
+			return cue.Value{}, "", false, fmt.Errorf("external schema for %s/%s does not define %s", apiVersion, kind, defName)
+		}
+		return defVal, apiVersion + " " + defName, true, nil
 	}
-	return nil
+
+	return cue.Value{}, "", false, nil
 }
 
 // ValidateStructured is like Validate but returns the CUE error list
@@ -89,41 +128,20 @@ func Validate(r *protocol.Resource) error {
 // loading failures (missing schema pkg, unresolvable module, etc.);
 // validation failures come back as a populated slice, not an error.
 func ValidateStructured(r *protocol.Resource) ([]ValidationError, error) {
-	if r == nil {
-		return nil, fmt.Errorf("resource is nil")
+	if err := checkResourceMeta(r); err != nil {
+		return nil, err
 	}
-	if r.APIVersion == "" || r.Kind == "" {
-		return nil, fmt.Errorf("resource missing apiVersion or kind")
+	ctx := cuecontext.New()
+	defVal, _, ok, err := schemaDefValue(ctx, r.APIVersion, r.Kind)
+	if err != nil {
+		return nil, err
 	}
-	pkg, def, ok := SchemaSelector(r.APIVersion, r.Kind)
 	if !ok {
 		return nil, nil
 	}
-	ctx := cuecontext.New()
-	const overlayDir = "/openctl-validate-structured"
-	cfg := &load.Config{Dir: overlayDir, Overlay: GetOverlay(overlayDir)}
-	insts := load.Instances([]string{"openctl.io/schemas/" + pkg}, cfg)
-	if len(insts) == 0 {
-		return nil, fmt.Errorf("no CUE instance for schema package %q", pkg)
-	}
-	if insts[0].Err != nil {
-		return nil, fmt.Errorf("load schema package %q: %w", pkg, insts[0].Err)
-	}
-	schemaVal := ctx.BuildInstance(insts[0])
-	if err := schemaVal.Err(); err != nil {
-		return nil, fmt.Errorf("build schema: %w", err)
-	}
-	defVal := schemaVal.LookupPath(cue.ParsePath(def))
-	if !defVal.Exists() {
-		return nil, fmt.Errorf("schema %s.%s not found in package", pkg, def)
-	}
-	data, err := json.Marshal(r)
+	resourceVal, err := compileResource(ctx, r)
 	if err != nil {
-		return nil, fmt.Errorf("marshal resource: %w", err)
-	}
-	resourceVal := ctx.CompileBytes(data)
-	if err := resourceVal.Err(); err != nil {
-		return nil, fmt.Errorf("parse resource: %w", err)
+		return nil, err
 	}
 	unified := defVal.Unify(resourceVal)
 	if err := unified.Validate(cue.Concrete(true)); err != nil {
