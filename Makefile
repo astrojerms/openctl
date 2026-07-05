@@ -1,4 +1,4 @@
-.PHONY: all build build-cli build-controller build-plugins build-plugin-proxmox build-plugin-k3s build-plugin-k3s-agent build-plugin-k3s-agent-linux install clean test test-e2e fmt lint modernize modernize-check generate ui ui-install ui-clean codesign-setup
+.PHONY: all build build-cli build-controller build-controller-linux build-plugins build-plugin-proxmox build-plugin-k3s build-plugin-k3s-agent build-plugin-k3s-agent-linux install clean test test-e2e fmt lint modernize modernize-check generate ui ui-install ui-clean codesign-setup
 
 # Binary names
 CLI_BINARY=openctl
@@ -101,6 +101,17 @@ build-plugin-k3s-agent-linux:
 	cd $(K3S_PLUGIN_DIR) && GOOS=linux GOARCH=amd64 go build $(GOFLAGS) -o ../../$(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-amd64 ./cmd/openctl-k3s-agent
 	cd $(K3S_PLUGIN_DIR) && GOOS=linux GOARCH=arm64 go build $(GOFLAGS) -o ../../$(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-arm64 ./cmd/openctl-k3s-agent
 	cd $(K3S_PLUGIN_DIR) && GOOS=linux GOARCH=arm GOARM=7 go build $(GOFLAGS) -o ../../$(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-armv7 ./cmd/openctl-k3s-agent
+
+# Cross-compile the controller for Linux (the run-anywhere daemon target and
+# the payload for `openctl-controller install --target ssh://`). Pure-Go
+# SQLite (modernc.org/sqlite) means CGO_ENABLED=0 yields a static ELF binary —
+# no cross C toolchain needed. Depends on `ui` because the controller
+# //go:embeds the built UI assets. Not codesigned (ELF, not Mach-O).
+build-controller-linux: ui
+	@echo "Building openctl-controller for linux/amd64, linux/arm64..."
+	@mkdir -p $(BUILD_DIR)
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(GOFLAGS) -o $(BUILD_DIR)/$(CONTROLLER_BINARY)-linux-amd64 ./cmd/openctl-controller
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(GOFLAGS) -o $(BUILD_DIR)/$(CONTROLLER_BINARY)-linux-arm64 ./cmd/openctl-controller
 
 install: build build-plugin-k3s-agent-linux
 	@echo "Installing binaries..."

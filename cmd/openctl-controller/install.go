@@ -1,81 +1,128 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
-	"text/template"
 	"time"
 )
 
-// Install/uninstall constants. Kept together so the plist label, paths, and
-// log destinations stay in sync between the two flows.
+// Install/uninstall constants shared across service managers.
 const (
-	launchdLabel = "io.openctl.controller"
-	plistName    = "io.openctl.controller.plist"
+	serviceLabel   = "io.openctl.controller" // launchd label
+	plistName      = "io.openctl.controller.plist"
+	systemdUnit    = "openctl-controller.service" // systemd (user) unit name
+	controllerBin  = "openctl-controller"
+	defaultProbe   = "127.0.0.1:9444" // listener the install waits for
+	defaultProbeTO = 10 * time.Second
 )
 
-// installPaths is the set of derived paths the install/uninstall flows
-// touch. Computed once from $HOME so the install and uninstall agree on
-// where things live.
+// installPaths is the set of derived paths the install/uninstall flows touch.
+// Computed once from $HOME per platform so install and uninstall agree on
+// where things live. Field meanings are platform-generalized:
+//   - UnitDir/UnitPath: the service definition (launchd plist / systemd unit)
+//   - LogOut/LogErr: file log destinations (launchd only; empty on systemd,
+//     which captures stdout/stderr into the journal)
 type installPaths struct {
 	HomeDir       string
-	BinaryDir     string // ~/Library/Application Support/openctl/bin
-	BinaryPath    string // .../openctl-controller
-	AgentDir      string // .../k3s-agents
-	PlistDir      string // ~/Library/LaunchAgents
-	PlistPath     string // .../io.openctl.controller.plist
-	LogDir        string // ~/Library/Logs/openctl
-	LogOut        string // .../controller.out.log
-	LogErr        string // .../controller.err.log
-	StateDir      string // ~/.openctl/controller
-	CLIConfigDir  string // ~/.openctl
-	CLIConfigFile string // ~/.openctl/config.yaml
+	BinaryDir     string
+	BinaryPath    string
+	AgentDir      string
+	UnitDir       string
+	UnitPath      string
+	LogDir        string
+	LogOut        string
+	LogErr        string
+	StateDir      string
+	CLIConfigDir  string
+	CLIConfigFile string
 }
 
+// resolveInstallPaths resolves the install layout for the current OS.
 func resolveInstallPaths() (*installPaths, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("resolve $HOME: %w", err)
 	}
-	binaryDir := filepath.Join(home, "Library", "Application Support", "openctl", "bin")
-	plistDir := filepath.Join(home, "Library", "LaunchAgents")
-	logDir := filepath.Join(home, "Library", "Logs", "openctl")
-	return &installPaths{
-		HomeDir:       home,
-		BinaryDir:     binaryDir,
-		BinaryPath:    filepath.Join(binaryDir, "openctl-controller"),
-		AgentDir:      filepath.Join(binaryDir, "k3s-agents"),
-		PlistDir:      plistDir,
-		PlistPath:     filepath.Join(plistDir, plistName),
-		LogDir:        logDir,
-		LogOut:        filepath.Join(logDir, "controller.out.log"),
-		LogErr:        filepath.Join(logDir, "controller.err.log"),
-		StateDir:      filepath.Join(home, ".openctl", "controller"),
-		CLIConfigDir:  filepath.Join(home, ".openctl"),
-		CLIConfigFile: filepath.Join(home, ".openctl", "config.yaml"),
-	}, nil
+	return resolveInstallPathsFor(runtime.GOOS, home)
+}
+
+// resolveInstallPathsFor computes the install layout for a given OS + home.
+// Split out from resolveInstallPaths so tests can exercise both platforms
+// regardless of the host they run on.
+func resolveInstallPathsFor(goos, home string) (*installPaths, error) {
+	common := func(p *installPaths) *installPaths {
+		p.HomeDir = home
+		p.BinaryPath = filepath.Join(p.BinaryDir, controllerBin)
+		p.AgentDir = filepath.Join(p.BinaryDir, "k3s-agents")
+		p.StateDir = filepath.Join(home, ".openctl", "controller")
+		p.CLIConfigDir = filepath.Join(home, ".openctl")
+		p.CLIConfigFile = filepath.Join(home, ".openctl", "config.yaml")
+		return p
+	}
+
+	switch goos {
+	case "darwin":
+		binaryDir := filepath.Join(home, "Library", "Application Support", "openctl", "bin")
+		unitDir := filepath.Join(home, "Library", "LaunchAgents")
+		logDir := filepath.Join(home, "Library", "Logs", "openctl")
+		p := common(&installPaths{BinaryDir: binaryDir})
+		p.UnitDir = unitDir
+		p.UnitPath = filepath.Join(unitDir, plistName)
+		p.LogDir = logDir
+		p.LogOut = filepath.Join(logDir, "controller.out.log")
+		p.LogErr = filepath.Join(logDir, "controller.err.log")
+		return p, nil
+	case "linux":
+		// XDG-style user layout. systemd (user scope) captures stdout/stderr
+		// into the journal, so no file log paths are needed.
+		binaryDir := filepath.Join(home, ".local", "share", "openctl", "bin")
+		unitDir := filepath.Join(home, ".config", "systemd", "user")
+		p := common(&installPaths{BinaryDir: binaryDir})
+		p.UnitDir = unitDir
+		p.UnitPath = filepath.Join(unitDir, systemdUnit)
+		return p, nil
+	default:
+		return nil, fmt.Errorf("unsupported platform %q (install supports darwin and linux)", goos)
+	}
+}
+
+// serviceManager abstracts the per-OS service supervisor: launchd on macOS,
+// systemd (user scope) on Linux. Selected by GOOS. The install flow writes the
+// unit file to installPaths.UnitPath itself; the manager only (re)starts and
+// stops the service.
+type serviceManager interface {
+	name() string
+	// render produces the service definition bytes written to UnitPath.
+	render(p *installPaths) ([]byte, error)
+	// reload (re)installs and starts the service after the unit is written.
+	reload(p *installPaths) error
+	// stop stops and unregisters the service (best-effort, for uninstall).
+	stop(p *installPaths) error
+}
+
+// serviceManagerFor returns the service manager for a GOOS.
+func serviceManagerFor(goos string) (serviceManager, error) {
+	switch goos {
+	case "darwin":
+		return launchdManager{}, nil
+	case "linux":
+		return systemdManager{}, nil
+	default:
+		return nil, fmt.Errorf("unsupported platform %q (install supports darwin and linux)", goos)
+	}
 }
 
 // runInstall handles `openctl-controller install --local`. It copies the
-// current binary into the user-local Application Support tree, writes a
-// LaunchAgent plist that runs `... serve`, loads it, waits for the
-// controller to come up, and ensures the CLI config has a controller
-// section.
+// current binary into a per-user tree, writes a service definition (launchd
+// plist on macOS, systemd user unit on Linux), starts it, waits for the
+// controller to come up, and ensures the CLI config has a controller section.
 //
-// Local-Mac install only — Linux/remote variants are tracked as followups
-// in CONTROLLER.md.
+// Remote installs (`--target ssh://user@host`) are handled separately.
 func runInstall(args []string) error {
-	if runtime.GOOS != "darwin" {
-		return fmt.Errorf("install --local is macOS-only (LaunchAgents); platform=%s", runtime.GOOS)
-	}
-	// Single supported flag for now: `--local`. Parse it manually to keep
-	// the surface honest (we don't yet support --target ssh:// etc.).
 	var local bool
 	for _, a := range args {
 		switch a {
@@ -89,9 +136,13 @@ func runInstall(args []string) error {
 		}
 	}
 	if !local {
-		return fmt.Errorf("--local is required (other targets are followup work)")
+		return fmt.Errorf("--local is required (remote install via --target ssh:// is separate)")
 	}
 
+	mgr, err := serviceManagerFor(runtime.GOOS)
+	if err != nil {
+		return err
+	}
 	paths, err := resolveInstallPaths()
 	if err != nil {
 		return err
@@ -105,15 +156,14 @@ func runInstall(args []string) error {
 		return fmt.Errorf("resolve symlinks for current binary: %w", err)
 	}
 
-	for _, dir := range []string{paths.BinaryDir, paths.AgentDir, paths.PlistDir, paths.LogDir, paths.StateDir, paths.CLIConfigDir} {
+	for _, dir := range []string{paths.BinaryDir, paths.AgentDir, paths.UnitDir, paths.LogDir, paths.StateDir, paths.CLIConfigDir} {
+		if dir == "" {
+			continue
+		}
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fmt.Errorf("mkdir %s: %w", dir, err)
 		}
 	}
-
-	// LaunchAgents requires 0755 on the dir per Apple's recent enforcement,
-	// but ~/Library is the user's. The MkdirAll above creates it 0700; that
-	// works for LaunchAgents because the dir is owned by the user.
 
 	if err := copyFile(src, paths.BinaryPath, 0o755); err != nil {
 		return fmt.Errorf("copy binary: %w", err)
@@ -122,41 +172,38 @@ func runInstall(args []string) error {
 		return fmt.Errorf("copy k3s agent binaries: %w", err)
 	}
 
-	plist, err := renderPlist(paths)
+	unit, err := mgr.render(paths)
 	if err != nil {
-		return fmt.Errorf("render plist: %w", err)
+		return fmt.Errorf("render %s unit: %w", mgr.name(), err)
 	}
-	// Plist mode 0o600 is fine — LaunchAgents reads it as the user who
-	// owns it (us). 0o644 would also work but tighter is fine here.
-	if err := os.WriteFile(paths.PlistPath, plist, 0o600); err != nil {
-		return fmt.Errorf("write plist: %w", err)
+	if err := os.WriteFile(paths.UnitPath, unit, 0o600); err != nil {
+		return fmt.Errorf("write service unit: %w", err)
 	}
-
-	// Best-effort unload first — install over an existing install should
-	// replace cleanly. Errors are ignored because the plist may not be
-	// loaded.
-	_ = exec.Command("launchctl", "unload", paths.PlistPath).Run() // #nosec G204 -- paths.PlistPath is derived from $HOME
-
-	if out, err := exec.Command("launchctl", "load", "-w", paths.PlistPath).CombinedOutput(); err != nil { // #nosec G204 -- paths.PlistPath is derived from $HOME
-		return fmt.Errorf("launchctl load: %w (output: %s)", err, bytes.TrimSpace(out))
+	if err := mgr.reload(paths); err != nil {
+		return err
 	}
 
-	// Verify the controller is up by dialing the default listen address.
-	// If the user customized --listen via flags in the plist, this misses,
-	// but the default install never does.
-	if err := waitForListener("127.0.0.1:9444", 10*time.Second); err != nil {
-		return fmt.Errorf("controller did not come up within 10s: %w (check %s)", err, paths.LogErr)
+	if err := waitForListener(defaultProbe, defaultProbeTO); err != nil {
+		logHint := paths.LogErr
+		if logHint == "" {
+			logHint = "journalctl --user -u " + systemdUnit
+		}
+		return fmt.Errorf("controller did not come up within %s: %w (check %s)", defaultProbeTO, err, logHint)
 	}
 
 	if err := ensureCLIConfig(paths.CLIConfigFile); err != nil {
 		return fmt.Errorf("write CLI config: %w", err)
 	}
 
-	fmt.Println("openctl-controller installed and running.")
+	fmt.Printf("openctl-controller installed and running (%s).\n", mgr.name())
 	fmt.Printf("  binary:   %s\n", paths.BinaryPath)
 	fmt.Printf("  agents:   %s\n", paths.AgentDir)
-	fmt.Printf("  plist:    %s\n", paths.PlistPath)
-	fmt.Printf("  logs:     %s\n", paths.LogOut)
+	fmt.Printf("  unit:     %s\n", paths.UnitPath)
+	if paths.LogOut != "" {
+		fmt.Printf("  logs:     %s\n", paths.LogOut)
+	} else {
+		fmt.Printf("  logs:     journalctl --user -u %s\n", systemdUnit)
+	}
 	fmt.Printf("  state:    %s\n", paths.StateDir)
 	fmt.Println()
 	fmt.Println("Next steps:")
@@ -168,14 +215,10 @@ func runInstall(args []string) error {
 	return nil
 }
 
-// runUninstall handles `openctl-controller uninstall`. Removes the plist
-// and binary; optionally with --purge also removes ~/.openctl/controller/.
-// The user's CLI config is always left alone — it usually carries provider
-// credentials that aren't ours to remove.
+// runUninstall handles `openctl-controller uninstall`. Stops the service and
+// removes the unit + binary; optionally with --purge also removes
+// ~/.openctl/controller/. The user's CLI config is always left alone.
 func runUninstall(args []string) error {
-	if runtime.GOOS != "darwin" {
-		return fmt.Errorf("uninstall is macOS-only; platform=%s", runtime.GOOS)
-	}
 	var purge bool
 	for _, a := range args {
 		switch a {
@@ -189,23 +232,27 @@ func runUninstall(args []string) error {
 		}
 	}
 
+	mgr, err := serviceManagerFor(runtime.GOOS)
+	if err != nil {
+		return err
+	}
 	paths, err := resolveInstallPaths()
 	if err != nil {
 		return err
 	}
 
-	// Best-effort unload — ignore errors if not loaded.
-	_ = exec.Command("launchctl", "unload", paths.PlistPath).Run() // #nosec G204 -- paths.PlistPath is derived from $HOME
+	// Best-effort stop — ignore errors if not running.
+	_ = mgr.stop(paths)
 
-	if err := removeIfExists(paths.PlistPath); err != nil {
-		return fmt.Errorf("remove plist: %w", err)
+	if err := removeIfExists(paths.UnitPath); err != nil {
+		return fmt.Errorf("remove service unit: %w", err)
 	}
 	if err := removeIfExists(paths.BinaryPath); err != nil {
 		return fmt.Errorf("remove binary: %w", err)
 	}
 
-	fmt.Println("openctl-controller uninstalled.")
-	fmt.Printf("  removed: %s\n", paths.PlistPath)
+	fmt.Printf("openctl-controller uninstalled (%s).\n", mgr.name())
+	fmt.Printf("  removed: %s\n", paths.UnitPath)
 	fmt.Printf("  removed: %s\n", paths.BinaryPath)
 
 	if purge {
@@ -224,54 +271,7 @@ func runUninstall(args []string) error {
 	return nil
 }
 
-// plistTemplate is the LaunchAgent plist for the controller. RunAtLoad +
-// KeepAlive together give us "start now and restart if it dies" semantics.
-// Logs go to ~/Library/Logs/openctl/ so they show up in Console.app under
-// the standard "User Reports" tree.
-var plistTemplate = template.Must(template.New("plist").Parse(`<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>{{.Label}}</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>{{.BinaryPath}}</string>
-    <string>serve</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>{{.LogOut}}</string>
-  <key>StandardErrorPath</key>
-  <string>{{.LogErr}}</string>
-  <key>WorkingDirectory</key>
-  <string>{{.HomeDir}}</string>
-</dict>
-</plist>
-`))
-
-func renderPlist(p *installPaths) ([]byte, error) {
-	var buf bytes.Buffer
-	if err := plistTemplate.Execute(&buf, struct {
-		Label      string
-		BinaryPath string
-		LogOut     string
-		LogErr     string
-		HomeDir    string
-	}{
-		Label:      launchdLabel,
-		BinaryPath: p.BinaryPath,
-		LogOut:     p.LogOut,
-		LogErr:     p.LogErr,
-		HomeDir:    p.HomeDir,
-	}); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
+// --- shared helpers (platform-independent) ---
 
 func copyFile(src, dst string, mode os.FileMode) error {
 	in, err := os.Open(src) // #nosec G304 -- src is os.Executable() of this process
@@ -283,7 +283,6 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	// when reinstalling over a binary that's currently running.
 	tmp := dst + ".new"
 	out, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode) // #nosec G304 -- dst is derived from $HOME
-
 	if err != nil {
 		return err
 	}
@@ -327,10 +326,8 @@ func removeIfExists(path string) error {
 	return nil
 }
 
-// waitForListener dials addr until either the dial succeeds or budget
-// expires. Used to verify launchd actually started the controller — if the
-// binary panics or the listen flag is wrong, the wait times out and the
-// install reports the issue while pointing at the log file.
+// waitForListener dials addr until either the dial succeeds or budget expires.
+// Verifies the supervisor actually started the controller.
 func waitForListener(addr string, budget time.Duration) error {
 	deadline := time.Now().Add(budget)
 	var lastErr error
@@ -349,14 +346,9 @@ func waitForListener(addr string, budget time.Duration) error {
 	return lastErr
 }
 
-// ensureCLIConfig makes sure ~/.openctl/config.yaml exists. We don't
-// rewrite an existing file — if the user has provider configs there
-// already, they're hands-off. We only create a minimal stub when the file
-// doesn't exist, so a fresh install has something to point at.
-//
-// The CLI auto-fills controller defaults (URL, token path, CA path) when
-// the controller section is absent or empty, so we don't need to write
-// those keys explicitly.
+// ensureCLIConfig makes sure ~/.openctl/config.yaml exists, creating a minimal
+// stub only when absent (an existing file is left untouched — it usually
+// carries provider credentials).
 func ensureCLIConfig(path string) error {
 	if _, err := os.Stat(path); err == nil {
 		return nil
@@ -378,20 +370,23 @@ controller:
 
 const installUsage = `usage: openctl-controller install --local
 
-Installs the controller as a per-user LaunchAgent on macOS:
-  - copies this binary to ~/Library/Application Support/openctl/bin/
-  - copies k3s agent binaries to ~/Library/Application Support/openctl/bin/k3s-agents/
-  - writes ~/Library/LaunchAgents/io.openctl.controller.plist
-  - launchctl-loads the plist (RunAtLoad + KeepAlive)
-  - verifies the controller responds on 127.0.0.1:9444
-  - writes a stub ~/.openctl/config.yaml if none exists
+Installs the controller as a per-user background service:
+  macOS  — a LaunchAgent (~/Library/LaunchAgents/io.openctl.controller.plist)
+  Linux  — a systemd user unit (~/.config/systemd/user/openctl-controller.service)
 
-Logs land at ~/Library/Logs/openctl/controller.{out,err}.log.
+It copies this binary + the k3s agent binaries into a per-user tree, writes
+and starts the service (start-now + restart-on-death), verifies the
+controller responds on 127.0.0.1:9444, and writes a stub ~/.openctl/config.yaml
+if none exists.
+
+Logs: macOS → ~/Library/Logs/openctl/controller.{out,err}.log;
+      Linux → journalctl --user -u openctl-controller.service.
+
 Run 'openctl-controller uninstall' to remove.`
 
 const uninstallUsage = `usage: openctl-controller uninstall [--purge]
 
-Stops the LaunchAgent, removes the plist and the installed binary.
+Stops the service, removes the unit definition and the installed binary.
 
   --purge   also remove ~/.openctl/controller (TLS material, token,
             state DB, applied manifests). Default leaves state alone so

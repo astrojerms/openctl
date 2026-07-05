@@ -7,27 +7,58 @@ import (
 	"testing"
 )
 
-func TestResolveInstallPathsUsesHome(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
-	p, err := resolveInstallPaths()
+func TestResolveInstallPathsDarwin(t *testing.T) {
+	home := "/Users/test"
+	p, err := resolveInstallPathsFor("darwin", home)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cases := []struct {
 		got, want string
 	}{
-		{p.BinaryPath, filepath.Join(tmp, "Library", "Application Support", "openctl", "bin", "openctl-controller")},
-		{p.AgentDir, filepath.Join(tmp, "Library", "Application Support", "openctl", "bin", "k3s-agents")},
-		{p.PlistPath, filepath.Join(tmp, "Library", "LaunchAgents", "io.openctl.controller.plist")},
-		{p.LogOut, filepath.Join(tmp, "Library", "Logs", "openctl", "controller.out.log")},
-		{p.StateDir, filepath.Join(tmp, ".openctl", "controller")},
-		{p.CLIConfigFile, filepath.Join(tmp, ".openctl", "config.yaml")},
+		{p.BinaryPath, filepath.Join(home, "Library", "Application Support", "openctl", "bin", "openctl-controller")},
+		{p.AgentDir, filepath.Join(home, "Library", "Application Support", "openctl", "bin", "k3s-agents")},
+		{p.UnitPath, filepath.Join(home, "Library", "LaunchAgents", "io.openctl.controller.plist")},
+		{p.LogOut, filepath.Join(home, "Library", "Logs", "openctl", "controller.out.log")},
+		{p.StateDir, filepath.Join(home, ".openctl", "controller")},
+		{p.CLIConfigFile, filepath.Join(home, ".openctl", "config.yaml")},
 	}
 	for _, c := range cases {
 		if c.got != c.want {
 			t.Errorf("got %q, want %q", c.got, c.want)
 		}
+	}
+}
+
+func TestResolveInstallPathsLinux(t *testing.T) {
+	home := "/home/test"
+	p, err := resolveInstallPathsFor("linux", home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		got, want string
+	}{
+		{p.BinaryPath, filepath.Join(home, ".local", "share", "openctl", "bin", "openctl-controller")},
+		{p.AgentDir, filepath.Join(home, ".local", "share", "openctl", "bin", "k3s-agents")},
+		{p.UnitPath, filepath.Join(home, ".config", "systemd", "user", "openctl-controller.service")},
+		{p.StateDir, filepath.Join(home, ".openctl", "controller")},
+		{p.CLIConfigFile, filepath.Join(home, ".openctl", "config.yaml")},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Errorf("got %q, want %q", c.got, c.want)
+		}
+	}
+	// Linux uses the journal — no file log paths.
+	if p.LogOut != "" || p.LogErr != "" {
+		t.Errorf("linux should have empty log paths, got out=%q err=%q", p.LogOut, p.LogErr)
+	}
+}
+
+func TestResolveInstallPathsUnsupported(t *testing.T) {
+	if _, err := resolveInstallPathsFor("windows", "C:\\Users\\test"); err == nil {
+		t.Error("expected error for unsupported platform")
 	}
 }
 
@@ -58,6 +89,59 @@ func TestRenderPlistContainsKeyFields(t *testing.T) {
 	for _, want := range wantSubstrings {
 		if !strings.Contains(got, want) {
 			t.Errorf("plist missing %q. Full output:\n%s", want, got)
+		}
+	}
+}
+
+func TestRenderSystemdUnitContainsKeyFields(t *testing.T) {
+	p := &installPaths{
+		HomeDir:    "/home/test",
+		BinaryPath: "/home/test/.local/share/openctl/bin/openctl-controller",
+	}
+	out, err := renderSystemdUnit(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	wantSubstrings := []string{
+		"[Unit]",
+		"Description=openctl controller",
+		"[Service]",
+		"Type=simple",
+		"ExecStart=" + p.BinaryPath + " serve",
+		"WorkingDirectory=" + p.HomeDir,
+		"Restart=on-failure",
+		"[Install]",
+		"WantedBy=default.target",
+	}
+	for _, want := range wantSubstrings {
+		if !strings.Contains(got, want) {
+			t.Errorf("systemd unit missing %q. Full output:\n%s", want, got)
+		}
+	}
+}
+
+func TestServiceManagerForSelectsByPlatform(t *testing.T) {
+	cases := []struct {
+		goos, want string
+		ok         bool
+	}{
+		{"darwin", "launchd", true},
+		{"linux", "systemd", true},
+		{"windows", "", false},
+	}
+	for _, c := range cases {
+		mgr, err := serviceManagerFor(c.goos)
+		if c.ok {
+			if err != nil {
+				t.Errorf("%s: unexpected error %v", c.goos, err)
+				continue
+			}
+			if mgr.name() != c.want {
+				t.Errorf("%s: manager = %q, want %q", c.goos, mgr.name(), c.want)
+			}
+		} else if err == nil {
+			t.Errorf("%s: expected error for unsupported platform", c.goos)
 		}
 	}
 }
