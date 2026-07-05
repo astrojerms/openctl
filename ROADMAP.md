@@ -59,10 +59,10 @@ direction.md):
    provider. Author reference: [docs/plugin-protocol.md](docs/plugin-protocol.md).
    Shaped with the Terraform host as an explicit second consumer (opaque
    state/private blobs already carried on the wire).
-2. **Terraform / OpenTofu provider host** — a second implementer of that
+2. **Terraform / OpenTofu provider host** — ✅ **shipped** — a second implementer of that
    interface; the breadth multiplier that unlocks the whole provider
    registry (AWS/GKE/…). Design + honest hard-parts analysis in
-   [docs/plugin-architecture.md](docs/plugin-architecture.md). **In progress:**
+   [docs/plugin-architecture.md](docs/plugin-architecture.md).
    - *Prereq shipped:* the `provider_state` opaque store (migration 0009 +
      `internal/controller/providerstate`) — the TF host reuses it directly.
    - *Phase A shipped:* the transport — `internal/controller/providers/tfhost`
@@ -77,8 +77,11 @@ direction.md):
    - *Schema translation shipped:* mapped Terraform resource schemas generate
      standalone CUE and register through the existing external-schema path, so
      SchemaService/validation can see hosted Terraform kinds.
-   - *Remaining:* config + registration wiring for operator-configured
-     Terraform provider binaries.
+   - *Config/registration shipped:* controller config can now launch
+     operator-configured Terraform provider binaries, pass provider-level
+     config through `ConfigureProvider`, map openctl Kinds to Terraform
+     resource types, register generated schemas, and reap hosted provider
+     processes at shutdown.
 3. **Run-anywhere: portable Linux daemon + `install --target ssh://`** — ✅
    **shipped** (PRs #47–#48). systemd support (user unit local + system unit
    remote) behind a `serviceManager` abstraction; `make build-controller-linux`
@@ -608,7 +611,7 @@ phase plan when ready to commit.
 - [ ] **Multi-user auth** — OIDC integration, named sessions, RBAC on
       `ResourceService`. Cookie/session layer from U1 is the
       foundation.
-- [ ] **Terraform / OpenTofu provider host** *(Tier 1 — see
+- [x] **Terraform / OpenTofu provider host** *(Tier 1 — see
       [docs/direction.md](docs/direction.md))* — consume the existing
       Terraform provider ecosystem (AWS, GCP, Azure, Cloudflare, …)
       instead of hand-writing every provider, by adding a *second

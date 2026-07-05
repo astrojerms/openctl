@@ -93,6 +93,59 @@ providers:
 	}
 }
 
+func TestLoadFromFile_TerraformProvider(t *testing.T) {
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `
+providers:
+  fake:
+    terraform:
+      command: /usr/local/bin/terraform-provider-fake
+      args:
+        - --debug
+      config:
+        endpoint: https://fake.example.com
+        insecure: true
+      resources:
+        - kind: Thing
+          type: fake_thing
+`
+	if err := os.WriteFile(configFile, []byte(configContent), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadFromFile(configFile)
+	if err != nil {
+		t.Fatalf("LoadFromFile: %v", err)
+	}
+	fake, ok := cfg.Providers["fake"]
+	if !ok {
+		t.Fatal("expected fake provider")
+	}
+	if fake.Terraform == nil {
+		t.Fatal("expected terraform config")
+	}
+	if fake.Terraform.Command != "/usr/local/bin/terraform-provider-fake" {
+		t.Fatalf("terraform.command = %q", fake.Terraform.Command)
+	}
+	if len(fake.Terraform.Args) != 1 || fake.Terraform.Args[0] != "--debug" {
+		t.Fatalf("terraform.args = %v", fake.Terraform.Args)
+	}
+	if got := fake.Terraform.Config["endpoint"]; got != "https://fake.example.com" {
+		t.Fatalf("terraform.config.endpoint = %v", got)
+	}
+	if got := fake.Terraform.Config["insecure"]; got != true {
+		t.Fatalf("terraform.config.insecure = %v", got)
+	}
+	if len(fake.Terraform.Resources) != 1 {
+		t.Fatalf("terraform.resources = %v", fake.Terraform.Resources)
+	}
+	if got := fake.Terraform.Resources[0]; got.Kind != "Thing" || got.Type != "fake_thing" {
+		t.Fatalf("terraform.resources[0] = %+v", got)
+	}
+}
+
 func TestLoadFromFile_NotExists(t *testing.T) {
 	cfg, err := LoadFromFile("/nonexistent/config.yaml")
 	if err != nil {

@@ -42,9 +42,24 @@ type Provider struct {
 	schemaByKind map[string]*tfplugin6.Schema
 }
 
+type providerOptions struct {
+	providerConfig map[string]any
+}
+
+// ProviderOption customizes a Terraform-hosted provider adapter.
+type ProviderOption func(*providerOptions)
+
+// WithProviderConfig supplies provider-level Terraform config. Keys must match
+// attributes in the Terraform provider schema.
+func WithProviderConfig(config map[string]any) ProviderOption {
+	return func(opts *providerOptions) {
+		opts.providerConfig = cloneMap(config)
+	}
+}
+
 // NewProvider constructs a Terraform-hosted provider adapter from an already
 // launched Client and a set of explicit resource mappings.
-func NewProvider(ctx context.Context, name string, client *Client, store StateStore, mappings []ResourceMapping) (*Provider, error) {
+func NewProvider(ctx context.Context, name string, client *Client, store StateStore, mappings []ResourceMapping, opts ...ProviderOption) (*Provider, error) {
 	if name == "" {
 		return nil, fmt.Errorf("tfhost provider name is required")
 	}
@@ -58,11 +73,33 @@ func NewProvider(ctx context.Context, name string, client *Client, store StateSt
 		return nil, fmt.Errorf("tfhost provider requires at least one resource mapping")
 	}
 
+	var options providerOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&options)
+		}
+	}
+
 	schemaResp, err := client.GetProviderSchema(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if err := diagnosticsError("GetProviderSchema", schemaResp.GetDiagnostics()); err != nil {
+		return nil, err
+	}
+
+	config, err := configDynamicValue(schemaResp.GetProvider(), options.providerConfig)
+	if err != nil {
+		return nil, fmt.Errorf("encode provider config: %w", err)
+	}
+	configured, err := client.ConfigureProvider(ctx, &tfplugin6.ConfigureProvider_Request{
+		TerraformVersion: "openctl",
+		Config:           config,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := diagnosticsError("ConfigureProvider", configured.GetDiagnostics()); err != nil {
 		return nil, err
 	}
 
@@ -334,7 +371,10 @@ func isNullDynamicValue(dv *tfplugin6.DynamicValue) bool {
 
 func observedResource(apiVersion, kind, name string, spec map[string]any, schema *tfplugin6.Schema, state *tfplugin6.DynamicValue) *protocol.Resource {
 	status := map[string]any{"phase": "Ready"}
-	_, computed := splitState(schema, state)
+	observedSpec, computed := splitState(schema, state)
+	if len(observedSpec) == 0 {
+		observedSpec = cloneMap(spec)
+	}
 	for k, v := range computed {
 		status[k] = v
 	}
@@ -342,7 +382,7 @@ func observedResource(apiVersion, kind, name string, spec map[string]any, schema
 		APIVersion: apiVersion,
 		Kind:       kind,
 		Metadata:   protocol.ResourceMetadata{Name: name},
-		Spec:       cloneMap(spec),
+		Spec:       observedSpec,
 		Status:     status,
 	}
 }

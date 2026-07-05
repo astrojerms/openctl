@@ -25,6 +25,7 @@ import (
 	externalprovider "github.com/openctl/openctl/internal/controller/providers/external"
 	k3sprovider "github.com/openctl/openctl/internal/controller/providers/k3s"
 	pmprovider "github.com/openctl/openctl/internal/controller/providers/proxmox"
+	tfhostprovider "github.com/openctl/openctl/internal/controller/providers/tfhost"
 	"github.com/openctl/openctl/internal/controller/providerstate"
 	"github.com/openctl/openctl/internal/controller/reconciler"
 	"github.com/openctl/openctl/internal/controller/server"
@@ -539,10 +540,11 @@ func buildTemplateRegistry() *templates.Registry {
 
 // buildRegistry constructs the Provider registry from ~/.openctl/config.yaml.
 // Registers the built-in proxmox/k3s providers, then loads any config entries
-// that declare an external plugin `command:` (see internal/controller/
-// providers/external). Returns the registry, the registered provider names
-// (for logging), and a cleanup func the caller must defer to reap spawned
-// plugin processes on shutdown.
+// that declare either a native external plugin `command:` (see internal/
+// controller/providers/external) or a Terraform host `terraform:` block.
+// Returns the registry, the registered provider names (for logging), and a
+// cleanup func the caller must defer to reap spawned plugin processes on
+// shutdown.
 //
 // If the config file is missing, the registry is left empty — the controller
 // still starts; resource RPCs will return errors pointing the user at the
@@ -551,6 +553,7 @@ func buildRegistry(ctx context.Context, stateStore externalprovider.StateStore) 
 	registry := providers.NewRegistry()
 	var names []string
 	var clients []*pluginproto.Client
+	var tfClients []*tfhostprovider.Client
 	cleanup := func() {
 		for _, c := range clients {
 			// Best-effort reap; use a fresh short context since the root ctx
@@ -558,6 +561,9 @@ func buildRegistry(ctx context.Context, stateStore externalprovider.StateStore) 
 			cc, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			_ = c.Close(cc)
 			cancel()
+		}
+		for _, c := range tfClients {
+			c.Close()
 		}
 	}
 
@@ -587,15 +593,36 @@ func buildRegistry(ctx context.Context, stateStore externalprovider.StateStore) 
 		names = append(names, "k3s")
 	}
 
-	// External plugins: any provider entry with a `command:` whose name isn't
-	// already registered (built-ins win). A plugin that fails to load is
-	// logged and skipped — one bad plugin must not stop the controller.
+	// External providers: any provider entry with either a native plugin
+	// `command:` or a Terraform host `terraform:` block whose name isn't
+	// already registered (built-ins win). A provider that fails to load is
+	// logged and skipped — one bad provider must not stop the controller.
 	registered := map[string]bool{}
 	for _, n := range names {
 		registered[n] = true
 	}
 	for name, pc := range cfg.Providers {
-		if pc.Command == "" || registered[name] {
+		if registered[name] {
+			continue
+		}
+		if pc.Command != "" && pc.Terraform != nil {
+			log.Printf("  provider %q: both command and terraform configured; skipping ambiguous provider", name)
+			continue
+		}
+		if pc.Terraform != nil {
+			prov, client, err := loadTerraformProvider(ctx, name, pc, stateStore)
+			if err != nil {
+				log.Printf("  terraform provider %q: load failed, skipping: %v", name, err)
+				continue
+			}
+			registry.Register(prov)
+			tfClients = append(tfClients, client)
+			registered[prov.Name()] = true
+			names = append(names, prov.Name())
+			log.Printf("  terraform provider %q: registered %d kind(s)", prov.Name(), len(prov.Kinds()))
+			continue
+		}
+		if pc.Command == "" {
 			continue
 		}
 		prov, hs, client, err := loadExternalProvider(ctx, cfg, name, pc, stateStore)
@@ -647,4 +674,34 @@ func loadExternalProvider(ctx context.Context, cfg *config.Config, name string, 
 	}
 	cmd := exec.CommandContext(ctx, pc.Command, pc.Args...) //nolint:gosec // G204: plugin command is operator-configured in config.yaml
 	return externalprovider.Load(ctx, cmd, pcfg, stateStore)
+}
+
+func loadTerraformProvider(ctx context.Context, name string, pc *config.Provider, stateStore tfhostprovider.StateStore) (providers.Provider, *tfhostprovider.Client, error) {
+	tf := pc.Terraform
+	if tf == nil {
+		return nil, nil, fmt.Errorf("terraform config is required")
+	}
+	if tf.Command == "" {
+		return nil, nil, fmt.Errorf("terraform.command is required")
+	}
+	mappings := make([]tfhostprovider.ResourceMapping, 0, len(tf.Resources))
+	for _, r := range tf.Resources {
+		if r.Kind == "" || r.Type == "" {
+			return nil, nil, fmt.Errorf("terraform resource mappings require kind and type")
+		}
+		mappings = append(mappings, tfhostprovider.ResourceMapping{
+			Kind:     r.Kind,
+			TypeName: r.Type,
+		})
+	}
+	client, err := tfhostprovider.Launch(tf.Command, tf.Args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	prov, err := tfhostprovider.NewProvider(ctx, name, client, stateStore, mappings, tfhostprovider.WithProviderConfig(tf.Config))
+	if err != nil {
+		client.Close()
+		return nil, nil, err
+	}
+	return prov, client, nil
 }

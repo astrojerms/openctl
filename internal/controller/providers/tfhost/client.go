@@ -100,6 +100,16 @@ func (c *Client) GetProviderSchema(ctx context.Context) (*tfplugin6.GetProviderS
 	return resp, nil
 }
 
+// ConfigureProvider sends the provider-level configuration Terraform core
+// would normally deliver before resource operations.
+func (c *Client) ConfigureProvider(ctx context.Context, req *tfplugin6.ConfigureProvider_Request) (*tfplugin6.ConfigureProvider_Response, error) {
+	resp, err := c.provider.ConfigureProvider(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("ConfigureProvider: %w", err)
+	}
+	return resp, nil
+}
+
 // PlanResourceChange asks the provider to turn a proposed resource state into
 // the concrete planned state Terraform would later apply.
 func (c *Client) PlanResourceChange(ctx context.Context, req *tfplugin6.PlanResourceChange_Request) (*tfplugin6.PlanResourceChange_Response, error) {

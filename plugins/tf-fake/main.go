@@ -48,6 +48,10 @@ var (
 		"note": tftypes.String,
 		"id":   tftypes.String,
 	}}
+
+	providerConfigType = tftypes.Object{AttributeTypes: map[string]tftypes.Type{
+		"endpoint": tftypes.String,
+	}}
 )
 
 type fakeThing struct {
@@ -56,9 +60,14 @@ type fakeThing struct {
 	ID   string `json:"id"`
 }
 
+type fakeProviderConfig struct {
+	Endpoint string `json:"endpoint"`
+}
+
 type fakeProvider struct {
-	mu     sync.Mutex
-	things map[string]fakeThing
+	mu       sync.Mutex
+	endpoint string
+	things   map[string]fakeThing
 }
 
 func newFakeProvider() tfprotov6.ProviderServer {
@@ -88,7 +97,14 @@ func (p *fakeProvider) ValidateProviderConfig(context.Context, *tfprotov6.Valida
 	return &tfprotov6.ValidateProviderConfigResponse{}, nil
 }
 
-func (p *fakeProvider) ConfigureProvider(context.Context, *tfprotov6.ConfigureProviderRequest) (*tfprotov6.ConfigureProviderResponse, error) {
+func (p *fakeProvider) ConfigureProvider(_ context.Context, req *tfprotov6.ConfigureProviderRequest) (*tfprotov6.ConfigureProviderResponse, error) {
+	cfg, err := decodeProviderConfig(req.Config)
+	if err != nil {
+		return &tfprotov6.ConfigureProviderResponse{Diagnostics: diagError("Invalid provider config", err.Error())}, nil
+	}
+	p.mu.Lock()
+	p.endpoint = cfg.Endpoint
+	p.mu.Unlock()
 	return &tfprotov6.ConfigureProviderResponse{}, nil
 }
 
@@ -150,6 +166,12 @@ func (p *fakeProvider) PlanResourceChange(_ context.Context, req *tfprotov6.Plan
 
 	if proposed.ID == "" {
 		proposed.ID = "fake-" + proposed.Name
+	}
+	p.mu.Lock()
+	endpoint := p.endpoint
+	p.mu.Unlock()
+	if proposed.Note == "" {
+		proposed.Note = endpoint
 	}
 	dv, err := encodeThing(proposed)
 	if err != nil {
@@ -274,6 +296,32 @@ func decodeThing(dv *tfprotov6.DynamicValue) (fakeThing, bool, error) {
 		return fakeThing{}, false, err
 	}
 	return thing, false, nil
+}
+
+func decodeProviderConfig(dv *tfprotov6.DynamicValue) (fakeProviderConfig, error) {
+	if dv == nil {
+		return fakeProviderConfig{}, nil
+	}
+	isNull, err := dv.IsNull()
+	if err != nil {
+		return fakeProviderConfig{}, err
+	}
+	if isNull {
+		return fakeProviderConfig{}, nil
+	}
+	v, err := dv.Unmarshal(providerConfigType)
+	if err != nil {
+		return fakeProviderConfig{}, err
+	}
+	attrs := map[string]tftypes.Value{}
+	if err := v.As(&attrs); err != nil {
+		return fakeProviderConfig{}, err
+	}
+	var cfg fakeProviderConfig
+	if err := stringAttr(attrs, "endpoint", &cfg.Endpoint); err != nil {
+		return fakeProviderConfig{}, err
+	}
+	return cfg, nil
 }
 
 func stringAttr(attrs map[string]tftypes.Value, name string, dst *string) error {

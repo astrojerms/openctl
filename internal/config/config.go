@@ -147,6 +147,28 @@ type Provider struct {
 	Command string `yaml:"command,omitempty"`
 	// Args are the arguments passed to Command (e.g. ["plugin-serve"]).
 	Args []string `yaml:"args,omitempty"`
+
+	// Terraform, when set, marks this provider as a Terraform/OpenTofu
+	// provider hosted by openctl's tfhost adapter. The controller launches
+	// Terraform.Command Args..., configures the provider with Terraform.Config,
+	// and exposes the configured Resources as openctl Kinds.
+	Terraform *TerraformProvider `yaml:"terraform,omitempty"`
+}
+
+// TerraformProvider configures one Terraform/OpenTofu provider binary hosted
+// by the controller over the tfplugin6 protocol.
+type TerraformProvider struct {
+	Command   string                 `yaml:"command"`
+	Args      []string               `yaml:"args,omitempty"`
+	Config    map[string]any         `yaml:"config,omitempty"`
+	Resources []TerraformResourceMap `yaml:"resources"`
+}
+
+// TerraformResourceMap binds an openctl Kind to the provider's Terraform
+// resource type name, for example Kind "Bucket" to type "aws_s3_bucket".
+type TerraformResourceMap struct {
+	Kind string `yaml:"kind"`
+	Type string `yaml:"type"`
 }
 
 // Context represents a provider context (like a cluster or endpoint)

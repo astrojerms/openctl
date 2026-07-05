@@ -272,7 +272,7 @@ Same per-resource key shape, different meaning — keep them separate.
 
 ---
 
-## Implementation status & the apply-path plan
+## Implementation status
 
 The TF host is being built in slices (see ROADMAP.md for PRs):
 
@@ -285,9 +285,14 @@ The TF host is being built in slices (see ROADMAP.md for PRs):
 - **Schema translation (done).** `SchemaAttributes` / `ObjectTypeForSchema`
   turn a tfplugin6 resource schema into a `tftypes.Object`, via a
   hand-rolled `parseCtyType` (see below).
-- **Apply/Read path (next).** The `providers.Provider` adapter mapping
+- **Apply/Read path (done).** The `providers.Provider` adapter maps
   Apply→`PlanResourceChange`+`ApplyResourceChange`, Get→`ReadResource`,
   Delete→`ApplyResourceChange(null)`, threading the `provider_state` blob.
+- **Config + registration (done).** Controller config can launch
+  operator-configured Terraform provider binaries, pass provider-level config
+  through `ConfigureProvider`, expose explicit openctl Kind → Terraform type
+  mappings, register generated schemas, and clean up hosted provider
+  processes during shutdown.
 
 ### The load-bearing decision: avoid the deprecated msgpack codec
 

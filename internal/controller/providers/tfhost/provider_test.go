@@ -140,6 +140,50 @@ func TestProviderAdapterRequiresMappedSchema(t *testing.T) {
 	}
 }
 
+func TestProviderAdapterConfiguresTerraformProvider(t *testing.T) {
+	openctlschema.ResetExternal()
+	defer openctlschema.ResetExternal()
+
+	bin := buildFakeProvider(t)
+
+	client, err := tfhost.Launch(bin)
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	defer client.Close()
+
+	ctx := context.Background()
+	db, err := storage.Open(ctx, filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatalf("open storage: %v", err)
+	}
+	defer db.Close()
+
+	p, err := tfhost.NewProvider(ctx, "fake", client, providerstate.New(db), []tfhost.ResourceMapping{
+		{Kind: "Thing", TypeName: "fake_thing"},
+	}, tfhost.WithProviderConfig(map[string]any{
+		"endpoint": "https://configured.example.com",
+	}))
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+
+	applied, err := p.Apply(ctx, &protocol.Resource{
+		APIVersion: "fake.openctl.io/v1",
+		Kind:       "Thing",
+		Metadata:   protocol.ResourceMetadata{Name: "configured"},
+		Spec: map[string]any{
+			"name": "configured",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if got, _ := applied.Spec["note"].(string); got != "https://configured.example.com" {
+		t.Fatalf("spec.note = %q, want provider endpoint", got)
+	}
+}
+
 func assertResource(t *testing.T, r *protocol.Resource, apiVersion, kind, name, note, id string) {
 	t.Helper()
 	if r.APIVersion != apiVersion || r.Kind != kind || r.Metadata.Name != name {
