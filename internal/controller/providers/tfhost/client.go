@@ -100,6 +100,35 @@ func (c *Client) GetProviderSchema(ctx context.Context) (*tfplugin6.GetProviderS
 	return resp, nil
 }
 
+// PlanResourceChange asks the provider to turn a proposed resource state into
+// the concrete planned state Terraform would later apply.
+func (c *Client) PlanResourceChange(ctx context.Context, req *tfplugin6.PlanResourceChange_Request) (*tfplugin6.PlanResourceChange_Response, error) {
+	resp, err := c.provider.PlanResourceChange(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("PlanResourceChange: %w", err)
+	}
+	return resp, nil
+}
+
+// ApplyResourceChange applies a planned resource state and returns the new
+// opaque provider state plus private blob.
+func (c *Client) ApplyResourceChange(ctx context.Context, req *tfplugin6.ApplyResourceChange_Request) (*tfplugin6.ApplyResourceChange_Response, error) {
+	resp, err := c.provider.ApplyResourceChange(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("ApplyResourceChange: %w", err)
+	}
+	return resp, nil
+}
+
+// ReadResource refreshes a prior resource state through the provider.
+func (c *Client) ReadResource(ctx context.Context, req *tfplugin6.ReadResource_Request) (*tfplugin6.ReadResource_Response, error) {
+	resp, err := c.provider.ReadResource(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("ReadResource: %w", err)
+	}
+	return resp, nil
+}
+
 // Close terminates the provider process.
 func (c *Client) Close() {
 	if c.plugin != nil {

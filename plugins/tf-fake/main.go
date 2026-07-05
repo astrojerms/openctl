@@ -1,93 +1,333 @@
-// Command tf-fake is a minimal Terraform plugin-protocol-v6 provider used to
+// Command tf-fake is a small Terraform plugin-protocol-v6 provider used to
 // test openctl's Terraform host (internal/controller/providers/tfhost) without
-// downloading a real terraform-provider-* binary. It speaks the same
-// go-plugin + tfplugin6 gRPC protocol a real provider does, so a client that
-// works against it works against the real registry.
-//
-// It advertises one resource, "fake_thing", with a tiny schema, and implements
-// only GetProviderSchema meaningfully (the rest inherit
-// UnimplementedProviderServer). Later tfhost phases will grow this fake as the
-// Plan/Apply/Read paths come online.
+// downloading a real terraform-provider-* binary. It is served through
+// terraform-plugin-go's public tf6server adapter, so the provider side of the
+// wire uses the same code path as real providers.
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"sync"
 
-	goplugin "github.com/hashicorp/go-plugin"
-	"google.golang.org/grpc"
-
-	"github.com/openctl/openctl/pkg/tfplugin6"
+	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
+	"github.com/hashicorp/terraform-plugin-go/tfprotov6/tf6server"
+	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
-var handshake = goplugin.HandshakeConfig{
-	ProtocolVersion:  6,
-	MagicCookieKey:   "TF_PLUGIN_MAGIC_COOKIE",
-	MagicCookieValue: "d602bf8f470bc67ca7faa0386276bbdd4330efaf76d1a219cb4d6991ca9872b2",
-}
+const (
+	providerAddress = "registry.openctl.test/openctl/fake"
+	resourceType    = "fake_thing"
+)
 
-// fakeServer implements just enough of the provider server for schema tests.
-type fakeServer struct {
-	tfplugin6.UnimplementedProviderServer
-}
-
-func (fakeServer) GetProviderSchema(context.Context, *tfplugin6.GetProviderSchema_Request) (*tfplugin6.GetProviderSchema_Response, error) {
-	strAttr := func(name string, required bool) *tfplugin6.Schema_Attribute {
-		return &tfplugin6.Schema_Attribute{
-			Name:     name,
-			Type:     []byte(`"string"`), // tftypes JSON encoding of the string type
-			Required: required,
-			Optional: !required,
-		}
-	}
-	return &tfplugin6.GetProviderSchema_Response{
-		Provider: &tfplugin6.Schema{
-			Version: 0,
-			Block: &tfplugin6.Schema_Block{
-				Attributes: []*tfplugin6.Schema_Attribute{strAttr("endpoint", false)},
+var (
+	providerSchema = &tfprotov6.Schema{
+		Version: 0,
+		Block: &tfprotov6.SchemaBlock{
+			Attributes: []*tfprotov6.SchemaAttribute{
+				{Name: "endpoint", Type: tftypes.String, Optional: true},
 			},
 		},
-		ResourceSchemas: map[string]*tfplugin6.Schema{
-			"fake_thing": {
-				Version: 1,
-				Block: &tfplugin6.Schema_Block{
-					Attributes: []*tfplugin6.Schema_Attribute{
-						strAttr("name", true),
-						strAttr("note", false),
-					},
-				},
+	}
+
+	thingSchema = &tfprotov6.Schema{
+		Version: 1,
+		Block: &tfprotov6.SchemaBlock{
+			Attributes: []*tfprotov6.SchemaAttribute{
+				{Name: "name", Type: tftypes.String, Required: true},
+				{Name: "note", Type: tftypes.String, Optional: true},
+				{Name: "id", Type: tftypes.String, Computed: true},
 			},
+		},
+	}
+
+	thingType = tftypes.Object{AttributeTypes: map[string]tftypes.Type{
+		"name": tftypes.String,
+		"note": tftypes.String,
+		"id":   tftypes.String,
+	}}
+)
+
+type fakeThing struct {
+	Name string `json:"name"`
+	Note string `json:"note"`
+	ID   string `json:"id"`
+}
+
+type fakeProvider struct {
+	mu     sync.Mutex
+	things map[string]fakeThing
+}
+
+func newFakeProvider() tfprotov6.ProviderServer {
+	return &fakeProvider{things: map[string]fakeThing{}}
+}
+
+func (p *fakeProvider) GetMetadata(context.Context, *tfprotov6.GetMetadataRequest) (*tfprotov6.GetMetadataResponse, error) {
+	return &tfprotov6.GetMetadataResponse{
+		Resources: []tfprotov6.ResourceMetadata{{TypeName: resourceType}},
+	}, nil
+}
+
+func (p *fakeProvider) GetProviderSchema(context.Context, *tfprotov6.GetProviderSchemaRequest) (*tfprotov6.GetProviderSchemaResponse, error) {
+	return &tfprotov6.GetProviderSchemaResponse{
+		Provider: providerSchema,
+		ResourceSchemas: map[string]*tfprotov6.Schema{
+			resourceType: thingSchema,
 		},
 	}, nil
 }
 
-// providerPlugin is the go-plugin server half.
-type providerPlugin struct {
-	goplugin.NetRPCUnsupportedPlugin
+func (p *fakeProvider) GetResourceIdentitySchemas(context.Context, *tfprotov6.GetResourceIdentitySchemasRequest) (*tfprotov6.GetResourceIdentitySchemasResponse, error) {
+	return &tfprotov6.GetResourceIdentitySchemasResponse{}, nil
 }
 
-// GRPCServer registers the fake provider. The nil return is required by
-// go-plugin's GRPCPlugin interface signature.
-func (providerPlugin) GRPCServer(_ *goplugin.GRPCBroker, s *grpc.Server) error { //nolint:unparam // signature fixed by go-plugin
-	tfplugin6.RegisterProviderServer(s, fakeServer{})
+func (p *fakeProvider) ValidateProviderConfig(context.Context, *tfprotov6.ValidateProviderConfigRequest) (*tfprotov6.ValidateProviderConfigResponse, error) {
+	return &tfprotov6.ValidateProviderConfigResponse{}, nil
+}
+
+func (p *fakeProvider) ConfigureProvider(context.Context, *tfprotov6.ConfigureProviderRequest) (*tfprotov6.ConfigureProviderResponse, error) {
+	return &tfprotov6.ConfigureProviderResponse{}, nil
+}
+
+func (p *fakeProvider) StopProvider(context.Context, *tfprotov6.StopProviderRequest) (*tfprotov6.StopProviderResponse, error) {
+	return &tfprotov6.StopProviderResponse{}, nil
+}
+
+func (p *fakeProvider) ValidateResourceConfig(context.Context, *tfprotov6.ValidateResourceConfigRequest) (*tfprotov6.ValidateResourceConfigResponse, error) {
+	return &tfprotov6.ValidateResourceConfigResponse{}, nil
+}
+
+func (p *fakeProvider) UpgradeResourceState(context.Context, *tfprotov6.UpgradeResourceStateRequest) (*tfprotov6.UpgradeResourceStateResponse, error) {
+	return &tfprotov6.UpgradeResourceStateResponse{}, nil
+}
+
+func (p *fakeProvider) UpgradeResourceIdentity(context.Context, *tfprotov6.UpgradeResourceIdentityRequest) (*tfprotov6.UpgradeResourceIdentityResponse, error) {
+	return &tfprotov6.UpgradeResourceIdentityResponse{}, nil
+}
+
+func (p *fakeProvider) ReadResource(_ context.Context, req *tfprotov6.ReadResourceRequest) (*tfprotov6.ReadResourceResponse, error) {
+	if diag := checkType(req.TypeName); diag != nil {
+		return &tfprotov6.ReadResourceResponse{Diagnostics: diag}, nil
+	}
+	current, isNull, err := decodeThing(req.CurrentState)
+	if err != nil {
+		return &tfprotov6.ReadResourceResponse{Diagnostics: diagError("Invalid current state", err.Error())}, nil
+	}
+	if isNull {
+		return &tfprotov6.ReadResourceResponse{NewState: nullDynamicValue(), Private: req.Private}, nil
+	}
+
+	p.mu.Lock()
+	observed, ok := p.things[current.Name]
+	p.mu.Unlock()
+	if !ok {
+		return &tfprotov6.ReadResourceResponse{NewState: nullDynamicValue(), Private: req.Private}, nil
+	}
+	dv, err := encodeThing(observed)
+	if err != nil {
+		return nil, err
+	}
+	return &tfprotov6.ReadResourceResponse{NewState: dv, Private: []byte("read:" + observed.ID)}, nil
+}
+
+func (p *fakeProvider) PlanResourceChange(_ context.Context, req *tfprotov6.PlanResourceChangeRequest) (*tfprotov6.PlanResourceChangeResponse, error) {
+	if diag := checkType(req.TypeName); diag != nil {
+		return &tfprotov6.PlanResourceChangeResponse{Diagnostics: diag}, nil
+	}
+	proposed, isDelete, err := decodeThing(req.ProposedNewState)
+	if err != nil {
+		return &tfprotov6.PlanResourceChangeResponse{Diagnostics: diagError("Invalid proposed state", err.Error())}, nil
+	}
+	if isDelete {
+		return &tfprotov6.PlanResourceChangeResponse{
+			PlannedState:   nullDynamicValue(),
+			PlannedPrivate: append([]byte(nil), req.PriorPrivate...),
+		}, nil
+	}
+
+	if proposed.ID == "" {
+		proposed.ID = "fake-" + proposed.Name
+	}
+	dv, err := encodeThing(proposed)
+	if err != nil {
+		return nil, err
+	}
+	return &tfprotov6.PlanResourceChangeResponse{
+		PlannedState:   dv,
+		PlannedPrivate: []byte("plan:" + proposed.ID),
+	}, nil
+}
+
+func (p *fakeProvider) ApplyResourceChange(_ context.Context, req *tfprotov6.ApplyResourceChangeRequest) (*tfprotov6.ApplyResourceChangeResponse, error) {
+	if diag := checkType(req.TypeName); diag != nil {
+		return &tfprotov6.ApplyResourceChangeResponse{Diagnostics: diag}, nil
+	}
+	planned, isDelete, err := decodeThing(req.PlannedState)
+	if err != nil {
+		return &tfprotov6.ApplyResourceChangeResponse{Diagnostics: diagError("Invalid planned state", err.Error())}, nil
+	}
+	if isDelete {
+		prior, priorNull, err := decodeThing(req.PriorState)
+		if err != nil {
+			return &tfprotov6.ApplyResourceChangeResponse{Diagnostics: diagError("Invalid prior state", err.Error())}, nil
+		}
+		if !priorNull {
+			p.mu.Lock()
+			delete(p.things, prior.Name)
+			p.mu.Unlock()
+		}
+		return &tfprotov6.ApplyResourceChangeResponse{NewState: nullDynamicValue()}, nil
+	}
+
+	if planned.ID == "" {
+		planned.ID = "fake-" + planned.Name
+	}
+	p.mu.Lock()
+	p.things[planned.Name] = planned
+	p.mu.Unlock()
+
+	dv, err := encodeThing(planned)
+	if err != nil {
+		return nil, err
+	}
+	return &tfprotov6.ApplyResourceChangeResponse{
+		NewState: dv,
+		Private:  []byte("state:" + planned.ID),
+	}, nil
+}
+
+func (p *fakeProvider) ImportResourceState(context.Context, *tfprotov6.ImportResourceStateRequest) (*tfprotov6.ImportResourceStateResponse, error) {
+	return &tfprotov6.ImportResourceStateResponse{}, nil
+}
+
+func (p *fakeProvider) MoveResourceState(context.Context, *tfprotov6.MoveResourceStateRequest) (*tfprotov6.MoveResourceStateResponse, error) {
+	return &tfprotov6.MoveResourceStateResponse{}, nil
+}
+
+func (p *fakeProvider) GenerateResourceConfig(context.Context, *tfprotov6.GenerateResourceConfigRequest) (*tfprotov6.GenerateResourceConfigResponse, error) {
+	return &tfprotov6.GenerateResourceConfigResponse{}, nil
+}
+
+func (p *fakeProvider) ValidateDataResourceConfig(context.Context, *tfprotov6.ValidateDataResourceConfigRequest) (*tfprotov6.ValidateDataResourceConfigResponse, error) {
+	return &tfprotov6.ValidateDataResourceConfigResponse{}, nil
+}
+
+func (p *fakeProvider) ReadDataSource(context.Context, *tfprotov6.ReadDataSourceRequest) (*tfprotov6.ReadDataSourceResponse, error) {
+	return &tfprotov6.ReadDataSourceResponse{}, nil
+}
+
+func (p *fakeProvider) GetFunctions(context.Context, *tfprotov6.GetFunctionsRequest) (*tfprotov6.GetFunctionsResponse, error) {
+	return &tfprotov6.GetFunctionsResponse{}, nil
+}
+
+func (p *fakeProvider) CallFunction(context.Context, *tfprotov6.CallFunctionRequest) (*tfprotov6.CallFunctionResponse, error) {
+	return &tfprotov6.CallFunctionResponse{}, nil
+}
+
+func (p *fakeProvider) ValidateEphemeralResourceConfig(context.Context, *tfprotov6.ValidateEphemeralResourceConfigRequest) (*tfprotov6.ValidateEphemeralResourceConfigResponse, error) {
+	return &tfprotov6.ValidateEphemeralResourceConfigResponse{}, nil
+}
+
+func (p *fakeProvider) OpenEphemeralResource(context.Context, *tfprotov6.OpenEphemeralResourceRequest) (*tfprotov6.OpenEphemeralResourceResponse, error) {
+	return &tfprotov6.OpenEphemeralResourceResponse{}, nil
+}
+
+func (p *fakeProvider) RenewEphemeralResource(context.Context, *tfprotov6.RenewEphemeralResourceRequest) (*tfprotov6.RenewEphemeralResourceResponse, error) {
+	return &tfprotov6.RenewEphemeralResourceResponse{}, nil
+}
+
+func (p *fakeProvider) CloseEphemeralResource(context.Context, *tfprotov6.CloseEphemeralResourceRequest) (*tfprotov6.CloseEphemeralResourceResponse, error) {
+	return &tfprotov6.CloseEphemeralResourceResponse{}, nil
+}
+
+func decodeThing(dv *tfprotov6.DynamicValue) (fakeThing, bool, error) {
+	if dv == nil {
+		return fakeThing{}, true, nil
+	}
+	isNull, err := dv.IsNull()
+	if err != nil {
+		return fakeThing{}, false, err
+	}
+	if isNull {
+		return fakeThing{}, true, nil
+	}
+	v, err := dv.Unmarshal(thingType)
+	if err != nil {
+		return fakeThing{}, false, err
+	}
+	attrs := map[string]tftypes.Value{}
+	if err := v.As(&attrs); err != nil {
+		return fakeThing{}, false, err
+	}
+
+	var thing fakeThing
+	if err := stringAttr(attrs, "name", &thing.Name); err != nil {
+		return fakeThing{}, false, err
+	}
+	if err := stringAttr(attrs, "note", &thing.Note); err != nil {
+		return fakeThing{}, false, err
+	}
+	if err := stringAttr(attrs, "id", &thing.ID); err != nil {
+		return fakeThing{}, false, err
+	}
+	return thing, false, nil
+}
+
+func stringAttr(attrs map[string]tftypes.Value, name string, dst *string) error {
+	v, ok := attrs[name]
+	if !ok || v.IsNull() {
+		return nil
+	}
+	if !v.IsKnown() {
+		return fmt.Errorf("%s is unknown", name)
+	}
+	if err := v.As(dst); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
 	return nil
 }
 
-func (providerPlugin) GRPCClient(context.Context, *goplugin.GRPCBroker, *grpc.ClientConn) (any, error) {
-	return nil, fmt.Errorf("tf-fake is a server, not a client")
+func encodeThing(thing fakeThing) (*tfprotov6.DynamicValue, error) {
+	return jsonDynamicValue(thing)
+}
+
+func nullDynamicValue() *tfprotov6.DynamicValue {
+	return &tfprotov6.DynamicValue{JSON: []byte("null")}
+}
+
+func jsonDynamicValue(v any) (*tfprotov6.DynamicValue, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	return &tfprotov6.DynamicValue{JSON: b}, nil
+}
+
+func checkType(typeName string) []*tfprotov6.Diagnostic {
+	if typeName == resourceType {
+		return nil
+	}
+	return diagError("Unsupported resource type", fmt.Sprintf("tf-fake only supports %q, got %q.", resourceType, typeName))
+}
+
+func diagError(summary, detail string) []*tfprotov6.Diagnostic {
+	return []*tfprotov6.Diagnostic{{
+		Severity: tfprotov6.DiagnosticSeverityError,
+		Summary:  summary,
+		Detail:   detail,
+	}}
 }
 
 func main() {
-	// Refuse to run outside a go-plugin handshake so a human running it
-	// directly gets a hint instead of a hang.
-	if os.Getenv(handshake.MagicCookieKey) != handshake.MagicCookieValue {
+	if os.Getenv("TF_PLUGIN_MAGIC_COOKIE") != "d602bf8f470bc67ca7faa0386276bbdd4330efaf76d1a219cb4d6991ca9872b2" {
 		fmt.Fprintln(os.Stderr, "tf-fake is a Terraform-protocol test provider; run it via the openctl tfhost, not directly")
 		os.Exit(2)
 	}
-	goplugin.Serve(&goplugin.ServeConfig{
-		HandshakeConfig: handshake,
-		Plugins:         goplugin.PluginSet{"provider": providerPlugin{}},
-		GRPCServer:      goplugin.DefaultGRPCServer,
-	})
+	if err := tf6server.Serve(providerAddress, newFakeProvider); err != nil {
+		fmt.Fprintf(os.Stderr, "serve tf-fake: %v\n", err)
+		os.Exit(1)
+	}
 }
