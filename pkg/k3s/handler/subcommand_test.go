@@ -3,12 +3,15 @@ package handler
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/openctl/openctl/pkg/k3s/agent/certs"
@@ -284,5 +287,93 @@ func TestHandle_Restart_SelectsNamedNode(t *testing.T) {
 	}
 	if !hit {
 		t.Error("named node's agent was not called")
+	}
+}
+
+func TestHandle_Upgrade_Success(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	var gotBody string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/upgrade/k3s", func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	startAgentStub(t, "ucl", "cp", map[string]string{"cp": "127.0.0.1"}, mux)
+
+	h := New(&protocol.ProviderConfig{})
+	resp, err := h.Handle(&protocol.Request{
+		Version: protocol.ProtocolVersion,
+		Action:  "upgrade",
+		Args:    map[string]any{"cluster": "ucl", "node": "cp", "to": "v1.30.5+k3s1"},
+	})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if resp.Status != protocol.StatusSuccess {
+		t.Fatalf("status = %s (err=%v)", resp.Status, resp.Error)
+	}
+	if !strings.Contains(gotBody, "v1.30.5+k3s1") {
+		t.Errorf("agent received body %q, want the target version", gotBody)
+	}
+	if !strings.Contains(resp.Message, "v1.30.5+k3s1") {
+		t.Errorf("message %q should name the target version", resp.Message)
+	}
+}
+
+func TestHandle_Upgrade_MissingVersion(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	h := New(&protocol.ProviderConfig{})
+	resp, err := h.Handle(&protocol.Request{
+		Version: protocol.ProtocolVersion,
+		Action:  "upgrade",
+		Args:    map[string]any{"cluster": "x", "node": "cp"}, // no --to
+	})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if resp.Status != protocol.StatusError || resp.Error.Code != protocol.ErrorCodeInvalidRequest {
+		t.Fatalf("want InvalidRequest for missing --to, got %+v", resp)
+	}
+}
+
+func TestHandle_Upgrade_AgentRejectsBadVersion(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// A real agent stub: the handler forwards the version and the agent's 400
+	// (bad version) must surface as an error, not a success.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/upgrade/k3s", makeAgentUpgradeStub())
+	startAgentStub(t, "bad", "cp", map[string]string{"cp": "127.0.0.1"}, mux)
+
+	h := New(&protocol.ProviderConfig{})
+	resp, err := h.Handle(&protocol.Request{
+		Version: protocol.ProtocolVersion,
+		Action:  "upgrade",
+		Args:    map[string]any{"cluster": "bad", "node": "cp", "to": "not-a-version"},
+	})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if resp.Status != protocol.StatusError {
+		t.Fatalf("want error when the agent rejects the version, got %+v", resp)
+	}
+}
+
+// makeAgentUpgradeStub mimics the agent's own version validation: 204 for a
+// well-formed tag, 400 otherwise.
+func makeAgentUpgradeStub() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Version string `json:"version"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !strings.HasPrefix(body.Version, "v") || !strings.Contains(body.Version, "+k3s") {
+			http.Error(w, "invalid version", http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }

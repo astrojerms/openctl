@@ -138,9 +138,11 @@ func capabilities(init string) map[string]string {
 	case "systemd":
 		caps["logs"] = "journald"
 		caps["service"] = "systemd"
+		caps["upgrade"] = "binary-swap"
 	case "openrc":
 		caps["logs"] = "file"
 		caps["service"] = "openrc"
+		caps["upgrade"] = "binary-swap"
 	default:
 		caps["logs"] = "none"
 		caps["service"] = "none"

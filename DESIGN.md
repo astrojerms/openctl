@@ -825,10 +825,11 @@ The agent reports its version in `/v1/info`. If it differs from what the plugin 
 - [ ] gRPC transport option for performance
 - [x] Automatic retry with backoff for transient failures (implemented in dispatcher)
 - [ ] Additional compute providers (AWS, Azure, GCP)
-- [ ] K3s cluster upgrades (will use the agent's service control + future binary-swap endpoint)
+- [~] K3s cluster upgrades — per-node binary-swap shipped (`openctl k3s
+      upgrade --node --to`); cluster-wide rolling upgrade (drain/cordon) remains
 - [ ] Certificate rotation for K3s clusters (agent + new endpoint)
 - [x] **Plugin-defined CLI subcommands** (generic protocol + CLI surface,
-      plus the k3s `logs`/`restart` handlers — see below)
+      plus the k3s `logs`/`restart`/`upgrade` handlers — see below)
 
 ## Plugin-defined CLI subcommands
 
@@ -843,15 +844,28 @@ implements the first two agent-backed subcommands:
   automatically; multi-node clusters require `--node`.
 - `openctl k3s restart <cluster> --node <name>` — restarts the k3s service on
   a node via its agent.
-- `openctl k3s upgrade <cluster> --to <version>` (future — needs a
-  binary-swap agent endpoint).
+- `openctl k3s upgrade <cluster> --node <name> --to <version>` — swaps the k3s
+  binary on a node to the target release (downloaded + sha256-verified by the
+  agent) and restarts. Per-node by design; cluster-wide rolling upgrades
+  (drain/cordon ordering) are the follow-up.
 
 Handler dispatch lives in `pkg/k3s/handler/handler.go` (`handleLogs`,
-`handleRestart`), which load the cluster state, reuse `extractAgentProbeConfig`
-to locate the agent bundle, build a per-node `agentclient.Client` via
-`client.NewFromProbeOptions`, and call the typed `Logs`/`RestartK3s` methods.
-Subcommand requests arrive with an agent `Action` and no `ResourceType`, so
-`Handle` routes on the action name before the resource-kind switch.
+`handleRestart`, `handleUpgrade`), which load the cluster state, reuse
+`extractAgentProbeConfig` to locate the agent bundle, build a per-node
+`agentclient.Client` via `client.NewFromProbeOptions`, and call the typed
+`Logs`/`RestartK3s`/`UpgradeK3s` methods. Subcommand requests arrive with an
+agent `Action` and no `ResourceType`, so `Handle` routes on the action name
+before the resource-kind switch.
+
+The **upgrade** endpoint (`POST /v1/upgrade/k3s`, `pkg/k3s/agent/upgrade.go`)
+is a binary swap: the agent downloads the target k3s release for its arch,
+verifies the published `sha256sum-<arch>.txt`, atomically renames the new
+binary over the installed one, and restarts the service. The target version is
+regex-validated (`vX.Y.Z+k3sN`) before it is ever placed in a download URL —
+the sole injection guard. The download can outlast the server's 30s
+`WriteTimeout`, so the handler extends its own write deadline via
+`http.NewResponseController`. `runUpgrade` takes injected `fetch`/`restart`
+seams so the swap orchestration is unit-tested without real downloads or root.
 
 **Original design (option 3 from the rollout discussion):** extend `protocol.Capabilities` with a list of plugin-defined subcommands, and have `internal/cli/provider.go` register them as cobra commands alongside `get`/`create`/`delete`/`apply`.
 
@@ -886,7 +900,7 @@ type FlagSpec struct {
 **CLI side:** in `internal/cli/provider.go`, after registering the standard commands, iterate `caps.Subcommands` and register a cobra command per entry. The command's `RunE` builds a `protocol.Request` with `Action: subcmd.Action`, packs positional args + flag values into `Request.Args map[string]any`, and dispatches via the existing executor. Structured responses go through the existing `formatter`; message-only responses print the message.
 
 **Plugin side (implemented):** the k3s plugin's `handler.Handle` dispatches new
-action names (`"logs"`, `"restart"`) that:
+action names (`"logs"`, `"restart"`, `"upgrade"`) that:
 1. Load the cluster's saved state file (`loadClusterStatus`).
 2. Pull the agent block from `status.outputs.agent` (`extractAgentProbeConfig`).
 3. Build an `agentclient.Client` for the selected node (`agentClientForNode` →
@@ -895,9 +909,13 @@ action names (`"logs"`, `"restart"`) that:
    the result as a `Message`.
 
 **Follow-ups still open:**
-- `upgrade` subcommand — blocked on a binary-swap agent endpoint.
+- Cluster-wide rolling upgrade — `upgrade` is per-node today; a rolling
+  variant needs drain/cordon ordering (control plane first, one worker at a
+  time), which the agent can't do alone (no kubectl access).
 - Streaming logs — the current path buffers the whole body; large journals
   could stream (chunked transfer + line-by-line print) later.
+- k3s cluster upgrade rollback — the binary swap has no automatic rollback if
+  the restarted k3s fails health; the previous binary is not retained.
 
 **Design considerations addressed:**
 - Authentication carryover — subcommands inherit `--context` via the same

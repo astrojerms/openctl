@@ -4,6 +4,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -13,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/openctl/openctl/pkg/k3s/agent"
@@ -97,6 +99,33 @@ func (c *Client) serviceAction(ctx context.Context, action string) error {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	return fmt.Errorf("service %s: status %d: %s", action, resp.StatusCode, string(body))
+}
+
+// UpgradeK3s calls POST /v1/upgrade/k3s to swap the node's k3s binary to
+// version (a tag like "v1.30.5+k3s1") and restart the service. It returns nil
+// on the agent's 204. The download + restart can take minutes, so callers
+// should build the Client with a generous Timeout. It backs
+// `openctl k3s upgrade` (see DESIGN.md "Plugin-defined CLI subcommands").
+func (c *Client) UpgradeK3s(ctx context.Context, version string) error {
+	payload, err := json.Marshal(map[string]string{"version": version})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/upgrade/k3s", bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req) // #nosec G107,G704 -- baseURL is from typed Options.Endpoint
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusNoContent {
+		return nil
+	}
+	body, _ := io.ReadAll(resp.Body)
+	return fmt.Errorf("upgrade to %s: status %d: %s", version, resp.StatusCode, strings.TrimSpace(string(body)))
 }
 
 // Logs calls GET /v1/logs/k3s. lines == 0 lets the agent pick its default.

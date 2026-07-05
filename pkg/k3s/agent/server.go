@@ -37,6 +37,7 @@ func New(opts Options) (*Server, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/info", handleInfo)
 	mux.HandleFunc("/v1/logs/k3s", makeLogsHandler(fetchK3sLogs))
+	mux.HandleFunc("/v1/upgrade/k3s", makeUpgradeHandler(upgradeK3s))
 	for _, action := range serviceActions {
 		mux.HandleFunc("/v1/service/k3s/"+string(action), makeServiceHandler(action, controlK3s))
 	}
