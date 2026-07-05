@@ -6,6 +6,16 @@ bin/
 *.so
 *.dylib
 
+# Stray root-level build outputs from `go build ./cmd/...` / `./plugins/...`
+# without -o (they land in the repo root). Ignore the known binary names so
+# an accidental bare build can't be committed.
+/openctl
+/openctl-controller
+/openctl-proxmox
+/openctl-k3s
+/openctl-k3s-agent
+/example
+
 # Test binary
 *.test
 

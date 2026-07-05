@@ -66,8 +66,10 @@ direction.md):
    shipped:** the `provider_state` opaque per-resource store (migration 0009 +
    `internal/controller/providerstate`), wired so stateful external plugins
    round-trip state — the TF host reuses this store directly.
-3. **Run-anywhere: portable Linux daemon + `install --target ssh://`** —
-   independent of 1–2, can proceed in parallel.
+3. **Run-anywhere: portable Linux daemon + `install --target ssh://`** — ✅
+   **shipped** (PRs #47–#48). systemd support (user unit local + system unit
+   remote) behind a `serviceManager` abstraction; `make build-controller-linux`
+   static cross-compile; `install --target ssh://user@host` remote deploy.
 
 **Tier 2 — natural follow-ons:** self-hosting bootstrap
 (`install --target proxmox://`); multi-user auth (OIDC/RBAC, downstream
@@ -118,12 +120,14 @@ plan/state); harden the provider contract before the ecosystem widens.
       [docs/plugin-protocol.md](docs/plugin-protocol.md) for the author
       reference and [docs/plugin-architecture.md](docs/plugin-architecture.md)
       for the design.
-- [~] **Run-anywhere: Linux daemon** (Tier 1 item 3). Local install now
-      works on Linux too: `install`/`uninstall` dispatch by GOOS through a
-      `serviceManager` abstraction (launchd on macOS, **systemd user unit** on
-      Linux). `make build-controller-linux` cross-compiles a static ELF
-      controller (CGO_ENABLED=0; pure-Go SQLite makes this trivial). Remaining:
-      `install --target ssh://user@host` remote deploy (next).
+- [x] **Run-anywhere: Linux daemon** (Tier 1 item 3). Local install works on
+      Linux (systemd user unit) via a `serviceManager` abstraction (launchd on
+      macOS, systemd on Linux); `make build-controller-linux` cross-compiles a
+      static ELF controller (CGO_ENABLED=0). **Remote deploy shipped:**
+      `install --target ssh://user@host` cross-builds + SSHes the controller to
+      a remote host and installs it as a **system** systemd service (reuses
+      `pkg/k3s/ssh`; uploads binary + unit, `systemctl enable --now`). The
+      orchestration is unit-tested against a fake SSH runner.
 - [ ] Proxmox bootstrap install (`openctl-controller install --target
       proxmox://homelab`).
 - [ ] Plugin-defined CLI subcommands (`openctl k3s logs/restart/upgrade`).
