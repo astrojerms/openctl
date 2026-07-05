@@ -10,10 +10,14 @@ import (
 	"github.com/openctl/openctl/internal/controller/providers/tfhost"
 	"github.com/openctl/openctl/internal/controller/providerstate"
 	"github.com/openctl/openctl/internal/controller/storage"
+	openctlschema "github.com/openctl/openctl/internal/schema"
 	"github.com/openctl/openctl/pkg/protocol"
 )
 
 func TestProviderAdapterApplyGetDelete(t *testing.T) {
+	openctlschema.ResetExternal()
+	defer openctlschema.ResetExternal()
+
 	bin := buildFakeProvider(t)
 
 	client, err := tfhost.Launch(bin)
@@ -35,6 +39,9 @@ func TestProviderAdapterApplyGetDelete(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
+	}
+	if _, ok := findSchema("fake.openctl.io/v1", "Thing"); !ok {
+		t.Fatal("NewProvider did not register generated external schema")
 	}
 
 	manifest := &protocol.Resource{
@@ -107,6 +114,9 @@ func TestProviderAdapterApplyGetDelete(t *testing.T) {
 }
 
 func TestProviderAdapterRequiresMappedSchema(t *testing.T) {
+	openctlschema.ResetExternal()
+	defer openctlschema.ResetExternal()
+
 	bin := buildFakeProvider(t)
 
 	client, err := tfhost.Launch(bin)

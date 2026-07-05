@@ -85,6 +85,9 @@ func NewProvider(ctx context.Context, name string, client *Client, store StateSt
 		p.typeByKind[m.Kind] = m.TypeName
 		p.schemaByKind[m.Kind] = schema
 	}
+	if err := RegisterExternalSchemas(p.apiVersion, mappings, schemaResp.GetResourceSchemas()); err != nil {
+		return nil, fmt.Errorf("register generated schemas: %w", err)
+	}
 	return p, nil
 }
 
