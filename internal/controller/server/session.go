@@ -32,7 +32,18 @@ func (h *sessionHandler) Login(ctx context.Context, req *apiv1.LoginRequest) (*a
 		return nil, status.Error(codes.Unimplemented, "session store not configured")
 	}
 	ttl := time.Duration(req.GetTtlSeconds()) * time.Second
-	sess, err := h.sessions.Create(ctx, auth.DefaultUserID, req.GetDisplayName(), ttl)
+	// Inherit the caller's identity: the interceptor resolved their bearer
+	// token to a Principal, so a viewer-token holder mints a viewer session.
+	// With --no-auth (no interceptor, no principal) fall back to the admin
+	// default so single-user setups keep working.
+	userID, role := auth.DefaultUserID, auth.RoleAdmin
+	if p, ok := auth.PrincipalFromContext(ctx); ok {
+		if !p.Root {
+			userID = p.UserID
+		}
+		role = p.Role
+	}
+	sess, err := h.sessions.Create(ctx, userID, req.GetDisplayName(), role, ttl)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "create session: %v", err)
 	}

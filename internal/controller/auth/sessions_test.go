@@ -21,11 +21,71 @@ func newTestSessionStore(t *testing.T) *SessionStore {
 	return NewSessionStore(db)
 }
 
+func TestSessionRoleRoundTrip(t *testing.T) {
+	s := newTestSessionStore(t)
+	ctx := context.Background()
+
+	// A viewer session round-trips its role through Lookup and Principal.
+	sess, err := s.Create(ctx, "alice", "browser", RoleViewer, time.Hour)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if sess.Role != RoleViewer {
+		t.Errorf("created session role = %q, want viewer", sess.Role)
+	}
+	got, err := s.Lookup(ctx, sess.Token)
+	if err != nil || got == nil {
+		t.Fatalf("Lookup: %v", err)
+	}
+	if got.Role != RoleViewer {
+		t.Errorf("looked-up role = %q, want viewer", got.Role)
+	}
+	if p := got.Principal(); p.UserID != "alice" || p.Role != RoleViewer {
+		t.Errorf("Principal = %+v, want alice/viewer", p)
+	}
+
+	// An empty role defaults to admin at Create time.
+	def, _ := s.Create(ctx, "bob", "", "", time.Hour)
+	if def.Role != RoleAdmin {
+		t.Errorf("empty role should default to admin, got %q", def.Role)
+	}
+}
+
+// TestSessionLegacyRowDefaultsAdmin inserts a session row the pre-roles way
+// (omitting the role column), which is how the migration's `ADD COLUMN role
+// NOT NULL DEFAULT 'admin'` backfills existing rows. Lookup must surface admin.
+func TestSessionLegacyRowDefaultsAdmin(t *testing.T) {
+	s := newTestSessionStore(t)
+	ctx := context.Background()
+
+	token := "legacy-token"
+	now := time.Now().UTC()
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO sessions (id, user_id, token_hash, display_name, created_at, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"sess-legacy", "olduser", hashToken(token), "old",
+		now.Format(time.RFC3339Nano), now.Add(time.Hour).Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+	got, err := s.Lookup(ctx, token)
+	if err != nil || got == nil {
+		t.Fatalf("Lookup: %v", err)
+	}
+	if got.Role != RoleAdmin {
+		t.Errorf("legacy row role = %q, want admin (column default)", got.Role)
+	}
+	if got.Principal().Role != RoleAdmin {
+		t.Errorf("legacy row principal role = %q, want admin", got.Principal().Role)
+	}
+}
+
 func TestSessionCreateAndLookupRoundTrip(t *testing.T) {
 	s := newTestSessionStore(t)
 	ctx := context.Background()
 
-	sess, err := s.Create(ctx, "", "browser-mac", 0)
+	sess, err := s.Create(ctx, "", "browser-mac", RoleAdmin, 0)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -71,7 +131,7 @@ func TestSessionLookupExpiredReturnsNil(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a session that expires in the past.
-	sess, err := s.Create(ctx, "", "ephemeral", -time.Hour)
+	sess, err := s.Create(ctx, "", "ephemeral", RoleAdmin, -time.Hour)
 	if err == nil && sess != nil {
 		// TTL was rejected (we coerce <= 0 to default). Force-expire via direct UPDATE.
 		past := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)
@@ -92,7 +152,7 @@ func TestSessionDeleteByTokenRevokes(t *testing.T) {
 	s := newTestSessionStore(t)
 	ctx := context.Background()
 
-	sess, _ := s.Create(ctx, "", "throwaway", 0)
+	sess, _ := s.Create(ctx, "", "throwaway", RoleAdmin, 0)
 	if err := s.DeleteByToken(ctx, sess.Token); err != nil {
 		t.Fatalf("DeleteByToken: %v", err)
 	}
@@ -107,8 +167,8 @@ func TestSessionGCExpiredRemovesPastSessions(t *testing.T) {
 	ctx := context.Background()
 
 	// Create one live + one we'll expire by hand.
-	live, _ := s.Create(ctx, "", "live", time.Hour)
-	dead, _ := s.Create(ctx, "", "dead", time.Hour)
+	live, _ := s.Create(ctx, "", "live", RoleAdmin, time.Hour)
+	dead, _ := s.Create(ctx, "", "dead", RoleAdmin, time.Hour)
 	past := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)
 	if _, err := s.db.ExecContext(ctx, `UPDATE sessions SET expires_at = ? WHERE id = ?`, past, dead.ID); err != nil {
 		t.Fatal(err)
@@ -128,7 +188,7 @@ func TestSessionGCExpiredRemovesPastSessions(t *testing.T) {
 
 func TestValidatorAcceptsSessionTokenViaWithSessions(t *testing.T) {
 	s := newTestSessionStore(t)
-	sess, _ := s.Create(context.Background(), "", "", 0)
+	sess, _ := s.Create(context.Background(), "", "", RoleAdmin, 0)
 
 	v := NewValidator("root-bearer-token").WithSessions(s)
 	// Root token still works.
