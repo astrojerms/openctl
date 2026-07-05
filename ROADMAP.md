@@ -149,11 +149,13 @@ plan/state); harden the provider contract before the ecosystem widens.
       target parsing, bootstrap VM manifest generation, VM create/poll
       through the existing Proxmox provider, then handoff to the SSH
       Linux installer. Still needs homelab validation before marking done.
-- [~] Plugin-defined CLI subcommands (`openctl k3s logs/restart/upgrade`).
-      Generic protocol + CLI registration shipped: plugins can now advertise
-      typed subcommands in capabilities, and the CLI dispatches them with
-      positional/flag values in `Request.Args`. Remaining work is the k3s
-      plugin-specific logs/restart handlers.
+- [x] Plugin-defined CLI subcommands (`openctl k3s logs/restart`).
+      Generic protocol + CLI registration shipped: plugins advertise typed
+      subcommands in capabilities, and the CLI dispatches them with
+      positional/flag values in `Request.Args`. The k3s plugin now advertises
+      and implements `logs` (fetch a node's k3s journal) and `restart`
+      (restart k3s on a node) against the per-node agent client. `upgrade`
+      remains a follow-up (needs a binary-swap agent endpoint).
 - [x] Bug fix: the proxmox handler collapsed any `GetVM`/`GetNode`/
       `GetTemplate` error to NotFound — a network timeout produced a false
       "VM gone" result, and `applyVM` treated it as "doesn't exist" and
@@ -671,9 +673,10 @@ phase plan when ready to commit.
       Follow-up if ever wanted: a config-watch/SIGHUP reload path so
       changes apply without a restart.
 - [ ] **Mobile-friendly layout** — not v1 but worth flagging.
-- [~] **Plugin-defined CLI subcommands** — generic protocol + CLI
-      registration landed; k3s-specific logs/restart handlers remain.
-      See DESIGN.md "TODO: Plugin-defined CLI subcommands."
+- [x] **Plugin-defined CLI subcommands** — generic protocol + CLI
+      registration landed, and the k3s plugin ships `logs`/`restart`
+      handlers backed by the per-node agent client.
+      See DESIGN.md "Plugin-defined CLI subcommands."
 - [x] **Default-timeout problem** — verified. The controller's
       submit-returns-immediately model means the global `--timeout` (300s,
       used for the fast gRPC submit + exec'd-plugin executors) is fine; the

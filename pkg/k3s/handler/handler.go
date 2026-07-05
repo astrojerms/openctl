@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -31,6 +32,16 @@ func New(config *protocol.ProviderConfig) *Handler {
 
 // Handle handles a request and returns a response
 func (h *Handler) Handle(req *protocol.Request) (*protocol.Response, error) {
+	// Plugin-defined CLI subcommands (see DESIGN.md "Plugin-defined CLI
+	// subcommands") arrive with an agent action and no ResourceType — they
+	// operate on a cluster's per-node agent rather than a resource kind.
+	switch req.Action {
+	case "logs":
+		return h.handleLogs(req)
+	case "restart":
+		return h.handleRestart(req)
+	}
+
 	switch req.ResourceType {
 	case "Cluster":
 		return h.handleCluster(req)
@@ -304,6 +315,200 @@ func setStatusField(resource *protocol.Resource, key string, value any) {
 		resource.Status = map[string]any{}
 	}
 	resource.Status[key] = value
+}
+
+// loadClusterStatus reads a cluster's saved state file and returns its status
+// map. It returns a NotFound response (resp != nil) when the cluster is
+// unknown, mirroring getCluster, so callers can return that directly.
+func (h *Handler) loadClusterStatus(name string) (map[string]any, *protocol.Response, error) {
+	if name == "" {
+		return nil, &protocol.Response{
+			Status: protocol.StatusError,
+			Error: &protocol.Error{
+				Code:    protocol.ErrorCodeInvalidRequest,
+				Message: "cluster name is required",
+			},
+		}, nil
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, nil, err
+	}
+	statePath := filepath.Join(homeDir, ".openctl", "state", "k3s", name+".yaml")
+	stateData, err := os.ReadFile(statePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, &protocol.Response{
+				Status: protocol.StatusError,
+				Error: &protocol.Error{
+					Code:    protocol.ErrorCodeNotFound,
+					Message: fmt.Sprintf("cluster %q not found", name),
+				},
+			}, nil
+		}
+		return nil, nil, err
+	}
+
+	var state map[string]any
+	if err := yaml.Unmarshal(stateData, &state); err != nil {
+		return nil, nil, err
+	}
+	status, _ := state["status"].(map[string]any)
+	if status == nil {
+		status = map[string]any{}
+	}
+	return status, nil, nil
+}
+
+// agentClientForNode builds a typed agent client for a single node of a
+// cluster. node selects the target endpoint; when empty it is allowed only if
+// the cluster has exactly one node. It returns an error Response (resp != nil)
+// for the caller to return directly when selection or config fails.
+func (h *Handler) agentClientForNode(status map[string]any, node string) (*agentclient.Client, string, *protocol.Response, error) {
+	endpoints, opts, ok := extractAgentProbeConfig(status)
+	if !ok {
+		return nil, "", &protocol.Response{
+			Status: protocol.StatusError,
+			Error: &protocol.Error{
+				Code:    protocol.ErrorCodeInvalidRequest,
+				Message: "cluster has no reachable agent endpoints (created before the agent shipped, or partially provisioned)",
+			},
+		}, nil
+	}
+
+	name, ip, errResp := selectEndpoint(endpoints, node)
+	if errResp != nil {
+		return nil, "", errResp, nil
+	}
+
+	c, err := agentclient.NewFromProbeOptions(opts, ip)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	return c, name, nil, nil
+}
+
+// selectEndpoint picks one node's endpoint. If node is named it must exist;
+// otherwise it is chosen only when unambiguous (a single node).
+func selectEndpoint(endpoints map[string]string, node string) (name, ip string, errResp *protocol.Response) {
+	if node != "" {
+		ip, ok := endpoints[node]
+		if !ok {
+			return "", "", &protocol.Response{
+				Status: protocol.StatusError,
+				Error: &protocol.Error{
+					Code:    protocol.ErrorCodeNotFound,
+					Message: fmt.Sprintf("node %q not found in cluster (nodes: %s)", node, strings.Join(sortedKeys(endpoints), ", ")),
+				},
+			}
+		}
+		return node, ip, nil
+	}
+	if len(endpoints) != 1 {
+		return "", "", &protocol.Response{
+			Status: protocol.StatusError,
+			Error: &protocol.Error{
+				Code:    protocol.ErrorCodeInvalidRequest,
+				Message: fmt.Sprintf("cluster has %d nodes; specify one with --node (nodes: %s)", len(endpoints), strings.Join(sortedKeys(endpoints), ", ")),
+			},
+		}
+	}
+	for n, addr := range endpoints {
+		return n, addr, nil
+	}
+	return "", "", nil // unreachable
+}
+
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// handleLogs implements `openctl k3s logs <cluster> [--node] [--lines]`: it
+// fetches the k3s service journal from one node's agent.
+func (h *Handler) handleLogs(req *protocol.Request) (*protocol.Response, error) {
+	status, errResp, err := h.loadClusterStatus(argString(req.Args, "cluster"))
+	if err != nil || errResp != nil {
+		return errResp, err
+	}
+	c, node, errResp, err := h.agentClientForNode(status, argString(req.Args, "node"))
+	if err != nil || errResp != nil {
+		return errResp, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	logs, err := c.Logs(ctx, argInt(req.Args, "lines"))
+	if err != nil {
+		return &protocol.Response{
+			Status: protocol.StatusError,
+			Error: &protocol.Error{
+				Code:    protocol.ErrorCodeInternal,
+				Message: fmt.Sprintf("fetch logs from node %q: %v", node, err),
+			},
+		}, nil
+	}
+	return &protocol.Response{Status: protocol.StatusSuccess, Message: logs}, nil
+}
+
+// handleRestart implements `openctl k3s restart <cluster> --node <name>`: it
+// restarts the k3s service on a node via its agent.
+func (h *Handler) handleRestart(req *protocol.Request) (*protocol.Response, error) {
+	status, errResp, err := h.loadClusterStatus(argString(req.Args, "cluster"))
+	if err != nil || errResp != nil {
+		return errResp, err
+	}
+	c, node, errResp, err := h.agentClientForNode(status, argString(req.Args, "node"))
+	if err != nil || errResp != nil {
+		return errResp, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := c.RestartK3s(ctx); err != nil {
+		return &protocol.Response{
+			Status: protocol.StatusError,
+			Error: &protocol.Error{
+				Code:    protocol.ErrorCodeInternal,
+				Message: fmt.Sprintf("restart k3s on node %q: %v", node, err),
+			},
+		}, nil
+	}
+	return &protocol.Response{
+		Status:  protocol.StatusSuccess,
+		Message: fmt.Sprintf("restarted k3s on node %q", node),
+	}, nil
+}
+
+// argString returns args[key] as a string, or "" if absent or not a string.
+func argString(args map[string]any, key string) string {
+	if args == nil {
+		return ""
+	}
+	s, _ := args[key].(string)
+	return s
+}
+
+// argInt returns args[key] as an int, tolerating the float64 that JSON
+// round-trips produce, or 0 if absent.
+func argInt(args map[string]any, key string) int {
+	if args == nil {
+		return 0
+	}
+	switch v := args[key].(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	}
+	return 0
 }
 
 func (h *Handler) createCluster(req *protocol.Request) (*protocol.Response, error) {
