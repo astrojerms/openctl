@@ -155,12 +155,25 @@ reaches your plugin as `{"defaults":{"dir":"/var/lib/openctl-example"}}`.
 `Apply`/`Get`/`Delete` carry optional opaque **state** and **private** blobs
 (`ApplyParams.State`, `ApplyResult.State`, …). A stateless provider (like the
 example, which reads files back off disk) ignores them. Providers that need to
-persist opaque per-resource state across calls — most notably the forthcoming
-Terraform/OpenTofu host — return updated blobs and read them back next call.
+persist opaque per-resource state across calls return updated blobs and read
+them back next call.
 
-> The wire format carries these blobs today, but the controller-side
-> `provider_state` store that persists them lands with Tier 1 item 2. Until
-> then, author **stateless** providers (re-read observed state from the world).
+To opt in, advertise **`CapabilityState`** in the handshake. The controller
+then persists whatever your plugin returns in its `provider_state` store (one
+opaque row per resource) and replays it verbatim on the next call:
+
+- **Apply** — the controller loads the prior `state`/`private` and passes them
+  in `ApplyParams`; it saves the `state`/`private` you return.
+- **Get** — the prior `state` is passed in; if you return refreshed `state`
+  (Terraform `ReadResource` semantics), the controller persists it so drift
+  checks compare against your latest view.
+- **Delete** — the current `state`/`private` are passed in, then the row is
+  removed.
+
+openctl never parses these blobs. Because the store is per-resource and opaque,
+none of the monolithic-tfstate pain (global lock, whole-world file, state
+surgery) applies. `schema_version` is stored alongside for a future
+provider-driven state-upgrade path; simple plugins can ignore it.
 
 ## Installing your plugin
 

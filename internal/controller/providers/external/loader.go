@@ -17,9 +17,11 @@ import (
 // controller shutdown to reap the plugin process.
 //
 // config is marshaled verbatim into the configure bag (nil skips configure).
-// If cmd.Stderr is unset, the plugin's diagnostic output is forwarded to the
-// controller's stderr so plugin logs surface alongside controller logs.
-func Load(ctx context.Context, cmd *exec.Cmd, config any) (providers.Provider, *pluginproto.HandshakeResult, *pluginproto.Client, error) {
+// store persists opaque provider state for stateful plugins (CapabilityState);
+// pass nil for stateless plugins. If cmd.Stderr is unset, the plugin's
+// diagnostic output is forwarded to the controller's stderr so plugin logs
+// surface alongside controller logs.
+func Load(ctx context.Context, cmd *exec.Cmd, config any, store StateStore) (providers.Provider, *pluginproto.HandshakeResult, *pluginproto.Client, error) {
 	if cmd.Stderr == nil {
 		cmd.Stderr = os.Stderr
 	}
@@ -51,5 +53,5 @@ func Load(ctx context.Context, cmd *exec.Cmd, config any) (providers.Provider, *
 		}
 	}
 
-	return New(client, hs), hs, client, nil
+	return New(client, hs, store), hs, client, nil
 }
