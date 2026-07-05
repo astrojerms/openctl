@@ -106,8 +106,8 @@ func TestSessionHandlerWhoAmIIdentifiesSessionVsRoot(t *testing.T) {
 	store := newSessionStoreForTest(t)
 	h := newSessionHandler(store)
 
-	// Session-token caller: WhoAmI returns user_id + session_id.
-	sess, _ := store.Create(context.Background(), "", "", auth.RoleAdmin, 0)
+	// Session-token caller: WhoAmI returns user_id + session_id + role.
+	sess, _ := store.Create(context.Background(), "alice", "", auth.RoleViewer, 0)
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
 		"authorization", "Bearer "+sess.Token,
 	))
@@ -115,20 +115,35 @@ func TestSessionHandlerWhoAmIIdentifiesSessionVsRoot(t *testing.T) {
 	if resp.GetSessionId() != sess.ID {
 		t.Errorf("session caller: SessionId = %q, want %q", resp.GetSessionId(), sess.ID)
 	}
-	if resp.GetUserId() != auth.DefaultUserID {
-		t.Errorf("session caller: UserId = %q, want %q", resp.GetUserId(), auth.DefaultUserID)
+	if resp.GetUserId() != "alice" {
+		t.Errorf("session caller: UserId = %q, want alice", resp.GetUserId())
+	}
+	if resp.GetRole() != "viewer" {
+		t.Errorf("session caller: Role = %q, want viewer", resp.GetRole())
 	}
 
-	// Root-bearer caller: token doesn't match any session.
-	rootCtx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
-		"authorization", "Bearer some-root-token-not-in-sessions",
-	))
+	// Root-bearer caller: principal injected (as the interceptor would), Root.
+	rootCtx := auth.ContextWithPrincipal(context.Background(), auth.RootPrincipal())
 	rootResp, _ := h.WhoAmI(rootCtx, &apiv1.WhoAmIRequest{})
 	if rootResp.GetSessionId() != "" {
 		t.Errorf("root caller: SessionId = %q, want empty", rootResp.GetSessionId())
 	}
 	if rootResp.GetUserId() != "" {
-		t.Errorf("root caller: UserId = %q, want empty", rootResp.GetUserId())
+		t.Errorf("root caller: UserId = %q, want empty (root signal)", rootResp.GetUserId())
+	}
+	if rootResp.GetRole() != "admin" {
+		t.Errorf("root caller: Role = %q, want admin", rootResp.GetRole())
+	}
+
+	// Named-user token caller (no session): principal carries user + role.
+	userCtx := auth.ContextWithPrincipal(context.Background(),
+		auth.Principal{UserID: "bob", Role: auth.RoleEditor})
+	userResp, _ := h.WhoAmI(userCtx, &apiv1.WhoAmIRequest{})
+	if userResp.GetUserId() != "bob" || userResp.GetRole() != "editor" {
+		t.Errorf("named-user caller: got %q/%q, want bob/editor", userResp.GetUserId(), userResp.GetRole())
+	}
+	if userResp.GetSessionId() != "" {
+		t.Errorf("named-user caller: SessionId = %q, want empty", userResp.GetSessionId())
 	}
 }
 

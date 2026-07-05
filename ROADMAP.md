@@ -641,8 +641,11 @@ phase plan when ready to commit.
         caller's principal and mints the session with their user+role, so a
         viewer-token holder who logs in gets a viewer-scoped cookie.
         `--no-auth` still mints admin. Browser logins are now role-scoped.
-      - *Next — OIDC:* external IdP → claims → role, plus surfacing the
-        logged-in user's role in `WhoAmI`/the UI.
+      - *WhoAmI surfaces role:* `WhoAmIResponse.role` now reports the caller's
+        RBAC level (session → its role, named-user/root → the principal's), so
+        a client can display "you are alice (viewer)". UI display is a small
+        frontend follow-up.
+      - *Next — OIDC:* external IdP → claims → role (the last big auth slice).
 - [x] **Terraform / OpenTofu provider host** *(Tier 1 — see
       [docs/direction.md](docs/direction.md))* — consume the existing
       Terraform provider ecosystem (AWS, GCP, Azure, Cloudflare, …)

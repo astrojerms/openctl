@@ -694,11 +694,12 @@ message WhoAmIRequest {}
 
 // WhoAmIResponse returns identifying info about the auth credential used
 // on the call. For root-bearer-token callers user_id is empty; for
-// session-token callers it carries the session's user_id (always
-// "default" in single-user mode).
+// named-user and session-token callers it carries the user id. role is the
+// caller's RBAC level ("viewer" | "editor" | "admin").
 message WhoAmIResponse {
   string user_id = 1;
   string session_id = 2; // empty if authenticated via root bearer
+  string role = 3;       // RBAC role of the caller
 }
 
 // SchemaService introspects the controller's embedded CUE schemas and

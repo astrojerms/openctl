@@ -72,12 +72,25 @@ func (h *sessionHandler) WhoAmI(ctx context.Context, _ *apiv1.WhoAmIRequest) (*a
 	tok := bearerFromCtx(ctx)
 	if h.sessions != nil && tok != "" {
 		if sess, _ := h.sessions.Lookup(ctx, tok); sess != nil {
-			return &apiv1.WhoAmIResponse{UserId: sess.UserID, SessionId: sess.ID}, nil
+			return &apiv1.WhoAmIResponse{
+				UserId:    sess.UserID,
+				SessionId: sess.ID,
+				Role:      string(sess.Principal().Role),
+			}, nil
 		}
 	}
-	// No session match — caller authenticated via the root bearer token.
-	// Leave user_id empty to signal "root credential, not a session".
-	return &apiv1.WhoAmIResponse{}, nil
+	// Not a session token — report from the injected principal (a named user,
+	// or the root credential). user_id stays empty for root to preserve the
+	// "root, not a session" signal; role is always surfaced.
+	if p, ok := auth.PrincipalFromContext(ctx); ok {
+		resp := &apiv1.WhoAmIResponse{Role: string(p.Role)}
+		if !p.Root {
+			resp.UserId = p.UserID
+		}
+		return resp, nil
+	}
+	// No principal (e.g. --no-auth): full access, report admin.
+	return &apiv1.WhoAmIResponse{Role: string(auth.RoleAdmin)}, nil
 }
 
 // bearerFromCtx pulls the raw token out of the incoming Authorization

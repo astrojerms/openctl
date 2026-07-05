@@ -3633,12 +3633,13 @@ func (*WhoAmIRequest) Descriptor() ([]byte, []int) {
 
 // WhoAmIResponse returns identifying info about the auth credential used
 // on the call. For root-bearer-token callers user_id is empty; for
-// session-token callers it carries the session's user_id (always
-// "default" in single-user mode).
+// named-user and session-token callers it carries the user id. role is the
+// caller's RBAC level ("viewer" | "editor" | "admin").
 type WhoAmIResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	SessionId     string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"` // empty if authenticated via root bearer
+	Role          string                 `protobuf:"bytes,3,opt,name=role,proto3" json:"role,omitempty"`                            // RBAC role of the caller
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3683,6 +3684,13 @@ func (x *WhoAmIResponse) GetUserId() string {
 func (x *WhoAmIResponse) GetSessionId() string {
 	if x != nil {
 		return x.SessionId
+	}
+	return ""
+}
+
+func (x *WhoAmIResponse) GetRole() string {
+	if x != nil {
+		return x.Role
 	}
 	return ""
 }
@@ -5147,11 +5155,12 @@ const file_api_proto_rawDesc = "" +
 	"expires_at\x18\x03 \x01(\tR\texpiresAt\"\x0f\n" +
 	"\rLogoutRequest\"\x10\n" +
 	"\x0eLogoutResponse\"\x0f\n" +
-	"\rWhoAmIRequest\"H\n" +
+	"\rWhoAmIRequest\"\\\n" +
 	"\x0eWhoAmIResponse\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x02 \x01(\tR\tsessionId\"\x14\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\x12\x12\n" +
+	"\x04role\x18\x03 \x01(\tR\x04role\"\x14\n" +
 	"\x12ListSchemasRequest\"G\n" +
 	"\x13ListSchemasResponse\x120\n" +
 	"\aschemas\x18\x01 \x03(\v2\x16.openctl.v1.SchemaInfoR\aschemas\"z\n" +
