@@ -42,6 +42,11 @@ type ComputeSpec struct {
 	Context  string          `json:"context,omitempty"`
 	Image    ImageSpec       `json:"image"`
 	Default  DefaultSizeSpec `json:"default"`
+	// Nodes is the cluster-wide default pool of provider hosts (e.g.
+	// Proxmox node names) to spread VMs across, round-robin within each
+	// node pool. Empty means the provider's configured default host.
+	// A per-pool Nodes list overrides this for that pool.
+	Nodes []string `json:"nodes,omitempty"`
 }
 
 // ImageSpec defines the VM image to use
@@ -69,6 +74,11 @@ type NodesSpec struct {
 type ControlPlaneSpec struct {
 	Count int              `json:"count"`
 	Size  *DefaultSizeSpec `json:"size,omitempty"`
+	// Nodes overrides Compute.Nodes for the control-plane pool. When set,
+	// control-plane VMs are spread round-robin across these provider
+	// hosts — three CP replicas over three hosts land one each, keeping
+	// etcd quorum across failure domains.
+	Nodes []string `json:"nodes,omitempty"`
 }
 
 // WorkerSpec defines a worker node pool
@@ -76,6 +86,9 @@ type WorkerSpec struct {
 	Name  string           `json:"name"`
 	Count int              `json:"count"`
 	Size  *DefaultSizeSpec `json:"size,omitempty"`
+	// Nodes overrides Compute.Nodes for this worker pool, spreading the
+	// pool's VMs round-robin across these provider hosts.
+	Nodes []string `json:"nodes,omitempty"`
 }
 
 // K3sSpec defines K3s configuration
@@ -109,6 +122,7 @@ func ParseClusterSpec(r *protocol.Resource) (*ClusterSpec, error) {
 		if context, ok := compute["context"].(string); ok {
 			spec.Compute.Context = context
 		}
+		spec.Compute.Nodes = parseStringSlice(compute["nodes"])
 		if image, ok := compute["image"].(map[string]any); ok {
 			if url, ok := image["url"].(string); ok {
 				spec.Compute.Image.URL = url
@@ -145,6 +159,7 @@ func ParseClusterSpec(r *protocol.Resource) (*ClusterSpec, error) {
 			if size, ok := cp["size"].(map[string]any); ok {
 				spec.Nodes.ControlPlane.Size = parseSizeSpec(size)
 			}
+			spec.Nodes.ControlPlane.Nodes = parseStringSlice(cp["nodes"])
 		}
 		if workers, ok := nodes["workers"].([]any); ok {
 			for _, w := range workers {
@@ -159,6 +174,7 @@ func ParseClusterSpec(r *protocol.Resource) (*ClusterSpec, error) {
 					if size, ok := worker["size"].(map[string]any); ok {
 						ws.Size = parseSizeSpec(size)
 					}
+					ws.Nodes = parseStringSlice(worker["nodes"])
 					spec.Nodes.Workers = append(spec.Nodes.Workers, ws)
 				}
 			}
@@ -236,6 +252,23 @@ func ParseClusterSpec(r *protocol.Resource) (*ClusterSpec, error) {
 	return spec, nil
 }
 
+// parseStringSlice coerces a spec value into a []string, tolerating the
+// []any shape that JSON/YAML decoding produces. Returns nil for any
+// other shape (including absent), so an unset field stays nil.
+func parseStringSlice(v any) []string {
+	items, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	var out []string
+	for _, item := range items {
+		if s, ok := item.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 func parseSizeSpec(m map[string]any) *DefaultSizeSpec {
 	size := &DefaultSizeSpec{}
 	if cpus, ok := m["cpus"].(float64); ok {
@@ -311,6 +344,51 @@ func NodeNames(clusterName string, spec *ClusterSpec) (controlPlanes []string, w
 	}
 
 	return
+}
+
+// PlacementHosts returns a map of node name -> target provider host
+// (e.g. a Proxmox node name) for every node whose pool defines a host
+// list. A pool uses its own Nodes list when set, else Compute.Nodes;
+// if both are empty the pool's nodes are omitted from the map, leaving
+// the compute provider to fall back to its configured default host.
+//
+// Hosts are assigned round-robin WITHIN each pool, so the control
+// plane and each worker pool spread independently — three CP replicas
+// over [pve1,pve2,pve3] land one per host, keeping etcd quorum across
+// failure domains. The node names match NodeNames exactly.
+func PlacementHosts(clusterName string, spec *ClusterSpec) map[string]string {
+	hosts := make(map[string]string)
+
+	cpHosts := spec.Nodes.ControlPlane.Nodes
+	if len(cpHosts) == 0 {
+		cpHosts = spec.Compute.Nodes
+	}
+	if len(cpHosts) > 0 {
+		for i := 0; i < spec.Nodes.ControlPlane.Count; i++ {
+			name := fmt.Sprintf("%s-cp-%d", clusterName, i)
+			hosts[name] = cpHosts[i%len(cpHosts)]
+		}
+	}
+
+	for _, pool := range spec.Nodes.Workers {
+		poolHosts := pool.Nodes
+		if len(poolHosts) == 0 {
+			poolHosts = spec.Compute.Nodes
+		}
+		if len(poolHosts) == 0 {
+			continue
+		}
+		poolName := pool.Name
+		if poolName == "" {
+			poolName = "worker"
+		}
+		for i := 0; i < pool.Count; i++ {
+			name := fmt.Sprintf("%s-%s-%d", clusterName, poolName, i)
+			hosts[name] = poolHosts[i%len(poolHosts)]
+		}
+	}
+
+	return hosts
 }
 
 // AllocateIPs generates IP allocations for all nodes in the cluster

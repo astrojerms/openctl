@@ -731,6 +731,18 @@ When phases or followups land, move them up out of "pending" into their
 detail doc's marked-complete section, then leave a one-line entry here
 with the commit hash for at-a-glance history. Trim to the last 10.
 
+- feat: **k3s node placement across Proxmox hosts** — a k3s `Cluster` can
+  now spread its VMs across multiple provider hosts instead of piling every
+  node onto one. `spec.compute.nodes` sets a cluster-wide host pool and
+  `spec.nodes.controlPlane.nodes` / `spec.nodes.workers[].nodes` override it
+  per pool; VMs are assigned round-robin within each pool (three CP replicas
+  over three hosts land one each, keeping etcd quorum across failure domains).
+  `resources.PlacementHosts` threads the chosen host onto each VirtualMachine's
+  `spec.node` in both the `Cluster.Apply` and `Plan`/dispatcher paths; empty
+  lists leave `spec.node` unset for the provider default (fully backward
+  compatible). Covers only different physical nodes within one Proxmox
+  endpoint — spanning separate Proxmox *endpoints* still needs per-pool
+  context selection. CUE schema + README + tests.
 - feat: **`provider_state` opaque store** — migration 0009 +
   `internal/controller/providerstate` (per-resource state/private/schema_version
   blobs, keyed like applied_manifests). The external adapter now round-trips

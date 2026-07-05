@@ -47,6 +47,7 @@ func (p *Provider) Plan(_ context.Context, manifest *protocol.Resource) (*provid
 		return nil, fmt.Errorf("cluster must have at least one control plane node")
 	}
 	nodeIPs, _ := k3sresources.AllocateIPs(clusterName, spec)
+	placement := k3sresources.PlacementHosts(clusterName, spec)
 
 	children := make([]*protocol.Resource, 0, (len(cpNodes)+len(workerNodes))*3)
 	firstCP := cpNodes[0]
@@ -57,7 +58,7 @@ func (p *Provider) Plan(_ context.Context, manifest *protocol.Resource) (*provid
 	for i, nodeName := range allNodes {
 		size := sizeForNode(i, len(cpNodes), spec)
 		staticIP := nodeIPs[nodeName]
-		vm := buildVMManifest(clusterName, nodeName, i, len(cpNodes), size, staticIP, spec)
+		vm := buildVMManifest(clusterName, nodeName, i, len(cpNodes), size, staticIP, placement[nodeName], spec)
 		children = append(children, vm)
 	}
 
@@ -166,7 +167,7 @@ func sizeForNode(i, cpCount int, spec *k3sresources.ClusterSpec) k3sresources.De
 // pkg/k3s/cluster.Creator.GenerateDispatchRequests. Kept side-by-side
 // so a future refactor can switch Apply to consume Plan output
 // without changing VM shape.
-func buildVMManifest(clusterName, nodeName string, i, cpCount int, size k3sresources.DefaultSizeSpec, staticIP string, spec *k3sresources.ClusterSpec) *protocol.Resource {
+func buildVMManifest(clusterName, nodeName string, i, cpCount int, size k3sresources.DefaultSizeSpec, staticIP, host string, spec *k3sresources.ClusterSpec) *protocol.Resource {
 	var ipConfig map[string]any
 	if staticIP != "" && spec.Network.StaticIPs != nil {
 		ipConfig = map[string]any{
@@ -207,6 +208,11 @@ func buildVMManifest(clusterName, nodeName string, i, cpCount int, size k3sresou
 				"ipConfig": ipConfig,
 			},
 		},
+	}
+	// Pin this VM to a specific provider host when its pool defines
+	// placement; otherwise leave spec.node unset for the provider default.
+	if host != "" {
+		vm.Spec["node"] = host
 	}
 	if spec.Compute.Image.URL != "" {
 		cloudImage := map[string]any{"url": spec.Compute.Image.URL}

@@ -47,6 +47,11 @@ import "openctl.io/schemas/base"
 		// Default node size applied to every control-plane and worker
 		// VM unless overridden on the pool.
 		default?: #NodeSize
+		// Cluster-wide default pool of provider hosts (e.g. Proxmox node
+		// names) to spread VMs across, round-robin within each node pool.
+		// Omit to use the provider's single configured host. A per-pool
+		// nodes list overrides this for that pool.
+		nodes?: [...string]
 	}
 
 	// Node topology of the cluster.
@@ -58,6 +63,10 @@ import "openctl.io/schemas/base"
 			count: int & >=1 | *1
 			// Optional size override for the control-plane pool.
 			size?: #NodeSize
+			// Provider hosts to spread control-plane VMs across, round-robin.
+			// Overrides compute.nodes for this pool. Three replicas over
+			// three hosts land one each, keeping etcd quorum across hosts.
+			nodes?: [...string]
 		}
 		// Worker (agent) node pools. Each pool can have its own size.
 		workers?: [...{
@@ -67,6 +76,9 @@ import "openctl.io/schemas/base"
 			count: int & >=1
 			// Optional size override for this pool.
 			size?: #NodeSize
+			// Provider hosts to spread this pool's VMs across, round-robin.
+			// Overrides compute.nodes for this pool.
+			nodes?: [...string]
 		}]
 	}
 

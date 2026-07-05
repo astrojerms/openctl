@@ -76,6 +76,10 @@ spec:
       cpus: <number>             # CPU cores per VM (default: 2)
       memoryMB: <number>         # Memory in MB (default: 4096)
       diskGB: <number>           # Disk size in GB (default: 32)
+    nodes:                       # Optional: provider hosts to spread VMs
+      - <host-1>                 # across, round-robin within each pool
+      - <host-2>                 # (e.g. Proxmox node names). Omit to use
+      - <host-3>                 # the provider's single configured host.
 
   nodes:
     controlPlane:
@@ -84,6 +88,10 @@ spec:
         cpus: <number>
         memoryMB: <number>
         diskGB: <number>
+      nodes:                     # Optional: override compute.nodes for the
+        - <host-1>               # control plane. Three replicas over three
+        - <host-2>               # hosts land one each, spreading etcd quorum
+        - <host-3>               # across failure domains.
     workers:                     # Optional: worker node pools
       - name: <pool-name>        # Pool name (used in VM names)
         count: <number>          # Number of workers in pool
@@ -91,6 +99,8 @@ spec:
           cpus: <number>
           memoryMB: <number>
           diskGB: <number>
+        nodes:                   # Optional: override compute.nodes for this
+          - <host-1>             # pool, spreading its VMs round-robin.
 
   k3s:                           # Optional: K3s configuration
     version: <version>           # K3s version (e.g., "v1.29.0+k3s1")
@@ -294,6 +304,7 @@ VMs are named based on the cluster name:
 | `default.cpus` | int | No | Default CPU cores (default: 2) |
 | `default.memoryMB` | int | No | Default memory in MB (default: 4096) |
 | `default.diskGB` | int | No | Default disk in GB (default: 32) |
+| `nodes` | []string | No | Provider hosts to spread VMs across, round-robin within each pool. Omit for the provider's default host. |
 
 ### spec.nodes Options
 
@@ -301,9 +312,16 @@ VMs are named based on the cluster name:
 |-------|------|----------|-------------|
 | `controlPlane.count` | int | No | Control plane nodes (default: 1) |
 | `controlPlane.size` | object | No | Override default sizing |
+| `controlPlane.nodes` | []string | No | Hosts to spread control-plane VMs across; overrides `compute.nodes` |
 | `workers[].name` | string | Yes | Worker pool name |
 | `workers[].count` | int | Yes | Workers in pool |
 | `workers[].size` | object | No | Override default sizing |
+| `workers[].nodes` | []string | No | Hosts to spread this pool's VMs across; overrides `compute.nodes` |
+
+> **Node placement.** Host lists cover different physical nodes within a
+> single Proxmox endpoint (one `compute.provider` + `context`). Spreading a
+> cluster across *separate* Proxmox endpoints is not yet supported — a
+> cluster carries one provider/context for all nodes.
 
 ### spec.network Options
 
