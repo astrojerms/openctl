@@ -53,9 +53,17 @@ in. Any change requires re-opening the discussion.
   barrier edges for non-ref constraints (e.g. every AgentInstall waits on the
   CA bundle, which aggregates all K3sNode states). Serial by default (preserves
   SSH-install semantics); `OPENCTL_APPLY_CONCURRENCY=N` applies independent
-  children in parallel. Ordering *across* separate top-level operations is still
-  FIFO — cross-op scheduling is future work. See `DESIGN.md` §"Dependencies,
-  Value-Passing & Ordering" for the `$ref`/resolver model.
+  children in parallel. See `DESIGN.md` §"Dependencies, Value-Passing &
+  Ordering" for the `$ref`/resolver model.
+- **Cross-op scheduling is opt-in.** By default the dispatcher processes
+  *separate* top-level operations one at a time (FIFO). Setting
+  `OPENCTL_CROSS_OP_SCHEDULING` switches it to claim the whole pending batch and
+  run it through the same `operations.RunGraph`: independent ops run
+  concurrently (`OPENCTL_CROSS_OP_CONCURRENCY`, default 4), dependent ops are
+  ordered by their `$ref` edges (`crossOpEdges`). Default-off, so the
+  single-goroutine / fail-fast-collision model below is unchanged until an
+  operator opts in. Design + the decisions to weigh before flipping the default:
+  [docs/cross-op-scheduling.md](docs/cross-op-scheduling.md).
 - **Success criteria:** end-to-end verification. Cluster apply is
   `succeeded` only when all VMs are running, k3s is responding, and agents
   are reachable. Reuse the existing Phase 3 reachability probe.
