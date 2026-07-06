@@ -100,6 +100,21 @@ Workloads/PaaS is vetoed by scope.
 **Cross-cutting:** test every capability against the wedge (no global
 plan/state); harden the provider contract before the ecosystem widens.
 
+- [~] **Provider conformance suite** (`internal/controller/providers/providertest`).
+      A reusable `Suite` + `Capabilities` battery encoding the baseline
+      `providers.Provider` contract once — Apply identity, Get-after-Apply
+      round-trip, `*providers.NotFoundError` on missing Get, idempotent Delete,
+      Delete-removes, List enumeration — with capability flags for legitimate
+      variations (`SupportsList`, `NoOpOnExisting`). Self-tested for teeth (a
+      compliant in-memory provider passes; deliberately-broken ones fail).
+      **Bound to:** the external-plugin adapter (in-process pluginproto, the
+      primary ecosystem-widening path) and the Terraform host (tf-fake over
+      subprocess, exercising `SupportsList=false`). **Follow-ups:** bind the
+      proxmox VirtualMachine provider (needs a stateful fake Proxmox API;
+      asserts `NoOpOnExisting`) and decide how the composite k3s Cluster fits
+      (it is not an atomic CRUD resource — the battery targets atomic
+      providers).
+
 ---
 
 ## Controller rollout — CONTROLLER.md
