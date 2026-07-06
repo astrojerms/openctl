@@ -194,6 +194,44 @@ provider-driven state-upgrade path; simple plugins can ignore it.
    to load is logged and skipped (it can't stop the controller), and built-in
    provider names (`proxmox`, `k3s`) always win a name collision.
 
+## The provider contract
+
+The controller reaches your plugin through an in-process adapter that turns
+your `Handler` into the same `providers.Provider` interface the compiled-in
+providers implement. The controller — dispatcher, reconciler, gRPC layer —
+relies on a small set of invariants holding for *every* provider. Get these
+right and your plugin behaves like a first-party one; get them wrong and the
+failure is subtle (a duplicate resource, a delete that reports success but
+leaves state, a not-found that surfaces as an internal error). The invariants:
+
+- **Apply returns the observed resource with its identity intact.** The result
+  carries the same `kind` and `metadata.name` you were handed, and a non-empty
+  `apiVersion`. Put observed/computed outputs (an assigned IP, an ID) in
+  `status` so other resources can `$ref` them.
+- **Get on a missing resource returns `pluginproto.NotFound(...)`.** The adapter
+  maps that sentinel to `*providers.NotFoundError`, which the server maps to
+  gRPC `codes.NotFound`. Returning a generic error instead turns "doesn't
+  exist" into "internal error" and breaks Get-after-Delete and reconcile.
+- **Get after a successful Apply returns the resource** — the round-trip must
+  hold, so a resource you just created is immediately observable by name.
+- **Delete is idempotent.** Delete of a name that doesn't exist returns success
+  (nil), not an error — reconcile and retries depend on it.
+- **Delete removes.** After Delete succeeds, a Get for that name returns
+  NotFound.
+- **Re-Apply of an unchanged manifest is never destructive.** Whether you no-op
+  (return the observed state unchanged, like the Proxmox VM provider) or update
+  in place, the resource still round-trips afterward. Do not recreate it.
+- **List (if you support it) enumerates by kind** and returns an empty slice —
+  not an error — when there are none. If your backend has no enumeration API,
+  it's fine to return an error from List; declare that so callers don't rely on
+  it.
+
+These are exactly the invariants the shared conformance battery in
+`internal/controller/providers/providertest` enforces. The external adapter is
+bound to it (`internal/controller/providers/external/conformance_test.go`), so
+a `Handler` that upholds the obligations above passes the battery through the
+adapter automatically.
+
 ## Testing tips
 
 - Unit-test your `Handler` directly (no process needed) — call its methods, or
@@ -202,3 +240,7 @@ provider-driven state-upgrade path; simple plugins can ignore it.
 - For an end-to-end check, build your binary and load it through
   `internal/controller/providers/external.Load`. See
   `internal/controller/providers/external/e2e_test.go`.
+- To check contract conformance, run the shared `providertest.Suite` against
+  your adapter-wrapped provider (as the external adapter does in
+  `conformance_test.go`) — it exercises the invariants above and reports the
+  specific one you miss.
