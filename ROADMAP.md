@@ -111,17 +111,19 @@ plan/state); harden the provider contract before the ecosystem widens.
       primary ecosystem-widening path), the Terraform host (tf-fake over
       subprocess, exercising `SupportsList=false`), and the compiled-in
       **proxmox VirtualMachine** provider (stateful in-memory fake Proxmox API,
-      `NoOpOnExisting=false`) — so all three provider classes (compiled-in,
-      external, TF host) are covered. Binding proxmox surfaced two contract
-      gaps: (1) **fixed** (#71) — `Apply` returned a nil `Resource` from the
+      `NoOpOnExisting=true`) — so all three provider classes (compiled-in,
+      external, TF host) are covered. Binding proxmox surfaced and fixed two
+      contract gaps: (1) (#71) — `Apply` returned a nil `Resource` from the
       create/apply paths; it now reads the VM back and returns observed state,
-      per the `Provider` interface doc. (2) **awaiting a decision** — `applyVM`
-      mutates an existing VM (`ConfigureVM`/`ResizeVMDisk`) rather than the
-      no-op CONTROLLER.md:23 locks in; the binding uses `NoOpOnExisting=false`
-      to match current behavior, but reconciling it (make `applyVM` no-op +
-      flip the flag to `true`) touches a locked decision and is left for a
-      separate call. **Remaining follow-up:** decide how the composite k3s
-      Cluster fits (it is not an atomic CRUD resource — the battery targets
+      per the `Provider` interface doc. (2) — `applyVM` mutated an existing VM
+      (`ConfigureVM`/`ResizeVMDisk`) rather than the no-op CONTROLLER.md:23
+      locks in; it now no-ops and returns observed state (surfacing drift via
+      the manifest-vs-observed comparison), matching the documented atomic
+      contract, and the binding asserts `NoOpOnExisting=true`. *If in-place VM
+      update via re-apply was actually intended, revert that change and update
+      CONTROLLER.md:23 instead.* **Remaining follow-up:** decide how the
+      composite k3s Cluster fits (it is not an atomic CRUD resource — the
+      battery targets
       atomic providers).
 
 ---
