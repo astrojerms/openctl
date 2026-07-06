@@ -1,10 +1,11 @@
 # Cross-op dependency scheduling
 
-**Status:** implemented, **flag-gated and default-off** (`OPENCTL_CROSS_OP_SCHEDULING`).
-The default path is unchanged FIFO dispatch; the locked single-goroutine /
-fail-fast-collision behavior only changes if an operator opts in. Flip the
-default to on only after homelab validation (see Rollout).
-**Author:** autonomous session, 2026-07-05.
+**Status:** implemented and **on by default** (2026-07-06). The dispatcher
+schedules the pending batch as a dependency graph. `OPENCTL_CROSS_OP_SCHEDULING=0`
+(or `false`/`no`) is an operator escape hatch back to single-goroutine FIFO
+dispatch. The two reopened locked decisions were verified *preserved* rather than
+loosened before the flip — see Rollout.
+**Author:** autonomous session, 2026-07-05; default flipped 2026-07-06.
 **Motivating work:** the composite-apply dependency DAG (#66) and the `$ref`
 primitive documented in DESIGN.md § "Dependencies, Value-Passing & Ordering".
 **Implementation:** `internal/controller/operations/crossop.go` (edge
@@ -182,11 +183,12 @@ can show cross-op edges).
 - No cross-op transactions or rollback.
 - No change to how composite children are scheduled — that DAG is unchanged.
 
-## Known limitations (weigh before flipping the default)
+## Known limitations
 
-These are acceptable for the opt-in slice but should be understood before the
-default flips to on. None are correctness bugs; all stem from claiming the
-whole pending batch up front and running it as one graph.
+None are correctness bugs; all stem from claiming the whole pending batch up
+front and running it as one graph. They were weighed and accepted when the
+default flipped to on; the escape hatch (`OPENCTL_CROSS_OP_SCHEDULING=0`) exists
+for an operator who hits one of them in the field.
 
 - **Op status reads "running" while queued in the graph.** `drainScheduled`
   claims every pending op (marking it `running`) before `RunGraph` starts, but
@@ -212,7 +214,25 @@ whole pending batch up front and running it as one graph.
 
 ## Rollout
 
-Ship flag-off. Validate on the homelab (independent multi-endpoint applies
-in parallel; a VM + dependent k3s resource submitted separately and correctly
-ordered). Weigh the known limitations above. Flip the default only after that,
-in its own change.
+Shipped flag-off (#74), then flipped on by default (2026-07-06) once the two
+reopened locked decisions were verified *preserved rather than loosened*:
+
+- **Same-resource fail-fast is untouched.** `Store.Submit` rejects a second
+  pending/running op for the same `(apiVersion, kind, name)` inside its
+  transaction, and `ClaimNextPending` atomically marks a claimed op `running`.
+  So a claimed batch can never hold two ops for one resource, and no two
+  same-resource ops can run concurrently — regardless of drain strategy. The
+  guarantee lives at Submit, not in the drain loop, so hoisting the drain to a
+  graph does not weaken it.
+- **Concurrent provider `Apply` on distinct resources is not new.** The
+  intra-composite DAG (`RefChildEdges`/`RunGraph`, on by default) already fans a
+  composite's children through the same engine, so providers already run
+  concurrent Applies for distinct resources (proven by the k3s Cluster). This
+  change only hoists that proven pattern one level up.
+
+Verified empirically: the full root suite passes under `-race` with scheduling
+on by default (every baseline dispatcher test now flows through the scheduled
+path), plus explicit default-on and opt-out coverage in `crossop_test.go`.
+
+The escape hatch remains: `OPENCTL_CROSS_OP_SCHEDULING=0` restores FIFO if a
+field issue traces to the known limitations above.

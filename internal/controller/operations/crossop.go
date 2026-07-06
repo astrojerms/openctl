@@ -12,29 +12,37 @@ import (
 	"github.com/openctl/openctl/pkg/protocol"
 )
 
-// Cross-op dependency scheduling (opt-in, flag-gated).
+// Cross-op dependency scheduling (on by default; opt-out via env).
 //
 // The composite-apply dependency DAG (see operations.RunGraph / RefChildEdges)
 // orders the children *within* one operation. This hoists the same idea one
-// level up: when OPENCTL_CROSS_OP_SCHEDULING is set, the dispatcher processes a
-// whole batch of pending operations as a graph — running independent ops
-// concurrently and ordering dependent ones by their `$ref` edges — instead of
-// the default one-at-a-time FIFO drain.
+// level up: the dispatcher processes a whole batch of pending operations as a
+// graph — running independent ops concurrently and ordering dependent ones by
+// their `$ref` edges — instead of a one-at-a-time FIFO drain.
 //
-// Design + the decisions this reopens are written up in
-// docs/cross-op-scheduling.md. This ships the opt-in machinery only; the flag
-// defaults off, so the locked single-goroutine / fail-fast-collision behavior
-// is unchanged unless an operator explicitly turns it on.
+// Design + the decisions this settles are written up in
+// docs/cross-op-scheduling.md. Scheduling is now the default: the two reopened
+// locked decisions are both preserved rather than actually loosened —
+//   - same-resource fail-fast: Store.Submit rejects a second pending/running op
+//     for the same (apiVersion, kind, name) (see operations.go), so a claimed
+//     batch never holds two ops for one resource; no two same-resource ops can
+//     run concurrently regardless of drain strategy.
+//   - concurrent provider Apply on distinct resources: already the default path,
+//     since the intra-composite DAG (RefChildEdges/RunGraph) fans a composite's
+//     children through the same engine. This only hoists that proven pattern one
+//     level up.
+// OPENCTL_CROSS_OP_SCHEDULING=0 (or false/no) restores the single-goroutine FIFO
+// drain as an operator escape hatch.
 
 // crossOpSchedulingEnabled reports whether the dispatcher should schedule
-// pending operations as a batch graph rather than draining them FIFO. Off by
-// default.
+// pending operations as a batch graph rather than draining them FIFO. On by
+// default; set OPENCTL_CROSS_OP_SCHEDULING to a falsey value to opt out.
 func crossOpSchedulingEnabled() bool {
 	switch os.Getenv("OPENCTL_CROSS_OP_SCHEDULING") {
-	case "1", "true", "TRUE", "yes":
-		return true
+	case "0", "false", "FALSE", "no":
+		return false
 	}
-	return false
+	return true
 }
 
 // crossOpConcurrency bounds how many independent operations run at once under
