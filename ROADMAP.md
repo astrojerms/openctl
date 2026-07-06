@@ -225,16 +225,21 @@ plan/state); harden the provider contract before the ecosystem widens.
       on a node), and `upgrade` (binary-swap a node to a target k3s version:
       the agent downloads + sha256-verifies the release, atomically swaps the
       binary, and restarts). All run against the per-node agent client.
-      Cluster-wide rolling upgrade (drain/cordon ordering) remains a follow-up,
-      scoped in [docs/k3s-rolling-upgrade.md](docs/k3s-rolling-upgrade.md). The
-      **orchestration core has landed** (`cluster_upgrade.go`: `upgradeOrder`
-      CPs-serial-then-workers + `rollingUpgrade` idempotent-skip + health-gated
-      halt-on-failure, over an injected `nodeUpgrader`; 8 unit tests). Remaining
-      to wire it up: `Actioner` action-parameters plumbing (the interface has no
-      version arg today) → proto/RPC/UI, a real agent-backed `nodeUpgrader`
-      (cluster-state node list + mTLS bundle + agent `UpgradeK3s`/`Info`), and
-      multi-node homelab validation. `--drain` stays opt-in (needs a k8s
-      client); the landed core is no-drain by design.
+      Cluster-wide rolling upgrade (drain/cordon ordering) — **implemented and
+      reachable** as the k3s Cluster `upgrade` action (no-drain, per
+      [docs/k3s-rolling-upgrade.md](docs/k3s-rolling-upgrade.md)). Landed in
+      four slices: orchestration core (#87, `cluster_upgrade.go` —
+      CPs-serial-then-workers, idempotent-skip, health-gated halt); parameterized
+      actions plumbing (#88, `InvokeAction` gains `parameters` +
+      `ParameterizedActioner`); production agent upgrader (#89,
+      `agentNodeUpgrader` over mTLS, unit-tested vs a fake agent); and the wiring
+      (enumerate nodes from cluster state + cert bundle → `DoActionWithParams
+      ("upgrade", {version})`). Invoke: `InvokeAction Cluster/<name> upgrade
+      version=v1.30.5+k3s1`. **Remaining:** multi-node homelab validation (real
+      k3s download + pod continuity — the one hardware gate); idempotent-skip
+      needs a current-version pre-query to activate (v1 re-upgrades all);
+      `--drain` stays an opt-in follow-on (needs a k8s client). UI action-param
+      input is a small frontend follow-up.
 - [x] Bug fix: the proxmox handler collapsed any `GetVM`/`GetNode`/
       `GetTemplate` error to NotFound — a network timeout produced a false
       "VM gone" result, and `applyVM` treated it as "doesn't exist" and

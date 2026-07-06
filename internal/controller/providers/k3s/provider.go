@@ -34,6 +34,10 @@ const (
 	kindCluster  = "Cluster"
 )
 
+// The k3s Provider is a parameterized actioner (its Cluster `upgrade` action
+// takes a version parameter); assert it at compile time.
+var _ providers.ParameterizedActioner = (*Provider)(nil)
+
 // VMApplier is the subset of providers.Provider that the k3s Provider needs
 // to drive child VM creation. The proxmox provider satisfies this naturally;
 // using a narrow interface keeps the dependency explicit and tests trivial.
@@ -66,7 +70,18 @@ func (p *Provider) Actions(kind string) []string {
 	if kind != kindCluster {
 		return nil
 	}
-	return []string{"get-kubeconfig"}
+	return []string{"get-kubeconfig", "upgrade"}
+}
+
+// DoActionWithParams implements providers.ParameterizedActioner. The `upgrade`
+// action takes a `version` parameter and rolls every node to that k3s version
+// (control planes first for etcd quorum, then workers, health-gated); all other
+// actions ignore parameters and delegate to DoAction.
+func (p *Provider) DoActionWithParams(ctx context.Context, kind, name, action string, params map[string]string) (*providers.ActionResult, error) {
+	if kind == kindCluster && action == "upgrade" {
+		return p.runClusterUpgrade(ctx, name, params["version"], productionUpgraderFactory)
+	}
+	return p.DoAction(ctx, kind, name, action)
 }
 
 // DoAction implements providers.Actioner. Reads the stored kubeconfig
