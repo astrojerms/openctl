@@ -375,7 +375,7 @@ func (h *resourceHandler) InvokeAction(ctx context.Context, req *apiv1.InvokeAct
 	if req.GetApiVersion() == "" || req.GetKind() == "" || req.GetResourceName() == "" || req.GetAction() == "" {
 		return nil, status.Error(codes.InvalidArgument, "api_version, kind, resource_name, and action are required")
 	}
-	result, err := h.registry.DoAction(ctx, req.GetApiVersion(), req.GetKind(), req.GetResourceName(), req.GetAction())
+	result, err := h.registry.DoAction(ctx, req.GetApiVersion(), req.GetKind(), req.GetResourceName(), req.GetAction(), req.GetParameters())
 	if err != nil {
 		// Route "not supported" errors to FailedPrecondition so the UI can
 		// distinguish user error (button shouldn't have been shown) from

@@ -157,6 +157,16 @@ type Actioner interface {
 	DoAction(ctx context.Context, kind, name, action string) (*ActionResult, error)
 }
 
+// ParameterizedActioner is an optional extension of Actioner for providers
+// whose actions take key/value arguments (e.g. a target version for a cluster
+// upgrade). A provider implementing it receives the invocation's parameters;
+// providers implementing only Actioner are called via DoAction with the
+// parameters dropped, so this is fully backward-compatible.
+type ParameterizedActioner interface {
+	Actioner
+	DoActionWithParams(ctx context.Context, kind, name, action string, params map[string]string) (*ActionResult, error)
+}
+
 // ActionResult carries the structured output of a runtime action.
 // Providers populate whichever fields fit — message for short text,
 // url for external navigation, download_content+filename for file
@@ -309,11 +319,13 @@ func (r *Registry) ActionsFor(apiVersion, kind string) []string {
 	return a.Actions(kind)
 }
 
-// DoAction routes an action invocation to the responsible provider.
-// Returns FailedPrecondition-flavored errors when the provider doesn't
-// implement Actioner or the action isn't in its supported list, so the
-// server layer can map cleanly to gRPC status codes.
-func (r *Registry) DoAction(ctx context.Context, apiVersion, kind, name, action string) (*ActionResult, error) {
+// DoAction routes an action invocation to the responsible provider, passing
+// optional key/value parameters. Returns FailedPrecondition-flavored errors
+// when the provider doesn't implement Actioner or the action isn't in its
+// supported list, so the server layer can map cleanly to gRPC status codes.
+// A provider implementing ParameterizedActioner receives the parameters; one
+// implementing only Actioner is called without them (backward-compatible).
+func (r *Registry) DoAction(ctx context.Context, apiVersion, kind, name, action string, params map[string]string) (*ActionResult, error) {
 	p, err := r.For(apiVersion)
 	if err != nil {
 		return nil, err
@@ -324,6 +336,9 @@ func (r *Registry) DoAction(ctx context.Context, apiVersion, kind, name, action 
 	}
 	if !slices.Contains(a.Actions(kind), action) {
 		return nil, fmt.Errorf("action %q not supported for kind %q", action, kind)
+	}
+	if pa, ok := p.(ParameterizedActioner); ok {
+		return pa.DoActionWithParams(ctx, kind, name, action, params)
 	}
 	return a.DoAction(ctx, kind, name, action)
 }
