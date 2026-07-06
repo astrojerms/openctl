@@ -228,6 +228,15 @@ func (d *Dispatcher) drainScheduled(ctx context.Context) {
 		edges = nil
 	}
 
+	// Annotate dependent ops with what they depend on, so a queued op is
+	// explainable in the UI ops drawer instead of sitting pending for no
+	// visible reason. Best-effort — a label write failure doesn't block work.
+	for opID, label := range crossOpDependencyLabels(batch, edges) {
+		if err := d.store.SetLabel(ctx, opID, label); err != nil {
+			log.Printf("dispatcher: set cross-op label on %s: %v", opID, err)
+		}
+	}
+
 	tasks := make([]Task, len(batch))
 	for i, op := range batch {
 		tasks[i] = Task{

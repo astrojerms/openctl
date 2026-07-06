@@ -276,6 +276,52 @@ func TestDrainScheduled_CycleDoesNotHang(t *testing.T) {
 	}
 }
 
+// crossOpDependencyLabels names the resources each dependent op depends on;
+// ops without dependencies get no entry.
+func TestCrossOpDependencyLabels(t *testing.T) {
+	batch := []*Operation{
+		{ID: "A", Kind: "VirtualMachine", ResourceName: "cp-0"},
+		{ID: "B", Kind: "K3sNode", ResourceName: "cp-0"},
+		{ID: "C", Kind: "AgentInstall", ResourceName: "cp-0"},
+	}
+	edges := map[string][]string{"B": {"A"}, "C": {"A", "B"}}
+
+	labels := crossOpDependencyLabels(batch, edges)
+	if got := labels["B"]; got != "depends on VirtualMachine/cp-0" {
+		t.Errorf("labels[B] = %q", got)
+	}
+	// Sorted by resource description, deduped naturally by edge derivation.
+	if got := labels["C"]; got != "depends on K3sNode/cp-0, VirtualMachine/cp-0" {
+		t.Errorf("labels[C] = %q", got)
+	}
+	if _, ok := labels["A"]; ok {
+		t.Errorf("labels[A] = %q, want none (no dependencies)", labels["A"])
+	}
+	if crossOpDependencyLabels(batch, nil) != nil {
+		t.Error("no edges should yield no labels")
+	}
+}
+
+// drainScheduled stamps the dependency label onto a dependent op so it's
+// explainable in the UI.
+func TestDrainScheduled_StampsDependencyLabel(t *testing.T) {
+	p := newOrderProvider()
+	store, d := newSchedulerDispatcher(t, p)
+
+	submitApply(t, store, "a", nil)
+	b := submitApply(t, store, "b", map[string]any{"from": refTo("fake.openctl.io/v1", "Thing", "a", "status.x")})
+
+	d.drainScheduled(context.Background())
+
+	op, err := store.Get(context.Background(), b.ID)
+	if err != nil {
+		t.Fatalf("get op b: %v", err)
+	}
+	if op.Label != "depends on Thing/a" {
+		t.Errorf("op b label = %q, want \"depends on Thing/a\"", op.Label)
+	}
+}
+
 // With the flag set, drain() routes to the scheduled path and processes the
 // pending batch.
 func TestDrainRoutesToScheduledWhenFlagSet(t *testing.T) {
