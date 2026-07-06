@@ -129,6 +129,37 @@ func TestRunClusterUpgrade_DrivesRollingUpgrade(t *testing.T) {
 	}
 }
 
+// A node already at the target version is skipped (idempotent re-run): the
+// version pre-pass reads its current version and rollingUpgrade skips it.
+func TestRunClusterUpgrade_SkipsNodeAlreadyAtTarget(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	writeClusterChildren(t, "dev", []string{"dev-cp-0", "dev-worker-0"})
+	writeNodeState(t, "dev-cp-0", roleServer, "10.0.0.10")
+	writeNodeState(t, "dev-worker-0", roleAgent, "10.0.0.20")
+	bundleDir, err := clusterBundleDir("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeBundle(t, bundleDir)
+
+	// dev-cp-0 already reports the target version → the pre-pass marks it, and
+	// rollingUpgrade skips it. dev-worker-0 reports nothing → gets upgraded.
+	fake := &fakeUpgrader{postVersion: map[string]string{"dev-cp-0": "v2"}}
+	factory := func(_ agentCertBundle, _ map[string]string) nodeUpgrader { return fake }
+
+	p := &Provider{}
+	res, err := p.runClusterUpgrade(context.Background(), "dev", "v2", factory)
+	if err != nil {
+		t.Fatalf("runClusterUpgrade: %v", err)
+	}
+	if len(fake.upgraded) != 1 || fake.upgraded[0] != "dev-worker-0" {
+		t.Errorf("upgraded = %v, want only [dev-worker-0] (cp-0 already at target)", fake.upgraded)
+	}
+	if !strings.Contains(res.Message, "1 already at target") {
+		t.Errorf("message = %q, want it to note 1 skipped", res.Message)
+	}
+}
+
 func writeBundle(t *testing.T, dir string) {
 	t.Helper()
 	bundle, err := certs.GenerateBundle("dev", []certs.NodeIdentity{{Name: "dev-cp-0", IP: "10.0.0.10"}})

@@ -246,11 +246,12 @@ plan/state); harden the provider contract before the ecosystem widens.
       `agentNodeUpgrader` over mTLS, unit-tested vs a fake agent); and the wiring
       (enumerate nodes from cluster state + cert bundle → `DoActionWithParams
       ("upgrade", {version})`). Invoke: `InvokeAction Cluster/<name> upgrade
-      version=v1.30.5+k3s1`. **Remaining:** multi-node homelab validation (real
-      k3s download + pod continuity — the one hardware gate); idempotent-skip
-      needs a current-version pre-query to activate (v1 re-upgrades all);
-      `--drain` stays an opt-in follow-on (needs a k8s client). UI action-param
-      input is a small frontend follow-up.
+      version=v1.30.5+k3s1`. Idempotent-skip is active — a version pre-pass
+      queries each node so a re-run after a partial/halted upgrade skips nodes
+      already at the target. **Remaining:** multi-node homelab validation (real
+      k3s download + pod continuity — the one hardware gate); `--drain` stays an
+      opt-in follow-on (needs a k8s client); UI action-param input is a small
+      frontend follow-up.
 - [x] Bug fix: the proxmox handler collapsed any `GetVM`/`GetNode`/
       `GetTemplate` error to NotFound — a network timeout produced a false
       "VM gone" result, and `applyVM` treated it as "doesn't exist" and

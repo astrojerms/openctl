@@ -82,6 +82,13 @@ func (p *Provider) runClusterUpgrade(ctx context.Context, clusterName, version s
 		ClientKeyPEM:  bundle.ClientKeyPEM,
 	}, endpoints)
 
+	// Idempotency pre-pass: query each node's current k3s version so
+	// rollingUpgrade can skip nodes already at the target. A node that doesn't
+	// answer (down / unreachable) is left at unknown version and thus attempted,
+	// which is the safe default. This makes a re-run after a partial/halted
+	// upgrade resume from where it stopped instead of re-swapping every node.
+	nodes = withCurrentVersions(ctx, nodes, u)
+
 	res, err := rollingUpgrade(ctx, nodes, version, u)
 	msg := fmt.Sprintf("upgraded %d node(s) to %s", len(res.Upgraded), version)
 	if len(res.Skipped) > 0 {
@@ -93,6 +100,21 @@ func (p *Provider) runClusterUpgrade(ctx context.Context, clusterName, version s
 		return nil, fmt.Errorf("%s; halted: %w", msg, err)
 	}
 	return &providers.ActionResult{Message: msg}, nil
+}
+
+// withCurrentVersions returns nodes with their Version populated from the
+// upgrader's health/version query, so the rolling upgrade can idempotently skip
+// nodes already at the target. A node whose version can't be read is left
+// unknown (empty) and will be attempted.
+func withCurrentVersions(ctx context.Context, nodes []upgradeNode, u nodeUpgrader) []upgradeNode {
+	out := make([]upgradeNode, len(nodes))
+	for i, n := range nodes {
+		out[i] = n
+		if v, err := u.Health(ctx, n); err == nil {
+			out[i].Version = v
+		}
+	}
+	return out
 }
 
 // productionUpgraderFactory builds the real agent-backed upgrader.
