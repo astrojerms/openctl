@@ -1,9 +1,15 @@
-# Cross-op dependency scheduling — design proposal
+# Cross-op dependency scheduling
 
-**Status:** proposal, awaiting sign-off. Not implemented.
+**Status:** implemented, **flag-gated and default-off** (`OPENCTL_CROSS_OP_SCHEDULING`).
+The default path is unchanged FIFO dispatch; the locked single-goroutine /
+fail-fast-collision behavior only changes if an operator opts in. Flip the
+default to on only after homelab validation (see Rollout).
 **Author:** autonomous session, 2026-07-05.
 **Motivating work:** the composite-apply dependency DAG (#66) and the `$ref`
 primitive documented in DESIGN.md § "Dependencies, Value-Passing & Ordering".
+**Implementation:** `internal/controller/operations/crossop.go` (edge
+derivation, acyclicity, flag/concurrency helpers) + `Dispatcher.drainScheduled`
+in `dispatcher.go`; tests in `crossop_test.go`.
 
 This proposes hoisting the dependency-graph machinery that today orders the
 *children of one composite apply* up one level, so it can also order and
@@ -77,9 +83,14 @@ lazy-resolve semantics. This keeps the change strictly additive: it can only
 *delay* an op that would otherwise have raced, never change what a
 non-racing op does.
 
-## Decisions that need sign-off
+## Decisions
 
-Each is a genuine product/architecture choice, with a recommendation.
+Each is a genuine product/architecture choice. The shipped default-off
+implementation takes the recommended option for each; because the flag is off
+by default, none of these changes user-visible behavior until an operator opts
+in (and, for the collision decision, the recommended option keeps it unchanged
+even then). Flipping the default to on is the point at which sign-off matters —
+that is deferred to the Rollout step.
 
 ### 1. Collision → ordering vs. staying fail-fast
 

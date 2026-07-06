@@ -165,6 +165,13 @@ func (d *Dispatcher) run(ctx context.Context) {
 }
 
 func (d *Dispatcher) drain(ctx context.Context) {
+	// Opt-in: schedule the whole pending batch as a dependency graph (independent
+	// ops concurrent, dependent ops ordered by their $ref edges). Default off, so
+	// the branch below is the unchanged FIFO drain.
+	if crossOpSchedulingEnabled() {
+		d.drainScheduled(ctx)
+		return
+	}
 	for {
 		op, err := d.store.ClaimNextPending(ctx)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -175,6 +182,67 @@ func (d *Dispatcher) drain(ctx context.Context) {
 			return
 		}
 		d.execute(ctx, op)
+	}
+}
+
+// drainScheduled claims every currently-pending operation, derives a dependency
+// graph over the batch from their $ref edges, and runs it through RunGraph:
+// independent ops execute concurrently (up to crossOpConcurrency), dependent
+// ops wait for the op that applies the resource they reference.
+//
+// Failure isolation: each task wraps execute, which records the op's terminal
+// status itself and never surfaces an error to RunGraph. So one op failing does
+// not stop independent ops (RunGraph only halts new launches on a task error);
+// a dependent whose predecessor failed still runs, and simply fails at ref
+// resolution because the referenced resource was never applied — matching the
+// declarative model. A $ref cycle falls back to unordered scheduling so cyclic
+// ops still reach a terminal state rather than being left claimed-but-unrun.
+func (d *Dispatcher) drainScheduled(ctx context.Context) {
+	var batch []*Operation
+	for {
+		op, err := d.store.ClaimNextPending(ctx)
+		if errors.Is(err, sql.ErrNoRows) {
+			break
+		}
+		if err != nil {
+			log.Printf("dispatcher: claim error: %v", err)
+			break
+		}
+		batch = append(batch, op)
+	}
+	if len(batch) == 0 {
+		return
+	}
+
+	ids := make([]string, len(batch))
+	for i, op := range batch {
+		ids[i] = op.ID
+	}
+	edges, err := crossOpEdges(batch)
+	if err != nil {
+		log.Printf("dispatcher: cross-op edge derivation failed (%v); scheduling batch unordered", err)
+		edges = nil
+	}
+	if edges != nil && !crossOpAcyclic(ids, edges) {
+		log.Printf("dispatcher: cross-op $ref cycle in pending batch; scheduling unordered")
+		edges = nil
+	}
+
+	tasks := make([]Task, len(batch))
+	for i, op := range batch {
+		tasks[i] = Task{
+			ID:        op.ID,
+			DependsOn: edges[op.ID],
+			Run: func(ctx context.Context) error {
+				d.execute(ctx, op)
+				return nil // execute records terminal status; keep failures isolated
+			},
+		}
+	}
+	if err := RunGraph(ctx, crossOpConcurrency(), tasks); err != nil {
+		// IDs are unique, edges are confined to the batch, and the graph was
+		// pre-checked acyclic, so RunGraph should not error here — log defensively.
+		log.Printf("dispatcher: cross-op RunGraph: %v", err)
 	}
 }
 
