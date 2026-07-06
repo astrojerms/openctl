@@ -168,7 +168,10 @@ plan/state); harden the provider contract before the ecosystem widens.
       endpoint index); k3s just stamps `spec.context`/`spec.node` on each
       VM child. Scoped to endpoints sharing one L2 network — separate-L2
       spread (per-pool subnets, routable join URL, wireguard flannel) is a
-      parked epic.
+      parked epic, now scoped in a design proposal:
+      [docs/k3s-separate-l2-spread.md](docs/k3s-separate-l2-spread.md)
+      (routed-VLAN slice first; the networking gap, not orchestration; unit-
+      testable, with only two-site apply needing hardware). Awaiting sign-off.
 - [x] **Composite-apply dependency DAG** (#66). Ordering within a single
       composite `Apply` is now a real dependency graph
       (`operations.RunGraph`: topological execution + cycle detection),
