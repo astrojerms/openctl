@@ -168,6 +168,11 @@ plan/state); harden the provider contract before the ecosystem widens.
       same graph machinery, hoisted one level up. Aligns with the arch
       Phase 9-10 typed-task-IR + DAG-scheduler sketch in
       [docs/target-architecture.html](docs/target-architecture.html).
+      **Design proposal awaiting sign-off:**
+      [docs/cross-op-scheduling.md](docs/cross-op-scheduling.md) — flag-gated
+      (`OPENCTL_CROSS_OP_SCHEDULING`), reuses `operations.RunGraph`, and calls
+      out the two locked decisions it reopens (single-goroutine dispatch,
+      same-resource fail-fast) with recommendations.
 
 ### Followups (post-Phase-6, parked)
 
