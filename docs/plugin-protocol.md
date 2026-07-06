@@ -232,6 +232,28 @@ bound to it (`internal/controller/providers/external/conformance_test.go`), so
 a `Handler` that upholds the obligations above passes the battery through the
 adapter automatically.
 
+### Composite providers (`Plan`)
+
+If your provider advertises `CapabilityPlan` — expanding one resource into
+child manifests instead of applying it directly — its contract is its `Plan`,
+not the atomic CRUD obligations above (which is why composite providers are out
+of the conformance battery's scope). A composite `Plan` must:
+
+- **Stamp owner references** on every child (`openctl.io/owner-kind` /
+  `owner-name`), so the controller can attribute children to their parent and
+  block orphaning them.
+- **Emit an acyclic, self-contained child `$ref` graph.** Any `$ref` between
+  children must point at another child in the same plan, and the graph must be
+  acyclic — the controller schedules the children with a real dependency DAG
+  (`operations.RunGraph`), which errors on a cycle or a dangling reference.
+- **Be deterministic.** The same input manifest must produce the same children
+  (same set, same specs). Reconciliation, drift surfacing, and the
+  verifying-trace cache all assume a stable plan; don't derive child names or
+  values from wall-clock time or map-iteration order.
+
+The k3s `Cluster` provider is the reference composite; its `Plan` contract is
+pinned by `internal/controller/providers/k3s/cluster_plan_contract_test.go`.
+
 ## Testing tips
 
 - Unit-test your `Handler` directly (no process needed) — call its methods, or
