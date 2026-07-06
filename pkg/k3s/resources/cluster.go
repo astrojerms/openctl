@@ -3,6 +3,7 @@ package resources
 import (
 	"fmt"
 	"maps"
+	"sort"
 
 	"github.com/openctl/openctl/pkg/protocol"
 )
@@ -23,6 +24,20 @@ type NetworkSpec struct {
 	// DHCP indicates whether to use DHCP for IP allocation (default: true)
 	DHCP bool `json:"dhcp"`
 	// StaticIPs provides static IP configuration
+	StaticIPs *StaticIPSpec `json:"staticIPs,omitempty"`
+	// PerContext holds per-endpoint L2 network config for separate-L2 spread
+	// (a cluster whose nodes live on different subnets). Keyed by placement
+	// context; a node inherits the block for the context it lands on. Empty =
+	// single-L2 (the top-level Bridge/StaticIPs apply to every node,
+	// unchanged). See docs/k3s-separate-l2-spread.md.
+	PerContext map[string]NetworkBlock `json:"perContext,omitempty"`
+}
+
+// NetworkBlock is one context's L2 network config under NetworkSpec.PerContext:
+// its own bridge and static-IP range, so nodes on different subnets each
+// allocate from the right pool.
+type NetworkBlock struct {
+	Bridge    string        `json:"bridge,omitempty"`
 	StaticIPs *StaticIPSpec `json:"staticIPs,omitempty"`
 }
 
@@ -499,6 +514,12 @@ func resolvePoolTargets(targets []PlacementTarget, poolContext string, poolNodes
 // AllocateIPs generates IP allocations for all nodes in the cluster
 // Returns a map of node name -> IP address
 func AllocateIPs(clusterName string, spec *ClusterSpec) (map[string]string, error) {
+	// Separate-L2: when per-context network blocks are configured, allocate
+	// each node from its own context's range instead of one shared range.
+	if len(spec.Network.PerContext) > 0 {
+		return allocateIPsPerContext(clusterName, spec)
+	}
+
 	if spec.Network.DHCP || spec.Network.StaticIPs == nil {
 		return nil, nil // DHCP mode, no pre-allocated IPs
 	}
@@ -518,6 +539,44 @@ func AllocateIPs(clusterName string, spec *ClusterSpec) (map[string]string, erro
 		}
 	}
 
+	return ips, nil
+}
+
+// allocateIPsPerContext allocates node IPs from each context's own static-IP
+// range (separate-L2 spread). Nodes are grouped by their placement context;
+// within a context they allocate contiguously from that context's block's
+// startIP, in stable node-name order for determinism. A node placed on a
+// context that has no block (or a block without staticIPs) is a hard error —
+// fail fast at Plan time, mirroring the unknown-context check in the multi-
+// endpoint work, rather than silently producing an unroutable node.
+func allocateIPsPerContext(clusterName string, spec *ClusterSpec) (map[string]string, error) {
+	placement := PlacementTargets(clusterName, spec)
+	cpNodes, workerNodes := NodeNames(clusterName, spec)
+	allNodes := append(append([]string{}, cpNodes...), workerNodes...)
+
+	byContext := make(map[string][]string)
+	for _, name := range allNodes {
+		ctx := placement[name].Context
+		byContext[ctx] = append(byContext[ctx], name)
+	}
+
+	ips := make(map[string]string, len(allNodes))
+	for ctx, nodes := range byContext {
+		block, ok := spec.Network.PerContext[ctx]
+		if !ok || block.StaticIPs == nil || block.StaticIPs.StartIP == "" {
+			return nil, fmt.Errorf("network.perContext has no staticIPs block for context %q (nodes: %v)", ctx, nodes)
+		}
+		sort.Strings(nodes) // deterministic allocation order within the context
+		current := block.StaticIPs.StartIP
+		for _, name := range nodes {
+			ips[name] = current
+			next, err := incrementIP(current)
+			if err != nil {
+				return nil, fmt.Errorf("allocate IP for %s in context %q: %w", name, ctx, err)
+			}
+			current = next
+		}
+	}
 	return ips, nil
 }
 
