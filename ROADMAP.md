@@ -168,10 +168,17 @@ plan/state); harden the provider contract before the ecosystem widens.
       endpoint index); k3s just stamps `spec.context`/`spec.node` on each
       VM child. Scoped to endpoints sharing one L2 network — separate-L2
       spread (per-pool subnets, routable join URL, wireguard flannel) is a
-      parked epic, now scoped in a design proposal:
+      parked epic, scoped in
       [docs/k3s-separate-l2-spread.md](docs/k3s-separate-l2-spread.md)
-      (routed-VLAN slice first; the networking gap, not orchestration; unit-
-      testable, with only two-site apply needing hardware). Awaiting sign-off.
+      (routed-VLAN slice first; the networking gap, not orchestration).
+      **First slice landed:** per-context IP allocation —
+      `NetworkSpec.PerContext` (per-endpoint bridge + static-IP range) and
+      `AllocateIPs` allocating each node from its placement context's range
+      (fail-fast on a context with no block); single-L2 path byte-identical.
+      Tested; not yet reachable (the follow-on wires `perContext` through
+      ParseClusterSpec + the CUE schema + per-context bridge stamping +
+      `routableIP`/`--node-external-ip` + `wireguard-native` flannel, then
+      two-VLAN homelab validation).
 - [x] **Composite-apply dependency DAG** (#66). Ordering within a single
       composite `Apply` is now a real dependency graph
       (`operations.RunGraph`: topological execution + cycle detection),
