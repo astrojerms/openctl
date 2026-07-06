@@ -711,6 +711,11 @@ phase plan when ready to commit.
         `openctl whoami` prints your user + role from the CLI. UI display is a
         small frontend follow-up.
       - *Next — OIDC:* external IdP → claims → role (the last big auth slice).
+        **Design proposal:** [docs/oidc-design.md](docs/oidc-design.md) — OIDC
+        as a new session-minting front door (Authorization Code + PKCE,
+        discovery, claims→role deny-by-default) that reuses the shipped
+        session/cookie/RBAC machinery; testable against a fake IdP without an
+        external provider. Awaiting sign-off.
 - [x] **Terraform / OpenTofu provider host** *(Tier 1 — see
       [docs/direction.md](docs/direction.md))* — consume the existing
       Terraform provider ecosystem (AWS, GCP, Azure, Cloudflare, …)
