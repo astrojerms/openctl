@@ -182,8 +182,37 @@ can show cross-op edges).
 - No cross-op transactions or rollback.
 - No change to how composite children are scheduled — that DAG is unchanged.
 
+## Known limitations (weigh before flipping the default)
+
+These are acceptable for the opt-in slice but should be understood before the
+default flips to on. None are correctness bugs; all stem from claiming the
+whole pending batch up front and running it as one graph.
+
+- **Op status reads "running" while queued in the graph.** `drainScheduled`
+  claims every pending op (marking it `running`) before `RunGraph` starts, but
+  `RunGraph` only executes `crossOpConcurrency` at a time and holds dependents
+  until their predecessors finish. So an op past the concurrency limit, or one
+  waiting on a dependency, shows `running` in the UI before it actually starts.
+  The `depends on …` label (set for dependent ops) softens this for the
+  dependency case; independent ops beyond the concurrency limit have no such
+  hint. Under FIFO an op is claimed only immediately before it executes, so its
+  status is exact. A precise fix wants a distinct "claimed but not started"
+  state, which is a larger change to the claim/status model.
+- **Ops submitted during a batch wait for the whole batch.** A drain cycle
+  claims the batch and runs it to completion before the next cycle picks up
+  newly-submitted ops. If the batch contains one long op (a multi-minute
+  Cluster apply), an op submitted just after the batch started waits for the
+  entire batch, not just one op. Under FIFO it would also wait behind the
+  in-flight op, but only that one. Mitigations if this bites: cap batch size,
+  or re-drain when new ops arrive mid-batch.
+- **Concurrency is a single global bound.** `OPENCTL_CROSS_OP_CONCURRENCY`
+  caps total in-flight ops, not per-endpoint. A batch of applies all targeting
+  one Proxmox endpoint can still hit its API `concurrency`-wide. A per-endpoint
+  bound is a possible follow-on (noted in the design's decision #3).
+
 ## Rollout
 
 Ship flag-off. Validate on the homelab (independent multi-endpoint applies
 in parallel; a VM + dependent k3s resource submitted separately and correctly
-ordered). Flip the default only after that, in its own change.
+ordered). Weigh the known limitations above. Flip the default only after that,
+in its own change.
