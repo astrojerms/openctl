@@ -702,7 +702,7 @@ func (h *Handler) deleteVM(ctx context.Context, name string) (*protocol.Response
 }
 
 func (h *Handler) applyVM(ctx context.Context, manifest *protocol.Resource) (*protocol.Response, error) {
-	vm, err := h.client.GetVM(ctx, manifest.Metadata.Name)
+	_, err := h.client.GetVM(ctx, manifest.Metadata.Name)
 	if err != nil {
 		if errors.Is(err, client.ErrNotFound) {
 			// VM genuinely doesn't exist — create it.
@@ -713,30 +713,15 @@ func (h *Handler) applyVM(ctx context.Context, manifest *protocol.Resource) (*pr
 		return nil, fmt.Errorf("check existing VM %q: %w", manifest.Metadata.Name, err)
 	}
 
-	spec, err := resources.ParseVMSpec(manifest)
-	if err != nil {
-		return nil, err
-	}
-
-	configParams := spec.ToProxmoxConfig()
-	if len(configParams) > 0 {
-		if err := h.client.ConfigureVM(ctx, vm.Node, vm.VMID, configParams); err != nil {
-			return nil, fmt.Errorf("failed to configure VM: %w", err)
-		}
-	}
-
-	for _, disk := range spec.Disks {
-		if disk.Size != "" {
-			if err := h.client.ResizeVMDisk(ctx, vm.Node, vm.VMID, disk.Name, disk.Size); err != nil {
-				return nil, fmt.Errorf("failed to resize disk %s: %w", disk.Name, err)
-			}
-		}
-	}
-
-	return &protocol.Response{
-		Status:  protocol.StatusSuccess,
-		Message: fmt.Sprintf("VM %s updated", manifest.Metadata.Name),
-	}, nil
+	// The VM already exists. VirtualMachine is an atomic resource, so apply is
+	// a no-op that surfaces drift rather than mutating in place, per the locked
+	// decision in CONTROLLER.md: "Apply on existing atomic resource (e.g.
+	// VirtualMachine): no-op + surface drift. User must delete + re-apply for
+	// changes." Return the observed state so the caller/reconciler can compare
+	// it against the stored manifest and surface any drift; do NOT
+	// ConfigureVM/ResizeVMDisk. (Previously this path re-pushed config in
+	// place, which contradicted that decision.)
+	return h.getVM(ctx, manifest.Metadata.Name)
 }
 
 func (h *Handler) listTemplates(ctx context.Context) (*protocol.Response, error) {

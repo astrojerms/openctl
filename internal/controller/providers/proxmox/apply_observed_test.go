@@ -17,8 +17,8 @@ import (
 // providertest conformance battery once proxmox is bound to it).
 //
 // This drives the apply-on-existing path: the VM "vm0" already exists, so the
-// handler's applyVM takes the update branch (no clone), and Apply then reads
-// it back. A permissive catch-all keeps incidental calls (config, guest-agent
+// handler's applyVM takes the no-op branch (returns observed state, no clone),
+// and Apply then reads it back. A permissive catch-all keeps incidental calls (config, guest-agent
 // IP) benign so the test asserts only the return-value contract.
 func TestApplyReturnsObservedVM(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
