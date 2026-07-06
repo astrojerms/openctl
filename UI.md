@@ -106,7 +106,9 @@ went in. Any change requires re-opening the discussion.
 
 ### Phase U1: UI backend prerequisites
 
-**Status:** not started
+**Status:** complete. (This foundation shipped first — the marker simply
+lagged; every deliverable is in the running controller, and Phases U2–U9 are
+built on top of it.)
 
 **Goal:** make the existing gRPC API browser-reachable and add the
 streaming/schema/asset surfaces the UI needs. Verifiable entirely via
@@ -114,31 +116,35 @@ streaming/schema/asset surfaces the UI needs. Verifiable entirely via
 
 **Deliverables:**
 
-- [ ] `Watch(stream WatchEvent)` RPC on `ResourceService`: streams
+- [x] `Watch(stream WatchEvent)` RPC on `ResourceService`: streams
       add/modify/delete events plus drift updates. First-pass
       implementation polls Get/List internally; replace with notification
-      hooks from the dispatcher later.
-- [ ] `WatchOperations(stream OperationEvent)` RPC: streams op state
+      hooks from the dispatcher later. (`api.proto` `rpc Watch`;
+      `server/watch.go`.)
+- [x] `WatchOperations(stream OperationEvent)` RPC: streams op state
       transitions and substep updates. Filter by operation id, resource
-      ref, or status.
-- [ ] `SchemaService` proto with `ListSchemas`, `GetSchema(kind)`, and
+      ref, or status. (`api.proto` `rpc WatchOperations`.)
+- [x] `SchemaService` proto with `ListSchemas`, `GetSchema(kind)`, and
       `Validate(manifest)` RPCs. Returns the embedded CUE schema text
       plus runs the same validation path the controller uses at Apply.
-- [ ] `grpc-gateway` annotations on existing protos + a REST/JSON gateway
-      mounted alongside gRPC. Same port via cmux, or sibling port —
-      decide during implementation. Generates OpenAPI for free.
-- [ ] `SessionService`: `Login(bearer_token)` → `Set-Cookie:
+      (`api.proto` `service SchemaService`.)
+- [x] `grpc-gateway` annotations on existing protos + a REST/JSON gateway
+      mounted alongside gRPC. (`google.api.http` annotations throughout
+      `api.proto`; generated `api.pb.gw.go`; served over HTTP/2+TLS.)
+- [x] `SessionService`: `Login(bearer_token)` → `Set-Cookie:
       openctl_session=...; HttpOnly; Secure; SameSite=Strict`. `Logout`
       revokes. Session storage in SQLite (`sessions` table) so it
       survives restart. Sessions carry an internal user id even though
       v1 only has one user — leaves room for multi-user without a schema
-      migration.
-- [ ] `embed.FS` of UI assets in `cmd/openctl-controller`, served from
+      migration. (`api.proto` `rpc Login`; `server/session.go`;
+      role-carrying sessions extended later by the RBAC work.)
+- [x] `embed.FS` of UI assets in `cmd/openctl-controller`, served from
       `/ui/*`. Returns a friendly "UI not built — run `make ui`" page
-      when the embedded dir is empty.
-- [ ] Tests: Watch streams emit when a sibling client applies; session
+      when the embedded dir is empty. (`server/uiassets/`; `server/http.go`.)
+- [x] Tests: Watch streams emit when a sibling client applies; session
       cookie round-trips; SchemaService returns embedded CUE; REST
-      gateway reaches all CRUD RPCs.
+      gateway reaches all CRUD RPCs. (`server/watch_test.go`,
+      `session_test.go`, `http_test.go`.)
 
 **Verifiable:** `grpcurl -plaintext localhost:9444 openctl.v1.ResourceService/Watch`
 emits an event when another terminal does `openctl ctl apply -f vm.yaml`;
