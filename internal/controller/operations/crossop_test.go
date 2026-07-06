@@ -322,8 +322,8 @@ func TestDrainScheduled_StampsDependencyLabel(t *testing.T) {
 	}
 }
 
-// With the flag set, drain() routes to the scheduled path and processes the
-// pending batch.
+// With the flag explicitly set, drain() routes to the scheduled path and
+// processes the pending batch.
 func TestDrainRoutesToScheduledWhenFlagSet(t *testing.T) {
 	t.Setenv("OPENCTL_CROSS_OP_SCHEDULING", "1")
 	p := newOrderProvider()
@@ -334,6 +334,43 @@ func TestDrainRoutesToScheduledWhenFlagSet(t *testing.T) {
 
 	if s := statusOf(t, store, op.ID); s != StatusSucceeded {
 		t.Errorf("op status = %q, want succeeded via the scheduled drain path", s)
+	}
+}
+
+// Cross-op scheduling is on by default: with no env var set, drain() must route
+// to the scheduled path and still order a dependent op after its predecessor.
+func TestCrossOpSchedulingIsOnByDefault(t *testing.T) {
+	if !crossOpSchedulingEnabled() {
+		t.Fatal("cross-op scheduling should be enabled by default (no env var set)")
+	}
+	p := newOrderProvider()
+	store, d := newSchedulerDispatcher(t, p)
+
+	a := submitApply(t, store, "a", nil)
+	b := submitApply(t, store, "b", map[string]any{"from": refTo("fake.openctl.io/v1", "Thing", "a", "status.x")})
+	d.drain(context.Background())
+
+	if s := statusOf(t, store, a.ID); s != StatusSucceeded {
+		t.Errorf("op a status = %q, want succeeded", s)
+	}
+	if s := statusOf(t, store, b.ID); s != StatusSucceeded {
+		t.Errorf("op b status = %q, want succeeded", s)
+	}
+	if order := p.appliedOrder(); len(order) != 2 || order[0] != "a" || order[1] != "b" {
+		t.Errorf("apply order = %v, want [a b] via the default scheduled drain", order)
+	}
+}
+
+// The escape hatch: OPENCTL_CROSS_OP_SCHEDULING set to a falsey value restores
+// the single-goroutine FIFO drain.
+func TestCrossOpSchedulingOptOut(t *testing.T) {
+	for _, v := range []string{"0", "false", "FALSE", "no"} {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("OPENCTL_CROSS_OP_SCHEDULING", v)
+			if crossOpSchedulingEnabled() {
+				t.Errorf("OPENCTL_CROSS_OP_SCHEDULING=%q should disable scheduling", v)
+			}
+		})
 	}
 }
 

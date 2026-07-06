@@ -191,19 +191,21 @@ plan/state); harden the provider contract before the ecosystem widens.
       Serial by default; `OPENCTL_APPLY_CONCURRENCY=N` runs independent
       children in parallel. See `DESIGN.md` §"Dependencies, Value-Passing
       & Ordering".
-- [~] **Cross-op dependency scheduling** — implemented, **flag-gated,
-      default-off**. When `OPENCTL_CROSS_OP_SCHEDULING` is set, the dispatcher
-      claims the whole pending batch and runs it through `operations.RunGraph`:
-      independent ops run concurrently (`OPENCTL_CROSS_OP_CONCURRENCY`, default
-      4), dependent ops are ordered by their `$ref` edges (`crossOpEdges`, the
-      op-level analog of `RefChildEdges`). Failure is isolated (a failed op
-      doesn't stop independents; a dependent whose predecessor failed fails at
-      ref resolution); a `$ref` cycle falls back to unordered scheduling so no
-      op is left claimed-but-unrun. Default path is unchanged FIFO, so the
-      locked single-goroutine / fail-fast-collision behavior only changes on
-      opt-in. **Remaining: flip the default to on** after homelab validation —
-      that is the point the reopened decisions need sign-off. Design +
-      decisions: [docs/cross-op-scheduling.md](docs/cross-op-scheduling.md).
+- [x] **Cross-op dependency scheduling** — implemented and **on by default**
+      (2026-07-06). The dispatcher claims the whole pending batch and runs it
+      through `operations.RunGraph`: independent ops run concurrently
+      (`OPENCTL_CROSS_OP_CONCURRENCY`, default 4), dependent ops are ordered by
+      their `$ref` edges (`crossOpEdges`, the op-level analog of
+      `RefChildEdges`). Failure is isolated (a failed op doesn't stop
+      independents; a dependent whose predecessor failed fails at ref
+      resolution); a `$ref` cycle falls back to unordered scheduling so no op is
+      left claimed-but-unrun. The two reopened locked decisions were verified
+      *preserved, not loosened* before the flip: same-resource fail-fast is
+      enforced at `Store.Submit` (a batch never holds two ops for one resource),
+      and concurrent provider `Apply` on distinct resources was already the
+      default path via the intra-composite DAG. `OPENCTL_CROSS_OP_SCHEDULING=0`
+      is the escape hatch back to FIFO. Verified under `-race`. Design +
+      verification: [docs/cross-op-scheduling.md](docs/cross-op-scheduling.md).
 
 ### Followups (post-Phase-6, parked)
 

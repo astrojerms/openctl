@@ -55,14 +55,15 @@ in. Any change requires re-opening the discussion.
   SSH-install semantics); `OPENCTL_APPLY_CONCURRENCY=N` applies independent
   children in parallel. See `DESIGN.md` §"Dependencies, Value-Passing &
   Ordering" for the `$ref`/resolver model.
-- **Cross-op scheduling is opt-in.** By default the dispatcher processes
-  *separate* top-level operations one at a time (FIFO). Setting
-  `OPENCTL_CROSS_OP_SCHEDULING` switches it to claim the whole pending batch and
-  run it through the same `operations.RunGraph`: independent ops run
-  concurrently (`OPENCTL_CROSS_OP_CONCURRENCY`, default 4), dependent ops are
-  ordered by their `$ref` edges (`crossOpEdges`). Default-off, so the
-  single-goroutine / fail-fast-collision model below is unchanged until an
-  operator opts in. Design + the decisions to weigh before flipping the default:
+- **Cross-op scheduling is on by default.** The dispatcher claims the whole
+  pending batch of *separate* top-level operations and runs it through the same
+  `operations.RunGraph`: independent ops run concurrently
+  (`OPENCTL_CROSS_OP_CONCURRENCY`, default 4), dependent ops are ordered by their
+  `$ref` edges (`crossOpEdges`). The fail-fast-collision model below still holds:
+  `Store.Submit` rejects a second pending/running op for the same resource, so a
+  batch never holds two ops for one resource and no two same-resource ops run
+  concurrently. `OPENCTL_CROSS_OP_SCHEDULING=0` restores single-goroutine FIFO as
+  an escape hatch. Design + verification:
   [docs/cross-op-scheduling.md](docs/cross-op-scheduling.md).
 - **Success criteria:** end-to-end verification. Cluster apply is
   `succeeded` only when all VMs are running, k3s is responding, and agents
