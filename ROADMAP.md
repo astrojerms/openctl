@@ -41,8 +41,9 @@ config** (Settings page + GetControllerConfig/UpdateControllerConfig
 RPCs) have both shipped. With the feature build-out essentially
 complete, direction now shifts to **breadth + reach**: the external
 plugin protocol → Terraform/OpenTofu host → run-anywhere Linux daemon
-(Tier 1 in [docs/direction.md](docs/direction.md)). Multi-user auth,
-CUE-WASM validation, and mobile layout are parked behind that.
+(Tier 1 in [docs/direction.md](docs/direction.md)). Multi-user auth
+(OIDC slice) and CUE-WASM validation are parked behind that. (Mobile
+layout has since shipped.)
 
 ## Suggested next order
 
@@ -94,8 +95,8 @@ direction.md):
 (`install --target proxmox://`); multi-user auth (OIDC/RBAC, downstream
 of adoption).
 
-**Tier 3 — parked:** client-side CUE WASM validation; mobile layout.
-Workloads/PaaS is vetoed by scope.
+**Tier 3 — parked:** client-side CUE WASM validation. (Mobile layout,
+formerly Tier 3, has shipped.) Workloads/PaaS is vetoed by scope.
 
 **Cross-cutting:** test every capability against the wedge (no global
 plan/state); harden the provider contract before the ecosystem widens.
@@ -762,7 +763,7 @@ phase plan when ready to commit.
       one-op-per-resource design with no worker-count knob to tune.
       Follow-up if ever wanted: a config-watch/SIGHUP reload path so
       changes apply without a restart.
-- [~] **Mobile-friendly layout** — app shell is now responsive: below 48rem
+- [x] **Mobile-friendly layout** — app shell is now responsive: below 48rem
       the fixed 18rem sidebar collapses into a hamburger-toggled off-canvas
       drawer (backdrop + Esc to close; closes on navigation), the header
       wraps, and `main` goes full-width. Layout tokens (`--sidebar-width`,
