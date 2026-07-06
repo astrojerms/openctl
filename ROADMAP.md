@@ -171,14 +171,18 @@ plan/state); harden the provider contract before the ecosystem widens.
       parked epic, scoped in
       [docs/k3s-separate-l2-spread.md](docs/k3s-separate-l2-spread.md)
       (routed-VLAN slice first; the networking gap, not orchestration).
-      **First slice landed:** per-context IP allocation —
-      `NetworkSpec.PerContext` (per-endpoint bridge + static-IP range) and
-      `AllocateIPs` allocating each node from its placement context's range
-      (fail-fast on a context with no block); single-L2 path byte-identical.
-      Tested; not yet reachable (the follow-on wires `perContext` through
-      ParseClusterSpec + the CUE schema + per-context bridge stamping +
-      `routableIP`/`--node-external-ip` + `wireguard-native` flannel, then
-      two-VLAN homelab validation).
+      **Per-context networking landed and reachable** (#91 + follow-on):
+      `network.perContext` (per-endpoint bridge + static-IP range) validates
+      (CUE), parses (`ParseClusterSpec`), allocates each node's IP from its
+      placement context's range (`AllocateIPs`, fail-fast on a missing block),
+      and stamps the per-context bridge on each VM (`BridgeForContext` in
+      `buildVMManifest`). Single-L2 path byte-identical. So a routed-VLAN
+      cluster's VMs now land on the right subnet+bridge. **Remaining:** the
+      pod-overlay/join layer for cross-subnet — `--node-external-ip` +
+      (if needed) `wireguard-native` flannel via K3sNode `extraArgs`, and
+      `routableIP` for non-routed separate sites; these are k3s-semantic details
+      that need two-VLAN homelab validation to get right (server-vs-agent flag
+      placement, vxlan-over-routed vs wireguard).
 - [x] **Composite-apply dependency DAG** (#66). Ordering within a single
       composite `Apply` is now a real dependency graph
       (`operations.RunGraph`: topological execution + cycle detection),

@@ -200,7 +200,10 @@ func buildVMManifest(clusterName, nodeName string, i, cpCount int, size k3sresou
 				{"name": "scsi0", "size": fmt.Sprintf("%dG", size.DiskGB)},
 			},
 			"networks": []map[string]any{
-				{"name": "net0", "bridge": spec.Network.Bridge, "model": "virtio"},
+				// Per-context bridge for separate-L2 spread (a node lands on its
+				// endpoint's bridge); falls back to the cluster-wide bridge for
+				// single-L2 clusters.
+				{"name": "net0", "bridge": spec.Network.BridgeForContext(target.Context), "model": "virtio"},
 			},
 			"cloudInit": map[string]any{
 				"user":     spec.SSH.User,

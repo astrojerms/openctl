@@ -261,6 +261,12 @@ func ParseClusterSpec(r *protocol.Resource) (*ClusterSpec, error) {
 				spec.Network.DHCP = false
 			}
 		}
+		if perContext, ok := network["perContext"].(map[string]any); ok {
+			spec.Network.PerContext = parsePerContext(perContext)
+			if len(spec.Network.PerContext) > 0 {
+				spec.Network.DHCP = false // separate-L2 spread is static-IP by nature
+			}
+		}
 	}
 
 	// Parse k3s section
@@ -509,6 +515,48 @@ func resolvePoolTargets(targets []PlacementTarget, poolContext string, poolNodes
 		out[i] = PlacementTarget{Context: ctxName, Node: h}
 	}
 	return out
+}
+
+// parsePerContext parses the network.perContext map (context name -> {bridge,
+// staticIPs}) for separate-L2 spread. Malformed entries are skipped rather
+// than failing the whole parse; downstream allocation fails fast on a context
+// that ends up without a usable block.
+func parsePerContext(perContext map[string]any) map[string]NetworkBlock {
+	out := make(map[string]NetworkBlock, len(perContext))
+	for ctx, raw := range perContext {
+		blockMap, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		var block NetworkBlock
+		if bridge, ok := blockMap["bridge"].(string); ok {
+			block.Bridge = bridge
+		}
+		if s, ok := blockMap["staticIPs"].(map[string]any); ok {
+			block.StaticIPs = &StaticIPSpec{}
+			if v, ok := s["startIP"].(string); ok {
+				block.StaticIPs.StartIP = v
+			}
+			if v, ok := s["gateway"].(string); ok {
+				block.StaticIPs.Gateway = v
+			}
+			if v, ok := s["netmask"].(string); ok {
+				block.StaticIPs.Netmask = v
+			}
+		}
+		out[ctx] = block
+	}
+	return out
+}
+
+// BridgeForContext returns the network bridge a node placed on the given
+// context should use: the context's per-context bridge when configured
+// (separate-L2), else the cluster-wide Network.Bridge (single-L2, unchanged).
+func (n *NetworkSpec) BridgeForContext(context string) string {
+	if block, ok := n.PerContext[context]; ok && block.Bridge != "" {
+		return block.Bridge
+	}
+	return n.Bridge
 }
 
 // AllocateIPs generates IP allocations for all nodes in the cluster
