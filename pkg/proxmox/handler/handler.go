@@ -702,15 +702,19 @@ func (h *Handler) deleteVM(ctx context.Context, name string) (*protocol.Response
 }
 
 func (h *Handler) applyVM(ctx context.Context, manifest *protocol.Resource) (*protocol.Response, error) {
-	_, err := h.client.GetVM(ctx, manifest.Metadata.Name)
+	// Observe the VM once. getVM returns a NotFound *response* when it's
+	// genuinely absent and a transient *error* otherwise (it never reports a
+	// false "missing"), so a single call both checks existence and yields the
+	// observed state — no redundant GetVM on the reconciler hot path.
+	resp, err := h.getVM(ctx, manifest.Metadata.Name)
 	if err != nil {
-		if errors.Is(err, client.ErrNotFound) {
-			// VM genuinely doesn't exist — create it.
-			return h.createVM(ctx, manifest)
-		}
 		// Transient failure — do NOT fall through to create, or a Proxmox
 		// blip would clone a duplicate of a VM that already exists.
 		return nil, fmt.Errorf("check existing VM %q: %w", manifest.Metadata.Name, err)
+	}
+	if resp.Status == protocol.StatusError && resp.Error != nil && resp.Error.Code == protocol.ErrorCodeNotFound {
+		// VM genuinely doesn't exist — create it.
+		return h.createVM(ctx, manifest)
 	}
 
 	// The VM already exists. VirtualMachine is an atomic resource, so apply is
@@ -719,9 +723,8 @@ func (h *Handler) applyVM(ctx context.Context, manifest *protocol.Resource) (*pr
 	// VirtualMachine): no-op + surface drift. User must delete + re-apply for
 	// changes." Return the observed state so the caller/reconciler can compare
 	// it against the stored manifest and surface any drift; do NOT
-	// ConfigureVM/ResizeVMDisk. (Previously this path re-pushed config in
-	// place, which contradicted that decision.)
-	return h.getVM(ctx, manifest.Metadata.Name)
+	// ConfigureVM/ResizeVMDisk.
+	return resp, nil
 }
 
 func (h *Handler) listTemplates(ctx context.Context) (*protocol.Response, error) {
