@@ -108,18 +108,21 @@ plan/state); harden the provider contract before the ecosystem widens.
       variations (`SupportsList`, `NoOpOnExisting`). Self-tested for teeth (a
       compliant in-memory provider passes; deliberately-broken ones fail).
       **Bound to:** the external-plugin adapter (in-process pluginproto, the
-      primary ecosystem-widening path) and the Terraform host (tf-fake over
-      subprocess, exercising `SupportsList=false`). **Follow-ups:** finish
-      binding the proxmox VirtualMachine provider and decide how the composite
-      k3s Cluster fits (it is not an atomic CRUD resource — the battery targets
-      atomic providers). Binding proxmox surfaced two contract gaps: (1)
-      **fixed** — `Apply` returned a nil `Resource` from the create/apply
-      paths; it now reads the VM back and returns observed state, per the
-      `Provider` interface doc. (2) **awaiting a decision** — `applyVM` mutates
-      an existing VM (`ConfigureVM`/`ResizeVMDisk`) rather than the no-op
-      CONTROLLER.md:23 locks in; reconciling that (no-op vs. keep-updating,
-      which sets the `NoOpOnExisting` capability) touches a locked decision, so
-      the full binding waits on it.
+      primary ecosystem-widening path), the Terraform host (tf-fake over
+      subprocess, exercising `SupportsList=false`), and the compiled-in
+      **proxmox VirtualMachine** provider (stateful in-memory fake Proxmox API,
+      `NoOpOnExisting=false`) — so all three provider classes (compiled-in,
+      external, TF host) are covered. Binding proxmox surfaced two contract
+      gaps: (1) **fixed** (#71) — `Apply` returned a nil `Resource` from the
+      create/apply paths; it now reads the VM back and returns observed state,
+      per the `Provider` interface doc. (2) **awaiting a decision** — `applyVM`
+      mutates an existing VM (`ConfigureVM`/`ResizeVMDisk`) rather than the
+      no-op CONTROLLER.md:23 locks in; the binding uses `NoOpOnExisting=false`
+      to match current behavior, but reconciling it (make `applyVM` no-op +
+      flip the flag to `true`) touches a locked decision and is left for a
+      separate call. **Remaining follow-up:** decide how the composite k3s
+      Cluster fits (it is not an atomic CRUD resource — the battery targets
+      atomic providers).
 
 ---
 
