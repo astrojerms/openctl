@@ -336,3 +336,34 @@ func TestDrainRoutesToScheduledWhenFlagSet(t *testing.T) {
 		t.Errorf("op status = %q, want succeeded via the scheduled drain path", s)
 	}
 }
+
+// End-to-end through the real dispatcher goroutine: with the flag on, Start +
+// Notify drives the scheduled path (drain -> drainScheduled), ordering a
+// dependent op after its predecessor so its $ref resolves. This guards the
+// wiring a default-off feature would otherwise never exercise (the other tests
+// call drainScheduled/drain directly, not the running loop).
+func TestCrossOpScheduling_EndToEndThroughStart(t *testing.T) {
+	t.Setenv("OPENCTL_CROSS_OP_SCHEDULING", "1")
+	p := newOrderProvider()
+	store, d := newSchedulerDispatcher(t, p)
+
+	// Submit both before starting so they land in one pending batch.
+	a := submitApply(t, store, "a", nil)
+	b := submitApply(t, store, "b", map[string]any{"from": refTo("fake.openctl.io/v1", "Thing", "a", "status.x")})
+
+	d.Start(context.Background())
+	t.Cleanup(d.Stop)
+	d.Notify()
+
+	waitForStatus(t, store, a.ID, StatusSucceeded, 3*time.Second)
+	waitForStatus(t, store, b.ID, StatusSucceeded, 3*time.Second)
+
+	order := p.appliedOrder()
+	if len(order) != 2 || order[0] != "a" || order[1] != "b" {
+		t.Errorf("apply order = %v, want [a b] (dependent ordered after predecessor)", order)
+	}
+	// The dependent op carries its cross-op dependency label.
+	if op, err := store.Get(context.Background(), b.ID); err == nil && op.Label != "depends on Thing/a" {
+		t.Errorf("op b label = %q, want \"depends on Thing/a\"", op.Label)
+	}
+}
