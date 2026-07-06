@@ -247,7 +247,25 @@ func (p *Provider) Apply(ctx context.Context, manifest *protocol.Resource) (*pro
 	}
 	// Remember where this VM lives so later reads route directly.
 	p.index.Store(manifest.Metadata.Name, resolved)
-	return resp.Resource, nil
+
+	// The handler's create/apply paths report success without echoing the
+	// observed resource, but the Provider contract requires Apply to return
+	// observed state (interface doc: "Apply ... return the observed state").
+	// Read it back from the same endpoint. A transient read failure right
+	// after a successful apply must never turn that apply into a nil result,
+	// so fall back to the applied identity rather than propagating an error.
+	if observed, gerr := getFrom(ctx, h, kindVM, manifest.Metadata.Name); gerr == nil && observed != nil {
+		return observed, nil
+	}
+	if resp.Resource != nil {
+		return resp.Resource, nil
+	}
+	return &protocol.Resource{
+		APIVersion: manifest.APIVersion,
+		Kind:       kindVM,
+		Metadata:   protocol.ResourceMetadata{Name: manifest.Metadata.Name},
+		Spec:       manifest.Spec,
+	}, nil
 }
 
 // Get returns the current observed state of a VM or ProxmoxNode. Returns
