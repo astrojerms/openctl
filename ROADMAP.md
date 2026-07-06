@@ -121,10 +121,15 @@ plan/state); harden the provider contract before the ecosystem widens.
       the manifest-vs-observed comparison), matching the documented atomic
       contract, and the binding asserts `NoOpOnExisting=true`. *If in-place VM
       update via re-apply was actually intended, revert that change and update
-      CONTROLLER.md:23 instead.* **Remaining follow-up:** decide how the
-      composite k3s Cluster fits (it is not an atomic CRUD resource — the
-      battery targets
-      atomic providers).
+      CONTROLLER.md:23 instead.* **Composite k3s Cluster — resolved:** a
+      composite provider is not atomic CRUD, so it doesn't fit the
+      `providertest.Suite`; its contract is its `Plan()` (children carry owner
+      refs, the child `$ref` graph is acyclic and self-contained so
+      `operations.RunGraph` can schedule it, and Plan is deterministic). Those
+      invariants are now pinned by `cluster_plan_contract_test.go`
+      (`TestPlanChildGraphIsSchedulable`, `TestPlanIsDeterministic`) alongside
+      the existing owner-label test. A shared composite harness is deferred
+      until a second composite provider exists to justify the generality.
 
 ---
 
