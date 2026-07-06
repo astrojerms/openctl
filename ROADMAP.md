@@ -100,7 +100,7 @@ Workloads/PaaS is vetoed by scope.
 **Cross-cutting:** test every capability against the wedge (no global
 plan/state); harden the provider contract before the ecosystem widens.
 
-- [~] **Provider conformance suite** (`internal/controller/providers/providertest`).
+- [x] **Provider conformance suite** (`internal/controller/providers/providertest`).
       A reusable `Suite` + `Capabilities` battery encoding the baseline
       `providers.Provider` contract once — Apply identity, Get-after-Apply
       round-trip, `*providers.NotFoundError` on missing Get, idempotent Delete,
@@ -774,6 +774,18 @@ When phases or followups land, move them up out of "pending" into their
 detail doc's marked-complete section, then leave a one-line entry here
 with the commit hash for at-a-glance history. Trim to the last 10.
 
+- test/docs: **provider contract hardening** (#68, #67, this PR) — a reusable
+  `providertest.Suite` conformance battery encodes the `providers.Provider`
+  contract once (Apply identity, Get-after-Apply round-trip,
+  `*providers.NotFoundError` on missing Get, idempotent Delete, Delete-removes,
+  List), with `Capabilities` flags for legitimate variations (`SupportsList`,
+  `NoOpOnExisting`) and self-tests proving it fails violators. Bound to the
+  external-plugin adapter (in-process) and the Terraform host (tf-fake
+  subprocess). The `$ref` dependency/value model + composite-apply DAG are now
+  documented in DESIGN.md, and the provider contract is written up for external
+  authors in docs/plugin-protocol.md. Follow-up: proxmox VM binding (needs a
+  stateful fake Proxmox API); k3s Cluster is composite, out of the atomic
+  battery's scope.
 - feat: **dependency-DAG apply ordering** — composite Apply now orders its
   children with a real dependency graph + topological sort instead of
   hand-coded kind phases. New generic scheduler `operations.RunGraph`
@@ -848,11 +860,6 @@ with the commit hash for at-a-glance history. Trim to the last 10.
   `proxmox://` installer now waits for TCP/22 on the selected VM IP before
   handing off to the SSH Linux installer, avoiding a race with cloud-init and
   sshd startup. IPv6 SSH target formatting is covered too.
-- feat: **Plugin-defined CLI subcommand surface** — `Capabilities` now
-  includes typed subcommand definitions, `Request` carries `args`, and
-  provider commands register advertised subcommands as Cobra commands. Tests
-  execute a fake plugin end-to-end and assert positional args, string/int/bool
-  flags, and provider config are sent to the plugin.
 - (#42–#45) — feat: **external plugin protocol (Tier 1 item 1)**, shipped
   in four phases. #42 `pkg/pluginproto` (persistent-process, id-correlated
   JSON-over-stdio protocol + Client + Handler SDK). #43 external provider
