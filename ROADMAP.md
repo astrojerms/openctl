@@ -225,7 +225,12 @@ plan/state); harden the provider contract before the ecosystem widens.
       on a node), and `upgrade` (binary-swap a node to a target k3s version:
       the agent downloads + sha256-verifies the release, atomically swaps the
       binary, and restarts). All run against the per-node agent client.
-      Cluster-wide rolling upgrade (drain/cordon ordering) remains a follow-up.
+      Cluster-wide rolling upgrade (drain/cordon ordering) remains a follow-up,
+      now scoped in a design proposal:
+      [docs/k3s-rolling-upgrade.md](docs/k3s-rolling-upgrade.md) — orchestrates
+      the shipped per-node upgrade (CPs serial for etcd quorum, then workers,
+      health-gated), with no-drain kept as the default and `--drain` opt-in.
+      Awaiting sign-off.
 - [x] Bug fix: the proxmox handler collapsed any `GetVM`/`GetNode`/
       `GetTemplate` error to NotFound — a network timeout produced a false
       "VM gone" result, and `applyVM` treated it as "doesn't exist" and
