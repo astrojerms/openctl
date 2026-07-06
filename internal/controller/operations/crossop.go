@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/openctl/openctl/internal/controller/refs"
 	"github.com/openctl/openctl/pkg/protocol"
@@ -98,6 +99,37 @@ func crossOpEdges(ops []*Operation) (map[string][]string, error) {
 
 func resourceKey(apiVersion, kind, name string) string {
 	return apiVersion + "|" + kind + "|" + name
+}
+
+// crossOpDependencyLabels builds a human-readable label for each op that has
+// cross-op dependencies, naming the resources it depends on (e.g. "depends on
+// K3sNode/dev-cp-0, VirtualMachine/dev-cp-0"). Surfaced on the op row so a
+// queued op is explainable in the UI ops drawer rather than sitting pending
+// for no visible reason. Phrased as a standing fact about the op's
+// dependencies, so it still reads correctly after the op completes. Ops
+// without dependencies get no entry (their label is left untouched).
+func crossOpDependencyLabels(batch []*Operation, edges map[string][]string) map[string]string {
+	if len(edges) == 0 {
+		return nil
+	}
+	desc := make(map[string]string, len(batch))
+	for _, op := range batch {
+		desc[op.ID] = op.Kind + "/" + op.ResourceName
+	}
+	labels := make(map[string]string, len(edges))
+	for opID, deps := range edges {
+		names := make([]string, 0, len(deps))
+		for _, dep := range deps {
+			if d, ok := desc[dep]; ok {
+				names = append(names, d)
+			}
+		}
+		if len(names) > 0 {
+			sort.Strings(names)
+			labels[opID] = "depends on " + strings.Join(names, ", ")
+		}
+	}
+	return labels
 }
 
 // crossOpAcyclic reports whether the dependency graph over ids with the given
