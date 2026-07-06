@@ -171,19 +171,19 @@ plan/state); harden the provider contract before the ecosystem widens.
       Serial by default; `OPENCTL_APPLY_CONCURRENCY=N` runs independent
       children in parallel. See `DESIGN.md` §"Dependencies, Value-Passing
       & Ordering".
-- [ ] **Cross-op dependency scheduling.** The composite-apply DAG orders
-      children *within* one operation; the top-level dispatcher still
-      processes *separate* operations FIFO (with fail-fast on same-resource
-      collision). A future scheduler could run independent operations
-      concurrently and order dependent ones by their `$ref` edges — the
-      same graph machinery, hoisted one level up. Aligns with the arch
-      Phase 9-10 typed-task-IR + DAG-scheduler sketch in
-      [docs/target-architecture.html](docs/target-architecture.html).
-      **Design proposal awaiting sign-off:**
-      [docs/cross-op-scheduling.md](docs/cross-op-scheduling.md) — flag-gated
-      (`OPENCTL_CROSS_OP_SCHEDULING`), reuses `operations.RunGraph`, and calls
-      out the two locked decisions it reopens (single-goroutine dispatch,
-      same-resource fail-fast) with recommendations.
+- [~] **Cross-op dependency scheduling** — implemented, **flag-gated,
+      default-off**. When `OPENCTL_CROSS_OP_SCHEDULING` is set, the dispatcher
+      claims the whole pending batch and runs it through `operations.RunGraph`:
+      independent ops run concurrently (`OPENCTL_CROSS_OP_CONCURRENCY`, default
+      4), dependent ops are ordered by their `$ref` edges (`crossOpEdges`, the
+      op-level analog of `RefChildEdges`). Failure is isolated (a failed op
+      doesn't stop independents; a dependent whose predecessor failed fails at
+      ref resolution); a `$ref` cycle falls back to unordered scheduling so no
+      op is left claimed-but-unrun. Default path is unchanged FIFO, so the
+      locked single-goroutine / fail-fast-collision behavior only changes on
+      opt-in. **Remaining: flip the default to on** after homelab validation —
+      that is the point the reopened decisions need sign-off. Design +
+      decisions: [docs/cross-op-scheduling.md](docs/cross-op-scheduling.md).
 
 ### Followups (post-Phase-6, parked)
 
