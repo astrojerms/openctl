@@ -124,6 +124,22 @@ import "openctl.io/schemas/base"
 			// Netmask in CIDR-suffix form (e.g. "24").
 			netmask: string
 		}
+		// Per-endpoint network config for spreading one cluster across
+		// endpoints on DIFFERENT subnets (separate-L2 spread). Keyed by
+		// placement context; a node inherits the block for the context it
+		// lands on. When set, dhcp is forced off and each node's IP is
+		// allocated from its own context's range. Omit for single-L2
+		// clusters. See docs/k3s-separate-l2-spread.md.
+		perContext?: [string]: {
+			// Proxmox bridge for nodes on this endpoint.
+			bridge?: string
+			// Static-IP range for nodes on this endpoint.
+			staticIPs?: {
+				startIP: base.#IPv4
+				gateway?: base.#IPv4
+				netmask?: string
+			}
+		}
 	}
 
 	// k3s installer configuration.
