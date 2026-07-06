@@ -132,6 +132,11 @@ message InvokeActionRequest {
   string kind = 2;
   string resource_name = 3;
   string action = 4;
+  // parameters carries optional key/value arguments for actions that need
+  // them (e.g. a target version for a cluster upgrade). Actions that take no
+  // parameters ignore it; providers opt in by implementing
+  // ParameterizedActioner. Additive and backward-compatible.
+  map<string, string> parameters = 5;
 }
 
 message InvokeActionResponse {
