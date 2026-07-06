@@ -790,18 +790,29 @@ When phases or followups land, move them up out of "pending" into their
 detail doc's marked-complete section, then leave a one-line entry here
 with the commit hash for at-a-glance history. Trim to the last 10.
 
-- test/docs: **provider contract hardening** (#68, #67, this PR) — a reusable
+- feat: **cross-op dependency scheduling** (#74, design #70) — hoists the
+  composite-apply DAG up to the dispatcher, **flag-gated default-off**
+  (`OPENCTL_CROSS_OP_SCHEDULING`). On opt-in, `drainScheduled` claims the whole
+  pending batch and runs it through `operations.RunGraph`: independent ops
+  concurrent (`OPENCTL_CROSS_OP_CONCURRENCY`, default 4), dependent ops ordered
+  by `$ref` edges (`crossOpEdges`, the op-level analog of `RefChildEdges`).
+  Failure isolated (a failed op doesn't stop independents); `$ref` cycle falls
+  back to unordered so nothing is left claimed-but-unrun. Default path is
+  unchanged FIFO. Remaining: flip the default after homelab validation (where
+  the reopened locked decisions need sign-off).
+- test/docs: **provider contract hardening** (#67–#69, #71–#73) — a reusable
   `providertest.Suite` conformance battery encodes the `providers.Provider`
   contract once (Apply identity, Get-after-Apply round-trip,
   `*providers.NotFoundError` on missing Get, idempotent Delete, Delete-removes,
   List), with `Capabilities` flags for legitimate variations (`SupportsList`,
-  `NoOpOnExisting`) and self-tests proving it fails violators. Bound to the
-  external-plugin adapter (in-process) and the Terraform host (tf-fake
-  subprocess). The `$ref` dependency/value model + composite-apply DAG are now
-  documented in DESIGN.md, and the provider contract is written up for external
-  authors in docs/plugin-protocol.md. Follow-up: proxmox VM binding (needs a
-  stateful fake Proxmox API); k3s Cluster is composite, out of the atomic
-  battery's scope.
+  `NoOpOnExisting`) and self-tests proving it fails violators. Bound to all
+  three provider classes: external-plugin adapter (#68), Terraform host (#68),
+  and compiled-in proxmox VM (#72). Binding proxmox surfaced and fixed two
+  contract gaps: `Apply` returned a nil `Resource` (#71, now reads observed
+  state back) and `applyVM` mutated an existing VM instead of the CONTROLLER.md
+  no-op (#73, now no-ops + surfaces drift). The `$ref`/DAG model (DESIGN.md,
+  #67) and provider contract (docs/plugin-protocol.md, #69) are documented.
+  Follow-up: k3s Cluster is composite, out of the atomic battery's scope.
 - feat: **dependency-DAG apply ordering** — composite Apply now orders its
   children with a real dependency graph + topological sort instead of
   hand-coded kind phases. New generic scheduler `operations.RunGraph`
@@ -872,10 +883,6 @@ with the commit hash for at-a-glance history. Trim to the last 10.
   `disk-storage=` actually controls the target storage for self-hosting
   installs. `--ssh-key ~/...` is also expanded consistently for SSH installs
   and the Proxmox handoff path.
-- fix: **Proxmox bootstrap SSH readiness** — after VM creation the
-  `proxmox://` installer now waits for TCP/22 on the selected VM IP before
-  handing off to the SSH Linux installer, avoiding a race with cloud-init and
-  sshd startup. IPv6 SSH target formatting is covered too.
 - (#42–#45) — feat: **external plugin protocol (Tier 1 item 1)**, shipped
   in four phases. #42 `pkg/pluginproto` (persistent-process, id-correlated
   JSON-over-stdio protocol + Client + Handler SDK). #43 external provider
