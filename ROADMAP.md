@@ -226,11 +226,15 @@ plan/state); harden the provider contract before the ecosystem widens.
       the agent downloads + sha256-verifies the release, atomically swaps the
       binary, and restarts). All run against the per-node agent client.
       Cluster-wide rolling upgrade (drain/cordon ordering) remains a follow-up,
-      now scoped in a design proposal:
-      [docs/k3s-rolling-upgrade.md](docs/k3s-rolling-upgrade.md) — orchestrates
-      the shipped per-node upgrade (CPs serial for etcd quorum, then workers,
-      health-gated), with no-drain kept as the default and `--drain` opt-in.
-      Awaiting sign-off.
+      scoped in [docs/k3s-rolling-upgrade.md](docs/k3s-rolling-upgrade.md). The
+      **orchestration core has landed** (`cluster_upgrade.go`: `upgradeOrder`
+      CPs-serial-then-workers + `rollingUpgrade` idempotent-skip + health-gated
+      halt-on-failure, over an injected `nodeUpgrader`; 8 unit tests). Remaining
+      to wire it up: `Actioner` action-parameters plumbing (the interface has no
+      version arg today) → proto/RPC/UI, a real agent-backed `nodeUpgrader`
+      (cluster-state node list + mTLS bundle + agent `UpgradeK3s`/`Info`), and
+      multi-node homelab validation. `--drain` stays opt-in (needs a k8s
+      client); the landed core is no-drain by design.
 - [x] Bug fix: the proxmox handler collapsed any `GetVM`/`GetNode`/
       `GetTemplate` error to NotFound — a network timeout produced a false
       "VM gone" result, and `applyVM` treated it as "doesn't exist" and
