@@ -40,6 +40,7 @@ and the exec-plugin paths are removed.`,
 func newCtlApplyCommand() *cobra.Command {
 	var (
 		file             string
+		values           []string
 		noWait           bool
 		waitTimeout      time.Duration
 		allowDestructive bool
@@ -61,7 +62,7 @@ Destructive convergence (Phase 5):
 			if file == "" {
 				return fmt.Errorf("--file is required")
 			}
-			r, err := loadManifest(file)
+			r, err := loadManifestWithValues(file, values)
 			if err != nil {
 				return err
 			}
@@ -72,6 +73,7 @@ Destructive convergence (Phase 5):
 		},
 	}
 	cmd.Flags().StringVarP(&file, "file", "f", "", "manifest file (.yaml or .cue)")
+	cmd.Flags().StringArrayVar(&values, "values", nil, "CUE values file(s) to unify into a .cue manifest (repeatable; the -var-file analog)")
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "return immediately after submission instead of polling for completion")
 	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 30*time.Minute, "max time to wait for completion when not --no-wait (the op keeps running server-side if this fires)")
 	cmd.Flags().BoolVar(&allowDestructive, "allow-destructive", false, "permit removing declared children when re-applying a Cluster")
