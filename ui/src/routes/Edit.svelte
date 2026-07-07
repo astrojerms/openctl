@@ -6,6 +6,7 @@
     type DryRunApplyResponse,
   } from '../lib/api';
   import { parseYAML, resourceToYAML } from '../lib/yaml';
+  import { advancedKind } from '../lib/catalogue';
   import { canMutate } from '../lib/auth';
   import { ops as opsStore } from '../lib/ops';
   import type { OperationRow } from '../lib/watch';
@@ -477,6 +478,9 @@
     (plan.children ?? []).some((c) => c.verb !== 'no-op')
   );
   $: ownedByAnother = ownerRefs.length > 0;
+  // Composite-child kinds (K3sNode, AgentInstall) get an info banner in create
+  // mode nudging toward the owning composite.
+  $: advKind = isCreate ? advancedKind(apiVersion, kind) : undefined;
 
   // Name in the current manifest, used by the create-mode collision
   // check. Parsing on every keystroke is cheap (small docs); we don't
@@ -673,6 +677,15 @@
       <article class="retry-block">
         Pre-filled from operation
         <code class="mono">{retryFromOpId.slice(0, 12)}</code> — review the manifest before re-applying.
+      </article>
+    {/if}
+    {#if advKind}
+      <article class="advanced-block">
+        <strong>Advanced — usually created via a {advKind.owner}.</strong>
+        {advKind.note}
+        <a class="primary-link" href={routeHref({ name: 'create', apiVersion: 'k3s.openctl.io/v1', kind: advKind.owner })}>
+          Create a {advKind.owner} instead →
+        </a>
       </article>
     {/if}
     {#if nameCollision}
@@ -1085,6 +1098,26 @@
   }
   .child-link:hover {
     text-decoration: underline;
+  }
+  .advanced-block {
+    background: rgba(200, 162, 74, 0.09);
+    border-left: 3px solid #c8a24a;
+    border-radius: 6px;
+    padding: 0.75rem 1.1rem;
+    font-size: 0.88rem;
+    line-height: 1.55;
+  }
+  .advanced-block a {
+    color: #d6b45e;
+    text-decoration: none;
+  }
+  .advanced-block a:hover {
+    text-decoration: underline;
+  }
+  .advanced-block .primary-link {
+    display: inline-block;
+    margin-left: 0.4rem;
+    font-weight: 500;
   }
   .retry-block {
     background: rgba(255, 184, 0, 0.08);

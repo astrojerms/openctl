@@ -738,12 +738,13 @@ screens. Ordered by impact.
       previously-unused `RepoService.Pull` wrapper — how an operator picks
       up out-of-band commits (another controller, a manual push to the
       remote).
-- [ ] **U10.6 — Advanced/composite-child kinds in the create picker.**
-      The create picker offers `K3sNode` and `AgentInstall` flat alongside
-      `Cluster` with no signal that they're expert/composite-child paths
-      (AgentInstall in particular requires an existing Cluster's CA
-      bundle). Mark them "advanced" or group them under the owning
-      composite.
+- [x] **U10.6 — Advanced/composite-child kinds in the create picker.**
+      `K3sNode` and `AgentInstall` (composite children a k3s `Cluster` fans
+      out into) now carry an "adv" chip in the nav, and their create form
+      shows an info banner explaining they're normally produced by a
+      `Cluster` (AgentInstall in particular requires an existing Cluster's
+      CA bundle) with a "Create a Cluster instead →" link. Driven by an
+      `ADVANCED_KINDS` map in `catalogue.ts`.
 - [ ] **U10.7 — Small polish.** Raw CUE viewer via
       `SchemaService.GetSchema` (never called from the UI);
       dependent/cascading form dropdowns (storages/bridges on the selected
