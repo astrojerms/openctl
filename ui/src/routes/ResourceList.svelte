@@ -4,6 +4,7 @@
   import { watchResources } from '../lib/watch';
   import { statusBadge } from '../lib/format';
   import { routeHref } from '../lib/router';
+  import { canMutate } from '../lib/auth';
 
   export let apiVersion: string;
   export let kind: string;
@@ -152,7 +153,9 @@
       <p class="path">{provider} · {apiVersion}</p>
     </div>
     <span class="badge-count">{rows.length}</span>
-    <a class="new-btn" href={routeHref({ name: 'create', apiVersion, kind })}>+ New {kind}</a>
+    {#if $canMutate}
+      <a class="new-btn" href={routeHref({ name: 'create', apiVersion, kind })}>+ New {kind}</a>
+    {/if}
   </header>
 
   {#if loading}

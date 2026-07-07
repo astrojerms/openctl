@@ -96,6 +96,7 @@
     <GitStatus />
     <span class="who" title="Session: {me.sessionId}">
       signed in {me.userId ? `as ${me.userId}` : ''}
+      {#if me.role}<span class="role" class:viewer={me.role === 'viewer'}>{me.role}</span>{/if}
     </span>
     <button on:click={doLogout} disabled={busy}>
       {busy ? 'Signing out…' : 'Sign out'}
@@ -226,6 +227,22 @@
   .who {
     color: #888;
     font-size: 0.875rem;
+  }
+  .role {
+    margin-left: 0.35rem;
+    padding: 0.05rem 0.4rem;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    background: rgba(120, 160, 200, 0.18);
+    color: #9ec1e6;
+  }
+  /* A read-only session gets a distinct amber badge so it's obvious why
+     mutation controls are disabled. */
+  .role.viewer {
+    background: rgba(224, 160, 48, 0.18);
+    color: #e0a030;
   }
   .shell {
     display: grid;

@@ -721,11 +721,14 @@ screens. Ordered by impact.
       to page or filter past operations. Wire `ListOperations` into the
       drawer (filter controls already exist client-side; today they filter
       only the live tail).
-- [ ] **U10.4 — RBAC visibility & gating.** RBAC is enforced server-side
-      but invisible in the UI: the shell shows the user id but drops
-      `me.role` (carried on `WhoAmIResponse`), and mutation controls
-      aren't hidden for a `viewer`, so they 403 on click. (a) Surface the
-      role; (b) gate/disable mutation controls by role; (c) later — a
+- [x] **U10.4 — RBAC visibility & gating.** The shell now shows the
+      caller's role as a badge (amber for a read-only `viewer`), reading
+      `WhoAmIResponse.role` (the server already populated it; only the TS
+      type was missing the field). A `canMutate` derived store (`viewer` →
+      false; every other role and the unknown/`--no-auth` case → true, since
+      the server is the real gate) drives gating: Detail hides Edit/Delete
+      and disables actions/Reconcile, Edit disables Apply, ResourceList
+      hides "+ New" — each with a "read-only session" tooltip. *Deferred:* a
       user-management UI (no `UserService` RPC exists yet; `users.yaml` is
       hand-edited).
 - [ ] **U10.5 — `repo:pull` button.** `RepoService.Pull` has a UI wrapper

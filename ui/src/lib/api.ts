@@ -93,6 +93,10 @@ export interface LoginResponse {
 export interface WhoAmIResponse {
   userId: string;
   sessionId: string;
+  // RBAC role of the caller: "viewer" | "editor" | "admin". Empty when the
+  // server didn't report one (older server, or --no-auth) — treated as
+  // full access by the UI, since the server is the real gate.
+  role?: string;
 }
 
 export const session = {

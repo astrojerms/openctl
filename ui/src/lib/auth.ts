@@ -1,4 +1,4 @@
-import { writable, type Writable } from 'svelte/store';
+import { derived, writable, type Readable, type Writable } from 'svelte/store';
 import { session, UnauthorizedError, type WhoAmIResponse } from './api';
 
 export type AuthState =
@@ -7,6 +7,15 @@ export type AuthState =
   | { kind: 'signed-in'; me: WhoAmIResponse };
 
 export const auth: Writable<AuthState> = writable({ kind: 'unknown' });
+
+// canMutate is false only for an explicit `viewer` — every other role (editor,
+// admin) and the unknown/empty case (older server, --no-auth) allows mutation.
+// This is a UX gate that mirrors server-side RBAC (mutations need editor+); the
+// server remains the real enforcement point, so defaulting unknown to "allow"
+// never grants access the server would deny.
+export const canMutate: Readable<boolean> = derived(auth, ($auth) =>
+  $auth.kind === 'signed-in' ? $auth.me.role !== 'viewer' : true,
+);
 
 // refresh probes /v1/session/whoami to decide whether the existing cookie
 // is valid. Used on first load and after a successful Login. Errors that

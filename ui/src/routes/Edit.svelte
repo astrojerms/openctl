@@ -6,6 +6,7 @@
     type DryRunApplyResponse,
   } from '../lib/api';
   import { parseYAML, resourceToYAML } from '../lib/yaml';
+  import { canMutate } from '../lib/auth';
   import { ops as opsStore } from '../lib/ops';
   import type { OperationRow } from '../lib/watch';
   import { routeHref, navigate } from '../lib/router';
@@ -32,6 +33,9 @@
   const apiVersionCtx = writable(apiVersion);
   setContext('resourceAPIVersionStore', apiVersionCtx);
   $: apiVersionCtx.set(apiVersion);
+
+  // Shown on the disabled Apply button for a read-only (viewer) session.
+  const readOnlyTitle = 'Read-only session — requires editor or admin role';
 
   // Publish per-path validation errors so nested FormField instances
   // can highlight themselves without threading errors through props.
@@ -651,9 +655,9 @@
       <button on:click={back} disabled={applying}>{isCreate ? 'Cancel' : 'Back'}</button>
       <button
         class="primary"
-        disabled={applyBlocked}
+        disabled={applyBlocked || !$canMutate}
         on:click={doApply}
-        title={applyBlocked && plan ? applyBlockReason() : ''}
+        title={!$canMutate ? readOnlyTitle : (applyBlocked && plan ? applyBlockReason() : '')}
       >
         {applying ? 'Submitting…' : isCreate ? 'Create' : 'Apply'}
       </button>

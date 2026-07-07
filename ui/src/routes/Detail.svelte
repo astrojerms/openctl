@@ -1,6 +1,10 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { resources, UnauthorizedError, type GetResourceResponse, type Resource, type ResourceRef, type ActionSpec } from '../lib/api';
+  import { canMutate } from '../lib/auth';
+
+  // Shown on disabled mutation controls for a read-only (viewer) session.
+  const readOnlyTitle = 'Read-only session — requires editor or admin role';
   import { watchResources } from '../lib/watch';
   import { statusBadge, type StatusBadge } from '../lib/format';
   import { routeHref, navigate } from '../lib/router';
@@ -450,8 +454,8 @@
           type="button"
           class="action-btn"
           class:destructive={actionIsDestructive(a.name)}
-          disabled={!!actionInflight}
-          title={a.description || `Invoke '${a.name}' on ${resourceName}`}
+          disabled={!!actionInflight || !$canMutate}
+          title={$canMutate ? (a.description || `Invoke '${a.name}' on ${resourceName}`) : readOnlyTitle}
           on:click={() => onActionClick(a)}
         >
           {actionInflight === a.name ? '…' : actionLabel(a.name)}
@@ -461,22 +465,26 @@
       <button
         type="button"
         class="reconcile-btn"
-        disabled={reconciling || !data?.applied}
-        title={data?.applied
-          ? 'Re-apply the stored manifest to push desired state over observed'
-          : 'No applied manifest on file — nothing to reconcile from'}
+        disabled={reconciling || !data?.applied || !$canMutate}
+        title={!$canMutate
+          ? readOnlyTitle
+          : data?.applied
+            ? 'Re-apply the stored manifest to push desired state over observed'
+            : 'No applied manifest on file — nothing to reconcile from'}
         on:click={doReconcile}
       >
         {reconciling ? 'Reconciling…' : 'Reconcile'}
       </button>
-      <a class="edit-btn" href={routeHref({ name: 'edit', apiVersion, kind, resourceName })}>Edit</a>
-      <button
-        type="button"
-        class="delete-btn"
-        disabled={deleting}
-        title="Delete this resource"
-        on:click={doDelete}
-      >{deleting ? 'Deleting…' : 'Delete'}</button>
+      {#if $canMutate}
+        <a class="edit-btn" href={routeHref({ name: 'edit', apiVersion, kind, resourceName })}>Edit</a>
+        <button
+          type="button"
+          class="delete-btn"
+          disabled={deleting}
+          title="Delete this resource"
+          on:click={doDelete}
+        >{deleting ? 'Deleting…' : 'Delete'}</button>
+      {/if}
     </div>
   </header>
 
