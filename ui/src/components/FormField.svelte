@@ -36,6 +36,29 @@
     dispatch('change', v);
   }
 
+  // --- Secret-reference control (@secret fields) ---------------------------
+  // Parse the current value into a {source, key} pair for the control, and
+  // note a leftover inline plaintext value so the UI can nudge the user to
+  // replace it with a reference.
+  function secretParts(v: unknown): { source: string; key: string; plaintext: string | null } {
+    if (v && typeof v === 'object' && !Array.isArray(v) && '$secret' in (v as Record<string, unknown>)) {
+      const s = ((v as Record<string, unknown>).$secret ?? {}) as Record<string, unknown>;
+      if (typeof s.file === 'string') return { source: 'file', key: s.file, plaintext: null };
+      if (typeof s.env === 'string') return { source: 'env', key: s.env, plaintext: null };
+      if (typeof s.provider === 'string') return { source: s.provider, key: (s.key as string) ?? '', plaintext: null };
+    }
+    if (typeof v === 'string' && v !== '') return { source: 'file', key: '', plaintext: v };
+    return { source: 'file', key: '', plaintext: null };
+  }
+  // Emit a {$secret: {...}} marker (or clear the field when the key is empty).
+  function emitSecret(source: string, key: string) {
+    if (!key) { set(undefined); return; }
+    const inner = source === 'file' || source === 'env'
+      ? { [source]: key }
+      : { provider: source, key };
+    set({ $secret: inner });
+  }
+
   function setObjectKey(key: string, v: unknown) {
     const obj = (typeof value === 'object' && value && !Array.isArray(value))
       ? { ...(value as Record<string, unknown>) }
@@ -380,6 +403,35 @@
   </div>
 {:else if field.const !== undefined}
   <input class="const" type="text" value={String(field.const)} readonly tabindex="-1" />
+{:else if field.secret}
+  {@const sp = secretParts(value)}
+  <div class="secret-field">
+    <div class="secret-row">
+      <select
+        value={sp.source}
+        on:change={(e) => emitSecret((e.currentTarget as HTMLSelectElement).value, sp.key)}
+      >
+        <option value="file">secret file</option>
+        <option value="env">env var</option>
+        {#if sp.source !== 'file' && sp.source !== 'env'}
+          <option value={sp.source}>{sp.source}</option>
+        {/if}
+      </select>
+      <input
+        type="text"
+        value={sp.key}
+        placeholder={sp.source === 'env' ? 'ENV_VAR_NAME' : 'file-name.pw'}
+        on:input={(e) => emitSecret(sp.source, (e.currentTarget as HTMLInputElement).value)}
+      />
+    </div>
+    <p class="secret-hint">🔒 Stored as a reference — the value never enters this manifest or git.</p>
+    {#if sp.plaintext !== null}
+      <p class="secret-warn">
+        This field holds an inline value that would be committed to the manifest.
+        Set a reference above to replace it.
+      </p>
+    {/if}
+  </div>
 {:else if field.type === 'string' && optionsRef}
   <select
     value={value as string ?? ''}
@@ -460,6 +512,33 @@
 {/if}
 
 <style>
+  .secret-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    min-width: 0;
+  }
+  .secret-row {
+    display: flex;
+    gap: 0.4rem;
+  }
+  .secret-row select {
+    flex: 0 0 auto;
+  }
+  .secret-row input {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .secret-hint {
+    margin: 0;
+    font-size: 0.78rem;
+    opacity: 0.7;
+  }
+  .secret-warn {
+    margin: 0;
+    font-size: 0.78rem;
+    color: #e0a030;
+  }
   .object {
     display: flex;
     flex-direction: column;

@@ -28,6 +28,7 @@ import (
 	tfhostprovider "github.com/openctl/openctl/internal/controller/providers/tfhost"
 	"github.com/openctl/openctl/internal/controller/providerstate"
 	"github.com/openctl/openctl/internal/controller/reconciler"
+	"github.com/openctl/openctl/internal/controller/secrets"
 	"github.com/openctl/openctl/internal/controller/server"
 	"github.com/openctl/openctl/internal/controller/storage"
 	tlspkg "github.com/openctl/openctl/internal/controller/tls"
@@ -203,6 +204,22 @@ func runServe(args []string) error {
 	}
 
 	dispatcher := operations.NewDispatcher(opStore, registry, sink, 0)
+
+	// Secret resolution ($secret markers). v1 registers the built-in `file`
+	// (secrets read from <state-dir>/secrets, mode 0600) and `env` providers.
+	// The resolved value reaches provider.Apply only; the persisted manifest
+	// keeps the marker. Configured backends (Vault, cloud secret managers) and
+	// external secret-provider plugins register here later without touching the
+	// resolver or the redaction guarantee.
+	secretsDir := filepath.Join(*dir, "secrets")
+	if err := os.MkdirAll(secretsDir, 0o700); err != nil {
+		return fmt.Errorf("create secrets dir: %w", err)
+	}
+	secretsReg := secrets.NewRegistry()
+	secrets.RegisterBuiltins(secretsReg, secretsDir)
+	dispatcher.SetSecrets(secretsReg)
+	log.Printf("  secrets:     %s (providers: file, env)", secretsDir)
+
 	dispatcher.Start(ctx)
 	defer dispatcher.Stop()
 

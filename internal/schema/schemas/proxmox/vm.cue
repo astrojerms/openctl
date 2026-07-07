@@ -141,8 +141,11 @@ import "openctl.io/schemas/base"
 	cloudInit?: {
 		// Default user created in the guest.
 		user?: string
-		// Initial password (plaintext on the wire to Proxmox — prefer SSH keys).
-		password?: string
+		// Initial password. Prefer a secret reference (base.#Secret) so the
+		// value stays out of the git-synced manifest; a bare string is still
+		// accepted for back-compat but is committed verbatim. Prefer SSH keys
+		// over passwords entirely.
+		password?: (string | base.#Secret) @secret()
 		// SSH public keys for the default user.
 		sshKeys?: [...string]
 		// DNS search domain (e.g. "lan").
