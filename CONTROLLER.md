@@ -20,8 +20,13 @@ in. Any change requires re-opening the discussion.
   gap-filling.
 - **Comparison:** loose. Only manifest-specified fields are tracked.
   Provider-set defaults are unmanaged.
-- **Apply on existing atomic resource (e.g. `VirtualMachine`):** no-op +
-  surface drift. User must delete + re-apply for changes.
+- **Apply on existing atomic resource (e.g. `VirtualMachine`):** update in
+  place for the fields the provider can change live — for `VirtualMachine`:
+  memory, CPU (cores/sockets), and disk **growth**. Non-resizable differences
+  (template, networks, cloud-init) are not mutated; they surface as drift and
+  still require delete + re-apply. Disk **shrink** is rejected (Proxmox can't
+  shrink) — delete + re-apply to size down. Re-applying an unchanged spec is a
+  no-op (identical config, disks already at size).
 - **Apply on existing composite resource (`Cluster`):** structural changes
   honored declaratively (add nodes auto, remove nodes via
   `--allow-destructive`, catastrophic ops via
