@@ -1,6 +1,10 @@
 # OIDC authentication — design proposal
 
-**Status:** proposal, awaiting sign-off. Not implemented.
+**Status:** **backend IMPLEMENTED** (2026-07-07) — `auth.oidc` config block,
+`internal/controller/auth/oidc.go` (authenticator), `internal/controller/
+server/oidc_http.go` (login+callback routes), wired into the gateway; tested
+against a fake IdP (`oidc_test.go`). Remaining: a UI "Log in with SSO" button
+and real-IdP validation. The design below is what shipped.
 **Author:** autonomous session, 2026-07-05.
 **Roadmap item:** "Multi-user auth → *Next — OIDC: external IdP → claims →
 role (the last big auth slice)*" (ROADMAP.md, Future goals). Direction:

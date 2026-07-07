@@ -71,7 +71,7 @@ func startGatewayTestServer(t *testing.T) (gatewayBaseURL, rootToken string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	h, err := NewHTTPGateway(ctx, grpcLn.Addr().String(), caBytes, "localhost")
+	h, err := NewHTTPGateway(ctx, grpcLn.Addr().String(), caBytes, "localhost", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -49,7 +49,7 @@ var uiAssets embed.FS
 // the gRPC listen address (e.g. 127.0.0.1:9444) — typically the same
 // loopback host:port the controller itself listens on, since the HTTP
 // gateway runs alongside in the same process.
-func NewHTTPGateway(ctx context.Context, grpcAddr string, caCertPEM []byte, serverName string) (http.Handler, error) {
+func NewHTTPGateway(ctx context.Context, grpcAddr string, caCertPEM []byte, serverName string, oidc *OIDCHandler) (http.Handler, error) {
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(caCertPEM) {
 		return nil, fmt.Errorf("invalid CA cert PEM")
@@ -107,6 +107,12 @@ func NewHTTPGateway(ctx context.Context, grpcAddr string, caCertPEM []byte, serv
 	// UI assets. embed.FS roots at "uiassets/dist/"; strip to serve at /ui/.
 	mux.Handle("/ui/", http.StripPrefix("/ui/", uiHandler()))
 	mux.Handle("/ui", http.RedirectHandler("/ui/", http.StatusMovedPermanently))
+
+	// OIDC login front door (browser SSO). Mounted only when configured; the
+	// routes mint sessions directly and are not part of the gRPC surface.
+	if oidc != nil {
+		oidc.register(mux)
+	}
 
 	// Bare / → /ui/ for convenience.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -325,8 +331,8 @@ func extractJSONString(body, name string) string {
 // interstitial the user clicks through; that doesn't downgrade the
 // protocol — the h2 connection is still established. Trusting the CA
 // (DEVELOPMENT.md) removes the warning.
-func ServeHTTPGateway(ctx context.Context, addr, grpcAddr string, caCertPEM []byte, serverName, certFile, keyFile string) error {
-	h, err := NewHTTPGateway(ctx, grpcAddr, caCertPEM, serverName)
+func ServeHTTPGateway(ctx context.Context, addr, grpcAddr string, caCertPEM []byte, serverName, certFile, keyFile string, oidc *OIDCHandler) error {
+	h, err := NewHTTPGateway(ctx, grpcAddr, caCertPEM, serverName, oidc)
 	if err != nil {
 		return err
 	}
