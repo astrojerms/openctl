@@ -852,12 +852,22 @@ phase plan when ready to commit.
         RBAC level (session → its role, named-user/root → the principal's), and
         `openctl whoami` prints your user + role from the CLI. UI display is a
         small frontend follow-up.
-      - *Next — OIDC:* external IdP → claims → role (the last big auth slice).
-        **Design proposal:** [docs/oidc-design.md](docs/oidc-design.md) — OIDC
-        as a new session-minting front door (Authorization Code + PKCE,
-        discovery, claims→role deny-by-default) that reuses the shipped
-        session/cookie/RBAC machinery; testable against a fake IdP without an
-        external provider. Awaiting sign-off.
+      - *OIDC — SHIPPED (backend):* external IdP → claims → role, the last big
+        auth slice. Design: [docs/oidc-design.md](docs/oidc-design.md). OIDC is
+        a new session-minting front door (Authorization Code + PKCE, discovery,
+        claims→role **deny-by-default**) that reuses the shipped session/cookie/
+        RBAC machinery — it only adds an identity source. Config
+        `auth.oidc` block (`clientSecretFile`, `roleClaim`+`roleMapping`,
+        `defaultRole`); `internal/controller/auth/oidc.go` (go-oidc discovery +
+        JWKS verify + highest-role mapping) + `internal/controller/server/
+        oidc_http.go` (`/auth/oidc/login` + `/auth/oidc/callback`, state+PKCE
+        cookies, mints a session and sets the `openctl_session` cookie).
+        Coexists with root token + named tokens (`--no-auth` unchanged). Tested
+        against a **fake IdP** (`oidc_test.go` — real go-oidc verify: happy
+        path, highest-role-wins, deny-by-default, wrong-audience + expired
+        rejection). *Remaining:* a UI "Log in with SSO" button (frontend
+        follow-up — the backend is reachable directly at `/auth/oidc/login`)
+        and validation against a real IdP.
 - [x] **Terraform / OpenTofu provider host** *(Tier 1 — see
       [docs/direction.md](docs/direction.md))* — consume the existing
       Terraform provider ecosystem (AWS, GCP, Azure, Cloudflare, …)

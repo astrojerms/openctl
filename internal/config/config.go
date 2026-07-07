@@ -20,6 +20,44 @@ type Config struct {
 	Operations *Operations          `yaml:"operations,omitempty"`
 	Templates  *Templates           `yaml:"templates,omitempty"`
 	Secrets    *Secrets             `yaml:"secrets,omitempty"`
+	Auth       *Auth                `yaml:"auth,omitempty"`
+}
+
+// Auth configures authentication front doors beyond the root token + named
+// users. Currently just OIDC (browser SSO).
+type Auth struct {
+	OIDC *OIDCConfig `yaml:"oidc,omitempty"`
+}
+
+// OIDCConfig configures OIDC login: an external IdP mints openctl sessions via
+// Authorization Code + PKCE, reusing the existing session/cookie/RBAC layer.
+// Absent or Enabled=false → OIDC off (today's behavior exactly).
+type OIDCConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// Issuer is the IdP base URL; discovery reads <issuer>/.well-known/openid-configuration.
+	Issuer   string `yaml:"issuer"`
+	ClientID string `yaml:"clientID"`
+	// ClientSecretFile holds the OAuth client secret (0600). Never inline it.
+	ClientSecretFile string `yaml:"clientSecretFile,omitempty"`
+	// RedirectURL is this controller's callback URL, registered with the IdP.
+	RedirectURL string `yaml:"redirectURL"`
+	// RoleClaim is the ID-token claim carrying the role signal (default "groups").
+	RoleClaim string `yaml:"roleClaim,omitempty"`
+	// RoleMapping maps a claim value → openctl role (viewer|editor|admin).
+	RoleMapping map[string]string `yaml:"roleMapping,omitempty"`
+	// DefaultRole is granted to an authenticated user matching no mapping.
+	// Empty (the default) means deny — fail closed.
+	DefaultRole string `yaml:"defaultRole,omitempty"`
+	// UsernameClaim becomes Principal.UserID (default "email").
+	UsernameClaim string `yaml:"usernameClaim,omitempty"`
+}
+
+// ResolveClientSecret reads the OAuth client secret from ClientSecretFile.
+func (o *OIDCConfig) ResolveClientSecret() (string, error) {
+	if o.ClientSecretFile == "" {
+		return "", nil
+	}
+	return readSecretFile(o.ClientSecretFile)
 }
 
 // Secrets configures secret-resolution backends beyond the built-in file/env

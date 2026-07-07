@@ -79,6 +79,31 @@ func registerConfiguredSecretProviders(reg *secrets.Registry, providers []config
 	return names, nil
 }
 
+// oidcConfig reads config.auth.oidc, resolving the client secret from its file.
+// Returns (nil, nil) when OIDC is absent or disabled, (nil, err) when it's
+// enabled but the secret can't be read.
+func oidcConfig() (*auth.OIDCConfig, error) {
+	cfg, err := config.Load()
+	if err != nil || cfg == nil || cfg.Auth == nil || cfg.Auth.OIDC == nil || !cfg.Auth.OIDC.Enabled {
+		return nil, nil //nolint:nilerr // a missing/unreadable config just means "OIDC off"
+	}
+	o := cfg.Auth.OIDC
+	secret, err := o.ResolveClientSecret()
+	if err != nil {
+		return nil, fmt.Errorf("read client secret: %w", err)
+	}
+	return &auth.OIDCConfig{
+		Issuer:        o.Issuer,
+		ClientID:      o.ClientID,
+		ClientSecret:  secret,
+		RedirectURL:   o.RedirectURL,
+		RoleClaim:     o.RoleClaim,
+		RoleMapping:   o.RoleMapping,
+		DefaultRole:   o.DefaultRole,
+		UsernameClaim: o.UsernameClaim,
+	}, nil
+}
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
@@ -406,10 +431,27 @@ func runServe(args []string) error {
 		if err != nil {
 			return fmt.Errorf("read CA cert: %w", err)
 		}
+		// OIDC login front door (browser SSO), when configured. The gateway is
+		// TLS, so cookies are Secure. A discovery/config failure is fatal — an
+		// operator who enabled OIDC shouldn't silently get a controller with no
+		// SSO.
+		var oidcHandler *server.OIDCHandler
+		oc, err := oidcConfig()
+		if err != nil {
+			return fmt.Errorf("oidc config: %w", err)
+		}
+		if oc != nil {
+			authn, err := auth.NewOIDCAuthenticator(ctx, *oc)
+			if err != nil {
+				return fmt.Errorf("oidc: %w", err)
+			}
+			oidcHandler = server.NewOIDCHandler(authn, sessionStore, true)
+			log.Printf("  oidc:        enabled (issuer discovered)")
+		}
 		go func() {
 			log.Printf("openctl-controller HTTP gateway listening on %s (HTTP/2 over TLS)", *httpListen)
 			log.Printf("  UI:          https://%s/ui/", *httpListen)
-			if err := server.ServeHTTPGateway(ctx, *httpListen, *listen, caBytes, host, mat.ServerCertPath, mat.ServerKeyPath); err != nil {
+			if err := server.ServeHTTPGateway(ctx, *httpListen, *listen, caBytes, host, mat.ServerCertPath, mat.ServerKeyPath, oidcHandler); err != nil {
 				errCh <- fmt.Errorf("http gateway: %w", err)
 			}
 		}()
