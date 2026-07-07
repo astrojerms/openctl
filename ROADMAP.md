@@ -750,17 +750,18 @@ screens. Ordered by impact.
       `Cluster` (AgentInstall in particular requires an existing Cluster's
       CA bundle) with a "Create a Cluster instead →" link. Driven by an
       `ADVANCED_KINDS` map in `catalogue.ts`.
-- [~] **U10.7 — Small polish.** *Done:* raw CUE viewer — a "Schema" toggle
-      on each kind's ResourceList lazy-fetches `SchemaService.GetSchema`
-      (previously never called) and shows the CUE source in a scrollable
-      panel; kubeconfig download verified working through the existing
-      download-action path (`get-kubeconfig` → `DownloadContent`, streamed
-      as a file by the Detail action handler). *Remaining:*
-      dependent/cascading form dropdowns (storages/bridges on the selected
-      node) — needs a backend enumeration of a node's storages/bridges plus
-      a form field-to-field dependency convention the form MVP lacks; VM
-      console (websocket modality, parked). These two are their own small
-      features, not one-line polish.
+- [x] **U10.7 — Small polish.** Raw CUE viewer — a "Schema" toggle on each
+      kind's ResourceList lazy-fetches `SchemaService.GetSchema` (previously
+      never called). Kubeconfig download verified through the existing
+      download-action path. **Dependent/cascading form dropdowns** shipped:
+      the `@options` CUE convention gained `field` (a dotted path into the
+      target resource, e.g. `status.storages`) + `dependsOn` (the sibling
+      field whose value selects the instance, e.g. `spec.node`); the proxmox
+      client lists a node's storages/bridges and a single-node `Get` enriches
+      `ProxmoxNode.status.{storages,bridges}`; the form resolves a VM's disk
+      `storage` / network `bridge` from the selected node (free-text fallback
+      until a node is picked). *Deferred:* VM console (websocket modality —
+      its own feature, different modality).
 
 ---
 

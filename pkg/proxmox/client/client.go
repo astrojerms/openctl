@@ -101,6 +101,61 @@ func (c *Client) ListNodes(ctx context.Context) ([]*Node, error) {
 	return result.Data, nil
 }
 
+// NodeStorage is a storage pool available on a node, as returned by
+// /nodes/<node>/storage.
+type NodeStorage struct {
+	Storage string `json:"storage"` // storage ID (e.g. "local-lvm")
+	Type    string `json:"type"`    // backend type (e.g. "lvmthin", "dir")
+	Content string `json:"content"` // comma-separated content types (e.g. "images,rootdir")
+	Active  int    `json:"active"`  // 1 when the storage is online
+}
+
+// ListNodeStorages returns the storage pools configured on a node. Used to
+// populate storage dropdowns in the UI form. Returns only active storages.
+func (c *Client) ListNodeStorages(ctx context.Context, node string) ([]*NodeStorage, error) {
+	resp, err := c.get(ctx, fmt.Sprintf("/api2/json/nodes/%s/storage", node))
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Data []*NodeStorage `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse node storage: %w", err)
+	}
+	out := make([]*NodeStorage, 0, len(result.Data))
+	for _, s := range result.Data {
+		if s.Active == 0 {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+// NodeBridge is a network bridge on a node, as returned by
+// /nodes/<node>/network?type=bridge.
+type NodeBridge struct {
+	Iface  string `json:"iface"`  // interface name (e.g. "vmbr0")
+	Active int    `json:"active"` // 1 when the bridge is up
+}
+
+// ListNodeBridges returns the network bridges configured on a node. Used to
+// populate bridge dropdowns in the UI form.
+func (c *Client) ListNodeBridges(ctx context.Context, node string) ([]*NodeBridge, error) {
+	resp, err := c.get(ctx, fmt.Sprintf("/api2/json/nodes/%s/network?type=bridge", node))
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Data []*NodeBridge `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse node bridges: %w", err)
+	}
+	return result.Data, nil
+}
+
 // GetNode returns a single cluster member by name. Returns an error wrapping
 // ErrNotFound when Proxmox is reachable but has no node with that name;
 // propagates the underlying error verbatim on a transient failure.

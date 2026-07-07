@@ -84,3 +84,60 @@ export function getOptions(apiVersion: string, kind: string): Names | null {
 // optionsStore is the underlying Svelte store; subscribe from a
 // component to re-render when a fetch resolves.
 export const optionsStore: Readable<OptionsState> = store;
+
+// --- Dependent options ---------------------------------------------------
+// A `@options(kind, field, dependsOn)` field reads its list from a dotted
+// path (e.g. "status.storages") of a SPECIFIC resource instance, named by the
+// value of another field (dependsOn). Example: a VM's disk `storage` options
+// come from the selected ProxmoxNode's `status.storages`. These are keyed by
+// "apiVersion/kind/name/field" so switching the depended-on node re-resolves.
+
+function depKey(apiVersion: string, kind: string, name: string, field: string): string {
+  return `${apiVersion}/${kind}/${name}/${field}`;
+}
+
+// readPath walks a dotted path into an object and returns a string[] when the
+// resolved value is a string array, else null.
+function readStringList(obj: unknown, path: string): string[] | null {
+  let cur: unknown = obj;
+  for (const seg of path.split('.')) {
+    if (cur == null || typeof cur !== 'object') return null;
+    cur = (cur as Record<string, unknown>)[seg];
+  }
+  if (Array.isArray(cur) && cur.every((v) => typeof v === 'string')) return cur as string[];
+  return null;
+}
+
+// ensureDependentOptions fetches a specific resource once and extracts the
+// string list at `field`. Deduped and cached like ensureOptions. `name` is the
+// depended-on value (e.g. the selected node); an empty name is a no-op (the
+// dependency isn't chosen yet).
+export async function ensureDependentOptions(
+  apiVersion: string,
+  kind: string,
+  name: string,
+  field: string,
+): Promise<void> {
+  if (!name) return;
+  const k = depKey(apiVersion, kind, name, field);
+  if (inflight.has(k)) return;
+  const state = get(store);
+  if (k in state.data || k in state.errors) return;
+  inflight.add(k);
+  try {
+    const resp = await resources.get(apiVersion, kind, name);
+    const list = readStringList(resp.resource, field) ?? [];
+    store.update((s) => ({ ...s, data: { ...s.data, [k]: [...list].sort((a, b) => a.localeCompare(b)) } }));
+  } catch (err) {
+    if (err instanceof UnauthorizedError) return;
+    const msg = err instanceof Error ? err.message : String(err);
+    store.update((s) => ({ ...s, errors: { ...s.errors, [k]: msg } }));
+  } finally {
+    inflight.delete(k);
+  }
+}
+
+// dependentKey builds the store key a component uses to read dependent options.
+export function dependentKey(apiVersion: string, kind: string, name: string, field: string): string {
+  return depKey(apiVersion, kind, name, field);
+}

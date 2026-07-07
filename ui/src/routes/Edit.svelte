@@ -45,6 +45,14 @@
   const fieldErrorsCtx = writable<Record<string, string>>({});
   setContext('resourceFieldErrorsStore', fieldErrorsCtx);
 
+  // Publish the current form value (the whole manifest object) so a nested
+  // FormField with a `dependsOn` option (e.g. a disk's storage dropdown that
+  // depends on spec.node) can read the value it depends on. Updated on every
+  // form change and on load.
+  const manifestCtx = writable<unknown>(null);
+  setContext('resourceManifestStore', manifestCtx);
+  $: manifestCtx.set(formState);
+
   // Captured at submit time in create mode so the success-handoff knows
   // where to navigate after the op succeeds — `resourceName` is empty
   // until then.

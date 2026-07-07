@@ -2,7 +2,7 @@
   import { createEventDispatcher, getContext } from 'svelte';
   import type { FormField } from '../lib/formSchema';
   import { initialValue } from '../lib/formSchema';
-  import { ensureOptions, optionsStore } from '../lib/options';
+  import { ensureOptions, ensureDependentOptions, dependentKey, optionsStore } from '../lib/options';
   import Self from './FormField.svelte';
 
   // Set by Edit.svelte so @options(kind="X") without an explicit
@@ -15,6 +15,9 @@
   // rows look this up for each child to decide whether to add the
   // error rail; individual fields don't consume it themselves.
   const fieldErrorsCtx = getContext<Readable<Record<string, string>> | undefined>('resourceFieldErrorsStore');
+  // The whole manifest, published by Edit, so a `dependsOn` option field can
+  // read the value it depends on (e.g. spec.node for a disk storage dropdown).
+  const manifestCtx = getContext<Readable<unknown> | undefined>('resourceManifestStore');
 
   // The field schema and its current value. Value is `unknown` here
   // because every Field can carry a different shape; downstream the
@@ -153,6 +156,17 @@
   // Resolve @options into a concrete (apiVersion, kind) pair. Returns
   // null when the field isn't annotated or when kind-only is used
   // outside a resource context (rare — Edit sets the context on mount).
+  // readManifestPath walks a dotted path (from the manifest root) and returns
+  // the string value there, or '' when absent / non-string.
+  function readManifestPath(obj: unknown, path: string): string {
+    let cur: unknown = obj;
+    for (const seg of path.split('.')) {
+      if (cur == null || typeof cur !== 'object') return '';
+      cur = (cur as Record<string, unknown>)[seg];
+    }
+    return typeof cur === 'string' ? cur : '';
+  }
+
   $: containingAV = apiVersionCtx ? $apiVersionCtx : '';
   $: optionsRef = (() => {
     const src = field.optionsSource;
@@ -162,15 +176,36 @@
     return { apiVersion: av, kind: src.kind };
   })();
 
-  // Kick off the fetch as soon as we know the ref. Idempotent — the
-  // store dedupes concurrent callers per (apiVersion, kind).
-  $: if (optionsRef) void ensureOptions(optionsRef.apiVersion, optionsRef.kind);
+  // Dependent options: when the source has `field` + `dependsOn`, the option
+  // list comes from a specific resource instance (named by the dependsOn
+  // value) rather than the list of names. Read the depended-on value from the
+  // published manifest.
+  $: depField = field.optionsSource?.field ?? '';
+  $: depOn = field.optionsSource?.dependsOn ?? '';
+  $: depValue = (depField && depOn && manifestCtx)
+    ? readManifestPath($manifestCtx, depOn)
+    : '';
 
-  // Reactive lookup of the current names list. Reads from the store so
-  // that when the fetch resolves, this field re-renders.
-  $: optionsKey = optionsRef ? `${optionsRef.apiVersion}/${optionsRef.kind}` : '';
+  // Kick off the fetch as soon as we know the ref. Idempotent — the store
+  // dedupes concurrent callers. Dependent fields fetch a specific resource;
+  // plain option fields list names of the kind.
+  $: if (optionsRef && depField && depOn) {
+    void ensureDependentOptions(optionsRef.apiVersion, optionsRef.kind, depValue, depField);
+  } else if (optionsRef) {
+    void ensureOptions(optionsRef.apiVersion, optionsRef.kind);
+  }
+
+  // Reactive lookup of the current list. Reads from the store so that when the
+  // fetch resolves (or the dependency changes), this field re-renders.
+  $: optionsKey = !optionsRef
+    ? ''
+    : (depField && depOn)
+      ? dependentKey(optionsRef.apiVersion, optionsRef.kind, depValue, depField)
+      : `${optionsRef.apiVersion}/${optionsRef.kind}`;
   $: optionsNames = optionsKey ? $optionsStore.data[optionsKey] ?? null : null;
   $: optionsError = optionsKey ? $optionsStore.errors[optionsKey] ?? '' : '';
+  // A dependent field whose dependency isn't chosen yet: no value to select on.
+  $: depWaiting = !!(depField && depOn) && !depValue;
 
   // oneOf group support: preprocess field.fields into a render list
   // that collapses each group of `@oneOf(group="X")`-tagged siblings
@@ -432,21 +467,32 @@
       </p>
     {/if}
   </div>
+{:else if field.type === 'string' && optionsRef && depWaiting}
+  <!-- Dependent field with no dependency selected yet: allow free text so
+       authoring isn't blocked, and hint that picking the dependency enables
+       the dropdown. -->
+  <input
+    type="text"
+    value={value as string ?? ''}
+    placeholder={`select ${depOn.split('.').pop()} to list options`}
+    on:input={(e) => set((e.currentTarget as HTMLInputElement).value)}
+  />
 {:else if field.type === 'string' && optionsRef}
+  {@const optLabel = depField ? 'options' : optionsRef.kind}
   <select
     value={value as string ?? ''}
     disabled={optionsNames === null && !optionsError}
     on:change={(e) => set((e.currentTarget as HTMLSelectElement).value)}
   >
     {#if optionsNames === null && !optionsError}
-      <option value="">Loading {optionsRef.kind}…</option>
+      <option value="">Loading {optLabel}…</option>
     {:else if optionsError}
-      <option value="">Couldn't load {optionsRef.kind} list</option>
+      <option value="">Couldn't load {optLabel}</option>
     {:else if optionsNames?.length === 0}
-      <option value="">No {optionsRef.kind} available</option>
+      <option value="">No {optLabel} available</option>
     {:else}
       {#if field.optional || value === '' || value === undefined || value === null}
-        <option value="">— pick a {optionsRef.kind} —</option>
+        <option value="">— pick {depField ? 'an option' : `a ${optionsRef.kind}`} —</option>
       {/if}
       {#each optionsNames ?? [] as name}
         <option value={name}>{name}</option>
