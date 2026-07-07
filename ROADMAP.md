@@ -787,7 +787,15 @@ phase plan when ready to commit.
       `secrets.providers` config block) and **Tier 3** external
       secret-provider plugins over `pluginproto` — both pure registration
       against the same resolver/redaction (no wire-shape change).
-      **(B) parameterization** via a CUE `--values` overlay — not started.
+      **(B) parameterization — SHIPPED.** `openctl ctl apply -f vm.cue
+      --values prod.cue` unifies the manifest with one or more CUE values
+      files (repeatable flag), the `-var-file` analog:
+      `manifest.LoadCUEWithValues` builds each file as a `cue.Value` and
+      unifies — a concrete value fills an abstract manifest field, overrides
+      a default, and a conflict fails loudly (not last-writer-wins); an
+      unfilled abstract field fails the concreteness check. YAML manifests
+      are unchanged (`--values` on a YAML manifest is a usage error). Example:
+      `examples/vm-parameterized.cue` + `examples/vm-values.cue`.
 - [x] **Templates (MVP)** — parameterized starters. Go-defined
       templates compiled in (deferred a CUE-templating engine for
       user-authored templates as a future extension). New

@@ -175,9 +175,17 @@ func newVersionCommand() *cobra.Command {
 }
 
 func loadManifest(path string) (*protocol.Resource, error) {
+	return loadManifestWithValues(path, nil)
+}
+
+// loadManifestWithValues loads a single-resource manifest, optionally unifying
+// a CUE manifest with values files (Part B: the -var-file analog). Values are
+// only meaningful for a CUE manifest — passing them with a YAML manifest is a
+// usage error, since YAML has no unification.
+func loadManifestWithValues(path string, valuePaths []string) (*protocol.Resource, error) {
 	ext := filepath.Ext(path)
 	if ext == ".cue" {
-		resources, err := manifest.LoadCUE(path)
+		resources, err := manifest.LoadCUEWithValues(path, valuePaths)
 		if err != nil {
 			return nil, err
 		}
@@ -185,6 +193,9 @@ func loadManifest(path string) (*protocol.Resource, error) {
 			return nil, fmt.Errorf("expected 1 resource, got %d", len(resources))
 		}
 		return resources[0], nil
+	}
+	if len(valuePaths) > 0 {
+		return nil, fmt.Errorf("--values requires a .cue manifest (YAML manifests have no unification); got %s", path)
 	}
 	// Fall back to YAML for other extensions
 	return manifest.Load(path)

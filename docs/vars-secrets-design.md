@@ -4,8 +4,10 @@
 `internal/controller/secrets` resolver + registry (built-in `file`/`env`),
 dispatcher redaction, `base.#Secret` + `@secret` on VM `password`, and the
 form's secret-reference control are shipped. Tier 2 (configured backends),
-Tier 3 (external plugins), and Part B (CUE `--values` parameterization) remain
-proposals. See the ROADMAP "Variables & secrets" entry.
+Tier 3 (external plugins) remain proposals. **Part B (CUE `--values`
+parameterization) is now implemented** — `openctl ctl apply -f vm.cue
+--values prod.cue` unifies the manifest with values files
+(`manifest.LoadCUEWithValues`). See the ROADMAP "Variables & secrets" entry.
 **Author:** autonomous session, 2026-07-07.
 **Roadmap item:** "Future goals → Variables & secrets" (ROADMAP.md).
 Surfaced when the VM create form prompted for an SSH key and raised the
