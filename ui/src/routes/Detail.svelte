@@ -268,13 +268,16 @@
       case 'reboot': return 'Reboot';
       case 'console': return 'Console';
       case 'get-kubeconfig': return 'Kubeconfig';
+      case 'upgrade': return 'Upgrade';
+      case 'logs': return 'Logs';
+      case 'restart': return 'Restart k3s';
       default: return a;
     }
   }
 
   // Destructive actions get a confirmation prompt.
   function actionIsDestructive(a: string): boolean {
-    return a === 'stop' || a === 'shutdown' || a === 'reboot';
+    return a === 'stop' || a === 'shutdown' || a === 'reboot' || a === 'restart';
   }
 
   function openParamForm(spec: ActionSpec) {
