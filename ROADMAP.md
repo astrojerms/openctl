@@ -226,11 +226,29 @@ plan/state); harden the provider contract before the ecosystem widens.
       a remote host and installs it as a **system** systemd service (reuses
       `pkg/k3s/ssh`; uploads binary + unit, `systemctl enable --now`). The
       orchestration is unit-tested against a fake SSH runner.
-- [~] Proxmox bootstrap install (`openctl-controller install --target
-      proxmox://homelab`). First slice shipped: `proxmox://context`
-      target parsing, bootstrap VM manifest generation, VM create/poll
-      through the existing Proxmox provider, then handoff to the SSH
-      Linux installer. Still needs homelab validation before marking done.
+- [x] Proxmox bootstrap install (`openctl-controller install --target
+      proxmox://homelab`). Target parsing, bootstrap VM manifest generation,
+      VM create/poll through the Proxmox provider, then handoff to the SSH
+      Linux installer. **Metal-validated on the homelab (2026-07-07):** with a
+      static IP, `install --target proxmox://homelab?...&ip=…` created the VM,
+      applied the static IP, waited for SSH, then deployed the cross-built
+      Linux controller — the systemd `openctl-controller.service` came up
+      **active** with :9444 (gRPC) + :9445 (UI) listening. Prereq:
+      `make build-controller-linux` (the installer expects the pre-built
+      `bin/openctl-controller-linux-amd64`, it doesn't cross-compile on the
+      fly). **Known limitation found during validation:** DHCP mode
+      (`ip` unset) times out on IP discovery because it relies on the
+      qemu-guest-agent, and the QGA-install `cicustom` snippet silently
+      no-ops when the disk storage is `local-lvm` (LVM storages can't hold
+      `snippets` content). Use a static `ip=…` or a snippet-capable storage
+      until the QGA-install path is hardened (follow-up below).
+- [ ] **Bootstrap QGA robustness (follow-up).** `EnsureQemuAgentSnippet`
+      needs a `snippets`-capable storage; on a `local-lvm`-only node it
+      no-ops, so DHCP-mode bootstrap can't discover the VM's IP. Options:
+      install qemu-guest-agent via cloud-init `packages`/user-data (no
+      snippet storage needed), pick a snippets-capable storage automatically,
+      or fail loudly with a clear "set ip=… or configure a snippets storage"
+      message instead of timing out after 10m.
 - [x] Plugin-defined CLI subcommands (`openctl k3s logs/restart/upgrade`).
       Generic protocol + CLI registration shipped: plugins advertise typed
       subcommands in capabilities, and the CLI dispatches them with
