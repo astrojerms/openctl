@@ -141,7 +141,43 @@ func (h *Handler) getProxmoxNode(ctx context.Context, name string) (*protocol.Re
 		// so callers retry instead of concluding the node is gone.
 		return nil, err
 	}
-	return &protocol.Response{Status: protocol.StatusSuccess, Resource: resources.NodeToResource(n)}, nil
+	res := resources.NodeToResource(n)
+	// Enrich a single-node Get with its storages + bridges so the UI form can
+	// populate node-dependent dropdowns (VM disk storage / network bridge).
+	// Best-effort — a failure here must not fail the Get (the node is still
+	// observable); List stays lean and skips this.
+	enrichNodeOptions(ctx, h.client, name, res)
+	return &protocol.Response{Status: protocol.StatusSuccess, Resource: res}, nil
+}
+
+// enrichNodeOptions adds status.storages and status.bridges (name lists) to a
+// ProxmoxNode resource, each best-effort.
+func enrichNodeOptions(ctx context.Context, c nodeOptionsClient, name string, res *protocol.Resource) {
+	if res.Status == nil {
+		return
+	}
+	st := res.Status
+	if storages, err := c.ListNodeStorages(ctx, name); err == nil {
+		names := make([]string, 0, len(storages))
+		for _, s := range storages {
+			names = append(names, s.Storage)
+		}
+		st["storages"] = names
+	}
+	if bridges, err := c.ListNodeBridges(ctx, name); err == nil {
+		names := make([]string, 0, len(bridges))
+		for _, b := range bridges {
+			names = append(names, b.Iface)
+		}
+		st["bridges"] = names
+	}
+}
+
+// nodeOptionsClient is the slice of the Proxmox client enrichNodeOptions needs,
+// so it can be unit-tested with a fake.
+type nodeOptionsClient interface {
+	ListNodeStorages(ctx context.Context, node string) ([]*client.NodeStorage, error)
+	ListNodeBridges(ctx context.Context, node string) ([]*client.NodeBridge, error)
 }
 
 func (h *Handler) handleTemplate(ctx context.Context, req *protocol.Request) (*protocol.Response, error) {

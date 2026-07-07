@@ -100,7 +100,7 @@ import "openctl.io/schemas/base"
 		// virtio (fastest), sata, and ide.
 		name: string
 		// Proxmox storage ID (e.g. "local-lvm", "nfs-vmstore").
-		storage: string
+		storage: string @options(kind="ProxmoxNode", field="status.storages", dependsOn="spec.node")
 		// Target disk size with unit suffix, e.g. "50G", "1T".
 		size: string
 		// Advertise the disk as an SSD to the guest. Lets the OS issue
@@ -125,7 +125,7 @@ import "openctl.io/schemas/base"
 		// Interface name, e.g. "net0".
 		name: string
 		// Proxmox bridge to attach to.
-		bridge: string | *"vmbr0"
+		bridge: string | *"vmbr0" @options(kind="ProxmoxNode", field="status.bridges", dependsOn="spec.node")
 		// NIC model. virtio is fastest; e1000 is most-compatible for old guests.
 		model?: "virtio" | "e1000" | "rtl8139" | "vmxnet3" | "e1000e"
 		// VLAN tag (1-4094). Untagged when omitted.

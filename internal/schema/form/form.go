@@ -117,6 +117,14 @@ type Field struct {
 type OptionsSource struct {
 	Kind       string `json:"kind"`
 	APIVersion string `json:"apiVersion,omitempty"`
+	// Field is a dotted path into the target resource whose value is a list of
+	// option strings (e.g. "status.storages"). Empty means "list resource
+	// names" (the original behavior).
+	Field string `json:"field,omitempty"`
+	// DependsOn names a sibling field (dotted from the manifest root, e.g.
+	// "spec.node") whose current value selects which instance of Kind to read
+	// Field from. Only meaningful together with Field.
+	DependsOn string `json:"dependsOn,omitempty"`
 }
 
 // FromValue walks the given CUE value and produces a Field tree. The
@@ -363,6 +371,17 @@ func optionsSource(v cue.Value) (*OptionsSource, bool) {
 	os := &OptionsSource{Kind: kind}
 	if apiV, ok, err := attr.Lookup(0, "apiVersion"); err == nil && ok {
 		os.APIVersion = apiV
+	}
+	// Dependent options: `field` reads a string-list from a dotted path in the
+	// target resource (e.g. "status.storages"), and `dependsOn` names the
+	// sibling field (dotted from the manifest root, e.g. "spec.node") whose
+	// value selects which instance of the target kind to read. When both are
+	// set the UI resolves the specific resource rather than listing names.
+	if f, ok, err := attr.Lookup(0, "field"); err == nil && ok {
+		os.Field = f
+	}
+	if d, ok, err := attr.Lookup(0, "dependsOn"); err == nil && ok {
+		os.DependsOn = d
 	}
 	return os, true
 }
