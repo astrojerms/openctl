@@ -62,14 +62,15 @@ This mirrors the safest onboarding order — narrow blast radius first:
 3. `--cluster` once the VM path is solid.
 4. Snapshot `~/.openctl` before and after until you trust the state layer.
 
-## Reading the #73 re-apply check
+## Reading the in-place resize check
 
-The VM stage re-applies with a bumped memory value. **Today** openctl treats
-apply on an existing atomic resource as a no-op that surfaces drift — it will
-**not** resize a running VM (see `CONTROLLER.md`, "Apply on existing atomic
-resource"). So the expected result is: re-apply succeeds cleanly, the VM keeps
-its original memory, and drift is reported. If in-place resize is later enabled,
-this expectation flips and the assertion in `vm_lifecycle()` should be updated.
+The VM stage re-applies with a bumped memory value. openctl updates an existing
+VM **in place** for the resizable fields — memory, CPU (cores/sockets), and disk
+**growth** — without recreating it (see `CONTROLLER.md`, "Apply on existing
+atomic resource"). So the expected result is: re-apply succeeds and the VM's
+memory reflects the new value. Non-resizable changes (template, networks) are
+not applied in place and still require delete + re-apply; disk **shrink** is
+rejected with a clear error.
 
 ## Note on the harness itself
 

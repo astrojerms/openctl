@@ -702,29 +702,32 @@ func (h *Handler) deleteVM(ctx context.Context, name string) (*protocol.Response
 }
 
 func (h *Handler) applyVM(ctx context.Context, manifest *protocol.Resource) (*protocol.Response, error) {
-	// Observe the VM once. getVM returns a NotFound *response* when it's
-	// genuinely absent and a transient *error* otherwise (it never reports a
-	// false "missing"), so a single call both checks existence and yields the
-	// observed state — no redundant GetVM on the reconciler hot path.
-	resp, err := h.getVM(ctx, manifest.Metadata.Name)
+	// Observe once to decide create-vs-update. GetVM wraps ErrNotFound only when
+	// Proxmox is reachable but has no such VM; a transient failure propagates
+	// verbatim, so we never mistake an outage for "missing" and clone a
+	// duplicate of a VM that already exists.
+	vm, err := h.client.GetVM(ctx, manifest.Metadata.Name)
 	if err != nil {
-		// Transient failure — do NOT fall through to create, or a Proxmox
-		// blip would clone a duplicate of a VM that already exists.
+		if errors.Is(err, client.ErrNotFound) {
+			return h.createVM(ctx, manifest)
+		}
 		return nil, fmt.Errorf("check existing VM %q: %w", manifest.Metadata.Name, err)
 	}
-	if resp.Status == protocol.StatusError && resp.Error != nil && resp.Error.Code == protocol.ErrorCodeNotFound {
-		// VM genuinely doesn't exist — create it.
-		return h.createVM(ctx, manifest)
-	}
 
-	// The VM already exists. VirtualMachine is an atomic resource, so apply is
-	// a no-op that surfaces drift rather than mutating in place, per the locked
-	// decision in CONTROLLER.md: "Apply on existing atomic resource (e.g.
-	// VirtualMachine): no-op + surface drift. User must delete + re-apply for
-	// changes." Return the observed state so the caller/reconciler can compare
-	// it against the stored manifest and surface any drift; do NOT
-	// ConfigureVM/ResizeVMDisk.
-	return resp, nil
+	// The VM already exists. Update it in place for the fields Proxmox can
+	// change live — memory, CPU (cores/sockets), and disk growth — then return
+	// the fresh observed state. Non-resizable differences (template, networks,
+	// cloud-init) are not mutated here; they surface as drift via Get and still
+	// require delete + re-apply. See CONTROLLER.md, "Apply on existing atomic
+	// resource".
+	spec, err := resources.ParseVMSpec(manifest)
+	if err != nil {
+		return nil, err
+	}
+	if err := h.resizeVM(ctx, vm, spec); err != nil {
+		return nil, err
+	}
+	return h.getVM(ctx, manifest.Metadata.Name)
 }
 
 func (h *Handler) listTemplates(ctx context.Context) (*protocol.Response, error) {

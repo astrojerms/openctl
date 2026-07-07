@@ -82,10 +82,13 @@ func (f *fakeProxmox) newServer(t *testing.T) *httptest.Server {
 // coverage across the compiled-in, external-plugin, and Terraform-host
 // providers.
 //
-// Capabilities note: proxmox VM Apply is a no-op on an existing VM (returns
-// observed state, surfaces drift, does not mutate) per CONTROLLER.md:23, so
-// this binds with NoOpOnExisting=true — the battery asserts a re-Apply returns
-// the same observed state without mutating.
+// Capabilities note: proxmox VM Apply updates an existing VM in place for the
+// resizable fields (memory, CPU, disk growth) per CONTROLLER.md, so this binds
+// with NoOpOnExisting=false — the battery only requires that a re-Apply
+// succeeds and the resource still round-trips. (Re-applying the identical
+// manifest is still effectively a no-op because Proxmox no-ops on unchanged
+// config and disks already at size are skipped, but the provider is no longer
+// contractually a no-op on existing.)
 func TestProxmoxVMConformance(t *testing.T) {
 	providertest.Suite{
 		NewProvider: func(t *testing.T) (providers.Provider, func()) {
@@ -106,6 +109,6 @@ func TestProxmoxVMConformance(t *testing.T) {
 				},
 			}
 		},
-		Capabilities: providertest.Capabilities{SupportsList: true, NoOpOnExisting: true},
+		Capabilities: providertest.Capabilities{SupportsList: true, NoOpOnExisting: false},
 	}.Run(t)
 }

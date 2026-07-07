@@ -267,18 +267,19 @@ vm_lifecycle() {
   if echo "$got" | grep -qiE 'running|status.*run'; then pass "VM reports running"; else info "running-state not detected in ctl get output (format may vary); check: openctl ctl get VirtualMachine $VERIFY_VM_NAME --api-version $VM_API"; fi
   if echo "$got" | grep -qoE '([0-9]{1,3}\.){3}[0-9]{1,3}'; then pass "VM has an IP: $(echo "$got" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1)"; else info "no IP surfaced yet (QGA may lag, or the template lacks qemu-guest-agent)"; fi
 
-  # #73: re-apply with a bumped memory. TODAY this is a no-op that surfaces
-  # drift (it will NOT resize a running VM). If in-place resize is later
-  # enabled, this expectation flips — update the assertion then.
-  step "Re-apply behavior (#73 no-op-on-existing)"
+  # In-place resize: re-apply with a bumped memory. openctl now updates an
+  # existing VM in place for memory/CPU/disk-grow (see CONTROLLER.md), so the
+  # VM's memory should change WITHOUT a recreate.
+  step "In-place resize (re-apply with bumped memory)"
   render_vm "$VM_MEMORY_MB_BUMP" > "$mf"
   info "re-applying with memory bumped ${VM_MEMORY_MB}→${VM_MEMORY_MB_BUMP}MB..."
   if "$OPENCTL" ctl apply -f "$mf"; then
-    pass "re-apply of an existing VM succeeded (idempotent)"
-    info "expected TODAY: no in-place resize — drift is surfaced, VM keeps ${VM_MEMORY_MB}MB."
-    info "verify with: openctl ctl get VirtualMachine $VERIFY_VM_NAME --api-version $VM_API"
+    pass "re-apply succeeded"
+    got="$("$OPENCTL" ctl get VirtualMachine "$VERIFY_VM_NAME" --api-version "$VM_API" 2>&1 || true)"
+    if echo "$got" | grep -q "$VM_MEMORY_MB_BUMP"; then pass "memory updated in place to ${VM_MEMORY_MB_BUMP}MB (no recreate)"
+    else info "new memory not confirmed in ctl get output (format may vary); check: openctl ctl get VirtualMachine $VERIFY_VM_NAME --api-version $VM_API"; fi
   else
-    fail "re-apply errored (expected a clean no-op)"
+    fail "re-apply errored"
   fi
 
   step "Delete + confirm gone"

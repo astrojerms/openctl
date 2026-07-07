@@ -116,13 +116,14 @@ plan/state); harden the provider contract before the ecosystem widens.
       external, TF host) are covered. Binding proxmox surfaced and fixed two
       contract gaps: (1) (#71) — `Apply` returned a nil `Resource` from the
       create/apply paths; it now reads the VM back and returns observed state,
-      per the `Provider` interface doc. (2) — `applyVM` mutated an existing VM
-      (`ConfigureVM`/`ResizeVMDisk`) rather than the no-op CONTROLLER.md:23
-      locks in; it now no-ops and returns observed state (surfacing drift via
-      the manifest-vs-observed comparison), matching the documented atomic
-      contract, and the binding asserts `NoOpOnExisting=true`. *If in-place VM
-      update via re-apply was actually intended, revert that change and update
-      CONTROLLER.md:23 instead.* **Composite k3s Cluster — resolved:** a
+      per the `Provider` interface doc. (2) — `applyVM`'s update behavior on an
+      existing VM was first narrowed to a no-op (#73) and then, by product
+      decision, reinstated as a **scoped in-place resize**: re-applying updates
+      memory, CPU (cores/sockets), and disk **growth** in place (no recreate),
+      rejects disk shrink, and leaves non-resizable fields (template, networks,
+      cloud-init) to surface as drift. CONTROLLER.md updated accordingly; the
+      conformance binding is now `NoOpOnExisting=false` (an identical re-apply is
+      still effectively a no-op since Proxmox no-ops on unchanged config). **Composite k3s Cluster — resolved:** a
       composite provider is not atomic CRUD, so it doesn't fit the
       `providertest.Suite`; its contract is its `Plan()` (children carry owner
       refs, the child `$ref` graph is acyclic and self-contained so

@@ -11,16 +11,15 @@ import (
 	"github.com/openctl/openctl/pkg/protocol"
 )
 
-// TestApplyVM_ExistingIsNoOp guards the locked "apply on existing atomic
-// resource = no-op + surface drift" decision (CONTROLLER.md:23) at the handler
-// level: re-applying a VM that already exists must NOT mutate it — no clone, no
-// config PUT, no disk resize — even when the manifest carries config-worthy
-// fields and a disk size that the old (pre-fix) update path would have pushed.
-// It must instead return the observed state.
-func TestApplyVM_ExistingIsNoOp(t *testing.T) {
+// TestApplyVM_ExistingResizesInPlace covers the CONTROLLER.md decision to update
+// an existing atomic VM in place for the resizable fields (memory, CPU, disk
+// growth) rather than no-op: re-applying a VM that already exists with changed
+// memory/cpu and a larger disk must push a config PUT and a disk resize — but
+// must NOT clone/recreate the VM.
+func TestApplyVM_ExistingResizesInPlace(t *testing.T) {
 	var mu sync.Mutex
-	var getVMs int
-	mutating := map[string]int{} // path suffix -> count
+	mutating := map[string]int{} // op -> count
+	var configPut map[string]any
 
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
@@ -31,16 +30,20 @@ func TestApplyVM_ExistingIsNoOp(t *testing.T) {
 		case path == "/api2/json/nodes" && r.Method == http.MethodGet:
 			_, _ = w.Write([]byte(`{"data":[{"node":"pve1","status":"online"}]}`))
 		case path == "/api2/json/nodes/pve1/qemu" && r.Method == http.MethodGet:
-			getVMs++
 			_, _ = w.Write([]byte(`{"data":[{"vmid":100,"name":"vm0","status":"stopped","node":"pve1","template":0}]}`))
 		case strings.HasSuffix(path, "/config") && r.Method == http.MethodGet:
-			// GetVMConfig — a read, allowed on the no-op path.
-			_, _ = w.Write([]byte(`{"data":{}}`))
+			// Current config: a 32G scsi0 so the 80G request is a genuine grow.
+			_, _ = w.Write([]byte(`{"data":{"scsi0":"local-lvm:vm-100-disk-0,size=32G"}}`))
 		case strings.HasSuffix(path, "/clone") && r.Method == http.MethodPost:
 			mutating["clone"]++
 			_, _ = w.Write([]byte(`{"data":""}`))
 		case strings.HasSuffix(path, "/config") && r.Method == http.MethodPut:
 			mutating["config-put"]++
+			_ = r.ParseForm()
+			configPut = map[string]any{}
+			for k := range r.Form {
+				configPut[k] = r.Form.Get(k)
+			}
 			_, _ = w.Write([]byte(`{"data":""}`))
 		case strings.HasSuffix(path, "/resize") && r.Method == http.MethodPut:
 			mutating["resize"]++
@@ -61,11 +64,9 @@ func TestApplyVM_ExistingIsNoOp(t *testing.T) {
 			Kind:       "VirtualMachine",
 			Metadata:   protocol.ResourceMetadata{Name: "vm0"},
 			Spec: map[string]any{
-				"node": "pve1",
-				// Config-worthy fields + a sized disk: the old update path would
-				// have pushed these via ConfigureVM/ResizeVMDisk.
-				"cpus":     float64(8),
-				"memoryMB": float64(16384),
+				"node":   "pve1",
+				"cpu":    map[string]any{"cores": float64(8), "sockets": float64(1)},
+				"memory": map[string]any{"size": float64(16384)},
 				"disks": []any{
 					map[string]any{"name": "scsi0", "size": "80G"},
 				},
@@ -84,13 +85,19 @@ func TestApplyVM_ExistingIsNoOp(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	for op, n := range mutating {
-		if n > 0 {
-			t.Errorf("no-op apply performed a mutating call %q (%d times); re-apply of an existing VM must not mutate", op, n)
-		}
+	if mutating["clone"] != 0 {
+		t.Errorf("in-place resize must not clone/recreate; clone called %d times", mutating["clone"])
 	}
-	// A single VM listing observes existence + state — no redundant second GetVM.
-	if getVMs != 1 {
-		t.Errorf("qemu list (GetVM) called %d times, want 1 (single observe on the no-op path)", getVMs)
+	if mutating["config-put"] == 0 {
+		t.Error("expected a config PUT to update memory/cpu in place")
+	}
+	if mutating["resize"] == 0 {
+		t.Error("expected a disk resize (32G -> 80G)")
+	}
+	if got := configPut["memory"]; got != "16384" {
+		t.Errorf("config PUT memory = %v, want 16384", got)
+	}
+	if got := configPut["cores"]; got != "8" {
+		t.Errorf("config PUT cores = %v, want 8", got)
 	}
 }
