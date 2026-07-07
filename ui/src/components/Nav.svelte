@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Catalogue } from '../lib/catalogue';
+  import { advancedKind, type Catalogue } from '../lib/catalogue';
   import { routeHref } from '../lib/router';
 
   export let catalogue: Catalogue;
@@ -23,7 +23,12 @@
         {#each kinds as kind}
           <li class:active={kind.key === activeKindKey}>
             <a href={routeHref({ name: 'list', apiVersion: kind.apiVersion, kind: kind.kind })}>
-              <span class="kind">{kind.kind}</span>
+              <span class="kind">
+                {kind.kind}
+                {#if advancedKind(kind.apiVersion, kind.kind)}
+                  <span class="adv" title={`Advanced: usually created via a ${advancedKind(kind.apiVersion, kind.kind)?.owner}`}>adv</span>
+                {/if}
+              </span>
               <span class="count" title={kind.count === null ? 'count unavailable' : ''}>
                 {kind.count === null ? '—' : kind.count}
               </span>
@@ -70,6 +75,17 @@
   li.active a {
     background: rgba(74, 142, 240, 0.18);
     color: #6ea8ff;
+  }
+  .adv {
+    margin-left: 0.35rem;
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #c8a24a;
+    background: rgba(200, 162, 74, 0.15);
+    padding: 0.02em 0.3em;
+    border-radius: 3px;
+    vertical-align: middle;
   }
   .count {
     color: #888;

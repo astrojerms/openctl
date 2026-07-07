@@ -49,6 +49,33 @@ function kindKey(apiVersion: string, kind: string): string {
   return `${apiVersion}/${kind}`;
 }
 
+// Composite-child / expert kinds: normally produced by a parent composite (a
+// k3s Cluster fans out into VMs + K3sNodes + AgentInstalls) rather than
+// authored directly. The nav marks them "advanced" and the create form nudges
+// toward the owning composite. Keyed by `<apiVersion>/<kind>`.
+export const ADVANCED_KINDS: Record<string, { owner: string; note: string }> = {
+  'k3s.openctl.io/v1/K3sNode': {
+    owner: 'Cluster',
+    note:
+      'A K3sNode is one k3s install on one VM. Most users create a Cluster, ' +
+      'which expands into its VMs and K3sNodes automatically — author one ' +
+      'directly only to hand-assemble a cluster.',
+  },
+  'k3s.openctl.io/v1/AgentInstall': {
+    owner: 'Cluster',
+    note:
+      'An AgentInstall installs the openctl agent on a node and requires an ' +
+      "existing Cluster (it loads that Cluster's CA bundle). It is normally " +
+      'produced by a Cluster apply, not authored directly.',
+  },
+};
+
+// advancedKind returns the advanced-kind metadata for (apiVersion, kind), or
+// undefined for ordinary top-level kinds.
+export function advancedKind(apiVersion: string, kind: string): { owner: string; note: string } | undefined {
+  return ADVANCED_KINDS[kindKey(apiVersion, kind)];
+}
+
 let aborter: AbortController | null = null;
 let entries: KindEntry[] = [];
 
