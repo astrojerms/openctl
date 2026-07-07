@@ -687,6 +687,63 @@ the flat children list.
       manifest, not Planner-authored) render dim with a "read-only"
       badge and no `ref` edges, since no `$ref` metadata exists.
 
+### Phase U10 — UI exposure gaps (backend features not reachable from the UI)
+
+Punch list from a backend-RPC-vs-UI-usage audit (2026-07-07). The UI
+covers nearly every RPC, so these are *capability*- and *feature*-level
+gaps — shipped backend behavior a browser user can't reach — not missing
+screens. Ordered by impact.
+
+- [x] **U10.1 — Parameterized actions.** `ResourceService.InvokeAction`
+      already carries a `parameters` map, but `ListActions` returned bare
+      action-name strings with no parameter schema, so the Detail action
+      bar could only fire zero-arg actions — leaving the **shipped k3s
+      Cluster rolling upgrade** (`upgrade version=…`) unreachable from the
+      UI. Fixed: `ListActionsResponse` now carries `action_specs`
+      (`ActionSpec` + `ActionParameterSpec` — name/type/required/
+      description/default) via a new optional `providers.ActionDescriber`
+      interface (providers implementing only `Actioner` get name-only
+      specs synthesized, so proxmox etc. are unchanged). The k3s provider
+      declares `upgrade`'s required `version` param; the Detail action bar
+      renders an inline input form for parameterized actions and passes the
+      values through `invokeAction`. Backward-compatible (the `actions`
+      name list is still populated).
+- [ ] **U10.2 — Plugin-defined node ops in the UI.** The k3s plugin's
+      `logs` / `restart` / `upgrade` per-node subcommands
+      (`plugins/k3s/cmd/openctl-k3s/main.go`) are **CLI-only** — no UI
+      surface. They dispatch through parameterized provider actions, so
+      they ride on U10.1's parameter path once given a UI command surface
+      (natural home: the Detail page / a node row).
+- [ ] **U10.3 — Historical / filtered operation browsing.**
+      `OperationService.ListOperations` (status/kind/since/until/limit
+      filters) has a UI wrapper that is **never called** — the ops drawer
+      is fed only by the `WatchOperations` live stream, so there's no way
+      to page or filter past operations. Wire `ListOperations` into the
+      drawer (filter controls already exist client-side; today they filter
+      only the live tail).
+- [ ] **U10.4 — RBAC visibility & gating.** RBAC is enforced server-side
+      but invisible in the UI: the shell shows the user id but drops
+      `me.role` (carried on `WhoAmIResponse`), and mutation controls
+      aren't hidden for a `viewer`, so they 403 on click. (a) Surface the
+      role; (b) gate/disable mutation controls by role; (c) later — a
+      user-management UI (no `UserService` RPC exists yet; `users.yaml` is
+      hand-edited).
+- [ ] **U10.5 — `repo:pull` button.** `RepoService.Pull` has a UI wrapper
+      but no control — the git-status header wires only `status` + `push`.
+      Add a Pull affordance for GitOps symmetry.
+- [ ] **U10.6 — Advanced/composite-child kinds in the create picker.**
+      The create picker offers `K3sNode` and `AgentInstall` flat alongside
+      `Cluster` with no signal that they're expert/composite-child paths
+      (AgentInstall in particular requires an existing Cluster's CA
+      bundle). Mark them "advanced" or group them under the owning
+      composite.
+- [ ] **U10.7 — Small polish.** Raw CUE viewer via
+      `SchemaService.GetSchema` (never called from the UI);
+      dependent/cascading form dropdowns (storages/bridges on the selected
+      node — U8.11 follow-on); VM console (websocket modality, parked) and
+      verification that kubeconfig download works through the existing
+      download-action path.
+
 ---
 
 ## Future goals (parked)

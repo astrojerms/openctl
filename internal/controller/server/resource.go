@@ -358,8 +358,32 @@ func (h *resourceHandler) ListActions(ctx context.Context, req *apiv1.ListAction
 	if req.GetApiVersion() == "" || req.GetKind() == "" {
 		return nil, status.Error(codes.InvalidArgument, "api_version and kind are required")
 	}
+	specs := h.registry.ActionSpecsFor(req.GetApiVersion(), req.GetKind())
+	names := make([]string, 0, len(specs))
+	pbSpecs := make([]*apiv1.ActionSpec, 0, len(specs))
+	for _, s := range specs {
+		names = append(names, s.Name)
+		params := make([]*apiv1.ActionParameterSpec, 0, len(s.Parameters))
+		for _, p := range s.Parameters {
+			params = append(params, &apiv1.ActionParameterSpec{
+				Name:         p.Name,
+				Type:         p.Type,
+				Required:     p.Required,
+				Description:  p.Description,
+				DefaultValue: p.Default,
+			})
+		}
+		pbSpecs = append(pbSpecs, &apiv1.ActionSpec{
+			Name:        s.Name,
+			Description: s.Description,
+			Parameters:  params,
+		})
+	}
+	// actions (names) retained for backward-compatibility; action_specs is the
+	// richer form the UI now consumes.
 	return &apiv1.ListActionsResponse{
-		Actions: h.registry.ActionsFor(req.GetApiVersion(), req.GetKind()),
+		Actions:     names,
+		ActionSpecs: pbSpecs,
 	}, nil
 }
 

@@ -270,8 +270,25 @@ export interface ApplyResponse {
   message?: string;
 }
 
+export interface ActionParameterSpec {
+  name: string;
+  // "string" | "int" | "bool"
+  type?: string;
+  required?: boolean;
+  description?: string;
+  defaultValue?: string;
+}
+
+export interface ActionSpec {
+  name: string;
+  description?: string;
+  parameters?: ActionParameterSpec[];
+}
+
 export interface ListActionsResponse {
+  // Retained for backward-compat; actionSpecs is the richer form the UI uses.
   actions?: string[];
+  actionSpecs?: ActionSpec[];
 }
 
 export interface InvokeActionResponse {
@@ -392,9 +409,16 @@ export const resources = {
     api.post<ApplyResponse>('/v1/resources:apply', req),
   listActions: (apiVersion: string, kind: string) =>
     api.post<ListActionsResponse>('/v1/resources:listActions', { apiVersion, kind }),
-  invokeAction: (apiVersion: string, kind: string, resourceName: string, action: string) =>
+  invokeAction: (
+    apiVersion: string,
+    kind: string,
+    resourceName: string,
+    action: string,
+    parameters?: Record<string, string>,
+  ) =>
     api.post<InvokeActionResponse>('/v1/resources:invokeAction', {
       apiVersion, kind, resourceName, action,
+      ...(parameters && Object.keys(parameters).length > 0 ? { parameters } : {}),
     }),
   delete: (apiVersion: string, kind: string, name: string) =>
     api.post<DeleteResourceResponse>('/v1/resources:delete', {
