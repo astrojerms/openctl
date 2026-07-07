@@ -78,28 +78,55 @@ convention from provider config to any spec field.
 ### Authoring shape (mirrors `#Ref`)
 
 A `#Secret` CUE helper in `base`, usable in any field a schema marks
-`@secret`:
+`@secret`. The canonical form names a **secret provider** and a
+provider-specific **key**:
 
 ```cue
 spec: cloudInit: {
     // instead of:  password: "hunter2"
-    password: base.#Secret & { valueFrom: file: "vm-root.pw" }   // 0600 under the state dir
+    password: base.#Secret & { $secret: { provider: "vault", key: "secret/data/db#password" } }
 }
 ```
 
-Wire shape: `{ "$secret": { file: "vm-root.pw" } }` (or `env: "VM_ROOT_PW"`),
+Wire shape: `{ "$secret": { provider: "<name>", key: "<provider-specific>" } }`,
 paralleling `{ "$ref": {...} }` so the resolver, form walker, and redaction
-logic all recognize a single marker convention.
+logic all recognize a single marker convention. The built-in `file` and `env`
+providers get sugar so the common case stays terse:
 
-### Sources (decision 2)
+```yaml
+password: { $secret: { file: db-01.pw } }       # → { provider: "file", key: "db-01.pw" }
+password: { $secret: { env: DB01_PASSWORD } }    # → { provider: "env",  key: "DB01_PASSWORD" }
+```
 
-- **file** — path resolved under the state dir, mode 0600, exactly like
-  `tokenSecretFile`. **(Recommended for v1.)**
-- **env** — a named environment variable on the controller. **(Recommended for
-  v1** — cheap, good for CI-injected secrets.)
-- **keyring** — OS keyring / an external secret manager. **(Follow-on.)** The
-  marker is extensible (`$secret.keyring: "..."`), so adding a source later is
-  additive.
+**The provider indirection is the whole point of leaving room for more backends
+later** (see "Secret provider extensibility" below): a `$secret` marker looks
+identical whether it resolves from a local file or from Vault, so adding a
+backend never touches the manifest wire shape or the redaction invariant.
+
+### Sources — a pluggable `SecretProvider`, `file`+`env` built in (decision 2)
+
+Sources are not a fixed set; they're a registry of named providers, exactly
+mirroring how resource providers work (compiled-in first, external plugins
+later). The seam is a narrow interface:
+
+```go
+// SecretProvider resolves a provider-specific key to a secret value. The
+// value is used transiently (handed to provider.Apply) and never persisted.
+type SecretProvider interface {
+    Name() string
+    Resolve(ctx context.Context, key string) (string, error)
+}
+```
+
+**v1 ships two built-in providers**, no config required:
+
+- **`file`** — key is a path resolved under the state dir, mode 0600, exactly
+  like `tokenSecretFile`.
+- **`env`** — key names an environment variable on the controller (cheap, good
+  for CI-injected secrets).
+
+That's all v1 needs. Everything past it is additive registration — see the next
+section.
 
 ### Resolution + redaction (the load-bearing part)
 
@@ -122,10 +149,53 @@ commit contain the marker and never the secret value.**
 ### UI
 
 The form walker maps a schema's `@secret` attribute to `Field.Secret`; the
-renderer shows a "reference a secret" input (source picker + name), never a
-plaintext box, for those fields. DryRun previews render the value as `••••`.
-Existing inline plaintext still loads (back-compat) but the field nudges toward
-a reference.
+renderer shows a "reference a secret" input for those fields — a **provider
+picker** (populated from the registered secret providers: `file` and `env`
+built-in, plus any configured backend) and a key input — never a plaintext box.
+DryRun previews render the value as `••••`. Existing inline plaintext still
+loads (back-compat) but the field nudges toward a reference.
+
+### Secret provider extensibility (leaving room for Vault, cloud SMs, plugins)
+
+The `SecretProvider` interface + named-provider marker is deliberately the same
+shape openctl already used to grow from compiled-in resource providers to an
+external plugin ecosystem. Backends land in three additive tiers, none of which
+changes the manifest wire shape or the redaction invariant:
+
+- **Tier 1 — built-in `file` + `env`** (v1). Registered unconditionally, no
+  config.
+- **Tier 2 — configured first-party backends** (Vault, AWS/GCP/Azure secret
+  managers). A `secrets.providers` config block declares them; the controller
+  constructs each `SecretProvider` at startup and registers it by name. The
+  backend's *own* credentials reuse the established `tokenSecretFile` pattern,
+  so there's no new secret-bootstrapping story — the one real secret file
+  authenticates the manager that holds the rest:
+
+  ```yaml
+  secrets:
+    providers:
+      - name: vault
+        type: vault
+        address: https://vault.lan:8200
+        tokenSecretFile: vault.token    # 0600 under the state dir
+      - name: aws-sm
+        type: aws-secretsmanager
+        region: us-east-1               # auth via ambient IAM / instance role
+  ```
+
+- **Tier 3 — external secret-provider plugins** over the existing
+  `pluginproto`. A new `SecretProvider` capability lets a third-party binary
+  resolve secrets over the same id-correlated JSON-over-stdio protocol the
+  resource plugins use, so anyone can add a backend with zero core changes —
+  the exact mirror of the resource external-plugin story. This is the far
+  horizon, not v1, but the interface above is intentionally narrow enough
+  (`Resolve(key) (string, error)`) to serialize trivially when the time comes.
+
+The design rule that makes this safe: **resolution is the only thing that
+varies by provider.** The marker, the resolver walk, the redaction (persist the
+marker, never the value), the drift semantics, and the UI's secret-field
+treatment are all provider-agnostic. So Tier 2/3 are pure registration — the
+load-bearing invariant is written and tested once, in Tier 1.
 
 ## Part B — Parameterization: lean on CUE, don't invent tfvars
 
@@ -150,12 +220,20 @@ single expression language across schemas, forms, and now parameterization.
 
 1. **Split into two slices, secrets first.** Secrets is a live leak risk;
    parameters is convenience. **(Recommended: yes.)**
-2. **Secret sources for v1: file + env; keyring/external later.**
+2. **Sources are a pluggable `SecretProvider` registry; v1 ships `file` + `env`
+   built-in.** Named-provider marker (`{provider, key}`) with sugar for the two
+   built-ins, so Vault / cloud secret managers (Tier 2 config) and external
+   secret-provider plugins (Tier 3 over `pluginproto`) slot in later as pure
+   registration — no wire-shape or invariant change. **(Recommended: build the
+   registry seam in v1 even though only `file`+`env` register, so the marker is
+   right the first time.)**
 3. **Redaction: persist the marker, not the value** — reuse the `$ref`
    raw-manifest-preservation precedent (migration 0008). **(Recommended;
-   non-negotiable for the feature to be worth anything.)**
-4. **Marker shape: a `#Secret` helper emitting `{"$secret":{...}}`,** mirroring
-   `#Ref`, so resolver + form + redaction share one convention.
+   non-negotiable for the feature to be worth anything.)** Provider-agnostic:
+   the invariant is written once in Tier 1 and holds for every backend.
+4. **Marker shape: a `#Secret` helper emitting
+   `{"$secret":{"provider","key"}}`,** mirroring `#Ref`, so resolver + form +
+   redaction share one convention across all backends.
 5. **Which fields are secret: mark in CUE with an `@secret` attribute** (so the
    form redacts and a lint can flag inline literals). Apply to `password` and
    any future token-like fields.
@@ -169,9 +247,13 @@ single expression language across schemas, forms, and now parameterization.
 
 - `internal/schema/schemas/base/resource.cue`: add the `#Secret` helper;
   annotate `vm.cue` `password` (and peers) `@secret`.
-- `internal/controller/secrets/` (new): `Resolver` mirroring
-  `internal/controller/refs` — sources `file` (state-dir-relative, 0600) and
-  `env`; returns a resolved copy + leaves the raw manifest untouched.
+- `internal/controller/secrets/` (new): a `SecretProvider` interface +
+  name-keyed `Registry`, with built-in `file` (state-dir-relative, 0600) and
+  `env` providers registered unconditionally; plus a `Resolver` mirroring
+  `internal/controller/refs` that walks `$secret` markers, dispatches each to
+  its named provider, returns a resolved copy, and leaves the raw manifest
+  untouched. Tier 2 backends register here from a `secrets.providers` config
+  block; Tier 3 adds a `SecretProvider` capability to the external adapter.
 - **Dispatcher**: resolve `$secret` into the transient manifest alongside the
   existing `$ref` resolution, before `provider.Apply`; persist the raw
   (marker-bearing) manifest exactly as the refs path already does. No new
@@ -195,12 +277,18 @@ single expression language across schemas, forms, and now parameterization.
   warning when enabled).
 - Part B: `vm.cue & prod.cue` unifies, validates, applies; a required-but-unset
   variable fails validation with a path-attributed error.
+- Extensibility seam: a fake in-memory `SecretProvider` registers under a name
+  and resolves through the marker end to end — proving Tier 2/3 are pure
+  registration against the same resolver/redaction path (no new invariant to
+  re-test per backend).
 
 ## Non-goals
 
-- A full secret-management backend (Vault, cloud secret managers). File + env
-  + eventual keyring cover the homelab threat model; an external-manager source
-  is a later marker extension, not v1.
+- **Shipping a specific external backend (Vault, cloud secret managers) in v1.**
+  The `SecretProvider` seam and named-provider marker are designed in now (so
+  the wire shape is right), but only `file` + `env` register in v1; a concrete
+  Tier 2 backend is a follow-on that plugs into the seam, not part of the first
+  slice.
 - Encryption at rest of the secret *source* files — rely on filesystem perms
   (0600), exactly as `tokenSecretFile` does.
 - A templating language beyond CUE. If parameterization needs more than CUE
