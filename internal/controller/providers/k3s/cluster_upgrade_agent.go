@@ -65,6 +65,24 @@ func (u *agentNodeUpgrader) Upgrade(ctx context.Context, node upgradeNode, versi
 	return c.UpgradeK3s(ctx, version)
 }
 
+// Logs fetches the last `lines` of the node's k3s journal over its agent.
+func (u *agentNodeUpgrader) Logs(ctx context.Context, node upgradeNode, lines int) (string, error) {
+	c, err := u.clientFor(node)
+	if err != nil {
+		return "", err
+	}
+	return c.Logs(ctx, lines)
+}
+
+// Restart restarts the node's k3s service over its agent.
+func (u *agentNodeUpgrader) Restart(ctx context.Context, node upgradeNode) error {
+	c, err := u.clientFor(node)
+	if err != nil {
+		return err
+	}
+	return c.RestartK3s(ctx)
+}
+
 // Health polls the node's agent until it responds, returning the running k3s
 // version. k3s restarts during the upgrade, so Info fails transiently before
 // recovering; poll until healthTimeout. Returns the last error if the node

@@ -74,7 +74,7 @@ func (p *Provider) Actions(kind string) []string {
 	if kind != kindCluster {
 		return nil
 	}
-	return []string{"get-kubeconfig", "upgrade"}
+	return []string{"get-kubeconfig", "upgrade", "logs", "restart"}
 }
 
 // ActionSpecs implements providers.ActionDescriber: it annotates the Cluster
@@ -102,6 +102,36 @@ func (p *Provider) ActionSpecs(kind string) []providers.ActionSpec {
 				},
 			},
 		},
+		{
+			Name:        "logs",
+			Description: "Download a node's k3s journal via its agent (mTLS). Leave node blank for a single-node cluster.",
+			Parameters: []providers.ActionParameter{
+				{
+					Name:        "node",
+					Type:        "string",
+					Required:    false,
+					Description: "Node to read logs from (defaults to the only node).",
+				},
+				{
+					Name:        "lines",
+					Type:        "int",
+					Required:    false,
+					Description: "Number of journal lines to fetch (default 200).",
+				},
+			},
+		},
+		{
+			Name:        "restart",
+			Description: "Restart the k3s service on a node via its agent (mTLS).",
+			Parameters: []providers.ActionParameter{
+				{
+					Name:        "node",
+					Type:        "string",
+					Required:    true,
+					Description: "Node to restart k3s on.",
+				},
+			},
+		},
 	}
 }
 
@@ -110,8 +140,15 @@ func (p *Provider) ActionSpecs(kind string) []providers.ActionSpec {
 // (control planes first for etcd quorum, then workers, health-gated); all other
 // actions ignore parameters and delegate to DoAction.
 func (p *Provider) DoActionWithParams(ctx context.Context, kind, name, action string, params map[string]string) (*providers.ActionResult, error) {
-	if kind == kindCluster && action == "upgrade" {
-		return p.runClusterUpgrade(ctx, name, params["version"], productionUpgraderFactory)
+	if kind == kindCluster {
+		switch action {
+		case "upgrade":
+			return p.runClusterUpgrade(ctx, name, params["version"], productionUpgraderFactory)
+		case "logs":
+			return p.runClusterLogs(ctx, name, params, productionNodeAgentFactory)
+		case "restart":
+			return p.runClusterRestart(ctx, name, params, productionNodeAgentFactory)
+		}
 	}
 	return p.DoAction(ctx, kind, name, action)
 }

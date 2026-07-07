@@ -708,12 +708,17 @@ screens. Ordered by impact.
       renders an inline input form for parameterized actions and passes the
       values through `invokeAction`. Backward-compatible (the `actions`
       name list is still populated).
-- [ ] **U10.2 — Plugin-defined node ops in the UI.** The k3s plugin's
-      `logs` / `restart` / `upgrade` per-node subcommands
-      (`plugins/k3s/cmd/openctl-k3s/main.go`) are **CLI-only** — no UI
-      surface. They dispatch through parameterized provider actions, so
-      they ride on U10.1's parameter path once given a UI command surface
-      (natural home: the Detail page / a node row).
+- [x] **U10.2 — Node ops in the UI.** The k3s per-node `logs` and
+      `restart` operations (previously CLI-only) are now Cluster-level
+      **parameterized actions** on the in-process k3s provider, reusing the
+      rolling-upgrade machinery: `enumerateUpgradeNodes` + the cluster cert
+      bundle + `agentNodeUpgrader` (extended with `Logs`/`Restart`) drive a
+      node's openctl-k3s-agent over mTLS. `logs` (params: `node` optional,
+      `lines` optional) returns the journal as a download; `restart` (param:
+      `node` required) restarts k3s. They surface automatically in the
+      Cluster Detail action bar via U10.1's `action_specs` param form — the
+      only UI change was nicer button labels + a destructive-confirm on
+      restart. (`upgrade` was already reachable from U10.1.)
 - [x] **U10.3 — Historical / filtered operation browsing.** The ops
       drawer's live store is capped at the most recent 200, so its
       status/source filters only reached that tail. Added a **"Load older"**
