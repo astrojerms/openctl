@@ -1,0 +1,80 @@
+# Homelab verification
+
+Unit tests and fakes prove the logic; they cannot prove the controller drives
+real VM and k3s-cluster lifecycles on *your* Proxmox hardware. That last mile —
+timing, QEMU guest-agent quirks, template edges, real network behavior — only a
+run against metal validates. `hack/homelab-verify.sh` is a reusable, safe
+harness for exactly that.
+
+## What it checks
+
+| Stage | Proves |
+|-------|--------|
+| **Preflight** (`--dry-run`) | Controller reachable + authenticated, required config present, sandbox names free. Mutates nothing. |
+| **VM lifecycle** (default) | Apply a VM → it reaches Running with an IP → re-apply behaves per the locked #73 rule → delete → confirmed gone. |
+| **Cluster lifecycle** (`--cluster`) | Apply a small k3s cluster → nodes provision + join → delete → confirmed gone. |
+
+It drives the **real `openctl` CLI** (`openctl ctl apply/get/delete`), so it
+exercises the exact path you use, not a stand-in. Because `apply`/`delete`
+block until the operation completes, pass/fail rides on their exit codes; the
+`ctl get` output adds softer IP/status assertions on top.
+
+## Safety
+
+- **Only touches names it owns.** `VERIFY_VM_NAME` / `VERIFY_CLUSTER_NAME` are
+  prefixed `openctl-verify-` and the harness **refuses to start if they already
+  exist** — it can't stomp a real resource.
+- **Cleans up on exit** (trap) unless you pass `--keep`.
+- **`--dry-run` mutates nothing** — run it first, always.
+- Uses your homelab's safe IP range (`.235–.238` by default) for the cluster,
+  and a static VM IP you set outside that range.
+
+## Prerequisites
+
+Do the [QUICKSTART](../QUICKSTART.md) first. The harness assumes:
+
+1. `openctl-controller` is running (`openctl ping` succeeds).
+2. A Proxmox endpoint + API token are configured in the controller (secret via
+   `tokenSecretFile` — the harness never handles credentials).
+3. A cloud-init template exists on the target node.
+
+## Run it
+
+```sh
+cp hack/homelab-verify.env.example homelab-verify.env
+$EDITOR homelab-verify.env         # endpoint node, template, SSH keys, ranges
+
+hack/homelab-verify.sh --dry-run   # 1. preflight only — safe, ~seconds
+hack/homelab-verify.sh             # 2. VM lifecycle — ~1-3 min
+hack/homelab-verify.sh --cluster   # 3. + cluster lifecycle — ~10-20 min
+```
+
+Useful flags: `--cluster-only`, `--vm-only`, `--keep` (leave resources up for
+inspection), `-h`.
+
+## Recommended first-run sequence
+
+This mirrors the safest onboarding order — narrow blast radius first:
+
+1. `--dry-run` until preflight is all green.
+2. VM lifecycle. This validates the core apply → reconcile → observe → delete
+   loop on your metal before any composite complexity.
+3. `--cluster` once the VM path is solid.
+4. Snapshot `~/.openctl` before and after until you trust the state layer.
+
+## Reading the #73 re-apply check
+
+The VM stage re-applies with a bumped memory value. **Today** openctl treats
+apply on an existing atomic resource as a no-op that surfaces drift — it will
+**not** resize a running VM (see `CONTROLLER.md`, "Apply on existing atomic
+resource"). So the expected result is: re-apply succeeds cleanly, the VM keeps
+its original memory, and drift is reported. If in-place resize is later enabled,
+this expectation flips and the assertion in `vm_lifecycle()` should be updated.
+
+## Note on the harness itself
+
+The harness is validated for shape (shellcheck, `bash -n`) and uses verified CLI
+commands, but its **first real run against your hardware is itself part of the
+verification** — that run both exercises openctl and shakes out any
+environment-specific rough edges here. Report failures with `openctl ctl op
+list` / `openctl ctl op get <id>` output.

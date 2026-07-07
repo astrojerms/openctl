@@ -57,3 +57,6 @@ secrets/
 
 # AI
 .claude
+
+# local homelab verification config (not committed)
+homelab-verify.env
