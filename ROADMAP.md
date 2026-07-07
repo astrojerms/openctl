@@ -694,6 +694,20 @@ the flat children list.
 Cross-cutting items that don't belong to a single track. Promote into a
 phase plan when ready to commit.
 
+- [ ] **Variables & secrets** — openctl has no tfvars-style variable
+      layer and no secrets abstraction. Today `$ref` covers cross-resource
+      value passing (not input variables) and `tokenSecretFile` keeps
+      *provider* secrets out of manifests, but sensitive *spec* fields
+      (e.g. VM `password`, `vm.cue:145`) go inline and get materialized +
+      git-synced — a real secrets-in-git leak. **Design proposal:**
+      [docs/vars-secrets-design.md](docs/vars-secrets-design.md) — two
+      independent slices: **(A) secrets** via a `$secret`/`valueFrom`
+      indirection resolved at apply-time and **redacted from the
+      git-synced manifest** (reusing the `$ref` raw-manifest-preservation
+      precedent, migration 0008), file+env sources; **(B)
+      parameterization** via a CUE `--values` overlay rather than a
+      bespoke tfvars format. Ship secrets first (closes the leak), params
+      second (convenience). Awaiting sign-off.
 - [x] **Templates (MVP)** — parameterized starters. Go-defined
       templates compiled in (deferred a CUE-templating engine for
       user-authored templates as a future extension). New
