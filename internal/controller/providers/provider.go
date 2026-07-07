@@ -167,6 +167,35 @@ type ParameterizedActioner interface {
 	DoActionWithParams(ctx context.Context, kind, name, action string, params map[string]string) (*ActionResult, error)
 }
 
+// ActionParameter describes one argument an action accepts, so callers (the
+// UI) can render an input and validate before invoking.
+type ActionParameter struct {
+	Name        string
+	Type        string // "string" | "int" | "bool"
+	Required    bool
+	Description string
+	Default     string
+}
+
+// ActionSpec describes a runtime action and any parameters it accepts. It is
+// the richer form of a bare action name returned by Actioner.Actions.
+type ActionSpec struct {
+	Name        string
+	Description string
+	Parameters  []ActionParameter
+}
+
+// ActionDescriber is an optional extension of Actioner: a provider implements
+// it to declare parameter schemas for its actions. Providers that don't
+// implement it get name-only specs synthesized from Actions(kind), so this is
+// fully backward-compatible — parameterless actions need no change.
+type ActionDescriber interface {
+	Actioner
+	// ActionSpecs returns the descriptor for each action supported for kind.
+	// The set of names must match Actions(kind).
+	ActionSpecs(kind string) []ActionSpec
+}
+
 // ActionResult carries the structured output of a runtime action.
 // Providers populate whichever fields fit — message for short text,
 // url for external navigation, download_content+filename for file
@@ -317,6 +346,31 @@ func (r *Registry) ActionsFor(apiVersion, kind string) []string {
 		return nil
 	}
 	return a.Actions(kind)
+}
+
+// ActionSpecsFor returns the parameter-bearing descriptor for each action
+// supported for (apiVersion, kind). Providers implementing ActionDescriber
+// supply the schemas directly; those implementing only Actioner get name-only
+// specs synthesized from Actions(kind). Empty when no provider matches or the
+// provider has no actions — the UI hides the action bar in that case.
+func (r *Registry) ActionSpecsFor(apiVersion, kind string) []ActionSpec {
+	p, err := r.For(apiVersion)
+	if err != nil {
+		return nil
+	}
+	if d, ok := p.(ActionDescriber); ok {
+		return d.ActionSpecs(kind)
+	}
+	a, ok := p.(Actioner)
+	if !ok {
+		return nil
+	}
+	names := a.Actions(kind)
+	specs := make([]ActionSpec, 0, len(names))
+	for _, n := range names {
+		specs = append(specs, ActionSpec{Name: n})
+	}
+	return specs
 }
 
 // DoAction routes an action invocation to the responsible provider, passing

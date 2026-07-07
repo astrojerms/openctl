@@ -125,6 +125,33 @@ message ListActionsRequest {
 
 message ListActionsResponse {
   repeated string actions = 1;
+  // action_specs carries the same actions with parameter schemas so the UI can
+  // render inputs for actions that take arguments (e.g. a cluster upgrade's
+  // target version). Populated for every action; parameterless actions have an
+  // empty parameters list. Providers opt into parameters by implementing
+  // ActionDescriber; others yield name-only specs. (U10.1)
+  repeated ActionSpec action_specs = 2;
+}
+
+// ActionSpec describes a runtime action and any parameters it accepts.
+message ActionSpec {
+  string name = 1;
+  // Optional human-readable description for a tooltip/help text.
+  string description = 2;
+  repeated ActionParameterSpec parameters = 3;
+}
+
+// ActionParameterSpec describes one argument an action accepts so the UI can
+// render an input and validate before invoking.
+message ActionParameterSpec {
+  string name = 1;
+  // One of "string" | "int" | "bool". The UI renders an appropriate input.
+  string type = 2;
+  bool required = 3;
+  // Optional help text shown alongside the input.
+  string description = 4;
+  // Optional default value (pre-filled in the UI, string-encoded).
+  string default_value = 5;
 }
 
 message InvokeActionRequest {

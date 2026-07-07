@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { resources, UnauthorizedError, type GetResourceResponse, type Resource, type ResourceRef } from '../lib/api';
+  import { resources, UnauthorizedError, type GetResourceResponse, type Resource, type ResourceRef, type ActionSpec } from '../lib/api';
   import { watchResources } from '../lib/watch';
   import { statusBadge, type StatusBadge } from '../lib/format';
   import { routeHref, navigate } from '../lib/router';
@@ -180,31 +180,40 @@
 
   // U8.12: runtime actions. Fetched once per kind on load. Empty means
   // the provider has no runtime actions for this kind — bar hides.
-  let actions: string[] = [];
+  // U10.1: actions carry parameter schemas so parameterized actions
+  // (e.g. Cluster upgrade's target version) can prompt for inputs.
+  let actionSpecs: ActionSpec[] = [];
   let actionInflight = '';
   let actionMsg = '';
   let actionErr = '';
 
+  // Parameterized-action prompt: when an action declares parameters, clicking
+  // it opens this inline form instead of firing immediately.
+  let paramAction: ActionSpec | null = null;
+  let paramValues: Record<string, string> = {};
+  let paramError = '';
+
   async function loadActions(av: string, k: string) {
     try {
       const resp = await resources.listActions(av, k);
-      actions = resp.actions ?? [];
+      // Prefer the richer specs; fall back to bare names for older servers.
+      actionSpecs = resp.actionSpecs ?? (resp.actions ?? []).map((name) => ({ name }));
     } catch (err) {
       if (err instanceof UnauthorizedError) return;
       // Actions are best-effort — a failure just hides the bar, no toast.
       // eslint-disable-next-line no-console
       console.warn('listActions failed', err);
-      actions = [];
+      actionSpecs = [];
     }
   }
 
-  async function doAction(action: string) {
+  async function doAction(action: string, parameters?: Record<string, string>) {
     if (actionInflight) return;
     actionInflight = action;
     actionMsg = '';
     actionErr = '';
     try {
-      const resp = await resources.invokeAction(apiVersion, kind, resourceName, action);
+      const resp = await resources.invokeAction(apiVersion, kind, resourceName, action, parameters);
       // Dispatch on result shape: URL → open in new tab, download →
       // stream a file, otherwise show the message inline.
       if (resp.downloadContent && resp.downloadFilename) {
@@ -264,12 +273,47 @@
     return a === 'stop' || a === 'shutdown' || a === 'reboot';
   }
 
-  async function onActionClick(a: string) {
-    if (actionIsDestructive(a)) {
-      const ok = confirm(`${actionLabel(a)} ${resourceName}?`);
+  function openParamForm(spec: ActionSpec) {
+    paramAction = spec;
+    paramError = '';
+    const seed: Record<string, string> = {};
+    for (const p of spec.parameters ?? []) seed[p.name] = p.defaultValue ?? '';
+    paramValues = seed;
+  }
+
+  function cancelParamForm() {
+    paramAction = null;
+    paramValues = {};
+    paramError = '';
+  }
+
+  async function submitParamForm() {
+    if (!paramAction) return;
+    // Validate required params client-side before invoking.
+    for (const p of paramAction.parameters ?? []) {
+      if (p.required && !(paramValues[p.name] ?? '').trim()) {
+        paramError = `${p.name} is required`;
+        return;
+      }
+    }
+    const spec = paramAction;
+    const values = { ...paramValues };
+    cancelParamForm();
+    await doAction(spec.name, values);
+  }
+
+  async function onActionClick(spec: ActionSpec) {
+    // Parameterized actions open an input form; others fire immediately
+    // (with a confirm for destructive ones).
+    if (spec.parameters && spec.parameters.length > 0) {
+      openParamForm(spec);
+      return;
+    }
+    if (actionIsDestructive(spec.name)) {
+      const ok = confirm(`${actionLabel(spec.name)} ${resourceName}?`);
       if (!ok) return;
     }
-    await doAction(a);
+    await doAction(spec.name);
   }
 
   // U8.14: destructive delete flow. Requires the user to type the
@@ -401,16 +445,17 @@
           {#if childUnhealthy > 0} · {childUnhealthy} unhealthy{/if}
         </span>
       {/if}
-      {#each actions as a}
+      {#each actionSpecs as a}
         <button
           type="button"
           class="action-btn"
-          class:destructive={actionIsDestructive(a)}
+          class:destructive={actionIsDestructive(a.name)}
           disabled={!!actionInflight}
-          title={`Invoke '${a}' on ${resourceName}`}
+          title={a.description || `Invoke '${a.name}' on ${resourceName}`}
           on:click={() => onActionClick(a)}
         >
-          {actionInflight === a ? '…' : actionLabel(a)}
+          {actionInflight === a.name ? '…' : actionLabel(a.name)}
+          {#if a.parameters && a.parameters.length > 0}…{/if}
         </button>
       {/each}
       <button
@@ -455,6 +500,40 @@
   {/if}
   {#if reconcileErr}
     <p class="err small">{reconcileErr}</p>
+  {/if}
+  {#if paramAction}
+    <form class="param-form" on:submit|preventDefault={submitParamForm}>
+      <div class="param-form-head">{actionLabel(paramAction.name)} {resourceName}</div>
+      {#if paramAction.description}
+        <p class="muted small">{paramAction.description}</p>
+      {/if}
+      {#each paramAction.parameters ?? [] as p}
+        <label class="param-row">
+          <span class="param-label">{p.name}{#if p.required}<span class="req">*</span>{/if}</span>
+          {#if p.type === 'bool'}
+            <select bind:value={paramValues[p.name]}>
+              <option value="true">true</option>
+              <option value="false">false</option>
+            </select>
+          {:else}
+            <input
+              type={p.type === 'int' ? 'number' : 'text'}
+              bind:value={paramValues[p.name]}
+              placeholder={p.description || ''}
+              required={p.required}
+            />
+          {/if}
+          {#if p.description}<span class="param-help muted small">{p.description}</span>{/if}
+        </label>
+      {/each}
+      {#if paramError}<p class="err small">{paramError}</p>{/if}
+      <div class="param-form-actions">
+        <button type="submit" class="action-btn" disabled={!!actionInflight}>
+          {actionInflight === paramAction.name ? '…' : `Run ${actionLabel(paramAction.name)}`}
+        </button>
+        <button type="button" class="param-cancel" on:click={cancelParamForm}>Cancel</button>
+      </div>
+    </form>
   {/if}
   {#if actionMsg}
     <p class="muted small">{actionMsg}</p>
@@ -698,6 +777,62 @@
   .action-btn.destructive:hover:not(:disabled) {
     background: rgba(255, 137, 128, 0.1);
     color: #ff8980;
+  }
+  .param-form {
+    margin: 0.75em 0;
+    padding: 0.9em 1em;
+    border: 1px solid rgba(127, 127, 127, 0.3);
+    border-radius: 8px;
+    background: rgba(127, 127, 127, 0.06);
+    max-width: 32rem;
+  }
+  .param-form-head {
+    font-weight: 600;
+    margin-bottom: 0.4em;
+  }
+  .param-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2em;
+    margin: 0.6em 0;
+  }
+  .param-label {
+    font-size: 0.85rem;
+    color: #ccc;
+  }
+  .param-label .req {
+    color: #ff8980;
+    margin-left: 0.15em;
+  }
+  .param-row input,
+  .param-row select {
+    padding: 0.4em 0.6em;
+    border-radius: 6px;
+    border: 1px solid rgba(127, 127, 127, 0.35);
+    background: transparent;
+    color: #eee;
+    font: inherit;
+  }
+  .param-help {
+    opacity: 0.75;
+  }
+  .param-form-actions {
+    display: flex;
+    gap: 0.5em;
+    margin-top: 0.6em;
+  }
+  .param-cancel {
+    background: transparent;
+    color: #aaa;
+    border: 1px solid rgba(127, 127, 127, 0.35);
+    padding: 0.4em 0.9em;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  .param-cancel:hover {
+    color: #fff;
+    background: rgba(127, 127, 127, 0.12);
   }
   .delete-btn {
     background: transparent;
