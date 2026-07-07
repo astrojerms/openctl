@@ -12,6 +12,8 @@
   let error = '';
   let pushing = false;
   let pushMsg = '';
+  let pulling = false;
+  let pullMsg = '';
   let timer: number | undefined;
 
   onMount(async () => {
@@ -53,6 +55,21 @@
     }
   }
 
+  async function doPull() {
+    if (pulling) return;
+    pulling = true;
+    pullMsg = '';
+    try {
+      const r = await repo.pull();
+      pullMsg = r.message ?? 'pulled';
+      await refresh();
+    } catch (err) {
+      pullMsg = err instanceof Error ? err.message : String(err);
+    } finally {
+      pulling = false;
+    }
+  }
+
   // Pill tone: clean+up-to-date is good, dirty is warn, behind is warn,
   // ahead is info (no colour change), error is bad.
   function tone(s: RepoStatus | null, err: string): 'good' | 'warn' | 'bad' | 'muted' {
@@ -83,6 +100,11 @@
     !!status?.enabled &&
     !!status?.remote &&
     ((status?.ahead ?? 0) > 0 || status?.pushMode === 'manual');
+
+  // "Pull" shows whenever a remote is configured — it's how an operator picks
+  // up out-of-band commits (another controller, a manual git push to the
+  // remote). Highlighted when the local is behind.
+  $: showPull = !!status?.enabled && !!status?.remote;
 </script>
 
 <span
@@ -94,8 +116,14 @@
   {error ? 'git: error' : label(status)}
 </span>
 
+{#if showPull}
+  <button class="git-action" class:behind={(status?.behind ?? 0) > 0} on:click={doPull} disabled={pulling} title={pullMsg}>
+    {pulling ? 'Pulling…' : 'Pull'}
+  </button>
+{/if}
+
 {#if showPush}
-  <button class="push" on:click={doPush} disabled={pushing} title={pushMsg}>
+  <button class="git-action" on:click={doPush} disabled={pushing} title={pushMsg}>
     {pushing ? 'Pushing…' : 'Push now'}
   </button>
 {/if}
@@ -114,8 +142,12 @@
   .tone-warn { background: rgba(255, 184, 0, 0.15); color: #ffce4d; }
   .tone-bad  { background: rgba(248, 81, 73, 0.15); color: #ff8980; }
   .tone-muted { background: rgba(127, 127, 127, 0.12); color: #888; }
-  .push {
+  .git-action {
     font-size: 0.8rem;
     padding: 0.25em 0.75em;
+  }
+  .git-action.behind {
+    border-color: rgba(255, 184, 0, 0.5);
+    color: #ffce4d;
   }
 </style>

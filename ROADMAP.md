@@ -714,13 +714,14 @@ screens. Ordered by impact.
       surface. They dispatch through parameterized provider actions, so
       they ride on U10.1's parameter path once given a UI command surface
       (natural home: the Detail page / a node row).
-- [ ] **U10.3 — Historical / filtered operation browsing.**
-      `OperationService.ListOperations` (status/kind/since/until/limit
-      filters) has a UI wrapper that is **never called** — the ops drawer
-      is fed only by the `WatchOperations` live stream, so there's no way
-      to page or filter past operations. Wire `ListOperations` into the
-      drawer (filter controls already exist client-side; today they filter
-      only the live tail).
+- [x] **U10.3 — Historical / filtered operation browsing.** The ops
+      drawer's live store is capped at the most recent 200, so its
+      status/source filters only reached that tail. Added a **"Load older"**
+      control that queries `OperationService.ListOperations` (status/source
+      pushed server-side) and merges the results into the drawer (deduped by
+      id, live row preferred, newest-first), so operations beyond the live
+      window are browsable. `ListOperations` was previously wired in
+      `api.ts` but never called.
 - [x] **U10.4 — RBAC visibility & gating.** The shell now shows the
       caller's role as a badge (amber for a read-only `viewer`), reading
       `WhoAmIResponse.role` (the server already populated it; only the TS
@@ -731,9 +732,12 @@ screens. Ordered by impact.
       hides "+ New" — each with a "read-only session" tooltip. *Deferred:* a
       user-management UI (no `UserService` RPC exists yet; `users.yaml` is
       hand-edited).
-- [ ] **U10.5 — `repo:pull` button.** `RepoService.Pull` has a UI wrapper
-      but no control — the git-status header wires only `status` + `push`.
-      Add a Pull affordance for GitOps symmetry.
+- [x] **U10.5 — `repo:pull` button.** The git-status header now has a
+      **Pull** button (shown whenever a remote is configured, highlighted
+      amber when the local is behind) alongside Push, calling the
+      previously-unused `RepoService.Pull` wrapper — how an operator picks
+      up out-of-band commits (another controller, a manual push to the
+      remote).
 - [ ] **U10.6 — Advanced/composite-child kinds in the create picker.**
       The create picker offers `K3sNode` and `AgentInstall` flat alongside
       `Cluster` with no signal that they're expert/composite-child paths

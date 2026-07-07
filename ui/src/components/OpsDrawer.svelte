@@ -16,13 +16,54 @@
   let cancelling: Record<string, boolean> = {};
   let cancelError: Record<string, string> = {};
 
-  // U7 filter controls — all client-side against the in-memory stream.
-  // The watcher already streams everything; per-filter re-subscribes
-  // would be more code for less convenience here.
+  // U7 filter controls — applied client-side against the in-memory stream.
   let filterStatus = '';
   let filterSource = '';
   let filterText = '';
   let lastAppliedFocus = '';
+
+  // U10.3 — historical operations. The live `ops` store is capped at the
+  // most recent 200, so status/source filters only reach that tail. "Load
+  // older" queries OperationService.ListOperations (status/source pushed to
+  // the server, since/until/limit available) and merges the results in so the
+  // drawer can browse past the live window.
+  let historical: OperationRow[] = [];
+  let loadingHistory = false;
+  let historyMsg = '';
+
+  async function loadHistory() {
+    if (loadingHistory) return;
+    loadingHistory = true;
+    historyMsg = '';
+    try {
+      const resp = await opsApi.list({
+        status: filterStatus || undefined,
+        source: filterSource || undefined,
+        limit: 200,
+      });
+      // Operation and OperationRow are structurally identical here.
+      historical = (resp.operations ?? []) as OperationRow[];
+      historyMsg = `${historical.length} loaded from history`;
+    } catch (err) {
+      historyMsg = err instanceof Error ? err.message : String(err);
+    } finally {
+      loadingHistory = false;
+    }
+  }
+
+  function clearHistory() {
+    historical = [];
+    historyMsg = '';
+  }
+
+  // Merge the live stream with any loaded history, preferring the live row on
+  // an id collision (it's the freshest), newest-first by submittedAt.
+  function mergeOps(live: OperationRow[], hist: OperationRow[]): OperationRow[] {
+    const seen = new Set(live.map((o) => o.id));
+    const merged = [...live, ...hist.filter((o) => !seen.has(o.id))];
+    merged.sort((a, b) => (b.submittedAt ?? '').localeCompare(a.submittedAt ?? ''));
+    return merged;
+  }
 
   function toggle() {
     open = !open;
@@ -151,8 +192,8 @@
     if (changed) expanded = nextExpanded;
   }
 
-  // Apply the U7 filter set against the in-memory ops list.
-  $: visible = $ops.filter((o) => {
+  // Apply the U7 filter set against the live stream merged with loaded history.
+  $: visible = mergeOps($ops, historical).filter((o) => {
     if (!opOrChildMatchesFocus(o, $opsDrawerFocus)) return false;
     if (filterStatus && o.status !== filterStatus) return false;
     if (filterSource && (o.source || '') !== filterSource) return false;
@@ -208,7 +249,17 @@
         {#if filterStatus || filterSource || filterText}
           <button class="clear-filters" on:click={() => { filterStatus=''; filterSource=''; filterText=''; }}>Clear</button>
         {/if}
+        <button class="load-history" on:click={loadHistory} disabled={loadingHistory}
+          title="Query older operations beyond the live 200 (applies the Status/Source filters server-side)">
+          {loadingHistory ? 'Loading…' : 'Load older'}
+        </button>
+        {#if historical.length > 0}
+          <button class="clear-filters" on:click={clearHistory}>Clear history</button>
+        {/if}
       </div>
+      {#if historyMsg}
+        <p class="history-msg muted small">{historyMsg}</p>
+      {/if}
       {#if $opsDrawerFocus}
         <div class="focus-bar">
           <span>Focused on {focusLabel($opsDrawerFocus)}</span>
@@ -473,7 +524,7 @@
       background: #fff;
     }
   }
-  .clear-filters {
+  .clear-filters, .load-history {
     align-self: end;
     padding: 0.3em 0.7em;
     font-size: 0.8rem;
@@ -482,6 +533,13 @@
     color: inherit;
     border-radius: 4px;
     cursor: pointer;
+  }
+  .load-history:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .history-msg {
+    margin: 0.3rem 0 0;
   }
   .focus-bar {
     display: flex;
