@@ -60,8 +60,9 @@ SSH_PRIVKEY_PATH="${SSH_PRIVKEY_PATH:-$HOME/.ssh/id_ed25519}"
 VERIFY_VM_NAME="${VERIFY_VM_NAME:-openctl-verify-vm}"
 VM_CPUS="${VM_CPUS:-2}"
 VM_MEMORY_MB="${VM_MEMORY_MB:-2048}"
-VM_MEMORY_MB_BUMP="${VM_MEMORY_MB_BUMP:-4096}"   # used to exercise the #73 re-apply behavior
+VM_MEMORY_MB_BUMP="${VM_MEMORY_MB_BUMP:-4096}"   # in-place memory resize target
 VM_DISK="${VM_DISK:-20G}"
+VM_DISK_BUMP="${VM_DISK_BUMP:-24G}"              # in-place disk-grow target (must be > VM_DISK)
 VM_IP="${VM_IP:-}"                                # e.g. 192.168.1.234/24 ; empty => dhcp
 VM_GATEWAY="${VM_GATEWAY:-}"
 
@@ -125,14 +126,32 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# resource_exists <kind> <name> <apiVersion> -> 0 if present
+# resource_exists <kind> <name> <apiVersion> -> 0 if present (controller-managed)
 resource_exists() {
   "$OPENCTL" ctl get "$1" "$2" --api-version "$3" >/dev/null 2>&1
 }
 
+# VM observation goes through `proxmox get vms`, not `ctl get`: `ctl get` lists
+# only openctl-managed VMs, whereas `proxmox get vms` sees every VM on the node
+# (so the collision guard can't be fooled) and its -o yaml surfaces the vmid —
+# the field that proves an in-place resize did not recreate the VM.
+
+# vm_present <name> -> 0 if a VM with this exact name exists on the node
+vm_present() {
+  "$OPENCTL" proxmox get vms 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx "$1"
+}
+
+# vm_field <name> <key> -> value of the first "  <key>: <value>" line, or empty.
+# Reads the proxmox YAML view (spec.memory.size, cpu.cores, status.vmid, ...).
+vm_field() {
+  "$OPENCTL" proxmox get vms "$1" -o yaml 2>/dev/null \
+    | grep -iE "^[[:space:]]*$2:" | head -1 | sed -E 's/^[^:]*:[[:space:]]*//'
+}
+
 # ---- manifest rendering ----------------------------------------------------
-render_vm() {   # $1 = memory MB ; writes manifest to stdout
-  local mem="$1" ipblock
+render_vm() {   # $1 = memory MB, $2 = disk size (e.g. 20G) ; writes manifest to stdout
+  local mem="$1" disk="$2" ipblock
+  [[ -n "$disk" ]] || disk="$VM_DISK"
   if [[ -n "$VM_IP" ]]; then
     ipblock=$(printf '      net0:\n        ip: %s\n        gateway: %s' "$VM_IP" "$VM_GATEWAY")
   else
@@ -157,7 +176,7 @@ spec:
   disks:
     - name: scsi0
       storage: $PROXMOX_STORAGE
-      size: $VM_DISK
+      size: $disk
   networks:
     - name: net0
       bridge: $PROXMOX_BRIDGE
@@ -168,7 +187,11 @@ spec:
       - $SSH_PUBKEY
     ipConfig:
 $ipblock
-  startOnCreate: true
+  # Created stopped on purpose: a resize test doesn't need a booted guest, it's
+  # faster, and it keeps memory observation reliable. proxmox get vms reports a
+  # RUNNING VM's live MaxMem, which lags a config change until reboot — so a
+  # running VM would show the old memory even though the config was updated.
+  startOnCreate: false
 EOF
 }
 
@@ -240,8 +263,9 @@ preflight() {
   fi
 
   # Sandbox-name collision guard: refuse to touch a pre-existing resource.
-  if [[ $DO_VM -eq 1 ]] && resource_exists VirtualMachine "$VERIFY_VM_NAME" "$VM_API"; then
-    die "a VirtualMachine named '$VERIFY_VM_NAME' already exists — refusing to reuse it. Delete it or set VERIFY_VM_NAME."
+  # Uses proxmox get vms so it sees ALL VMs on the node, not just managed ones.
+  if [[ $DO_VM -eq 1 ]] && vm_present "$VERIFY_VM_NAME"; then
+    die "a VM named '$VERIFY_VM_NAME' already exists on the node — refusing to reuse it. Delete it or set VERIFY_VM_NAME."
   fi
   [[ $DO_VM -eq 1 ]] && pass "sandbox VM name '$VERIFY_VM_NAME' is free"
   if [[ $DO_CLUSTER -eq 1 ]] && resource_exists Cluster "$VERIFY_CLUSTER_NAME" "$CLUSTER_API"; then
@@ -249,43 +273,61 @@ preflight() {
   fi
   [[ $DO_CLUSTER -eq 1 ]] && pass "sandbox cluster name '$VERIFY_CLUSTER_NAME' is free"
 
-  info "template existence and bridge validity aren't checked here — a bad value"
-  info "fails loudly at apply time with the Proxmox error."
+  info "template, storage ($PROXMOX_STORAGE), and bridge validity aren't checked"
+  info "here — a bad value fails loudly at apply time with the Proxmox error."
 }
 
 vm_lifecycle() {
   step "VM lifecycle: $VERIFY_VM_NAME"
   local mf="$TMPDIR_HV/vm.yaml"
 
-  render_vm "$VM_MEMORY_MB" > "$mf"
-  info "applying VM ($VM_CPUS cpu / ${VM_MEMORY_MB}MB) — blocks until Running..."
-  if "$OPENCTL" ctl apply -f "$mf"; then pass "apply succeeded (VM created + started)"
+  # --- create ---------------------------------------------------------------
+  render_vm "$VM_MEMORY_MB" "$VM_DISK" > "$mf"
+  info "applying VM ($VM_CPUS cpu / ${VM_MEMORY_MB}MB / ${VM_DISK}) — blocks until the op completes..."
+  if "$OPENCTL" ctl apply -f "$mf"; then pass "apply succeeded (VM created)"
   else fail "apply failed — see the op error above"; return; fi
 
-  local got; got="$("$OPENCTL" ctl get VirtualMachine "$VERIFY_VM_NAME" --api-version "$VM_API" 2>&1 || true)"
-  echo "$got" | grep -qi "$VERIFY_VM_NAME" && pass "controller reports the VM via ctl get" || fail "ctl get did not return the VM"
-  if echo "$got" | grep -qiE 'running|status.*run'; then pass "VM reports running"; else info "running-state not detected in ctl get output (format may vary); check: openctl ctl get VirtualMachine $VERIFY_VM_NAME --api-version $VM_API"; fi
-  if echo "$got" | grep -qoE '([0-9]{1,3}\.){3}[0-9]{1,3}'; then pass "VM has an IP: $(echo "$got" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1)"; else info "no IP surfaced yet (QGA may lag, or the template lacks qemu-guest-agent)"; fi
+  local vmid0; vmid0="$(vm_field "$VERIFY_VM_NAME" vmid)"
+  if [[ -n "$vmid0" ]]; then pass "VM exists on the node (vmid $vmid0)"; else fail "VM not found via proxmox get vms after apply"; return; fi
+  local mem0; mem0="$(vm_field "$VERIFY_VM_NAME" size)"
+  [[ "$mem0" == "$VM_MEMORY_MB" ]] && pass "memory is ${VM_MEMORY_MB}MB" || info "memory reads '$mem0' (want $VM_MEMORY_MB)"
 
-  # In-place resize: re-apply with a bumped memory. openctl now updates an
-  # existing VM in place for memory/CPU/disk-grow (see CONTROLLER.md), so the
-  # VM's memory should change WITHOUT a recreate.
-  step "In-place resize (re-apply with bumped memory)"
-  render_vm "$VM_MEMORY_MB_BUMP" > "$mf"
-  info "re-applying with memory bumped ${VM_MEMORY_MB}→${VM_MEMORY_MB_BUMP}MB..."
+  # --- in-place resize: the core assertion ----------------------------------
+  # openctl updates an existing VM in place for memory/CPU/disk-grow. The proof
+  # that it resized rather than recreated is a STABLE vmid across the re-apply.
+  step "In-place resize (memory ${VM_MEMORY_MB}→${VM_MEMORY_MB_BUMP}MB, disk ${VM_DISK}→${VM_DISK_BUMP})"
+  render_vm "$VM_MEMORY_MB_BUMP" "$VM_DISK_BUMP" > "$mf"
+  if "$OPENCTL" ctl apply -f "$mf"; then pass "re-apply succeeded"
+  else fail "re-apply errored"; fi
+  local vmid1; vmid1="$(vm_field "$VERIFY_VM_NAME" vmid)"
+  if [[ -n "$vmid1" && "$vmid1" == "$vmid0" ]]; then pass "vmid unchanged ($vmid1) — resized IN PLACE, not recreated"
+  else fail "vmid changed ($vmid0 → ${vmid1:-none}) — the VM was recreated, not resized"; fi
+  local mem1; mem1="$(vm_field "$VERIFY_VM_NAME" size)"
+  if [[ "$mem1" == "$VM_MEMORY_MB_BUMP" ]]; then pass "memory updated in place to ${VM_MEMORY_MB_BUMP}MB"
+  else fail "memory reads '$mem1' after resize (want $VM_MEMORY_MB_BUMP) — if the VM is running, this is a lagging live MaxMem, not a resize failure; check the Proxmox config"; fi
+  info "disk grow ${VM_DISK}→${VM_DISK_BUMP} applied without error (size not surfaced by proxmox get vms; verify in the Proxmox UI if needed)"
+
+  # --- shrink guard: must be rejected ---------------------------------------
+  step "Disk shrink is rejected"
+  render_vm "$VM_MEMORY_MB_BUMP" "$VM_DISK" > "$mf"   # back to the smaller disk = a shrink
+  local out; if out="$("$OPENCTL" ctl apply -f "$mf" 2>&1)"; then
+    fail "shrink ${VM_DISK_BUMP}→${VM_DISK} was accepted — it must be rejected"
+  elif echo "$out" | grep -qi shrink; then pass "shrink rejected with a clear error"
+  else info "re-apply failed but the error didn't mention shrink: $(echo "$out" | tail -1)"; fi
+
+  # --- idempotence: unchanged re-apply is a clean no-op ---------------------
+  step "Idempotent re-apply"
+  render_vm "$VM_MEMORY_MB_BUMP" "$VM_DISK_BUMP" > "$mf"
   if "$OPENCTL" ctl apply -f "$mf"; then
-    pass "re-apply succeeded"
-    got="$("$OPENCTL" ctl get VirtualMachine "$VERIFY_VM_NAME" --api-version "$VM_API" 2>&1 || true)"
-    if echo "$got" | grep -q "$VM_MEMORY_MB_BUMP"; then pass "memory updated in place to ${VM_MEMORY_MB_BUMP}MB (no recreate)"
-    else info "new memory not confirmed in ctl get output (format may vary); check: openctl ctl get VirtualMachine $VERIFY_VM_NAME --api-version $VM_API"; fi
-  else
-    fail "re-apply errored"
-  fi
+    local vmid2; vmid2="$(vm_field "$VERIFY_VM_NAME" vmid)"
+    [[ "$vmid2" == "$vmid0" ]] && pass "unchanged re-apply is a clean no-op (vmid still $vmid2)" || fail "vmid changed on an unchanged re-apply ($vmid0 → $vmid2)"
+  else fail "unchanged re-apply errored (expected a clean no-op)"; fi
 
+  # --- delete ---------------------------------------------------------------
   step "Delete + confirm gone"
   if "$OPENCTL" ctl delete VirtualMachine "$VERIFY_VM_NAME" --api-version "$VM_API"; then pass "delete succeeded"
   else fail "delete failed"; return; fi
-  if resource_exists VirtualMachine "$VERIFY_VM_NAME" "$VM_API"; then fail "VM still present after delete"; else pass "VM is gone (get returns not-found)"; fi
+  if vm_present "$VERIFY_VM_NAME"; then fail "VM still present on the node after delete"; else pass "VM is gone from the node"; fi
 }
 
 cluster_lifecycle() {

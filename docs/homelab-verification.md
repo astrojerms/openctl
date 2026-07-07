@@ -11,13 +11,23 @@ harness for exactly that.
 | Stage | Proves |
 |-------|--------|
 | **Preflight** (`--dry-run`) | Controller reachable + authenticated, required config present, sandbox names free. Mutates nothing. |
-| **VM lifecycle** (default) | Apply a VM → it reaches Running with an IP → re-apply behaves per the locked #73 rule → delete → confirmed gone. |
+| **VM lifecycle** (default) | Create a VM → **in-place resize** (memory + disk grow) proven by a *stable vmid* → disk **shrink rejected** → **idempotent** unchanged re-apply → delete → confirmed gone. |
 | **Cluster lifecycle** (`--cluster`) | Apply a small k3s cluster → nodes provision + join → delete → confirmed gone. |
 
-It drives the **real `openctl` CLI** (`openctl ctl apply/get/delete`), so it
-exercises the exact path you use, not a stand-in. Because `apply`/`delete`
-block until the operation completes, pass/fail rides on their exit codes; the
-`ctl get` output adds softer IP/status assertions on top.
+It drives the **real `openctl` CLI**, so it exercises the exact path you use, not
+a stand-in. `ctl apply`/`ctl delete` block until the op completes, so pass/fail
+rides on their exit codes. Observation goes through **`openctl proxmox get vms`**,
+not `ctl get`: `ctl get` lists only openctl-managed VMs, while `proxmox get vms`
+sees every VM on the node (so the collision guard can't be fooled) and its `-o
+yaml` surfaces the **vmid** — the field that proves an in-place resize did not
+recreate the VM.
+
+The verify VM is created **stopped** on purpose. A resize test doesn't need a
+booted guest, it's faster, and it keeps memory observation reliable: `proxmox
+get vms` reports a *running* VM's live `MaxMem`, which lags a config change until
+reboot — so a running VM would show the old memory even though the config was
+correctly updated. (This nuance was found on the first real-hardware run and is
+why the harness now creates stopped.)
 
 ## Safety
 
