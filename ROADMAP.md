@@ -782,11 +782,19 @@ phase plan when ready to commit.
       low-entropy secret's plaintext never enters a hashed/persisted column.
       VM `cloudInit.password` is annotated `@secret`; the form renders a
       secret-reference control (source + key) instead of a plaintext box.
-      Bare plaintext still validates (back-compat). *Remaining:* **Tier 2**
-      configured backends (Vault / cloud secret managers via a
-      `secrets.providers` config block) and **Tier 3** external
-      secret-provider plugins over `pluginproto` — both pure registration
-      against the same resolver/redaction (no wire-shape change).
+      Bare plaintext still validates (back-compat). **Tier 2 — Vault
+      SHIPPED.** A `secrets.providers` config block registers configured
+      backends; a `vault` type resolves `{$secret: {provider: "vault",
+      key: "secret/data/db#password"}}` over Vault's KV HTTP API
+      (`internal/controller/secrets/vault.go` — dependency-free net/http, KV
+      v1 + v2, `X-Vault-Token`/namespace, token via `tokenSecretFile`).
+      Registration is pure (same resolver + redaction, no wire-shape change),
+      proving the extensibility thesis. *Remaining:* other Tier 2 backends
+      (cloud secret managers) + **Tier 3** external secret-provider plugins
+      over `pluginproto` — same registration seam.
+      **(B) parameterization — SHIPPED.** `openctl ctl apply -f vm.cue
+      --values prod.cue` unifies the manifest with one or more CUE values
+      files (repeatable flag), the `-var-file` analog:
       **(B) parameterization — SHIPPED.** `openctl ctl apply -f vm.cue
       --values prod.cue` unifies the manifest with one or more CUE values
       files (repeatable flag), the `-var-file` analog:

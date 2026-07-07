@@ -3,7 +3,9 @@
 **Status:** Part A (secrets) **Tier 1 implemented** — the `$secret` marker,
 `internal/controller/secrets` resolver + registry (built-in `file`/`env`),
 dispatcher redaction, `base.#Secret` + `@secret` on VM `password`, and the
-form's secret-reference control are shipped. Tier 2 (configured backends),
+form's secret-reference control are shipped. **Tier 2 Vault is also shipped**
+(`internal/controller/secrets/vault.go` + the `secrets.providers` config block).
+Other Tier 2 backends (configured cloud secret managers) and
 Tier 3 (external plugins) remain proposals. **Part B (CUE `--values`
 parameterization) is now implemented** — `openctl ctl apply -f vm.cue
 --values prod.cue` unifies the manifest with values files

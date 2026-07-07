@@ -19,6 +19,40 @@ type Config struct {
 	Reconciler *Reconciler          `yaml:"reconciler,omitempty"`
 	Operations *Operations          `yaml:"operations,omitempty"`
 	Templates  *Templates           `yaml:"templates,omitempty"`
+	Secrets    *Secrets             `yaml:"secrets,omitempty"`
+}
+
+// Secrets configures secret-resolution backends beyond the built-in file/env
+// providers (Tier 2 of the $secret feature). Each entry registers a named
+// SecretProvider a manifest can reference via {$secret: {provider, key}}.
+type Secrets struct {
+	Providers []SecretProviderConfig `yaml:"providers"`
+}
+
+// SecretProviderConfig declares one configured secret backend.
+type SecretProviderConfig struct {
+	// Name is the identifier a $secret marker's `provider` field references.
+	Name string `yaml:"name"`
+	// Type selects the backend implementation. Currently "vault".
+	Type string `yaml:"type"`
+	// Address is the backend base URL (e.g. https://vault.lan:8200).
+	Address string `yaml:"address"`
+	// Token authenticates to the backend. Prefer TokenSecretFile (0600) over
+	// an inline TokenSecret — never commit a real token.
+	TokenSecret     string `yaml:"tokenSecret,omitempty"`
+	TokenSecretFile string `yaml:"tokenSecretFile,omitempty"`
+	// Namespace is an optional Vault Enterprise namespace (X-Vault-Namespace).
+	Namespace string `yaml:"namespace,omitempty"`
+}
+
+// ResolveToken returns the backend token, reading TokenSecretFile when set
+// (preferred) else the inline TokenSecret. Empty when neither is configured
+// (some backends authenticate ambiently, e.g. via instance identity).
+func (s *SecretProviderConfig) ResolveToken() (string, error) {
+	if s.TokenSecretFile != "" {
+		return readSecretFile(s.TokenSecretFile)
+	}
+	return s.TokenSecret, nil
 }
 
 // Operations configures the controller's operation store. nil/omitted →

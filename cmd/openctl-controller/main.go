@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -48,6 +49,34 @@ func resolveRetainPerResource() int {
 		return config.DefaultRetainPerResource
 	}
 	return cfg.Operations.RetainPerResource
+}
+
+// registerConfiguredSecretProviders builds and registers each configured
+// secret backend (Tier 2), returning display names for the startup log. An
+// unknown type or a missing required field is a hard error — a misconfigured
+// backend must surface loudly, not silently leave a $secret marker unresolved.
+func registerConfiguredSecretProviders(reg *secrets.Registry, providers []config.SecretProviderConfig) ([]string, error) {
+	var names []string
+	for _, pc := range providers {
+		if pc.Name == "" {
+			return nil, fmt.Errorf("a secret provider is missing its name")
+		}
+		switch pc.Type {
+		case "vault":
+			if pc.Address == "" {
+				return nil, fmt.Errorf("secret provider %q (vault) requires an address", pc.Name)
+			}
+			token, err := pc.ResolveToken()
+			if err != nil {
+				return nil, fmt.Errorf("secret provider %q token: %w", pc.Name, err)
+			}
+			reg.Register(secrets.NewVaultProvider(pc.Name, pc.Address, token, pc.Namespace))
+			names = append(names, pc.Name+" (vault)")
+		default:
+			return nil, fmt.Errorf("secret provider %q: unknown type %q", pc.Name, pc.Type)
+		}
+	}
+	return names, nil
 }
 
 func main() {
@@ -217,8 +246,17 @@ func runServe(args []string) error {
 	}
 	secretsReg := secrets.NewRegistry()
 	secrets.RegisterBuiltins(secretsReg, secretsDir)
+	secretProviderNames := []string{"file", "env"}
+	// Tier 2: register configured backends (Vault, ...) from config.secrets.
+	if cfg, err := config.Load(); err == nil && cfg != nil && cfg.Secrets != nil {
+		names, err := registerConfiguredSecretProviders(secretsReg, cfg.Secrets.Providers)
+		if err != nil {
+			return fmt.Errorf("configure secret providers: %w", err)
+		}
+		secretProviderNames = append(secretProviderNames, names...)
+	}
 	dispatcher.SetSecrets(secretsReg)
-	log.Printf("  secrets:     %s (providers: file, env)", secretsDir)
+	log.Printf("  secrets:     %s (providers: %s)", secretsDir, strings.Join(secretProviderNames, ", "))
 
 	dispatcher.Start(ctx)
 	defer dispatcher.Stop()
