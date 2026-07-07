@@ -761,7 +761,12 @@ phase plan when ready to commit.
       independent slices: **(A) secrets** via a `$secret`/`valueFrom`
       indirection resolved at apply-time and **redacted from the
       git-synced manifest** (reusing the `$ref` raw-manifest-preservation
-      precedent, migration 0008), file+env sources; **(B)
+      precedent, migration 0008). Sources are a pluggable `SecretProvider`
+      registry (named-provider marker `{provider, key}`); v1 ships
+      `file`+`env` built-in, with Vault / cloud secret managers (Tier 2
+      config) and external secret-provider plugins over `pluginproto`
+      (Tier 3) slotting in later as pure registration — no wire-shape or
+      redaction-invariant change. **(B)
       parameterization** via a CUE `--values` overlay rather than a
       bespoke tfvars format. Ship secrets first (closes the leak), params
       second (convenience). Awaiting sign-off.
