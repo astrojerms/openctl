@@ -13,6 +13,7 @@ import (
 	"github.com/openctl/openctl/internal/controller/manifests"
 	"github.com/openctl/openctl/internal/controller/providers"
 	"github.com/openctl/openctl/internal/controller/refs"
+	"github.com/openctl/openctl/internal/controller/secrets"
 	"github.com/openctl/openctl/pkg/protocol"
 )
 
@@ -53,6 +54,7 @@ type Dispatcher struct {
 	store        *Store
 	registry     *providers.Registry
 	manifests    ManifestSink
+	secrets      *secrets.Registry
 	pollInterval time.Duration
 
 	notify  chan struct{}
@@ -86,6 +88,15 @@ func NewDispatcher(store *Store, registry *providers.Registry, manifests Manifes
 		running:       make(map[string]context.CancelFunc),
 		userCancelled: make(map[string]bool),
 	}
+}
+
+// SetSecrets wires a secrets.Registry so ApplyManifest resolves $secret markers
+// before handing the manifest to provider.Apply. Nil (the default) disables
+// secret resolution — a manifest carrying a $secret marker then fails at Apply
+// with "resolve secrets", surfacing the misconfiguration rather than applying
+// an unresolved marker.
+func (d *Dispatcher) SetSecrets(reg *secrets.Registry) {
+	d.secrets = reg
 }
 
 // CancelRunning aborts the context of an in-flight op, if one with this id is
@@ -327,9 +338,32 @@ func (d *Dispatcher) ApplyManifest(ctx context.Context, raw *protocol.Resource) 
 		resolved.Spec = resolvedSpec
 	}
 	if cached, hit := d.tryCacheHitInline(ctx, p, raw, &resolved); hit {
+		// Cache hit: nothing changed, so the secret is never even read.
 		return cached, nil
 	}
-	result, err := p.Apply(ctx, &resolved)
+
+	// Resolve $secret markers into a further copy handed ONLY to provider.Apply.
+	// The ordering here is deliberate and security-critical:
+	//   - `resolved` (refs resolved, $secret still as MARKERS) is what feeds the
+	//     cache check above and refsHash below, so a resolved secret's plaintext
+	//     never enters refs_hash — a sha256 of a low-entropy secret in a
+	//     persisted column would be brute-forceable.
+	//   - `raw` (all markers intact) is the only thing persisted (operations
+	//     store, applied_manifests, disk mirror, git), so the secret value never
+	//     lands on disk or in a commit.
+	// The resolved value exists only in `applyManifest`, transiently, on its way
+	// to the provider — the irreducible minimum (the provider must configure the
+	// real infrastructure with it).
+	applyManifest := resolved
+	if d.secrets != nil && resolved.Spec != nil && secrets.HasSecrets(resolved.Spec) {
+		resolvedSpec, err := secrets.New(d.secrets).Resolve(ctx, resolved.Spec)
+		if err != nil {
+			return nil, fmt.Errorf("resolve secrets: %w", err)
+		}
+		applyManifest.Spec = resolvedSpec
+	}
+
+	result, err := p.Apply(ctx, &applyManifest)
 	if err != nil {
 		return nil, err
 	}

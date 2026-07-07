@@ -99,6 +99,13 @@ type Field struct {
 	// inside a struct — sibling fields at the same nesting level.
 	OneOfGroup string `json:"oneOfGroup,omitempty"`
 
+	// Secret marks a field authored as `(string | base.#Secret) @secret()`.
+	// The renderer shows a secret-reference control (source + key) instead of
+	// a plaintext input, so the authored value is a {$secret: {...}} marker
+	// that the controller resolves at apply time and keeps out of the
+	// git-synced manifest. A bare string is still accepted for back-compat.
+	Secret bool `json:"secret,omitempty"`
+
 	// FieldUnsupported: human-readable reason.
 	Reason string `json:"reason,omitempty"`
 }
@@ -222,6 +229,18 @@ func walkStruct(v cue.Value) []Field {
 		if attr := iter.Value().Attribute("oneOf"); attr.Err() == nil {
 			if g, ok, err := attr.Lookup(0, "group"); err == nil && ok {
 				child.OneOfGroup = g
+			}
+		}
+		// @secret marks a secret-reference field. It's authored as
+		// `(string | base.#Secret)`, a disjunction walk() can't model (it
+		// comes back FieldUnsupported), so recast it to a plain string field
+		// and flag it Secret — the UI renders a secret-reference control
+		// rather than a plaintext box.
+		if attr := iter.Value().Attribute("secret"); attr.Err() == nil {
+			child.Secret = true
+			if child.Type == FieldUnsupported {
+				child.Type = FieldString
+				child.Reason = ""
 			}
 		}
 		out = append(out, child)

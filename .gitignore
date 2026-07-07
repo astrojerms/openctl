@@ -38,6 +38,8 @@ Thumbs.db
 
 # Secrets (never commit)
 secrets/
+# ...but the Go package that implements $secret resolution is source, not secrets.
+!internal/controller/secrets/
 *.token
 *.key
 *.pem

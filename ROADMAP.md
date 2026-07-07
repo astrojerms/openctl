@@ -751,25 +751,24 @@ screens. Ordered by impact.
 Cross-cutting items that don't belong to a single track. Promote into a
 phase plan when ready to commit.
 
-- [ ] **Variables & secrets** — openctl has no tfvars-style variable
-      layer and no secrets abstraction. Today `$ref` covers cross-resource
-      value passing (not input variables) and `tokenSecretFile` keeps
-      *provider* secrets out of manifests, but sensitive *spec* fields
-      (e.g. VM `password`, `vm.cue:145`) go inline and get materialized +
-      git-synced — a real secrets-in-git leak. **Design proposal:**
-      [docs/vars-secrets-design.md](docs/vars-secrets-design.md) — two
-      independent slices: **(A) secrets** via a `$secret`/`valueFrom`
-      indirection resolved at apply-time and **redacted from the
-      git-synced manifest** (reusing the `$ref` raw-manifest-preservation
-      precedent, migration 0008). Sources are a pluggable `SecretProvider`
-      registry (named-provider marker `{provider, key}`); v1 ships
-      `file`+`env` built-in, with Vault / cloud secret managers (Tier 2
-      config) and external secret-provider plugins over `pluginproto`
-      (Tier 3) slotting in later as pure registration — no wire-shape or
-      redaction-invariant change. **(B)
-      parameterization** via a CUE `--values` overlay rather than a
-      bespoke tfvars format. Ship secrets first (closes the leak), params
-      second (convenience). Awaiting sign-off.
+- [~] **Variables & secrets** — [docs/vars-secrets-design.md](docs/vars-secrets-design.md).
+      **(A) secrets — Tier 1 SHIPPED.** A `$secret` spec-level marker
+      (`base.#Secret` CUE helper) resolved at apply-time and **redacted from
+      everything persisted** — the operations store, `applied_manifests`, the
+      on-disk mirror, and git all keep the marker; only `provider.Apply` sees
+      the value. Sources are a pluggable `SecretProvider` registry
+      (`internal/controller/secrets`): v1 registers built-in `file`
+      (`<state-dir>/secrets/<name>`, 0600) and `env`. The security-critical
+      ordering: secrets resolve *after* the cache check + `refs_hash`, so a
+      low-entropy secret's plaintext never enters a hashed/persisted column.
+      VM `cloudInit.password` is annotated `@secret`; the form renders a
+      secret-reference control (source + key) instead of a plaintext box.
+      Bare plaintext still validates (back-compat). *Remaining:* **Tier 2**
+      configured backends (Vault / cloud secret managers via a
+      `secrets.providers` config block) and **Tier 3** external
+      secret-provider plugins over `pluginproto` — both pure registration
+      against the same resolver/redaction (no wire-shape change).
+      **(B) parameterization** via a CUE `--values` overlay — not started.
 - [x] **Templates (MVP)** — parameterized starters. Go-defined
       templates compiled in (deferred a CUE-templating engine for
       user-authored templates as a future extension). New

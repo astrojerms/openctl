@@ -43,6 +43,9 @@ export interface FormField {
   // mutually-exclusive group of siblings. The form renderer groups
   // them into a picker.
   oneOfGroup?: string;
+  // `@secret` attribute → render a secret-reference control (source + key)
+  // that authors a {$secret: {...}} marker, instead of a plaintext input.
+  secret?: boolean;
   reason?: string;
 }
 

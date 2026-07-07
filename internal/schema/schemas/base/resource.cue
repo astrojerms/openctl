@@ -47,3 +47,33 @@ package base
 		field?: string
 	}
 }
+
+// #Secret is the CUE helper for authoring secret references — a spec-level
+// placeholder the controller resolves at Apply time to a real secret value,
+// then hands to the provider WITHOUT persisting the value: the stored
+// manifest (SQLite, on-disk mirror, git) keeps the marker, never the secret.
+// Use it in any field a schema marks `@secret` instead of writing a plaintext
+// value that would be committed to the manifest store.
+//
+// Canonical form names a secret provider + a provider-specific key:
+//
+//	password: base.#Secret & {
+//	    $secret: {provider: "vault", key: "secret/data/db#password"}
+//	}
+//
+// The two built-in providers get terse sugar (choose exactly one field):
+//
+//	password: base.#Secret & {$secret: {file: "db-01.pw"}}   // <state-dir>/secrets/db-01.pw, 0600
+//	password: base.#Secret & {$secret: {env: "DB01_PASSWORD"}}
+#Secret: {
+	"$secret": {
+		// Built-in sugar: set exactly one of file / env, OR the
+		// canonical provider+key pair below.
+		file?: string
+		env?:  string
+		// Canonical form for any registered provider (built-in or
+		// configured backend / plugin).
+		provider?: string
+		key?:      string
+	}
+}
