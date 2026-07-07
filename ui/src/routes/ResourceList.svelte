@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { resources, UnauthorizedError, type Resource } from '../lib/api';
+  import { resources, schemas, UnauthorizedError, type Resource } from '../lib/api';
   import { watchResources } from '../lib/watch';
   import { statusBadge } from '../lib/format';
   import { routeHref } from '../lib/router';
@@ -13,6 +13,44 @@
   let rows: Resource[] = [];
   let loading = true;
   let error = '';
+
+  // Raw CUE schema viewer (U10.7) — lazy-fetched via SchemaService.GetSchema
+  // the first time the user expands it, then cached per kind.
+  let showSchema = false;
+  let cueSource = '';
+  let schemaLoading = false;
+  let schemaError = '';
+  let schemaFor = '';
+
+  async function toggleSchema() {
+    showSchema = !showSchema;
+    if (!showSchema) return;
+    const key = `${apiVersion}/${kind}`;
+    if (schemaFor === key && cueSource) return; // cached
+    schemaLoading = true;
+    schemaError = '';
+    try {
+      const resp = await schemas.get(apiVersion, kind);
+      cueSource = resp.cueSource ?? '';
+      schemaFor = key;
+      if (!cueSource) schemaError = 'No schema available for this kind.';
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return;
+      schemaError = err instanceof Error ? err.message : String(err);
+    } finally {
+      schemaLoading = false;
+    }
+  }
+
+  // Collapse the schema panel when switching kinds so it doesn't show a stale one.
+  let lastSchemaKey = '';
+  $: {
+    const k = `${apiVersion}/${kind}`;
+    if (k !== lastSchemaKey) {
+      lastSchemaKey = k;
+      showSchema = false;
+    }
+  }
 
   let activeController: AbortController | null = null;
   let watching = '';
@@ -153,10 +191,26 @@
       <p class="path">{provider} · {apiVersion}</p>
     </div>
     <span class="badge-count">{rows.length}</span>
+    <button class="schema-btn" class:active={showSchema} on:click={toggleSchema}
+      title="View the CUE schema for this kind">
+      {showSchema ? 'Hide schema' : 'Schema'}
+    </button>
     {#if $canMutate}
       <a class="new-btn" href={routeHref({ name: 'create', apiVersion, kind })}>+ New {kind}</a>
     {/if}
   </header>
+
+  {#if showSchema}
+    <div class="schema-panel">
+      {#if schemaLoading}
+        <p class="muted small">Loading schema…</p>
+      {:else if schemaError}
+        <p class="err small">{schemaError}</p>
+      {:else}
+        <pre class="cue">{cueSource}</pre>
+      {/if}
+    </div>
+  {/if}
 
   {#if loading}
     <p class="muted">Loading…</p>
@@ -269,6 +323,37 @@
     text-decoration: none;
     font-size: 0.85rem;
     font-weight: 500;
+  }
+  .schema-btn {
+    background: transparent;
+    color: #ccc;
+    border: 1px solid rgba(127, 127, 127, 0.35);
+    padding: 0.4em 0.85em;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  .schema-btn:hover, .schema-btn.active {
+    background: rgba(127, 127, 127, 0.12);
+    color: #fff;
+  }
+  .schema-panel {
+    margin-bottom: 1.25rem;
+    border: 1px solid rgba(127, 127, 127, 0.25);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .cue {
+    margin: 0;
+    padding: 1rem 1.1rem;
+    overflow-x: auto;
+    max-height: 26rem;
+    overflow-y: auto;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    background: rgba(0, 0, 0, 0.2);
+    white-space: pre;
   }
   .new-btn:hover {
     background: #3a7eda;

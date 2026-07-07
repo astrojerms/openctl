@@ -750,12 +750,17 @@ screens. Ordered by impact.
       `Cluster` (AgentInstall in particular requires an existing Cluster's
       CA bundle) with a "Create a Cluster instead →" link. Driven by an
       `ADVANCED_KINDS` map in `catalogue.ts`.
-- [ ] **U10.7 — Small polish.** Raw CUE viewer via
-      `SchemaService.GetSchema` (never called from the UI);
+- [~] **U10.7 — Small polish.** *Done:* raw CUE viewer — a "Schema" toggle
+      on each kind's ResourceList lazy-fetches `SchemaService.GetSchema`
+      (previously never called) and shows the CUE source in a scrollable
+      panel; kubeconfig download verified working through the existing
+      download-action path (`get-kubeconfig` → `DownloadContent`, streamed
+      as a file by the Detail action handler). *Remaining:*
       dependent/cascading form dropdowns (storages/bridges on the selected
-      node — U8.11 follow-on); VM console (websocket modality, parked) and
-      verification that kubeconfig download works through the existing
-      download-action path.
+      node) — needs a backend enumeration of a node's storages/bridges plus
+      a form field-to-field dependency convention the form MVP lacks; VM
+      console (websocket modality, parked). These two are their own small
+      features, not one-line polish.
 
 ---
 
