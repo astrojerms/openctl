@@ -252,6 +252,29 @@ plan/state); harden the provider contract before the ecosystem widens.
       snippets-capable storage automatically (the proxmox client now has
       `ListNodeStorages`), or fail fast at create time when no such storage
       exists rather than after a 10-minute IP-wait.
+- [ ] **Bug: Cluster apply doesn't detect an out-of-band child-VM
+      deletion.** Surfaced 2026-07-07 recovering a k3s worker whose VM had
+      been deleted outside openctl. Cluster `Get`/apply reports `Ready`
+      straight from its persisted `children` list without verifying the
+      child VMs actually exist on the provider, so the missing worker is not
+      seen as drift. The verifying-trace cache compounds it: with the
+      manifest unchanged, `input+refs` hashes match and the apply is a cache
+      hit that returns `Ready` without reconciling at all (recovery required
+      manually clearing the `applied_manifests` row). *Fix:* the Cluster
+      drift/Get path should confirm each child VM exists (a missing child →
+      drift → recreation), and/or the verifying cache should not mask a
+      structurally-drifted composite.
+- [ ] **Bug: Plan-based count-up breaks on legacy (pre-`K3sNode`)
+      clusters.** After `applyExisting` was retired, existing-cluster
+      converge goes solely through the Plan/dispatcher path, which emits
+      worker `K3sNode` children with `$ref` joins to `K3sNode/<cp>` (e.g.
+      `K3sNode/dev-cp-0`). A cluster created via the old inline path has no
+      `K3sNode` resources for its control planes, so ref resolution fails:
+      `resolve refs: ref k3s.openctl.io/v1/K3sNode/dev-cp-0: K3sNode
+      "dev-cp-0" not found` — the worker VM is created but never joins.
+      *Fix:* synthesize `K3sNode` resources for existing CPs during Plan,
+      resolve the join token from cluster state instead of a `K3sNode` ref,
+      or provide a one-time migration for pre-`K3sNode` clusters.
 - [x] Plugin-defined CLI subcommands (`openctl k3s logs/restart/upgrade`).
       Generic protocol + CLI registration shipped: plugins advertise typed
       subcommands in capabilities, and the CLI dispatches them with
