@@ -196,6 +196,23 @@ func TestWaitForProxmoxBootstrapIPUsesConfiguredStaticIP(t *testing.T) {
 	}
 }
 
+// When DHCP-mode discovery times out (no QGA-reported IP), the error is
+// actionable: it names the likely cause (qemu-guest-agent not running) and the
+// static-IP workaround, rather than a bare "no IP" timeout.
+func TestWaitForProxmoxBootstrapIPTimeoutIsActionable(t *testing.T) {
+	// A tiny budget skips the poll loop and hits the timeout branch at once.
+	_, err := waitForProxmoxBootstrapIP(context.Background(), fakeProxmoxGetter{}, "vm", "", time.Nanosecond)
+	if err == nil {
+		t.Fatal("expected a timeout error")
+	}
+	msg := err.Error()
+	for _, want := range []string{"qemu-guest-agent", "ip=<CIDR>"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error %q should mention %q", msg, want)
+		}
+	}
+}
+
 func TestWaitForProxmoxBootstrapIPUsesObservedIP(t *testing.T) {
 	ip, err := waitForProxmoxBootstrapIP(context.Background(), fakeProxmoxGetter{resource: &protocol.Resource{
 		Status: map[string]any{"ip": "192.0.2.60"},
