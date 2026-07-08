@@ -77,7 +77,9 @@ func (p *Provider) respecNodesViaPlan(
 		}
 
 		// Recreate at the desired size, rejoining the surviving CP.
-		setJoinRef(k3sNode, survivingCP)
+		if err := p.setJoin(k3sNode, survivingCP, manifest, name, current, removed); err != nil {
+			return nil, fmt.Errorf("respec %s: resolve join: %w", node, err)
+		}
 		for _, child := range []*protocol.Resource{vm, k3sNode, agent} {
 			if _, err := cd.ApplyChild(ctx, child); err != nil {
 				return nil, fmt.Errorf("respec %s: recreate: %w", node, err)
