@@ -39,8 +39,17 @@ func NewOIDCHandler(authn *auth.OIDCAuthenticator, sessions *auth.SessionStore, 
 
 // register mounts the login + callback routes on the mux.
 func (h *OIDCHandler) register(mux *http.ServeMux) {
+	mux.HandleFunc("/auth/oidc/enabled", h.enabled)
 	mux.HandleFunc("/auth/oidc/login", h.login)
 	mux.HandleFunc("/auth/oidc/callback", h.callback)
+}
+
+// enabled is an unauthenticated probe the login page hits to decide whether to
+// render the "Log in with SSO" button. It's only registered when OIDC is
+// configured, so a 200 here means SSO is available; a 404 means it isn't.
+func (h *OIDCHandler) enabled(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"enabled":true}`))
 }
 
 // login starts the Authorization Code + PKCE flow: generate a state + PKCE

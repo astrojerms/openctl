@@ -8,12 +8,26 @@
   let busy = false;
   let error = '';
   let tokenInput: HTMLInputElement;
+  // Whether the controller has OIDC configured — probed on mount. The
+  // /auth/oidc/enabled route is only mounted when OIDC is on (200 → show the
+  // SSO button; 404/error → hide it).
+  let ssoEnabled = false;
 
   onMount(() => {
     // Programmatic focus instead of HTML autofocus — single input, clear
     // intent, and avoids Svelte's a11y_autofocus warning.
     tokenInput?.focus();
+    void probeSSO();
   });
+
+  async function probeSSO() {
+    try {
+      const resp = await fetch('/auth/oidc/enabled', { credentials: 'same-origin' });
+      ssoEnabled = resp.ok;
+    } catch {
+      ssoEnabled = false;
+    }
+  }
 
   function defaultDeviceLabel(): string {
     const ua = navigator.userAgent;
@@ -79,6 +93,10 @@
         {busy ? 'Signing in…' : 'Sign in'}
       </button>
     </form>
+    {#if ssoEnabled}
+      <div class="sso-divider"><span>or</span></div>
+      <a class="sso-btn" href="/auth/oidc/login">Log in with SSO</a>
+    {/if}
   </div>
 </main>
 
@@ -142,6 +160,36 @@
     color: #fff;
     font-weight: 600;
     border-color: #4a8ef0;
+  }
+  .sso-divider {
+    display: flex;
+    align-items: center;
+    text-align: center;
+    color: #888;
+    font-size: 0.8rem;
+    margin: 1rem 0 0.75rem;
+  }
+  .sso-divider::before,
+  .sso-divider::after {
+    content: '';
+    flex: 1;
+    border-bottom: 1px solid rgba(127, 127, 127, 0.25);
+  }
+  .sso-divider span {
+    padding: 0 0.6rem;
+  }
+  .sso-btn {
+    display: block;
+    text-align: center;
+    padding: 0.6em 1em;
+    border: 1px solid rgba(127, 127, 127, 0.4);
+    border-radius: 6px;
+    color: inherit;
+    text-decoration: none;
+    font-weight: 600;
+  }
+  .sso-btn:hover {
+    background: rgba(127, 127, 127, 0.1);
   }
   button:hover {
     background: #3a7ee0;
