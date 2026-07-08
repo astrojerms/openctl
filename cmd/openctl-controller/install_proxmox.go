@@ -359,10 +359,17 @@ func waitForProxmoxBootstrapIP(ctx context.Context, getter proxmoxVMGetter, name
 		}
 		time.Sleep(5 * time.Second)
 	}
+	// DHCP-mode IP discovery relies on the qemu-guest-agent reporting the
+	// lease. If it never appears, the usual cause is that qemu-guest-agent
+	// isn't running in the guest — the QGA-install cicustom snippet silently
+	// no-ops when the node's storage can't hold `snippets` content (e.g. a
+	// LVM-thin `local-lvm`). Point the operator at the fix instead of just
+	// reporting a bare timeout.
+	const qgaHint = "the VM's qemu-guest-agent may not be running (its install snippet no-ops on storages that can't hold `snippets` content, e.g. local-lvm). Re-run with ip=<CIDR>&gateway=<ip> to use a static IP and skip guest-agent discovery"
 	if lastErr != nil {
-		return "", fmt.Errorf("controller VM did not report an IP within %s: %w", budget, lastErr)
+		return "", fmt.Errorf("controller VM did not report an IP within %s — %s: %w", budget, qgaHint, lastErr)
 	}
-	return "", fmt.Errorf("controller VM did not report an IP within %s", budget)
+	return "", fmt.Errorf("controller VM did not report an IP within %s — %s", budget, qgaHint)
 }
 
 func observedIP(r *protocol.Resource) string {
