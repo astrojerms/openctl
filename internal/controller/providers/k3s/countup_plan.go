@@ -5,8 +5,12 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/openctl/openctl/internal/config"
 	"github.com/openctl/openctl/internal/controller/operations"
+	k3sresources "github.com/openctl/openctl/pkg/k3s/resources"
+	"github.com/openctl/openctl/pkg/k3s/ssh"
 	"github.com/openctl/openctl/pkg/protocol"
 )
 
@@ -62,8 +66,10 @@ func (p *Provider) addNodesViaPlan(
 				// Every added node JOINS the cluster — never initializes it.
 				// Plan strips the join refs off the first CP (index 0); if a
 				// re-added cp-0 lands here that would make it try to bootstrap
-				// a second cluster, so set the refs unconditionally.
-				setJoinRef(c, survivingCP)
+				// a second cluster, so set the join unconditionally.
+				if err := p.setJoin(c, survivingCP, manifest, name, current, removed); err != nil {
+					return nil, err
+				}
 				k3sNodes = append(k3sNodes, c)
 			}
 		case kindAgentInstall:
@@ -114,6 +120,57 @@ func survivingControlPlane(clusterName string, current []childRef, removed, excl
 		return "", fmt.Errorf("no surviving control plane to join (all removed or excluded)")
 	}
 	return cps[0], nil
+}
+
+// readCPNodeToken reads a control plane's k3s join token over SSH. A package
+// var so the legacy-CP join path is unit-testable without a live node.
+var readCPNodeToken = func(host, user, keyPath string) (string, error) {
+	client, err := ssh.WaitForSSH(host, sshPort, user, keyPath, 60*time.Second)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = client.Close() }()
+	tok, err := client.RunSudo("cat /var/lib/rancher/k3s/server/node-token")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(tok), nil
+}
+
+// setJoin points a new node at the surviving control plane. When that CP has a
+// K3sNode resource (clusters built via the Plan/K3sNode path), it uses a $ref
+// so the ref resolver serializes install ordering. For a LEGACY cluster whose
+// CP was installed inline — no K3sNode resource, so the $ref would fail with
+// "K3sNode <cp> not found" — it resolves the join token + IP directly from
+// cluster state + SSH and sets concrete values instead. This is what lets a
+// pre-K3sNode cluster be scaled/converged through the Plan path.
+func (p *Provider) setJoin(k3sNode *protocol.Resource, cpName string, manifest *protocol.Resource, clusterName string, current []childRef, removed map[string]bool) error {
+	if st, err := loadNodeState(cpName); err == nil && st != nil {
+		setJoinRef(k3sNode, cpName) // K3sNode resource exists → $ref
+		return nil
+	}
+	// Legacy CP: resolve the join token + IP concretely.
+	cpIP, err := p.survivingCPEndpoint(clusterName, current, removed, nil)
+	if err != nil || cpIP == "" {
+		return fmt.Errorf("legacy control plane %q has no K3sNode resource and no known endpoint to resolve its join token: %w", cpName, err)
+	}
+	spec, err := k3sresources.ParseClusterSpec(manifest)
+	if err != nil {
+		return err
+	}
+	keyPath := spec.SSH.PrivateKeyPath
+	if exp, expErr := config.ExpandPath(keyPath); expErr == nil {
+		keyPath = exp
+	}
+	token, err := readCPNodeToken(cpIP, spec.SSH.User, keyPath)
+	if err != nil {
+		return fmt.Errorf("read node-token from legacy CP %q (%s): %w", cpName, cpIP, err)
+	}
+	// applyK3sNode accepts a bare-string joinFrom (the token) and joinURLFrom
+	// (the CP IP), bypassing ref resolution.
+	k3sNode.Spec["joinFrom"] = token
+	k3sNode.Spec["joinURLFrom"] = cpIP
+	return nil
 }
 
 // setJoinRef points a K3sNode's join refs at cpName's K3sNode state so the

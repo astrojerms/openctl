@@ -15,6 +15,7 @@ import (
 // the *other* CP (cp-1) — never itself, which is down during its own respec.
 func TestRespecNodesViaPlan_DestroyRecreateRejoinSurvivingCP(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	seedServerNodes(t, "dev-cp-0", "dev-cp-1")
 
 	m := clusterManifest("dev", func(r *protocol.Resource) {
 		r.Spec["nodes"].(map[string]any)["controlPlane"] = map[string]any{"count": float64(2)}
@@ -70,6 +71,7 @@ func TestRespecNodesViaPlan_DestroyRecreateRejoinSurvivingCP(t *testing.T) {
 // control plane (cp-0), and the worker's own respec doesn't exclude any CP.
 func TestRespecNodesViaPlan_WorkerRejoinsCP(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	seedServerNodes(t, "dev-cp-0")
 
 	m := clusterManifest("dev", func(r *protocol.Resource) {
 		r.Spec["nodes"].(map[string]any)["workers"] = []any{

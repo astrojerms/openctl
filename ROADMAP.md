@@ -267,17 +267,20 @@ plan/state); harden the provider contract before the ecosystem widens.
       capture it; a Cluster re-apply now always reconciles (its apply-existing
       path is idempotent, so a converged cluster is a fast no-op). Tests:
       `TestGetDetectsDeletedChildVM`, `TestVerifyingCacheSkippedForComposite`.
-- [ ] **Bug: Plan-based count-up breaks on legacy (pre-`K3sNode`)
-      clusters.** After `applyExisting` was retired, existing-cluster
-      converge goes solely through the Plan/dispatcher path, which emits
-      worker `K3sNode` children with `$ref` joins to `K3sNode/<cp>` (e.g.
-      `K3sNode/dev-cp-0`). A cluster created via the old inline path has no
-      `K3sNode` resources for its control planes, so ref resolution fails:
-      `resolve refs: ref k3s.openctl.io/v1/K3sNode/dev-cp-0: K3sNode
-      "dev-cp-0" not found` — the worker VM is created but never joins.
-      *Fix:* synthesize `K3sNode` resources for existing CPs during Plan,
-      resolve the join token from cluster state instead of a `K3sNode` ref,
-      or provide a one-time migration for pre-`K3sNode` clusters.
+- [x] **Bug: Plan-based count-up breaks on legacy (pre-`K3sNode`)
+      clusters — FIXED.** Existing-cluster converge goes through the Plan
+      path, which pointed each new worker's join at `$ref(K3sNode/<cp>)`. A
+      cluster created via the old inline path has no `K3sNode` resource for
+      its CPs, so ref resolution failed (`K3sNode "dev-cp-0" not found`) and
+      the worker VM was created but never joined. *Fix:* `setJoin` now
+      checks whether the surviving CP has a `K3sNode` resource — if so it
+      keeps the `$ref` (Plan/K3sNode clusters); if not (legacy), it resolves
+      the join token + IP directly (CP IP from cluster-state endpoints, token
+      via SSH `cat .../node-token` behind a testable `readCPNodeToken` seam)
+      and sets **concrete** `joinFrom`/`joinURLFrom` values, which
+      `applyK3sNode` already accepts as bare strings. Both the count-up and
+      respec Plan paths use it. Tests: `TestSetJoin_UsesRefWhenK3sNodeExists`,
+      `TestSetJoin_ConcreteForLegacyCP`.
 - [x] Plugin-defined CLI subcommands (`openctl k3s logs/restart/upgrade`).
       Generic protocol + CLI registration shipped: plugins advertise typed
       subcommands in capabilities, and the CLI dispatches them with

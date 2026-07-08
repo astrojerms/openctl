@@ -30,6 +30,7 @@ func joinRefName(t *testing.T, k3sNode *protocol.Resource, field string) string 
 // the surviving control plane, and returns its resolved IP.
 func TestAddNodesViaPlan_AppliesAddedNodeChildrenWithSurvivingCPJoin(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	seedServerNodes(t, "dev-cp-0")
 
 	// Desired: 1 CP (dev-cp-0, already exists) + 1 worker (dev-w-0, to add).
 	m := clusterManifest("dev", func(r *protocol.Resource) {
@@ -84,6 +85,7 @@ func TestAddNodesViaPlan_AppliesAddedNodeChildrenWithSurvivingCPJoin(t *testing.
 // CP, not the default index-0 target.
 func TestAddNodesViaPlan_RepointsJoinWhenCP0Removed(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	seedServerNodes(t, "dev-cp-0", "dev-cp-1")
 
 	// Desired: 2 CPs (cp-0, cp-1) + 1 worker to add. cp-1 already exists and
 	// survives; cp-0 is being removed this converge.
