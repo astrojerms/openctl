@@ -51,13 +51,19 @@ func (r *fakeRecorder) End(_ context.Context, childID string, ok bool, errMsg, _
 // fakeVMs satisfies VMApplier for tests where we don't need real Proxmox.
 type fakeVMs struct {
 	deleted [][]string
+	// missing names report NotFound from Get (VM deleted out-of-band); any
+	// other name reports as existing so observed-count synthesis counts it.
+	missing map[string]bool
 }
 
 func (f *fakeVMs) Apply(_ context.Context, _ *protocol.Resource) (*protocol.Resource, error) {
 	return nil, nil
 }
-func (f *fakeVMs) Get(_ context.Context, _, _ string) (*protocol.Resource, error) {
-	return nil, nil
+func (f *fakeVMs) Get(_ context.Context, kind, name string) (*protocol.Resource, error) {
+	if f.missing[name] {
+		return nil, providers.NotFound(kind, name)
+	}
+	return &protocol.Resource{Kind: kind, Metadata: protocol.ResourceMetadata{Name: name}}, nil
 }
 func (f *fakeVMs) Delete(_ context.Context, kind, name string) error {
 	f.deleted = append(f.deleted, []string{kind, name})
@@ -309,6 +315,52 @@ children:
 	pool, _ := workers[0].(map[string]any)
 	if pool["count"] != 1 {
 		t.Errorf("workers[0].count = %v, want 1 (one VM, not the manifest's 3)", pool["count"])
+	}
+}
+
+// The exact bug from the 2026-07-07 recovery: a worker still listed in cluster
+// state but whose VM was deleted out-of-band must drop out of the observed
+// count, so the cluster reads drift (0 workers) instead of Ready off a stale
+// child list.
+func TestGetDetectsDeletedChildVM(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeClusterState(t, home, "dev", `apiVersion: k3s.openctl.io/v1
+kind: Cluster
+metadata:
+  name: dev
+spec:
+  nodes:
+    controlPlane:
+      count: 1
+    workers:
+      - name: worker
+        count: 1
+children:
+  - provider: proxmox
+    kind: VirtualMachine
+    name: dev-cp-0
+  - provider: proxmox
+    kind: VirtualMachine
+    name: dev-worker-0
+`)
+
+	// The worker VM is gone on the provider even though it's still in the
+	// children list.
+	p := New(&protocol.ProviderConfig{}, &fakeVMs{missing: map[string]bool{"dev-worker-0": true}})
+	r, err := p.Get(context.Background(), "Cluster", "dev")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	nodes := r.Spec["nodes"].(map[string]any)
+	cp := nodes["controlPlane"].(map[string]any)
+	if cp["count"] != 1 {
+		t.Errorf("controlPlane.count = %v, want 1 (cp VM still exists)", cp["count"])
+	}
+	workers := nodes["workers"].([]any)
+	pool := workers[0].(map[string]any)
+	if pool["count"] != 0 {
+		t.Errorf("workers[0].count = %v, want 0 — the deleted VM must not be counted (drift)", pool["count"])
 	}
 }
 
