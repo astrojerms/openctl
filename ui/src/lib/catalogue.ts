@@ -52,28 +52,20 @@ function kindKey(apiVersion: string, kind: string): string {
 // Composite-child / expert kinds: normally produced by a parent composite (a
 // k3s Cluster fans out into VMs + K3sNodes + AgentInstalls) rather than
 // authored directly. The nav marks them "advanced" and the create form nudges
-// toward the owning composite. Keyed by `<apiVersion>/<kind>`.
-export const ADVANCED_KINDS: Record<string, { owner: string; note: string }> = {
-  'k3s.openctl.io/v1/K3sNode': {
-    owner: 'Cluster',
-    note:
-      'A K3sNode is one k3s install on one VM. Most users create a Cluster, ' +
-      'which expands into its VMs and K3sNodes automatically — author one ' +
-      'directly only to hand-assemble a cluster.',
-  },
-  'k3s.openctl.io/v1/AgentInstall': {
-    owner: 'Cluster',
-    note:
-      'An AgentInstall installs the openctl agent on a node and requires an ' +
-      "existing Cluster (it loads that Cluster's CA bundle). It is normally " +
-      'produced by a Cluster apply, not authored directly.',
-  },
-};
+// toward the owning composite.
+//
+// This is now backend-derived: the controller stamps `advanced`/`ownerKind`/
+// `advancedNote` onto each SchemaInfo (from the provider's AdvancedKindDescriber
+// capability), so an external plugin's composite children get flagged too — no
+// hardcoded client-side list. `advancedByKey` is a lookup rebuilt on every
+// catalogue refresh, keyed by `<apiVersion>/<kind>`, for callers (the create
+// form) that only hold an (apiVersion, kind) pair rather than the full entry.
+const advancedByKey = new Map<string, { owner: string; note: string }>();
 
 // advancedKind returns the advanced-kind metadata for (apiVersion, kind), or
-// undefined for ordinary top-level kinds.
+// undefined for ordinary top-level kinds. Reflects the last catalogue refresh.
 export function advancedKind(apiVersion: string, kind: string): { owner: string; note: string } | undefined {
-  return ADVANCED_KINDS[kindKey(apiVersion, kind)];
+  return advancedByKey.get(kindKey(apiVersion, kind));
 }
 
 let aborter: AbortController | null = null;
@@ -97,6 +89,16 @@ export async function refreshCatalogue(): Promise<void> {
     const p = a.provider.localeCompare(b.provider);
     return p !== 0 ? p : a.kind.localeCompare(b.kind);
   });
+
+  advancedByKey.clear();
+  for (const s of schemaList) {
+    if (s.advanced) {
+      advancedByKey.set(kindKey(s.apiVersion, s.kind), {
+        owner: s.ownerKind ?? '',
+        note: s.advancedNote ?? '',
+      });
+    }
+  }
 
   entries = schemaList.map((s) => ({
     ...s,

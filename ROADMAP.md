@@ -798,8 +798,21 @@ screens. Ordered by impact.
       out into) now carry an "adv" chip in the nav, and their create form
       shows an info banner explaining they're normally produced by a
       `Cluster` (AgentInstall in particular requires an existing Cluster's
-      CA bundle) with a "Create a Cluster instead →" link. Driven by an
-      `ADVANCED_KINDS` map in `catalogue.ts`.
+      CA bundle) with a "Create a Cluster instead →" link.
+  - [x] **U10.6a — Advanced flag is now backend-derived (was a hardcoded UI
+        map).** The old `ADVANCED_KINDS` map in `catalogue.ts` is gone.
+        `SchemaInfo` gained `advanced` / `owner_kind` / `advanced_note`, stamped
+        by `SchemaService.ListSchemas` from a new optional provider capability
+        `providers.AdvancedKindDescriber` (a provider declares which of its OWN
+        kinds are composite-children + owner + note). The k3s provider declares
+        `K3sNode` + `AgentInstall` → `Cluster`; `VirtualMachine` stays unflagged
+        because it's proxmox's first-class kind, not a k3s child. External
+        plugins carry it too: `pluginproto.KindInfo` gained `ownerKind` /
+        `advancedNote`, forwarded by the external adapter's `AdvancedKinds()`.
+        The UI (`Nav.svelte` chip, `Edit.svelte` banner) reads the flag off the
+        catalogue entry and derives the "Create a &lt;owner&gt; instead" link
+        from the child's own apiVersion, so any plugin composite is flagged with
+        no client-side list.
 - [x] **U10.7 — Small polish.** Raw CUE viewer — a "Schema" toggle on each
       kind's ResourceList lazy-fetches `SchemaService.GetSchema` (previously
       never called). Kubeconfig download verified through the existing

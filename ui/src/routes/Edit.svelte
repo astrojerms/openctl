@@ -691,7 +691,7 @@
       <article class="advanced-block">
         <strong>Advanced — usually created via a {advKind.owner}.</strong>
         {advKind.note}
-        <a class="primary-link" href={routeHref({ name: 'create', apiVersion: 'k3s.openctl.io/v1', kind: advKind.owner })}>
+        <a class="primary-link" href={routeHref({ name: 'create', apiVersion, kind: advKind.owner })}>
           Create a {advKind.owner} instead →
         </a>
       </article>
