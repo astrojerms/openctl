@@ -136,6 +136,29 @@ const (
 	LabelOwnerName = "openctl.io/owner-name"
 )
 
+// AdvancedKind declares one of a provider's OWN kinds as a composite-child:
+// normally produced by a parent composite (a Planner) rather than authored
+// directly. OwnerKind names that parent kind (same provider); Note is the
+// human explanation a client shows when someone authors the child directly.
+type AdvancedKind struct {
+	Kind      string
+	OwnerKind string
+	Note      string
+}
+
+// AdvancedKindDescriber is an optional Provider capability: it declares which
+// of the provider's own kinds are composite-children (advanced). The schema
+// listing stamps this onto SchemaInfo so any client — not just one hardcoded
+// UI map — can mark expert kinds and nudge toward the owning composite.
+//
+// Only a provider's own kinds are eligible. Cross-provider children (a k3s
+// Cluster emitting a proxmox VirtualMachine) are intentionally NOT flagged,
+// because the VM is a first-class kind in its own provider. This is why the
+// k3s provider declares K3sNode + AgentInstall but not VirtualMachine.
+type AdvancedKindDescriber interface {
+	AdvancedKinds() []AdvancedKind
+}
+
 // Actioner is an optional provider capability for runtime actions on
 // existing resources — start/stop/reboot for VMs, get-kubeconfig for
 // clusters, console URL for VMs, etc. Distinct from Apply/Delete
@@ -276,6 +299,27 @@ func (r *Registry) knownNames() []string {
 	out := make([]string, 0, len(r.providers))
 	for name := range r.providers {
 		out = append(out, name)
+	}
+	return out
+}
+
+// AdvancedKinds collects composite-child declarations from every registered
+// provider implementing AdvancedKindDescriber, keyed by "<provider>/<kind>"
+// (matching schema.Info's Provider+Kind so the schema handler can join without
+// guessing an apiVersion). A nil registry yields an empty map.
+func (r *Registry) AdvancedKinds() map[string]AdvancedKind {
+	out := map[string]AdvancedKind{}
+	if r == nil {
+		return out
+	}
+	for name, p := range r.providers {
+		d, ok := p.(AdvancedKindDescriber)
+		if !ok {
+			continue
+		}
+		for _, ak := range d.AdvancedKinds() {
+			out[name+"/"+ak.Kind] = ak
+		}
 	}
 	return out
 }

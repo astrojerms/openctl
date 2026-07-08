@@ -130,7 +130,7 @@ func New(opts Options) (*Server, error) {
 		}
 		apiv1.RegisterOperationServiceServer(g, newOperationHandler(opts.Operations, canceler))
 	}
-	apiv1.RegisterSchemaServiceServer(g, newSchemaHandler())
+	apiv1.RegisterSchemaServiceServer(g, newSchemaHandler(registry))
 	if opts.Sessions != nil {
 		apiv1.RegisterSessionServiceServer(g, newSessionHandler(opts.Sessions))
 	}

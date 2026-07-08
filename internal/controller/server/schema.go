@@ -7,6 +7,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/openctl/openctl/internal/controller/providers"
 	"github.com/openctl/openctl/internal/schema"
 	"github.com/openctl/openctl/internal/schema/form"
 	apiv1 "github.com/openctl/openctl/pkg/api/v1"
@@ -15,17 +16,25 @@ import (
 // schemaHandler implements apiv1.SchemaServiceServer. Surface is read-only
 // introspection over the embedded CUE schemas plus a Validate RPC that
 // reuses the same validation path the controller runs pre-apply.
+//
+// registry is consulted only to stamp the composite-child "advanced" hint onto
+// SchemaInfo (see AdvancedKindDescriber); it may be nil, in which case no kind
+// is flagged advanced.
 type schemaHandler struct {
 	apiv1.UnimplementedSchemaServiceServer
+	registry *providers.Registry
 }
 
-func newSchemaHandler() *schemaHandler { return &schemaHandler{} }
+func newSchemaHandler(registry *providers.Registry) *schemaHandler {
+	return &schemaHandler{registry: registry}
+}
 
 func (h *schemaHandler) ListSchemas(_ context.Context, _ *apiv1.ListSchemasRequest) (*apiv1.ListSchemasResponse, error) {
 	infos := schema.Registry()
+	adv := h.registry.AdvancedKinds()
 	out := make([]*apiv1.SchemaInfo, 0, len(infos))
 	for _, i := range infos {
-		out = append(out, infoToProto(i))
+		out = append(out, infoToProto(i, adv))
 	}
 	return &apiv1.ListSchemasResponse{Schemas: out}, nil
 }
@@ -43,7 +52,7 @@ func (h *schemaHandler) GetSchema(_ context.Context, req *apiv1.GetSchemaRequest
 			return nil, status.Errorf(codes.Internal, "read schema: %v", err)
 		}
 		return &apiv1.GetSchemaResponse{
-			Info:      infoToProto(i),
+			Info:      infoToProto(i, h.registry.AdvancedKinds()),
 			CueSource: string(src),
 		}, nil
 	}
@@ -84,11 +93,20 @@ func (h *schemaHandler) GetFormSchema(_ context.Context, req *apiv1.GetFormSchem
 	return &apiv1.GetFormSchemaResponse{Json: string(out)}, nil
 }
 
-func infoToProto(i schema.Info) *apiv1.SchemaInfo {
-	return &apiv1.SchemaInfo{
+// infoToProto maps a schema.Info to the wire type, stamping the composite-child
+// "advanced" hint when the provider registry declares this kind as one (keyed
+// by "<provider>/<kind>"). adv may be nil/empty — then no kind is flagged.
+func infoToProto(i schema.Info, adv map[string]providers.AdvancedKind) *apiv1.SchemaInfo {
+	out := &apiv1.SchemaInfo{
 		ApiVersion: i.APIVersion,
 		Kind:       i.Kind,
 		Provider:   i.Provider,
 		FileName:   i.FileName,
 	}
+	if a, ok := adv[i.Provider+"/"+i.Kind]; ok {
+		out.Advanced = true
+		out.OwnerKind = a.OwnerKind
+		out.AdvancedNote = a.Note
+	}
+	return out
 }

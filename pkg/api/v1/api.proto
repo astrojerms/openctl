@@ -771,6 +771,17 @@ message SchemaInfo {
   string kind = 2;          // e.g. "VirtualMachine"
   string provider = 3;      // e.g. "proxmox"
   string file_name = 4;
+
+  // advanced marks a kind that is normally produced by a composite (a Planner
+  // parent) rather than authored directly — e.g. a k3s Cluster fans out into
+  // K3sNodes + AgentInstalls. owner_kind names that parent kind (same provider);
+  // advanced_note is a human explanation the create form shows. Populated by
+  // ListSchemas from the provider registry (AdvancedKindDescriber); empty for
+  // ordinary top-level kinds. Lets any client mark expert kinds without a
+  // hardcoded client-side list.
+  bool advanced = 5;
+  string owner_kind = 6;
+  string advanced_note = 7;
 }
 
 message GetSchemaRequest {

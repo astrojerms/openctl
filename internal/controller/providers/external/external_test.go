@@ -505,3 +505,30 @@ func TestStatelessAdapterIgnoresStore(t *testing.T) {
 		t.Errorf("stateless plugin should not write to the store, got %d entries", len(store.state))
 	}
 }
+
+func TestNewForwardsAdvancedKindsFromHandshake(t *testing.T) {
+	// A plugin declares one composite parent (Cluster) and one composite-child
+	// (Worker, owned by Cluster). New must forward only the child through
+	// AdvancedKindDescriber. New doesn't touch the client during construction,
+	// so a nil client is fine here.
+	hs := &pluginproto.HandshakeResult{
+		ProviderName:    "demo",
+		ProtocolVersion: pluginproto.ProtocolVersion,
+		Kinds: []pluginproto.KindInfo{
+			{Kind: "Cluster"},
+			{Kind: "Worker", OwnerKind: "Cluster", AdvancedNote: "made by a Cluster"},
+		},
+	}
+	prov := New(nil, hs, nil)
+	d, ok := prov.(providers.AdvancedKindDescriber)
+	if !ok {
+		t.Fatal("external provider should implement AdvancedKindDescriber")
+	}
+	adv := d.AdvancedKinds()
+	if len(adv) != 1 {
+		t.Fatalf("AdvancedKinds len = %d, want 1 (only Worker); got %+v", len(adv), adv)
+	}
+	if adv[0].Kind != "Worker" || adv[0].OwnerKind != "Cluster" || adv[0].Note != "made by a Cluster" {
+		t.Errorf("AdvancedKinds[0] = %+v, want {Worker Cluster \"made by a Cluster\"}", adv[0])
+	}
+}

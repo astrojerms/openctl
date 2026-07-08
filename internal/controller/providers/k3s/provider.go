@@ -41,6 +41,7 @@ const (
 var (
 	_ providers.ParameterizedActioner = (*Provider)(nil)
 	_ providers.ActionDescriber       = (*Provider)(nil)
+	_ providers.AdvancedKindDescriber = (*Provider)(nil)
 )
 
 // VMApplier is the subset of providers.Provider that the k3s Provider needs
@@ -67,6 +68,30 @@ func New(cfg *protocol.ProviderConfig, vms VMApplier) *Provider {
 
 func (p *Provider) Name() string    { return providerName }
 func (p *Provider) Kinds() []string { return []string{kindCluster, kindK3sNode, kindAgentInstall} }
+
+// AdvancedKinds implements providers.AdvancedKindDescriber. A Cluster apply
+// fans out (via Plan) into VMs + K3sNodes + AgentInstalls, so those two kinds
+// are rarely authored directly — clients surface them as "advanced" and nudge
+// toward creating a Cluster. VirtualMachine is deliberately absent: it's the
+// proxmox provider's own first-class kind, not a k3s-owned child.
+func (p *Provider) AdvancedKinds() []providers.AdvancedKind {
+	return []providers.AdvancedKind{
+		{
+			Kind:      kindK3sNode,
+			OwnerKind: kindCluster,
+			Note: "A K3sNode is one k3s install on one VM. Most users create a " +
+				"Cluster, which expands into its VMs and K3sNodes automatically — " +
+				"author one directly only to hand-assemble a cluster.",
+		},
+		{
+			Kind:      kindAgentInstall,
+			OwnerKind: kindCluster,
+			Note: "An AgentInstall installs the openctl agent on a node and requires " +
+				"an existing Cluster (it loads that Cluster's CA bundle). It is " +
+				"normally produced by a Cluster apply, not authored directly.",
+		},
+	}
+}
 
 // Actions implements providers.Actioner. Cluster supports one
 // runtime action today: get-kubeconfig, which returns the stored

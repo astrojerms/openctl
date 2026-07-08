@@ -138,6 +138,12 @@ export interface SchemaInfo {
   kind: string;
   provider: string;
   fileName: string;
+  // Composite-child hint, set by the controller when this kind is normally
+  // produced by a parent composite (e.g. a k3s Cluster). ownerKind names that
+  // parent; advancedNote explains it. Absent/false for ordinary top-level kinds.
+  advanced?: boolean;
+  ownerKind?: string;
+  advancedNote?: string;
 }
 
 export interface ListSchemasResponse {

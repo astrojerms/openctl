@@ -122,6 +122,15 @@ type KindInfo struct {
 	Schema   string   `json:"schema,omitempty"`
 	Actions  []string `json:"actions,omitempty"`
 	Observed bool     `json:"observed,omitempty"`
+
+	// OwnerKind, when set, marks this kind as a composite-child: normally
+	// produced by that parent kind (a Planner) rather than authored directly —
+	// e.g. a Cluster that fans out into node kinds. AdvancedNote is the human
+	// explanation openctl's create form shows. openctl re-exposes both via
+	// SchemaService.ListSchemas so any client can flag the kind as "advanced"
+	// and nudge toward the owning composite. Empty for ordinary top-level kinds.
+	OwnerKind    string `json:"ownerKind,omitempty"`
+	AdvancedNote string `json:"advancedNote,omitempty"`
 }
 
 // --- configure ---

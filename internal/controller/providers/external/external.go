@@ -46,10 +46,11 @@ type Provider struct {
 	client   *pluginproto.Client
 	name     string
 	kinds    []string
-	observed []string            // kinds flagged observed-only in the handshake
-	actions  map[string][]string // kind -> supported action names
-	caps     map[string]bool     // advertised capability set
-	store    StateStore          // nil for stateless plugins / when unset
+	observed []string                 // kinds flagged observed-only in the handshake
+	actions  map[string][]string      // kind -> supported action names
+	advanced []providers.AdvancedKind // composite-child kinds declared in the handshake
+	caps     map[string]bool          // advertised capability set
+	store    StateStore               // nil for stateless plugins / when unset
 }
 
 // plannerProvider is the Planner-capable variant, returned by New only when
@@ -80,6 +81,13 @@ func New(client *pluginproto.Client, hs *pluginproto.HandshakeResult, store Stat
 		if len(k.Actions) > 0 {
 			p.actions[k.Kind] = k.Actions
 		}
+		if k.OwnerKind != "" {
+			p.advanced = append(p.advanced, providers.AdvancedKind{
+				Kind:      k.Kind,
+				OwnerKind: k.OwnerKind,
+				Note:      k.AdvancedNote,
+			})
+		}
 	}
 	if p.caps[pluginproto.CapabilityPlan] {
 		return &plannerProvider{p}
@@ -91,6 +99,12 @@ func New(client *pluginproto.Client, hs *pluginproto.HandshakeResult, store Stat
 
 func (p *Provider) Name() string    { return p.name }
 func (p *Provider) Kinds() []string { return p.kinds }
+
+// AdvancedKinds implements providers.AdvancedKindDescriber, forwarding the
+// composite-child declarations a plugin made in its handshake (KindInfo with a
+// non-empty OwnerKind). Empty for plugins that declare no composites, so the
+// interface is satisfied without changing their behavior.
+func (p *Provider) AdvancedKinds() []providers.AdvancedKind { return p.advanced }
 
 // apiVersion is the canonical apiVersion this provider's kinds live under,
 // used to key the state store.

@@ -3947,11 +3947,21 @@ func (x *ListSchemasResponse) GetSchemas() []*SchemaInfo {
 // path under internal/schema/schemas/ (e.g. "proxmox/vm.cue") so the
 // client can compose links back to source if it wants to.
 type SchemaInfo struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ApiVersion    string                 `protobuf:"bytes,1,opt,name=api_version,json=apiVersion,proto3" json:"api_version,omitempty"` // e.g. "proxmox.openctl.io/v1"
-	Kind          string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`                               // e.g. "VirtualMachine"
-	Provider      string                 `protobuf:"bytes,3,opt,name=provider,proto3" json:"provider,omitempty"`                       // e.g. "proxmox"
-	FileName      string                 `protobuf:"bytes,4,opt,name=file_name,json=fileName,proto3" json:"file_name,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	ApiVersion string                 `protobuf:"bytes,1,opt,name=api_version,json=apiVersion,proto3" json:"api_version,omitempty"` // e.g. "proxmox.openctl.io/v1"
+	Kind       string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`                               // e.g. "VirtualMachine"
+	Provider   string                 `protobuf:"bytes,3,opt,name=provider,proto3" json:"provider,omitempty"`                       // e.g. "proxmox"
+	FileName   string                 `protobuf:"bytes,4,opt,name=file_name,json=fileName,proto3" json:"file_name,omitempty"`
+	// advanced marks a kind that is normally produced by a composite (a Planner
+	// parent) rather than authored directly — e.g. a k3s Cluster fans out into
+	// K3sNodes + AgentInstalls. owner_kind names that parent kind (same provider);
+	// advanced_note is a human explanation the create form shows. Populated by
+	// ListSchemas from the provider registry (AdvancedKindDescriber); empty for
+	// ordinary top-level kinds. Lets any client mark expert kinds without a
+	// hardcoded client-side list.
+	Advanced      bool   `protobuf:"varint,5,opt,name=advanced,proto3" json:"advanced,omitempty"`
+	OwnerKind     string `protobuf:"bytes,6,opt,name=owner_kind,json=ownerKind,proto3" json:"owner_kind,omitempty"`
+	AdvancedNote  string `protobuf:"bytes,7,opt,name=advanced_note,json=advancedNote,proto3" json:"advanced_note,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4010,6 +4020,27 @@ func (x *SchemaInfo) GetProvider() string {
 func (x *SchemaInfo) GetFileName() string {
 	if x != nil {
 		return x.FileName
+	}
+	return ""
+}
+
+func (x *SchemaInfo) GetAdvanced() bool {
+	if x != nil {
+		return x.Advanced
+	}
+	return false
+}
+
+func (x *SchemaInfo) GetOwnerKind() string {
+	if x != nil {
+		return x.OwnerKind
+	}
+	return ""
+}
+
+func (x *SchemaInfo) GetAdvancedNote() string {
+	if x != nil {
+		return x.AdvancedNote
 	}
 	return ""
 }
@@ -5351,14 +5382,18 @@ const file_api_proto_rawDesc = "" +
 	"\x04role\x18\x03 \x01(\tR\x04role\"\x14\n" +
 	"\x12ListSchemasRequest\"G\n" +
 	"\x13ListSchemasResponse\x120\n" +
-	"\aschemas\x18\x01 \x03(\v2\x16.openctl.v1.SchemaInfoR\aschemas\"z\n" +
+	"\aschemas\x18\x01 \x03(\v2\x16.openctl.v1.SchemaInfoR\aschemas\"\xda\x01\n" +
 	"\n" +
 	"SchemaInfo\x12\x1f\n" +
 	"\vapi_version\x18\x01 \x01(\tR\n" +
 	"apiVersion\x12\x12\n" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x1a\n" +
 	"\bprovider\x18\x03 \x01(\tR\bprovider\x12\x1b\n" +
-	"\tfile_name\x18\x04 \x01(\tR\bfileName\"G\n" +
+	"\tfile_name\x18\x04 \x01(\tR\bfileName\x12\x1a\n" +
+	"\badvanced\x18\x05 \x01(\bR\badvanced\x12\x1d\n" +
+	"\n" +
+	"owner_kind\x18\x06 \x01(\tR\townerKind\x12#\n" +
+	"\radvanced_note\x18\a \x01(\tR\fadvancedNote\"G\n" +
 	"\x10GetSchemaRequest\x12\x1f\n" +
 	"\vapi_version\x18\x01 \x01(\tR\n" +
 	"apiVersion\x12\x12\n" +
