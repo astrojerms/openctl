@@ -45,15 +45,37 @@ func TestExampleProviderEndToEnd(t *testing.T) {
 	}
 	defer func() { _ = client.Close(ctx) }()
 
-	// Handshake surfaced the provider identity and its schema.
+	// Handshake surfaced the provider identity and its kinds (Notebook + Note).
 	if hs.ProviderName != "example" {
 		t.Errorf("provider name = %q, want example", hs.ProviderName)
 	}
-	if len(hs.Kinds) != 1 || hs.Kinds[0].Schema == "" {
-		t.Fatalf("expected one kind carrying a schema, got %+v", hs.Kinds)
+	kinds := map[string]bool{}
+	for _, k := range hs.Kinds {
+		if k.Schema == "" {
+			t.Errorf("kind %q carries no schema", k.Kind)
+		}
+		kinds[k.Kind] = true
+	}
+	if !kinds["Note"] || !kinds["Notebook"] {
+		t.Fatalf("expected Note + Notebook kinds, got %+v", hs.Kinds)
 	}
 	if prov.Name() != "example" {
 		t.Errorf("adapter Name = %q", prov.Name())
+	}
+
+	// The composite-child "advanced" declaration survives the real subprocess
+	// wire round-trip and reaches AdvancedKindDescriber: Note is owned by
+	// Notebook.
+	adv, ok := prov.(providers.AdvancedKindDescriber)
+	if !ok {
+		t.Fatal("adapter should implement AdvancedKindDescriber")
+	}
+	advKinds := adv.AdvancedKinds()
+	if len(advKinds) != 1 || advKinds[0].Kind != "Note" || advKinds[0].OwnerKind != "Notebook" {
+		t.Fatalf("AdvancedKinds = %+v, want [{Note Notebook ...}]", advKinds)
+	}
+	if advKinds[0].Note == "" {
+		t.Error("advanced Note should carry a note")
 	}
 
 	note := &protocol.Resource{APIVersion: "example.openctl.io/v1", Kind: "Note"}
