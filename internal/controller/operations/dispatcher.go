@@ -288,6 +288,15 @@ func (d *Dispatcher) tryCacheHitInline(ctx context.Context, p providers.Provider
 	if d.manifests == nil {
 		return nil, false
 	}
+	// Composite (Planner) resources can't use the verifying-trace cache: their
+	// convergence depends on children that drift independently of the manifest
+	// hash. An out-of-band child deletion leaves input+refs hashes unchanged, so
+	// an input-hash cache would mask the drift and skip the reconcile that
+	// remediates it. Always do a real Apply for composites — the provider's
+	// apply-existing path is idempotent, so a converged cluster is a fast no-op.
+	if _, ok := p.(providers.Planner); ok {
+		return nil, false
+	}
 	if raw.Metadata.Annotations["openctl.io/i-know-this-breaks-the-cluster"] == "true" {
 		return nil, false
 	}

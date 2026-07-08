@@ -13,6 +13,7 @@ package k3s
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -552,16 +553,37 @@ func (p *Provider) Get(ctx context.Context, kind, name string) (*protocol.Resour
 	// otherwise echoes back the manifest verbatim and would always read
 	// drift-free even after an out-of-band VM deletion.
 	if children, err := readChildren(name); err == nil {
-		applyObservedCounts(r, name, children)
+		p.applyObservedCounts(ctx, r, name, children)
 	}
 	return r, nil
 }
 
+// vmChildExists reports whether a child VM actually exists on the provider. A
+// definitive NotFound means the VM is gone (so it must not be counted — that's
+// how an out-of-band deletion surfaces as drift). A transient error is treated
+// as "exists" so a provider blip doesn't fabricate drift and trigger
+// destructive convergence. A nil VM provider (unwired, e.g. some tests) trusts
+// the state list.
+func (p *Provider) vmChildExists(ctx context.Context, name string) bool {
+	if p.vms == nil {
+		return true
+	}
+	r, err := p.vms.Get(ctx, "VirtualMachine", name)
+	if err != nil {
+		var nf *providers.NotFoundError
+		return !errors.As(err, &nf)
+	}
+	return r != nil
+}
+
 // applyObservedCounts overwrites spec.nodes.controlPlane.count and each
 // spec.nodes.workers[*].count with the *actual* number of children matching
-// that role, derived from the names in `children`. Names follow the
-// `<cluster>-cp-<i>` / `<cluster>-<pool>-<i>` pattern set by NodeNames.
-func applyObservedCounts(r *protocol.Resource, clusterName string, children []childRef) {
+// that role. A child listed in cluster state is counted only if its VM still
+// exists on the provider — a VM deleted out-of-band drops out of the count so
+// structural drift surfaces against the manifest instead of the cluster
+// reading Ready off a stale child list. Names follow the `<cluster>-cp-<i>` /
+// `<cluster>-<pool>-<i>` pattern set by NodeNames.
+func (p *Provider) applyObservedCounts(ctx context.Context, r *protocol.Resource, clusterName string, children []childRef) {
 	if r.Spec == nil {
 		return
 	}
@@ -575,6 +597,9 @@ func applyObservedCounts(r *protocol.Resource, clusterName string, children []ch
 	for _, c := range children {
 		if c.Kind != "VirtualMachine" {
 			continue
+		}
+		if !p.vmChildExists(ctx, c.Name) {
+			continue // VM deleted out-of-band → don't count → drift shows
 		}
 		switch {
 		case strings.HasPrefix(c.Name, cpPrefix):

@@ -252,18 +252,21 @@ plan/state); harden the provider contract before the ecosystem widens.
       snippets-capable storage automatically (the proxmox client now has
       `ListNodeStorages`), or fail fast at create time when no such storage
       exists rather than after a 10-minute IP-wait.
-- [ ] **Bug: Cluster apply doesn't detect an out-of-band child-VM
-      deletion.** Surfaced 2026-07-07 recovering a k3s worker whose VM had
-      been deleted outside openctl. Cluster `Get`/apply reports `Ready`
-      straight from its persisted `children` list without verifying the
-      child VMs actually exist on the provider, so the missing worker is not
-      seen as drift. The verifying-trace cache compounds it: with the
-      manifest unchanged, `input+refs` hashes match and the apply is a cache
-      hit that returns `Ready` without reconciling at all (recovery required
-      manually clearing the `applied_manifests` row). *Fix:* the Cluster
-      drift/Get path should confirm each child VM exists (a missing child →
-      drift → recreation), and/or the verifying cache should not mask a
-      structurally-drifted composite.
+- [x] **Bug: Cluster apply doesn't detect an out-of-band child-VM
+      deletion — FIXED.** Surfaced 2026-07-07 recovering a k3s worker whose
+      VM had been deleted outside openctl: Cluster `Get` reported `Ready`
+      off its stale `children` list, and the verifying-trace cache further
+      short-circuited re-applies. Two coordinated fixes: (1) `applyObserved
+      Counts` now verifies each child VM actually exists on the provider
+      (`vmChildExists` via the VM provider's Get — a definitive `NotFound`
+      drops the child from the count so drift surfaces; a transient error is
+      treated as "exists" to avoid fabricating drift); (2) the dispatcher
+      **skips the verifying-trace cache for composite (`Planner`) providers**
+      — a composite's convergence depends on children that drift
+      independently of the manifest hash, so an input-hash cache can't
+      capture it; a Cluster re-apply now always reconciles (its apply-existing
+      path is idempotent, so a converged cluster is a fast no-op). Tests:
+      `TestGetDetectsDeletedChildVM`, `TestVerifyingCacheSkippedForComposite`.
 - [ ] **Bug: Plan-based count-up breaks on legacy (pre-`K3sNode`)
       clusters.** After `applyExisting` was retired, existing-cluster
       converge goes solely through the Plan/dispatcher path, which emits
