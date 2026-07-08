@@ -886,9 +886,11 @@ phase plan when ready to commit.
         Coexists with root token + named tokens (`--no-auth` unchanged). Tested
         against a **fake IdP** (`oidc_test.go` — real go-oidc verify: happy
         path, highest-role-wins, deny-by-default, wrong-audience + expired
-        rejection). *Remaining:* a UI "Log in with SSO" button (frontend
-        follow-up — the backend is reachable directly at `/auth/oidc/login`)
-        and validation against a real IdP.
+        rejection). **UI "Log in with SSO" button SHIPPED:** the login page
+        probes an unauthenticated `/auth/oidc/enabled` (only mounted when OIDC
+        is configured) and, when present, renders a "Log in with SSO" button
+        linking to `/auth/oidc/login`. *Remaining:* validation against a real
+        IdP (the one step that needs an actual provider).
 - [x] **Terraform / OpenTofu provider host** *(Tier 1 — see
       [docs/direction.md](docs/direction.md))* — consume the existing
       Terraform provider ecosystem (AWS, GCP, Azure, Cloudflare, …)
