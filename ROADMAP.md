@@ -813,6 +813,13 @@ screens. Ordered by impact.
         catalogue entry and derives the "Create a &lt;owner&gt; instead" link
         from the child's own apiVersion, so any plugin composite is flagged with
         no client-side list.
+  - [x] **U10.6b — Reference example for a plugin composite-child.**
+        `plugins/example` gained a `Notebook` composite (a Planner that expands
+        into one `Note` child per page, with owner labels) and declares `Note`
+        as an advanced composite-child of `Notebook` via the handshake
+        (`OwnerKind` / `AdvancedNote`). The external e2e test asserts the
+        declaration survives the real subprocess wire round-trip into
+        `AdvancedKindDescriber`. `docs/plugin-protocol.md` documents the field.
 - [x] **U10.7 — Small polish.** Raw CUE viewer — a "Schema" toggle on each
       kind's ResourceList lazy-fetches `SchemaService.GetSchema` (previously
       never called). Kubeconfig download verified through the existing

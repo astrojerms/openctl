@@ -37,14 +37,43 @@ func TestHandshakeAdvertisesSchemaAndActions(t *testing.T) {
 	if hs.ProviderName != "example" {
 		t.Errorf("name = %q", hs.ProviderName)
 	}
-	if len(hs.Kinds) != 1 || hs.Kinds[0].Kind != kindNote {
-		t.Fatalf("kinds = %+v", hs.Kinds)
+	byKind := map[string]pluginproto.KindInfo{}
+	for _, k := range hs.Kinds {
+		byKind[k.Kind] = k
 	}
-	if hs.Kinds[0].Schema == "" {
+	note, ok := byKind[kindNote]
+	if !ok {
+		t.Fatalf("kinds = %+v, missing Note", hs.Kinds)
+	}
+	if note.Schema == "" {
 		t.Error("Note should carry a schema")
 	}
-	if len(hs.Kinds[0].Actions) != 1 || hs.Kinds[0].Actions[0] != "touch" {
-		t.Errorf("actions = %v", hs.Kinds[0].Actions)
+	if len(note.Actions) != 1 || note.Actions[0] != "touch" {
+		t.Errorf("Note actions = %v", note.Actions)
+	}
+	// Note is declared a composite-child of Notebook — this is the reference for
+	// the advanced-kind handshake field.
+	if note.OwnerKind != kindNotebook {
+		t.Errorf("Note ownerKind = %q, want Notebook", note.OwnerKind)
+	}
+	if note.AdvancedNote == "" {
+		t.Error("Note should carry an advancedNote")
+	}
+	nb, ok := byKind[kindNotebook]
+	if !ok || nb.Schema == "" {
+		t.Fatalf("Notebook kind missing or schemaless: %+v", nb)
+	}
+	if nb.OwnerKind != "" {
+		t.Errorf("Notebook is the parent, should not be advanced (ownerKind %q)", nb.OwnerKind)
+	}
+	hasPlan := false
+	for _, c := range hs.Capabilities {
+		if c == pluginproto.CapabilityPlan {
+			hasPlan = true
+		}
+	}
+	if !hasPlan {
+		t.Errorf("Notebook composite requires CapabilityPlan; caps = %v", hs.Capabilities)
 	}
 }
 
@@ -82,6 +111,89 @@ func TestApplyGetListDelete(t *testing.T) {
 	}
 	if _, err := p.Get(ctx, pluginproto.GetParams{Kind: kindNote, Name: "hello"}); err == nil {
 		t.Fatal("expected NotFound after delete")
+	}
+}
+
+func notebookManifest(name string, pages ...[2]string) *protocol.Resource {
+	r := &protocol.Resource{APIVersion: "example.openctl.io/v1", Kind: kindNotebook}
+	r.Metadata.Name = name
+	var pl []any
+	for _, pg := range pages {
+		pl = append(pl, map[string]any{"name": pg[0], "content": pg[1]})
+	}
+	r.Spec = map[string]any{"pages": pl}
+	return r
+}
+
+func TestNotebookApplyCreatesChildNotes(t *testing.T) {
+	p := configuredProvider(t)
+	ctx := context.Background()
+
+	nb := notebookManifest("journal", [2]string{"day1", "hello"}, [2]string{"day2", "world"})
+	ar, err := p.Apply(ctx, pluginproto.ApplyParams{Manifest: nb})
+	if err != nil {
+		t.Fatalf("apply notebook: %v", err)
+	}
+	if ar.Resource.Status["pages"] != 2 {
+		t.Errorf("status pages = %v, want 2", ar.Resource.Status["pages"])
+	}
+
+	// Child notes exist on disk under the "<notebook>-<page>" naming and carry
+	// the page content.
+	for _, tc := range []struct{ name, content string }{
+		{"journal-day1", "hello"}, {"journal-day2", "world"},
+	} {
+		gr, err := p.Get(ctx, pluginproto.GetParams{Kind: kindNote, Name: tc.name})
+		if err != nil {
+			t.Fatalf("get child note %q: %v", tc.name, err)
+		}
+		if gr.Resource.Spec["content"] != tc.content {
+			t.Errorf("child %q content = %v, want %q", tc.name, gr.Resource.Spec["content"], tc.content)
+		}
+	}
+
+	// The Notebook lists as a Notebook; the children list as Notes.
+	nbs, err := p.List(ctx, kindNotebook)
+	if err != nil || len(nbs) != 1 {
+		t.Fatalf("list notebooks = %d (%v), err %v", len(nbs), nbs, err)
+	}
+	notes, err := p.List(ctx, kindNote)
+	if err != nil || len(notes) != 2 {
+		t.Fatalf("list notes = %d, want 2 (marker must not count), err %v", len(notes), err)
+	}
+
+	// Delete removes the notebook and its children.
+	if err := p.Delete(ctx, pluginproto.DeleteParams{Kind: kindNotebook, Name: "journal"}); err != nil {
+		t.Fatalf("delete notebook: %v", err)
+	}
+	if _, err := p.Get(ctx, pluginproto.GetParams{Kind: kindNotebook, Name: "journal"}); err == nil {
+		t.Error("expected NotFound after notebook delete")
+	}
+	if notes, _ := p.List(ctx, kindNote); len(notes) != 0 {
+		t.Errorf("child notes should be gone after notebook delete, got %d", len(notes))
+	}
+}
+
+func TestNotebookPlanExpandsToLabeledNotes(t *testing.T) {
+	p := configuredProvider(t)
+	nb := notebookManifest("journal", [2]string{"day1", "hello"}, [2]string{"day2", "world"})
+	res, err := p.Plan(context.Background(), nb)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	if len(res.Children) != 2 {
+		t.Fatalf("plan children = %d, want 2", len(res.Children))
+	}
+	c := res.Children[0]
+	if c.Kind != kindNote || c.Metadata.Name != "journal-day1" {
+		t.Errorf("child[0] = %s/%s, want Note/journal-day1", c.Kind, c.Metadata.Name)
+	}
+	if c.Metadata.Labels[ownerKindLabel] != kindNotebook || c.Metadata.Labels[ownerNameLabel] != "journal" {
+		t.Errorf("child[0] owner labels = %v, want Notebook/journal", c.Metadata.Labels)
+	}
+	// Plan only handles Notebook.
+	if _, err := p.Plan(context.Background(), noteManifest("x", "y")); err == nil {
+		t.Error("Plan on a Note should be unsupported")
 	}
 }
 

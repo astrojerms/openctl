@@ -8,8 +8,9 @@ ecosystem" foundation from [direction.md](direction.md); the
 the design. This page is the practical reference for **authoring** one.
 
 A complete, runnable reference plugin lives in
-[`plugins/example`](../plugins/example) (a file-backed `Note` provider). Read
-it alongside this page.
+[`plugins/example`](../plugins/example) (a file-backed `Note` provider, plus a
+`Notebook` composite that expands into `Note` children). Read it alongside this
+page.
 
 ---
 
@@ -77,9 +78,12 @@ func (myProvider) Handshake(context.Context) (*pluginproto.HandshakeResult, erro
 	return &pluginproto.HandshakeResult{
 		ProviderName:    "example",                 // → apiVersion "example.openctl.io/v1"
 		ProtocolVersion: pluginproto.ProtocolVersion,
-		Capabilities:    []string{pluginproto.CapabilitySchema, pluginproto.CapabilityActions},
+		Capabilities:    []string{pluginproto.CapabilitySchema, pluginproto.CapabilityActions, pluginproto.CapabilityPlan},
 		Kinds: []pluginproto.KindInfo{
-			{Kind: "Note", Schema: noteSchema, Actions: []string{"touch"}},
+			{Kind: "Notebook", Schema: notebookSchema},                 // composite parent
+			{Kind: "Note", Schema: noteSchema, Actions: []string{"touch"},
+				OwnerKind:    "Notebook",                                // composite-child of Notebook
+				AdvancedNote: "Usually one page of a Notebook, which creates its Notes for you."},
 		},
 	}, nil
 }
@@ -92,6 +96,12 @@ func (myProvider) Handshake(context.Context) (*pluginproto.HandshakeResult, erro
 - **`Kinds`** lists every resource kind you handle. `Observed: true` marks a
   platform-discovered kind (bypasses the managed-only filter). `Actions`
   lists per-kind runtime actions.
+- **`OwnerKind` + `AdvancedNote`** mark a kind as a *composite-child*: normally
+  produced by that parent kind (a Planner) rather than authored directly. The
+  controller re-exposes both through `SchemaService.ListSchemas`, so the UI
+  flags the kind "advanced" and nudges toward creating the parent — no
+  client-side list. Set these on the child (`Note`), not the parent
+  (`Notebook`). See `plugins/example` for the full Notebook→Note composite.
 
 ### Capabilities
 
@@ -253,6 +263,9 @@ of the conformance battery's scope). A composite `Plan` must:
 
 The k3s `Cluster` provider is the reference composite; its `Plan` contract is
 pinned by `internal/controller/providers/k3s/cluster_plan_contract_test.go`.
+For a minimal, file-backed composite in plugin form, see the `Notebook` kind in
+[`plugins/example`](../plugins/example): it `Plan`s into owner-labeled `Note`
+children and declares `Note` as an advanced composite-child of `Notebook`.
 
 ## Testing tips
 
