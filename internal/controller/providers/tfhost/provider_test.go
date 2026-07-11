@@ -184,6 +184,88 @@ func TestProviderAdapterConfiguresTerraformProvider(t *testing.T) {
 	}
 }
 
+// TestProviderAdapterNestedBlock drives a resource carrying a nested "network"
+// block end-to-end: openctl encodes it into a typed msgpack config, the real
+// tf6server provider round-trips it, and openctl decodes the msgpack state —
+// exercising both nested-block config encoding and msgpack state decoding that
+// the old JSON-only path could not do.
+func TestProviderAdapterNestedBlock(t *testing.T) {
+	openctlschema.ResetExternal()
+	defer openctlschema.ResetExternal()
+
+	bin := buildFakeProvider(t)
+	client, err := tfhost.Launch(bin)
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	defer client.Close()
+
+	ctx := context.Background()
+	db, err := storage.Open(ctx, filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatalf("open storage: %v", err)
+	}
+	defer db.Close()
+
+	p, err := tfhost.NewProvider(ctx, "fake", client, providerstate.New(db), []tfhost.ResourceMapping{
+		{Kind: "Thing", TypeName: "fake_thing"},
+	})
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+
+	manifest := &protocol.Resource{
+		APIVersion: "fake.openctl.io/v1",
+		Kind:       "Thing",
+		Metadata:   protocol.ResourceMetadata{Name: "net1"},
+		Spec: map[string]any{
+			"name": "net1",
+			"network": []any{
+				map[string]any{"subnet": "10.0.0.0/24", "public": true},
+				map[string]any{"subnet": "10.0.1.0/24", "public": false},
+			},
+		},
+	}
+
+	applied, err := p.Apply(ctx, manifest)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	assertNetworks(t, applied, [][2]any{{"10.0.0.0/24", true}, {"10.0.1.0/24", false}})
+
+	// Get reads it back from the persisted msgpack state.
+	read, err := p.Get(ctx, "Thing", "net1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	assertNetworks(t, read, [][2]any{{"10.0.0.0/24", true}, {"10.0.1.0/24", false}})
+}
+
+// assertNetworks checks the decoded spec.network nested block matches want
+// (a list of {subnet, public} pairs, order-sensitive).
+func assertNetworks(t *testing.T, r *protocol.Resource, want [][2]any) {
+	t.Helper()
+	raw, ok := r.Spec["network"].([]any)
+	if !ok {
+		t.Fatalf("spec.network = %v (%T), want a list", r.Spec["network"], r.Spec["network"])
+	}
+	if len(raw) != len(want) {
+		t.Fatalf("spec.network has %d rules, want %d: %v", len(raw), len(want), raw)
+	}
+	for i, w := range want {
+		rule, ok := raw[i].(map[string]any)
+		if !ok {
+			t.Fatalf("network[%d] = %T, want object", i, raw[i])
+		}
+		if rule["subnet"] != w[0] {
+			t.Errorf("network[%d].subnet = %v, want %v", i, rule["subnet"], w[0])
+		}
+		if rule["public"] != w[1] {
+			t.Errorf("network[%d].public = %v, want %v", i, rule["public"], w[1])
+		}
+	}
+}
+
 func assertResource(t *testing.T, r *protocol.Resource, apiVersion, kind, name, note, id string) {
 	t.Helper()
 	if r.APIVersion != apiVersion || r.Kind != kind || r.Metadata.Name != name {

@@ -276,56 +276,59 @@ Same per-resource key shape, different meaning — keep them separate.
 
 The TF host is being built in slices (see ROADMAP.md for PRs):
 
-- **Transport (done).** `internal/controller/providers/tfhost` launches a
-  real tfplugin6 provider over HashiCorp go-plugin (fixed magic-cookie
-  handshake, protocol v6, `"provider"` plugin set) and calls
-  `GetProviderSchema`. Stubs are vendored in `pkg/tfplugin6` (Terraform keeps
-  them `internal/`). Tested against an in-repo fake provider —
-  no registry download needed.
-- **Schema translation (done).** `SchemaAttributes` / `ObjectTypeForSchema`
-  turn a tfplugin6 resource schema into a `tftypes.Object`, via a
-  hand-rolled `parseCtyType` (see below).
+- **Transport (done).** `internal/controller/providers/tfhost` launches a real
+  Terraform provider over HashiCorp go-plugin (fixed magic-cookie handshake,
+  `"provider"` plugin set) and **negotiates protocol 5 or 6** via go-plugin
+  `VersionedPlugins` — SDKv2 providers serve 5, plugin-framework providers serve
+  6. Stubs are vendored in `pkg/tfplugin6` + `pkg/tfplugin5` (Terraform keeps
+  them `internal/`). The adapter speaks tfplugin6 types throughout; a protocol-5
+  provider is driven through `v5adapter` (client_v5.go), which converts the
+  field-identical v5⇄v6 messages at the boundary. Tested against an in-repo fake
+  (protocol 6) and the real `hashicorp/time` provider (protocol 5, gated on
+  `TFHOST_E2E_PROVIDER_TIME`).
+- **Schema translation (done).** `blockType` (values.go) turns a tfplugin6
+  resource schema — attributes **and nested blocks** — into a `tftypes.Type`,
+  via a hand-rolled `parseCtyType` (see below).
+- **Value encoding (done).** `encodeConfig` builds a **msgpack** `DynamicValue`
+  from openctl's `map[string]any` spec, conforming to the schema's implied type
+  (nested blocks included); `decodeState` reads a provider's `DynamicValue`
+  (msgpack **or** JSON) back into a Go map. Both use the *public* `tfprotov6`
+  codec — see the note below.
 - **Apply/Read path (done).** The `providers.Provider` adapter maps
   Apply→`PlanResourceChange`+`ApplyResourceChange`, Get→`ReadResource`,
-  Delete→`ApplyResourceChange(null)`, threading the `provider_state` blob.
+  Delete→`ApplyResourceChange(null)`, threading the `provider_state` blob and
+  splitting decoded state into spec (configurable) vs status (computed).
 - **Config + registration (done).** Controller config can launch
   operator-configured Terraform provider binaries, pass provider-level config
   through `ConfigureProvider`, expose explicit openctl Kind → Terraform type
   mappings, register generated schemas, and clean up hosted provider
   processes during shutdown.
 
-### The load-bearing decision: avoid the deprecated msgpack codec
+### Value encoding: the public DynamicValue codec, not the deprecated helpers
 
-`terraform-plugin-go` **deprecates every value-encoding helper a client
-needs** — `tftypes.ParseJSONType`, `ValueFromJSON`, `Value.MarshalMsgPack`,
-`ValueFromMsgPack` all say "not meant to be called by third parties." The
-library is built to *author* providers, not *consume* them. Fighting that
-with SA1019 suppressions everywhere, or hand-rolling tftypes' exact msgpack
-wire format (extension types for unknowns, etc.), is the real risk of the
-whole approach.
+An earlier slice sent config as JSON and stored state as opaque bytes to avoid
+`terraform-plugin-go`'s deprecated low-level helpers (`ValueFromMsgPack`,
+`Value.MarshalMsgPack`, …). That worked for opaque round-tripping but couldn't
+**decode** a real framework provider's msgpack state (so spec/status/drift were
+blind) and couldn't encode **nested-block** config.
 
-**openctl's opaque `provider_state` design sidesteps it.** A tfplugin6
-`DynamicValue` carries **both** a `Json` and a `Msgpack` field, and providers
-accept either. So:
+The resolution keeps openctl off the deprecated path while gaining full
+fidelity: use the library's **public, intended** value codec —
+`tfprotov6.NewDynamicValue(type, value)` to encode and
+`tfprotov6.DynamicValue.Unmarshal(type)` to decode. These are exactly the
+functions provider authors use, are not deprecated, and handle msgpack (and
+JSON) internally. openctl:
 
-- **Config → provider:** encode openctl's `map[string]any` spec as a
-  **schema-conformant JSON** `DynamicValue` (`DynamicValue{Json: …}`). No
-  msgpack, no deprecated API — just JSON that matches the `ObjectTypeForSchema`
-  shape (nulls for absent optionals, numbers as numbers).
-- **Prior state → provider:** wrap the **raw bytes** stored in
-  `provider_state` back into a `DynamicValue` and hand them over. openctl
-  never parses them (the opaque-blob contract), so the provider's own
-  msgpack round-trips through us untouched.
-- **New state ← provider:** store the returned `DynamicValue`'s **raw bytes**
-  verbatim in `provider_state`. Again no decode.
+- **Config → provider:** `encodeConfig` builds a `tftypes.Value` from the spec
+  conforming to `blockType(schema)` (all attributes present, null when unset;
+  nested blocks as typed lists/sets/objects) and encodes it via
+  `NewDynamicValue` (msgpack). `provider_state` stays opaque — the stored
+  DynamicValue's raw bytes round-trip untouched into Plan/Apply.
+- **New state ← provider:** `decodeState` wraps the returned bytes in a
+  `tfprotov6.DynamicValue` and calls `Unmarshal(blockType(schema))`, then walks
+  the `tftypes.Value` into a `map[string]any`. Msgpack or JSON, both work.
 
-The one thing that still needs *decoding* is surfacing observed field values
-into a resource's `status` for the UI/drift view — and that can start minimal
-(a couple of computed fields) and grow, without blocking Apply/Delete. The
-type parser we already own (`parseCtyType`) plus a small JSON value walk
-covers it when needed, still off the deprecated path.
-
-**Fake provider:** the test double should be built with the *public,
-intended* `tf6server` + a `tfprotov6.ProviderServer` implementation (that's
-what terraform-plugin-go is *for*), so all the encoding on the provider side
-is the library's own non-deprecated internal use — not ours.
+**Fake provider:** the in-repo `plugins/tf-fake` double is built with the
+*public* `tf6server` + a `tfprotov6.ProviderServer`, carries a nested block, and
+returns **msgpack** DynamicValues (via `NewDynamicValue`) — so the tests exercise
+the same wire encoding a real provider uses, not a JSON shortcut.

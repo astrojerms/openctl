@@ -7,7 +7,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"sync"
@@ -32,6 +31,10 @@ var (
 		},
 	}
 
+	// thingSchema carries a nested "network" block (list nesting) and typed
+	// attributes so openctl's tfhost exercises nested-block config encoding and
+	// msgpack state decoding against a real tf6server provider — the gaps the
+	// old JSON-only fake could not reach.
 	thingSchema = &tfprotov6.Schema{
 		Version: 1,
 		Block: &tfprotov6.SchemaBlock{
@@ -40,13 +43,31 @@ var (
 				{Name: "note", Type: tftypes.String, Optional: true},
 				{Name: "id", Type: tftypes.String, Computed: true},
 			},
+			BlockTypes: []*tfprotov6.SchemaNestedBlock{
+				{
+					TypeName: "network",
+					Nesting:  tfprotov6.SchemaNestedBlockNestingModeList,
+					Block: &tfprotov6.SchemaBlock{
+						Attributes: []*tfprotov6.SchemaAttribute{
+							{Name: "subnet", Type: tftypes.String, Required: true},
+							{Name: "public", Type: tftypes.Bool, Optional: true},
+						},
+					},
+				},
+			},
 		},
 	}
 
+	networkType = tftypes.Object{AttributeTypes: map[string]tftypes.Type{
+		"subnet": tftypes.String,
+		"public": tftypes.Bool,
+	}}
+
 	thingType = tftypes.Object{AttributeTypes: map[string]tftypes.Type{
-		"name": tftypes.String,
-		"note": tftypes.String,
-		"id":   tftypes.String,
+		"name":    tftypes.String,
+		"note":    tftypes.String,
+		"id":      tftypes.String,
+		"network": tftypes.List{ElementType: networkType},
 	}}
 
 	providerConfigType = tftypes.Object{AttributeTypes: map[string]tftypes.Type{
@@ -54,10 +75,16 @@ var (
 	}}
 )
 
+type network struct {
+	Subnet string
+	Public bool
+}
+
 type fakeThing struct {
-	Name string `json:"name"`
-	Note string `json:"note"`
-	ID   string `json:"id"`
+	Name     string
+	Note     string
+	ID       string
+	Networks []network
 }
 
 type fakeProviderConfig struct {
@@ -295,7 +322,38 @@ func decodeThing(dv *tfprotov6.DynamicValue) (fakeThing, bool, error) {
 	if err := stringAttr(attrs, "id", &thing.ID); err != nil {
 		return fakeThing{}, false, err
 	}
+	nets, err := decodeNetworks(attrs["network"])
+	if err != nil {
+		return fakeThing{}, false, err
+	}
+	thing.Networks = nets
 	return thing, false, nil
+}
+
+func decodeNetworks(v tftypes.Value) ([]network, error) {
+	if !v.IsKnown() || v.IsNull() {
+		return nil, nil
+	}
+	var list []tftypes.Value
+	if err := v.As(&list); err != nil {
+		return nil, fmt.Errorf("network: %w", err)
+	}
+	out := make([]network, 0, len(list))
+	for i, item := range list {
+		var attrs map[string]tftypes.Value
+		if err := item.As(&attrs); err != nil {
+			return nil, fmt.Errorf("network[%d]: %w", i, err)
+		}
+		var n network
+		if err := stringAttr(attrs, "subnet", &n.Subnet); err != nil {
+			return nil, err
+		}
+		if err := boolAttr(attrs, "public", &n.Public); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, nil
 }
 
 func decodeProviderConfig(dv *tfprotov6.DynamicValue) (fakeProviderConfig, error) {
@@ -338,20 +396,43 @@ func stringAttr(attrs map[string]tftypes.Value, name string, dst *string) error 
 	return nil
 }
 
+func boolAttr(attrs map[string]tftypes.Value, name string, dst *bool) error {
+	v, ok := attrs[name]
+	if !ok || v.IsNull() || !v.IsKnown() {
+		return nil
+	}
+	if err := v.As(dst); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	return nil
+}
+
+// encodeThing marshals a thing to a msgpack DynamicValue via NewDynamicValue —
+// the same encoding real framework providers use, so openctl's msgpack state
+// decoding is exercised end-to-end.
 func encodeThing(thing fakeThing) (*tfprotov6.DynamicValue, error) {
-	return jsonDynamicValue(thing)
+	networks := make([]tftypes.Value, 0, len(thing.Networks))
+	for _, n := range thing.Networks {
+		networks = append(networks, tftypes.NewValue(networkType, map[string]tftypes.Value{
+			"subnet": tftypes.NewValue(tftypes.String, n.Subnet),
+			"public": tftypes.NewValue(tftypes.Bool, n.Public),
+		}))
+	}
+	val := tftypes.NewValue(thingType, map[string]tftypes.Value{
+		"name":    tftypes.NewValue(tftypes.String, thing.Name),
+		"note":    tftypes.NewValue(tftypes.String, thing.Note),
+		"id":      tftypes.NewValue(tftypes.String, thing.ID),
+		"network": tftypes.NewValue(tftypes.List{ElementType: networkType}, networks),
+	})
+	dv, err := tfprotov6.NewDynamicValue(thingType, val)
+	if err != nil {
+		return nil, err
+	}
+	return &dv, nil
 }
 
 func nullDynamicValue() *tfprotov6.DynamicValue {
 	return &tfprotov6.DynamicValue{JSON: []byte("null")}
-}
-
-func jsonDynamicValue(v any) (*tfprotov6.DynamicValue, error) {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return nil, err
-	}
-	return &tfprotov6.DynamicValue{JSON: b}, nil
 }
 
 func checkType(typeName string) []*tfprotov6.Diagnostic {
