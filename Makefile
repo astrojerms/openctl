@@ -1,4 +1,4 @@
-.PHONY: all build build-cli build-controller build-controller-linux build-plugins build-plugin-proxmox build-plugin-k3s build-plugin-k3s-agent build-plugin-k3s-agent-linux install clean test test-e2e fmt lint modernize modernize-check generate ui ui-install ui-clean codesign-setup
+.PHONY: all build build-cli build-controller build-controller-linux build-plugins build-plugin-proxmox build-plugin-k3s build-plugin-cloudflare build-plugin-k3s-agent build-plugin-k3s-agent-linux install clean test test-e2e fmt lint modernize modernize-check generate ui ui-install ui-clean codesign-setup
 
 # Binary names
 CLI_BINARY=openctl
@@ -69,7 +69,15 @@ build-controller: ui
 	go build $(GOFLAGS) -o $(BUILD_DIR)/$(CONTROLLER_BINARY) ./cmd/openctl-controller
 	$(call codesign_binary,$(BUILD_DIR)/$(CONTROLLER_BINARY),io.openctl.controller)
 
-build-plugins: build-plugin-proxmox build-plugin-k3s
+build-plugins: build-plugin-proxmox build-plugin-k3s build-plugin-cloudflare
+
+# The cloudflare plugin lives in the root module (stdlib-only), so it builds
+# straight from ./plugins/cloudflare — no separate module / `cd` needed.
+build-plugin-cloudflare:
+	@echo "Building cloudflare plugin..."
+	@mkdir -p $(BUILD_DIR)
+	go build $(GOFLAGS) -o $(BUILD_DIR)/openctl-cloudflare ./plugins/cloudflare
+	$(call codesign_binary,$(BUILD_DIR)/openctl-cloudflare,io.openctl.plugin.cloudflare)
 
 build-plugin-proxmox:
 	@echo "Building openctl-proxmox plugin..."
@@ -120,6 +128,7 @@ install: build build-plugin-k3s-agent-linux
 	cp $(BUILD_DIR)/$(CONTROLLER_BINARY) $(GOBIN)/ 2>/dev/null || cp $(BUILD_DIR)/$(CONTROLLER_BINARY) /usr/local/bin/
 	cp $(BUILD_DIR)/$(PLUGIN_PROXMOX_BINARY) $(HOME)/.openctl/plugins/
 	cp $(BUILD_DIR)/$(PLUGIN_K3S_BINARY) $(HOME)/.openctl/plugins/
+	cp $(BUILD_DIR)/openctl-cloudflare $(HOME)/.openctl/plugins/
 	cp $(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-amd64 $(HOME)/.openctl/plugins/k3s-agents/
 	cp $(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-arm64 $(HOME)/.openctl/plugins/k3s-agents/
 	cp $(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-armv7 $(HOME)/.openctl/plugins/k3s-agents/
@@ -131,6 +140,7 @@ install-plugins: build-plugins build-plugin-k3s-agent-linux
 	@mkdir -p $(HOME)/.openctl/plugins/k3s-agents
 	cp $(BUILD_DIR)/$(PLUGIN_PROXMOX_BINARY) $(HOME)/.openctl/plugins/
 	cp $(BUILD_DIR)/$(PLUGIN_K3S_BINARY) $(HOME)/.openctl/plugins/
+	cp $(BUILD_DIR)/openctl-cloudflare $(HOME)/.openctl/plugins/
 	cp $(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-amd64 $(HOME)/.openctl/plugins/k3s-agents/
 	cp $(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-arm64 $(HOME)/.openctl/plugins/k3s-agents/
 	cp $(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-armv7 $(HOME)/.openctl/plugins/k3s-agents/

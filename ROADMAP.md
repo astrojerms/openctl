@@ -958,6 +958,23 @@ phase plan when ready to commit.
       TF host as an explicit second consumer, so the interface is shaped
       right. Precedent: Crossplane Upjet, Pulumi TF Bridge, Flux
       tf-controller. Target OpenTofu for the license story.
+- [x] **Cloudflare provider (native)** — `plugins/cloudflare`, a native
+      pluginproto external provider (stdlib-only, hand-rolled REST v4
+      client) managing `cloudflare.openctl.io/v1` **DNSRecord** and
+      **Tunnel**. Stateful via `CapabilityState`: Cloudflare-assigned
+      record/tunnel IDs round-trip through the `provider_state` store, so
+      openctl owns create→update→delete by ID (out-of-band deletes are
+      recreated on apply). The tunnel **run token is a `get-token` action**,
+      not status — it never lands in the git-synced state mirror (mirrors
+      the k3s kubeconfig-as-action precedent). Ships CUE schemas (validated
+      through the real external-schema path in tests) + full fake-API unit
+      lifecycle tests + a subprocess handshake e2e. Chosen over wrapping the
+      Terraform Cloudflare provider through `tfhost` because tfhost still
+      needs msgpack state decode + nested-block config encoding + a
+      real-binary e2e before it can host a real framework provider; the
+      native plugin ships working Cloudflare today and validates the
+      "wide, infra-only" thesis. *Next:* validate against a real Cloudflare
+      account; consider Zone (observed) and WAF/ruleset kinds.
 - [x] **Provider credential editing** — new ConfigService RPCs
       (ListProviders / UpsertProvider / DeleteProvider) that read/
       write ~/.openctl/config.yaml. UI Providers page with add /
