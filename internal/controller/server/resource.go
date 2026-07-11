@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -901,6 +902,44 @@ func normalizeValue(v any) any {
 			out[i] = normalizeValue(x)
 		}
 		return out
+	default:
+		return normalizeReflect(v)
+	}
+}
+
+// normalizeReflect handles typed containers that structpb.NewStruct rejects but
+// providers legitimately put in spec/status — e.g. []string (proxmox node
+// storages/bridges), []int, or map[string]string. structpb only accepts the
+// generic []any / map[string]any shapes, so convert via reflection, recursing
+// through each element. Non-container values (and []byte, which structpb
+// encodes as base64) pass through unchanged.
+func normalizeReflect(v any) any {
+	if v == nil {
+		return nil
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Slice, reflect.Array:
+		if rv.Type().Elem().Kind() == reflect.Uint8 { // []byte -> base64 string
+			return v
+		}
+		out := make([]any, rv.Len())
+		for i := range rv.Len() {
+			out[i] = normalizeValue(rv.Index(i).Interface())
+		}
+		return out
+	case reflect.Map:
+		out := make(map[string]any, rv.Len())
+		iter := rv.MapRange()
+		for iter.Next() {
+			out[fmt.Sprint(iter.Key().Interface())] = normalizeValue(iter.Value().Interface())
+		}
+		return out
+	case reflect.Pointer:
+		if rv.IsNil() {
+			return nil
+		}
+		return normalizeValue(rv.Elem().Interface())
 	default:
 		return v
 	}
