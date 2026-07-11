@@ -969,12 +969,30 @@ phase plan when ready to commit.
       the k3s kubeconfig-as-action precedent). Ships CUE schemas (validated
       through the real external-schema path in tests) + full fake-API unit
       lifecycle tests + a subprocess handshake e2e. Chosen over wrapping the
-      Terraform Cloudflare provider through `tfhost` because tfhost still
-      needs msgpack state decode + nested-block config encoding + a
-      real-binary e2e before it can host a real framework provider; the
-      native plugin ships working Cloudflare today and validates the
-      "wide, infra-only" thesis. *Next:* validate against a real Cloudflare
-      account; consider Zone (observed) and WAF/ruleset kinds.
+      Terraform Cloudflare provider through `tfhost` (at the time tfhost
+      couldn't yet host a real framework provider — see the tfhost hardening
+      item below, which has since closed that gap); the native plugin ships
+      working Cloudflare today and validates the "wide, infra-only" thesis.
+      *Next:* validate against a real Cloudflare account; consider Zone
+      (observed) and WAF/ruleset kinds.
+- [x] **tfhost hardening — real providers (protocol 5 + 6, msgpack, nested
+      blocks).** The four gaps that blocked hosting real `terraform-provider-*`
+      binaries are closed. **msgpack state decoding** + **nested-block/typed
+      config encoding** now go through the *public* `tfprotov6` value codec
+      (`NewDynamicValue` / `DynamicValue.Unmarshal`) against a schema-derived
+      `tftypes` type (values.go) — no deprecated API, full fidelity (the old
+      slice sent JSON and couldn't decode msgpack or encode nested blocks).
+      **Protocol 5** is negotiated alongside 6 via go-plugin `VersionedPlugins`;
+      a protocol-5 (SDKv2) provider is driven through `v5adapter` (client_v5.go)
+      converting the field-identical v5⇄v6 messages, so the adapter stays on
+      tfplugin6 types (stubs vendored in `pkg/tfplugin5`). **Real-binary e2e:**
+      `plugins/tf-fake` upgraded to a nested-block, msgpack-emitting framework
+      provider (protocol 6), plus a gated test driving the *published*
+      `hashicorp/time` provider (protocol 5) end-to-end —
+      create→read→delete `time_static`, decoding its computed msgpack outputs.
+      This makes tfhost able to host real SDKv2 and framework providers
+      (incl. the Terraform Cloudflare provider). *Next:* UpgradeResourceState
+      wiring; real-provider validation in CI (currently gated/local).
 - [x] **Provider credential editing** — new ConfigService RPCs
       (ListProviders / UpsertProvider / DeleteProvider) that read/
       write ~/.openctl/config.yaml. UI Providers page with add /

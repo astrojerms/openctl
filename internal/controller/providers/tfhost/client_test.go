@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
+	"github.com/hashicorp/terraform-plugin-go/tftypes"
+
 	"github.com/openctl/openctl/internal/controller/providers/tfhost"
 	"github.com/openctl/openctl/pkg/tfplugin6"
 )
@@ -76,6 +79,10 @@ func TestFakeProviderLifecycle(t *testing.T) {
 		t.Fatalf("launch: %v", err)
 	}
 	defer client.Close()
+
+	if v := client.ProtocolVersion(); v != 6 {
+		t.Fatalf("negotiated protocol %d, want 6 for the framework-based tf-fake", v)
+	}
 
 	ctx := context.Background()
 	config := jsonValue(t, map[string]any{
@@ -200,21 +207,55 @@ func assertNoDiagnostics(t *testing.T, diags []*tfplugin6.Diagnostic) {
 	}
 }
 
-func assertThing(t *testing.T, dv *tfplugin6.DynamicValue, wantName, wantNote, wantID string) {
+// testThingType mirrors tf-fake's fake_thing implied type (incl the nested
+// network block) so the test can decode the provider's msgpack DynamicValues.
+var testThingType = tftypes.Object{AttributeTypes: map[string]tftypes.Type{
+	"name": tftypes.String,
+	"note": tftypes.String,
+	"id":   tftypes.String,
+	"network": tftypes.List{ElementType: tftypes.Object{AttributeTypes: map[string]tftypes.Type{
+		"subnet": tftypes.String,
+		"public": tftypes.Bool,
+	}}},
+}}
+
+// decodeThingState decodes a (msgpack or JSON) fake_thing state into a Go map.
+func decodeThingState(t *testing.T, dv *tfplugin6.DynamicValue) map[string]tftypes.Value {
 	t.Helper()
 	if dv == nil {
 		t.Fatal("dynamic value is nil")
 	}
-	var got struct {
-		Name string `json:"name"`
-		Note string `json:"note"`
-		ID   string `json:"id"`
+	wire := tfprotov6.DynamicValue{MsgPack: dv.GetMsgpack(), JSON: dv.GetJson()}
+	val, err := wire.Unmarshal(testThingType)
+	if err != nil {
+		t.Fatalf("unmarshal dynamic value: %v", err)
 	}
-	if err := json.Unmarshal(dv.Json, &got); err != nil {
-		t.Fatalf("unmarshal dynamic value JSON %q: %v", string(dv.Json), err)
+	var attrs map[string]tftypes.Value
+	if err := val.As(&attrs); err != nil {
+		t.Fatalf("decode object: %v", err)
 	}
-	if got.Name != wantName || got.Note != wantNote || got.ID != wantID {
-		t.Fatalf("state = %+v, want name=%q note=%q id=%q", got, wantName, wantNote, wantID)
+	return attrs
+}
+
+func attrString(t *testing.T, attrs map[string]tftypes.Value, name string) string {
+	t.Helper()
+	v, ok := attrs[name]
+	if !ok || v.IsNull() || !v.IsKnown() {
+		return ""
+	}
+	var s string
+	if err := v.As(&s); err != nil {
+		t.Fatalf("attr %q: %v", name, err)
+	}
+	return s
+}
+
+func assertThing(t *testing.T, dv *tfplugin6.DynamicValue, wantName, wantNote, wantID string) {
+	t.Helper()
+	attrs := decodeThingState(t, dv)
+	name, note, id := attrString(t, attrs, "name"), attrString(t, attrs, "note"), attrString(t, attrs, "id")
+	if name != wantName || note != wantNote || id != wantID {
+		t.Fatalf("state = name=%q note=%q id=%q, want name=%q note=%q id=%q", name, note, id, wantName, wantNote, wantID)
 	}
 }
 

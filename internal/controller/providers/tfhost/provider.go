@@ -2,7 +2,6 @@ package tfhost
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"maps"
 	"sort"
@@ -314,28 +313,10 @@ func (p *Provider) lookup(kind string) (string, *tfplugin6.Schema, error) {
 	return typeName, p.schemaByKind[kind], nil
 }
 
+// configDynamicValue encodes an openctl spec into a msgpack DynamicValue typed
+// by the resource schema (nested blocks included). See values.go.
 func configDynamicValue(schema *tfplugin6.Schema, spec map[string]any) (*tfplugin6.DynamicValue, error) {
-	attrs, err := SchemaAttributes(schema)
-	if err != nil {
-		return nil, err
-	}
-	body := make(map[string]any, len(attrs))
-	for _, attr := range attrs {
-		v, ok := spec[attr.Name]
-		if !ok {
-			if attr.Required {
-				return nil, fmt.Errorf("required attribute %q missing from spec", attr.Name)
-			}
-			body[attr.Name] = nil
-			continue
-		}
-		body[attr.Name] = v
-	}
-	b, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	return &tfplugin6.DynamicValue{Json: b}, nil
+	return encodeConfig(schema, spec)
 }
 
 func marshalDynamicValue(dv *tfplugin6.DynamicValue) ([]byte, error) {
@@ -364,10 +345,19 @@ func isNullDynamicValue(dv *tfplugin6.DynamicValue) bool {
 	if dv == nil {
 		return true
 	}
+	if len(dv.GetJson()) == 0 && len(dv.GetMsgpack()) == 0 {
+		return true
+	}
 	if string(dv.GetJson()) == "null" {
 		return true
 	}
-	return len(dv.GetJson()) == 0 && len(dv.GetMsgpack()) == 0
+	// A real (framework) provider signals "gone" with a msgpack-encoded null,
+	// which is the single byte 0xc0 — detect it so ReadResource-returns-null is
+	// honored regardless of encoding.
+	if mp := dv.GetMsgpack(); len(mp) == 1 && mp[0] == 0xc0 {
+		return true
+	}
+	return false
 }
 
 func observedResource(apiVersion, kind, name string, spec map[string]any, schema *tfplugin6.Schema, state *tfplugin6.DynamicValue) *protocol.Resource {
@@ -386,24 +376,22 @@ func observedResource(apiVersion, kind, name string, spec map[string]any, schema
 	}
 }
 
+// splitState decodes a resource's DynamicValue state (msgpack or JSON) and
+// classifies each field into spec (configurable attributes + nested blocks) vs
+// status (computed-only attributes).
 func splitState(schema *tfplugin6.Schema, state *tfplugin6.DynamicValue) (map[string]any, map[string]any) {
 	spec := map[string]any{}
 	status := map[string]any{}
-	if state == nil || len(state.GetJson()) == 0 || isNullDynamicValue(state) {
+	decoded, err := decodeState(schema, state)
+	if err != nil {
+		status["state_decode_error"] = err.Error()
 		return spec, status
 	}
-	var fields map[string]any
-	if err := json.Unmarshal(state.GetJson(), &fields); err != nil {
-		status["state_json_error"] = err.Error()
+	if decoded == nil {
 		return spec, status
 	}
-	computed := map[string]bool{}
-	if attrs, err := SchemaAttributes(schema); err == nil {
-		for _, attr := range attrs {
-			computed[attr.Name] = attr.Computed && !attr.Optional && !attr.Required
-		}
-	}
-	for k, v := range fields {
+	computed := computedOnlyAttrs(schema)
+	for k, v := range decoded {
 		if v == nil {
 			continue
 		}
@@ -414,6 +402,19 @@ func splitState(schema *tfplugin6.Schema, state *tfplugin6.DynamicValue) (map[st
 		}
 	}
 	return spec, status
+}
+
+// computedOnlyAttrs returns the set of top-level attribute names that are
+// computed and neither optional nor required (provider-owned outputs). Nested
+// block names are absent here, so they classify as spec (configurable).
+func computedOnlyAttrs(schema *tfplugin6.Schema) map[string]bool {
+	out := map[string]bool{}
+	if attrs, err := SchemaAttributes(schema); err == nil {
+		for _, a := range attrs {
+			out[a.Name] = a.Computed && !a.Optional && !a.Required
+		}
+	}
+	return out
 }
 
 func cloneMap(in map[string]any) map[string]any {
