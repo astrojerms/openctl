@@ -446,77 +446,118 @@ func (h *resourceHandler) GetChildrenGraph(ctx context.Context, req *apiv1.GetCh
 	root.Root = true
 	root.Managed = true // the queried resource is always the managed root
 
-	// Preferred structural source: the Planner. Its children carry $ref
-	// pointers, so we get owns edges (root → child) and ref edges (child →
-	// sibling) in one pass. Planner children are authored by openctl, so
-	// they're all "managed" regardless of whether each has its own applied
-	// manifest (k3s writes only the parent Cluster to applied_manifests).
-	// A Plan failure (e.g. no applied manifest yet, empty spec) degrades to
-	// the ChildrenOf fallback rather than failing the whole graph.
-	planned := false
-	if planner, ok := p.(providers.Planner); ok {
-		parent := &protocol.Resource{
-			APIVersion: req.GetApiVersion(),
-			Kind:       req.GetKind(),
-			Metadata:   protocol.ResourceMetadata{Name: req.GetName()},
+	// Walk the composition + $ref graph breadth-first so it spans layers: a
+	// workload's kubeconfigPath $ref reaches its Cluster, the Cluster's Plan
+	// reaches its K3sNodes/VMs, and so on — the unified cross-layer view. The
+	// expanded set makes it cycle-safe; a depth cap is a runaway backstop.
+	_ = p // the root's provider; each dequeued node resolves its own
+	const maxGraphDepth = 8
+	queue := []graphWork{{req.GetApiVersion(), req.GetKind(), req.GetName(), root.Id, 0}}
+	for len(queue) > 0 {
+		w := queue[0]
+		queue = queue[1:]
+		if g.expanded[w.nodeID] || w.depth >= maxGraphDepth {
+			continue
 		}
-		// Feed the applied spec to Plan when we have it — the plan's child
-		// set (node count, join topology) is a function of the parent spec.
-		if h.manifests != nil {
-			if applied, lerr := h.manifests.Load(ctx, req.GetApiVersion(), req.GetKind(), req.GetName()); lerr == nil && applied != nil {
-				parent.Spec = applied.Spec
-			}
-		}
-		if plan, perr := planner.Plan(ctx, parent); perr != nil {
-			log.Printf("childrengraph: plan %s %q failed, falling back to ChildrenOf: %v",
-				req.GetKind(), req.GetName(), perr)
-		} else if plan != nil {
-			planned = true
-			for _, child := range plan.Children {
-				n := g.addNode(child.APIVersion, child.Kind, child.Metadata.Name)
-				g.planned[n.Id] = true
-				g.addEdge(root.Id, n.Id, "owns", "")
-				// Child → sibling ref edges from the child's own spec.
-				for _, ref := range refs.Collect(child.Spec) {
-					target := g.addNode(ref.APIVersion, ref.Kind, ref.Name)
-					g.addEdge(n.Id, target.Id, "ref", ref.Field)
-				}
-			}
-		}
-	}
-	if !planned {
-		// Fallback for non-Planner composites (and observed-only parents):
-		// registry.ChildrenOf reports direct children without ref metadata,
-		// so we can only draw owns edges. These aren't marked planned, so
-		// resolveStatus decides managed-ness from applied-manifest presence.
-		for _, c := range h.registry.ChildrenOf(req.GetKind(), req.GetName()) {
-			n := g.addNode(c.APIVersion, c.Kind, c.Name)
-			g.addEdge(root.Id, n.Id, "owns", "")
-		}
+		g.expanded[w.nodeID] = true
+		queue = g.expandNode(ctx, queue, w)
 	}
 
 	g.resolveStatus(ctx)
 	return g.response(), nil
 }
 
+// graphWork is one node awaiting expansion in GetChildrenGraph's BFS.
+type graphWork struct {
+	apiVersion, kind, name, nodeID string
+	depth                          int
+}
+
+// expandNode adds the edges out of one node — its own-spec $refs plus its
+// structural children (Planner-preferred, else ChildrenOf) — enqueuing each
+// newly-discovered node, and returns the grown queue.
+func (g *graphBuilder) expandNode(ctx context.Context, queue []graphWork, w graphWork) []graphWork {
+	enqueue := func(av, k, n, id string) {
+		queue = append(queue, graphWork{av, k, n, id, w.depth + 1})
+	}
+
+	// Load this node's applied spec (for its own $refs and, if a Planner, to
+	// feed Plan). Absent manifests / not-yet-applied children degrade to nil.
+	var spec map[string]any
+	if g.h.manifests != nil {
+		if applied, err := g.h.manifests.Load(ctx, w.apiVersion, w.kind, w.name); err == nil && applied != nil {
+			spec = applied.Spec
+		}
+	}
+
+	// The node's own-spec $refs (e.g. a HelmRelease's kubeconfigPath → Cluster).
+	for _, r := range refs.Collect(spec) {
+		t := g.addNode(r.APIVersion, r.Kind, r.Name)
+		g.addEdge(w.nodeID, t.Id, "ref", r.Field)
+		enqueue(r.APIVersion, r.Kind, r.Name, t.Id)
+	}
+
+	p, err := g.h.registry.For(w.apiVersion)
+	if err != nil {
+		return queue
+	}
+
+	// Preferred structural source: the Planner. Its children carry $ref
+	// pointers, so we get owns edges (node → child) and ref edges (child →
+	// sibling). Planner children are openctl-authored, so they're all managed.
+	// A Plan failure (empty spec, wrong kind) degrades to ChildrenOf.
+	if planner, ok := p.(providers.Planner); ok {
+		parent := &protocol.Resource{
+			APIVersion: w.apiVersion, Kind: w.kind,
+			Metadata: protocol.ResourceMetadata{Name: w.name}, Spec: spec,
+		}
+		if plan, perr := planner.Plan(ctx, parent); perr != nil {
+			log.Printf("childrengraph: plan %s %q failed, falling back to ChildrenOf: %v", w.kind, w.name, perr)
+		} else if plan != nil {
+			for _, child := range plan.Children {
+				n := g.addNode(child.APIVersion, child.Kind, child.Metadata.Name)
+				g.planned[n.Id] = true
+				g.addEdge(w.nodeID, n.Id, "owns", "")
+				for _, r := range refs.Collect(child.Spec) {
+					target := g.addNode(r.APIVersion, r.Kind, r.Name)
+					g.addEdge(n.Id, target.Id, "ref", r.Field)
+					enqueue(r.APIVersion, r.Kind, r.Name, target.Id)
+				}
+				enqueue(child.APIVersion, child.Kind, child.Metadata.Name, n.Id)
+			}
+			return queue
+		}
+	}
+
+	// Fallback: ChildrenOf reports direct children without ref metadata.
+	for _, c := range g.h.registry.ChildrenOf(w.kind, w.name) {
+		n := g.addNode(c.APIVersion, c.Kind, c.Name)
+		g.addEdge(w.nodeID, n.Id, "owns", "")
+		enqueue(c.APIVersion, c.Kind, c.Name, n.Id)
+	}
+	return queue
+}
+
 // graphBuilder accumulates nodes (deduplicated by "kind/name" id) and edges
 // while GetChildrenGraph walks a composite resource, then resolves each
 // node's coarse status pill in one pass at the end.
 type graphBuilder struct {
-	h       *resourceHandler
-	order   []string
-	nodes   map[string]*apiv1.GraphNode
-	edges   []*apiv1.GraphEdge
-	seen    map[string]bool // dedup edges by "from|to|relation|field"
-	planned map[string]bool // node ids that came from the Planner (openctl-authored)
+	h        *resourceHandler
+	order    []string
+	nodes    map[string]*apiv1.GraphNode
+	edges    []*apiv1.GraphEdge
+	seen     map[string]bool // dedup edges by "from|to|relation|field"
+	planned  map[string]bool // node ids that came from the Planner (openctl-authored)
+	expanded map[string]bool // node ids already expanded (BFS cycle guard)
 }
 
 func newGraphBuilder(h *resourceHandler) *graphBuilder {
 	return &graphBuilder{
-		h:       h,
-		nodes:   map[string]*apiv1.GraphNode{},
-		seen:    map[string]bool{},
-		planned: map[string]bool{},
+		h:        h,
+		nodes:    map[string]*apiv1.GraphNode{},
+		seen:     map[string]bool{},
+		planned:  map[string]bool{},
+		expanded: map[string]bool{},
 	}
 }
 

@@ -2,12 +2,73 @@ package server
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
+	"github.com/openctl/openctl/internal/controller/manifests"
 	"github.com/openctl/openctl/internal/controller/providers"
+	"github.com/openctl/openctl/internal/controller/storage"
 	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 	"github.com/openctl/openctl/pkg/protocol"
 )
+
+// TestGetChildrenGraphSpansCrossLayer proves the unified cross-layer graph: a
+// HelmRelease whose kubeconfigPath $refs a Cluster, queried as the root, must
+// span down through the Cluster's Plan expansion (VMs/Nodes) in one graph —
+// via (a) root-spec $ref collection and (b) multi-level recursion.
+func TestGetChildrenGraphSpansCrossLayer(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.Open(ctx, filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatalf("open storage: %v", err)
+	}
+	defer db.Close()
+	store := manifests.New(db)
+
+	// Seed the workload manifest with a root-spec $ref to the Cluster.
+	hr := &protocol.Resource{APIVersion: "fake.openctl.io/v1", Kind: "HelmRelease"}
+	hr.Metadata.Name = "app"
+	hr.Spec = map[string]any{
+		"kubeconfigPath": ref("fake.openctl.io/v1", "Cluster", "c", "status.outputs.kubeconfigPath"),
+		"chart":          map[string]any{"name": "podinfo"},
+	}
+	if err := store.Save(ctx, hr); err != nil {
+		t.Fatalf("save manifest: %v", err)
+	}
+
+	fp := &fakePlanner{fakeProvider: &fakeProvider{}, present: map[string]bool{}}
+	reg := providers.NewRegistry()
+	reg.Register(fp)
+	h := newResourceHandler(reg, nil, nil, store)
+
+	resp, err := h.GetChildrenGraph(ctx, &apiv1.GetChildrenGraphRequest{
+		ApiVersion: "fake.openctl.io/v1", Kind: "HelmRelease", Name: "app",
+	})
+	if err != nil {
+		t.Fatalf("GetChildrenGraph: %v", err)
+	}
+	edges := resp.GetEdges()
+
+	// The workload's own $ref reaches the Cluster (root-spec collection).
+	if !hasEdge(edges, "HelmRelease/app", "Cluster/c", "ref", "status.outputs.kubeconfigPath") {
+		t.Errorf("missing HelmRelease→Cluster ref edge; edges: %+v", edges)
+	}
+	// The Cluster expands (recursion into the ref target's Planner).
+	if !hasEdge(edges, "Cluster/c", "VM/vm-0", "owns", "") {
+		t.Errorf("missing Cluster→VM owns edge; edges: %+v", edges)
+	}
+	// A deep sibling ref inside the cluster expansion is present.
+	if !hasEdge(edges, "Node/node-0", "VM/vm-0", "ref", "") {
+		t.Errorf("missing Node→VM ref edge; edges: %+v", edges)
+	}
+	// Root + Cluster + 2 VMs + 2 Nodes = 6 nodes across three layers.
+	if got := len(resp.GetNodes()); got != 6 {
+		t.Fatalf("node count = %d, want 6: %+v", got, resp.GetNodes())
+	}
+	if root := nodeByID(resp.GetNodes(), "HelmRelease/app"); root == nil || !root.GetRoot() {
+		t.Errorf("HelmRelease should be the root: %+v", root)
+	}
+}
 
 // fakePlanner is a fakeProvider that implements providers.Planner, emitting a
 // small cluster-shaped expansion: two VMs and two Nodes, where the second
@@ -27,7 +88,12 @@ func ref(apiVersion, kind, name, field string) map[string]any {
 	return map[string]any{"$ref": inner}
 }
 
-func (f *fakePlanner) Plan(_ context.Context, _ *protocol.Resource) (*providers.PlanResult, error) {
+func (f *fakePlanner) Plan(_ context.Context, m *protocol.Resource) (*providers.PlanResult, error) {
+	// Only the Cluster composes (like the real k3s provider); other kinds are
+	// leaves, so the graph BFS doesn't re-expand VMs/Nodes into a fresh cluster.
+	if m.Kind != "Cluster" {
+		return nil, providers.NotFound(m.Kind, m.Metadata.Name)
+	}
 	av := "fake.openctl.io/v1"
 	child := func(kind, name string, spec map[string]any) *protocol.Resource {
 		return &protocol.Resource{APIVersion: av, Kind: kind, Metadata: protocol.ResourceMetadata{Name: name}, Spec: spec}

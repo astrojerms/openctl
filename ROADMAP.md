@@ -1067,8 +1067,21 @@ phase plan when ready to commit.
         this stays read-only (create-optional, read-baseline as designed).
         Verified: unit (summarize, observed phases, argocd component) + **e2e vs
         k3d** (register the Application CRD + a sample Application with
-        health/sync → read it back through the provider). *Next:* Phase 6 —
-        unified cross-layer graph in the UI.
+        health/sync → read it back through the provider).
+  - [x] **Phase 6 — unified cross-layer graph.** The UI graph renderer
+        (`DagView.svelte`) is fully kind-agnostic, so the work was entirely
+        backend: `GetChildrenGraph` now (a) collects `$ref` edges from the
+        **root's own spec** (previously only child specs) and (b) walks the
+        composition + `$ref` graph **breadth-first with a visited set + depth
+        cap** (previously depth-1). So querying a `HelmRelease` spans
+        HelmRelease → (kubeconfigPath `$ref`) → Cluster → (Plan) → K3sNodes/VMs
+        in one graph — the cross-layer view a cluster-scoped tool (ArgoCD)
+        structurally can't show — and the existing UI renders it with **zero
+        frontend changes**. Verified: unit (multi-level span with root-`$ref` +
+        recursion into the Cluster's Planner; existing depth-1 tests still pass).
+        *Follow-ons:* VM→Proxmox-host edge (the k3s VM manifest doesn't `$ref`
+        its ProxmoxNode yet) and upward-into-pods (a `ChildrenOf` on
+        `plugins/k8s`). **Deployment model Phases 1–6 all shipped.**
 - [x] **Provider credential editing** — new ConfigService RPCs
       (ListProviders / UpsertProvider / DeleteProvider) that read/
       write ~/.openctl/config.yaml. UI Providers page with add /
