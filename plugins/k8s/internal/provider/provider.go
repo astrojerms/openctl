@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"helm.sh/helm/v3/pkg/release"
@@ -40,14 +41,38 @@ func (p *provider) Handshake(context.Context) (*pluginproto.HandshakeResult, err
 }
 
 // releaseState is the opaque blob persisted for a HelmRelease: enough to Get and
-// Delete the release without the spec. The kubeconfig is included because
-// Get/Delete have no other way to reach the cluster; it lives in openctl's local
-// provider_state store (not git). Phase 2 (Cluster $ref) removes the need to
-// store it by re-resolving from the referenced Cluster.
+// Delete the release without the spec (Get/Delete params carry no spec). It
+// records how to reach the cluster:
+//   - KubeconfigPath (preferred): a path on the controller host — typically a
+//     k3s Cluster's status.outputs.kubeconfigPath resolved via a $ref. Only the
+//     path is stored; Get/Delete re-read the file. No credential bytes persist.
+//   - Kubeconfig: inline content, for an explicit external kubeconfig with no
+//     stable path. Stored in openctl's local provider_state (SQLite, not git).
 type releaseState struct {
-	Kubeconfig  string `json:"kubeconfig"`
-	Namespace   string `json:"namespace"`
-	ReleaseName string `json:"releaseName"`
+	KubeconfigPath string `json:"kubeconfigPath,omitempty"`
+	Kubeconfig     string `json:"kubeconfig,omitempty"`
+	Namespace      string `json:"namespace"`
+	ReleaseName    string `json:"releaseName"`
+}
+
+// loadKubeconfig returns the kubeconfig bytes for a stored release: re-read from
+// the path when path-based, else the inline content.
+func (st releaseState) loadKubeconfig() ([]byte, error) {
+	if st.KubeconfigPath != "" {
+		b, err := os.ReadFile(st.KubeconfigPath)
+		if err != nil {
+			return nil, fmt.Errorf("read kubeconfig %q: %w", st.KubeconfigPath, err)
+		}
+		return b, nil
+	}
+	if st.Kubeconfig != "" {
+		return []byte(st.Kubeconfig), nil
+	}
+	return nil, fmt.Errorf("no kubeconfig in state")
+}
+
+func (st releaseState) hasCluster() bool {
+	return st.ReleaseName != "" && (st.KubeconfigPath != "" || st.Kubeconfig != "")
 }
 
 func (p *provider) Apply(ctx context.Context, req pluginproto.ApplyParams) (*pluginproto.ApplyResult, error) {
@@ -63,7 +88,7 @@ func (p *provider) Apply(ctx context.Context, req pluginproto.ApplyParams) (*plu
 	if err != nil {
 		return nil, err
 	}
-	cfg, settings, cleanup, err := newActionConfig([]byte(spec.kubeconfig), spec.namespace)
+	cfg, settings, cleanup, err := newActionConfig(spec.kubeconfig, spec.namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -78,11 +103,13 @@ func (p *provider) Apply(ctx context.Context, req pluginproto.ApplyParams) (*plu
 		return nil, err
 	}
 
-	st, _ := json.Marshal(releaseState{
-		Kubeconfig:  spec.kubeconfig,
-		Namespace:   spec.namespace,
-		ReleaseName: spec.opts.releaseName,
-	})
+	rs := releaseState{Namespace: spec.namespace, ReleaseName: spec.opts.releaseName}
+	if spec.kubeconfigPath != "" {
+		rs.KubeconfigPath = spec.kubeconfigPath // path-based: store the path, not the bytes
+	} else {
+		rs.Kubeconfig = string(spec.kubeconfig)
+	}
+	st, _ := json.Marshal(rs)
 	return &pluginproto.ApplyResult{Resource: observed(m, rel), State: st}, nil
 }
 
@@ -94,10 +121,14 @@ func (p *provider) Get(_ context.Context, req pluginproto.GetParams) (*pluginpro
 	if len(req.State) > 0 {
 		_ = json.Unmarshal(req.State, &st)
 	}
-	if st.Kubeconfig == "" || st.ReleaseName == "" {
+	if !st.hasCluster() {
 		return nil, pluginproto.NotFound(fmt.Sprintf("HelmRelease %q has no prior state", req.Name))
 	}
-	cfg, _, cleanup, err := newActionConfig([]byte(st.Kubeconfig), st.Namespace)
+	kc, err := st.loadKubeconfig()
+	if err != nil {
+		return nil, err
+	}
+	cfg, _, cleanup, err := newActionConfig(kc, st.Namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -126,10 +157,14 @@ func (p *provider) Delete(_ context.Context, req pluginproto.DeleteParams) error
 	if len(req.State) > 0 {
 		_ = json.Unmarshal(req.State, &st)
 	}
-	if st.Kubeconfig == "" || st.ReleaseName == "" {
+	if !st.hasCluster() {
 		return nil // never applied / no state
 	}
-	cfg, _, cleanup, err := newActionConfig([]byte(st.Kubeconfig), st.Namespace)
+	kc, err := st.loadKubeconfig()
+	if err != nil {
+		return err
+	}
+	cfg, _, cleanup, err := newActionConfig(kc, st.Namespace)
 	if err != nil {
 		return err
 	}
@@ -140,19 +175,33 @@ func (p *provider) Delete(_ context.Context, req pluginproto.DeleteParams) error
 // --- spec parsing ---
 
 type helmSpec struct {
-	kubeconfig string
-	namespace  string
-	chart      chartSpec
-	opts       releaseOpts
+	kubeconfig     []byte // resolved content
+	kubeconfigPath string // set when sourced from a path (stored in state for re-read)
+	namespace      string
+	chart          chartSpec
+	opts           releaseOpts
 }
 
 func parseHelmSpec(m *protocol.Resource) (helmSpec, error) {
 	s := m.Spec
 	var hs helmSpec
-	hs.kubeconfig = specString(s, "kubeconfig")
-	if hs.kubeconfig == "" {
-		return hs, fmt.Errorf("HelmRelease %q: spec.kubeconfig is required", m.Metadata.Name)
+
+	// Kubeconfig comes from either a path (typically a Cluster's
+	// status.outputs.kubeconfigPath resolved via $ref — read the file) or inline
+	// content (an explicit external kubeconfig, usually a $secret).
+	if path := specString(s, "kubeconfigPath"); path != "" {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return hs, fmt.Errorf("HelmRelease %q: read kubeconfig %q: %w", m.Metadata.Name, path, err)
+		}
+		hs.kubeconfig = content
+		hs.kubeconfigPath = path
+	} else if inline := specString(s, "kubeconfig"); inline != "" {
+		hs.kubeconfig = []byte(inline)
+	} else {
+		return hs, fmt.Errorf("HelmRelease %q: spec.kubeconfig or spec.kubeconfigPath is required", m.Metadata.Name)
 	}
+
 	hs.namespace = specString(s, "namespace")
 	if hs.namespace == "" {
 		hs.namespace = "default"
@@ -200,8 +249,8 @@ func parseHelmSpec(m *protocol.Resource) (helmSpec, error) {
 func observed(m *protocol.Resource, rel *release.Release) *protocol.Resource {
 	spec := map[string]any{}
 	for k, v := range m.Spec {
-		if k == "kubeconfig" {
-			continue // never surface the credential
+		if k == "kubeconfig" || k == "kubeconfigPath" {
+			continue // never surface the credential / resolved path
 		}
 		spec[k] = v
 	}

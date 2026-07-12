@@ -30,15 +30,19 @@ func TestE2EHelmRelease(t *testing.T) {
 	}
 
 	cases := []struct {
-		name  string
-		chart map[string]any
+		name   string
+		chart  map[string]any
+		byPath bool // supply the kubeconfig as a path (the $ref/Cluster route)
 	}{
 		{"http", map[string]any{
 			"repo": "https://stefanprodan.github.io/podinfo", "name": "podinfo", "version": "6.7.0",
-		}},
+		}, false},
 		{"oci", map[string]any{
 			"repo": "oci://ghcr.io/stefanprodan/charts", "name": "podinfo", "version": "6.7.0",
-		}},
+		}, false},
+		{"kubeconfig-path", map[string]any{
+			"repo": "https://stefanprodan.github.io/podinfo", "name": "podinfo", "version": "6.7.0",
+		}, true},
 	}
 
 	for _, tc := range cases {
@@ -49,13 +53,19 @@ func TestE2EHelmRelease(t *testing.T) {
 			m := &protocol.Resource{APIVersion: apiVersion, Kind: kindHelmRelease}
 			m.Metadata.Name = relName
 			m.Spec = map[string]any{
-				"kubeconfig":      string(kc),
 				"namespace":       "openctl-e2e-" + tc.name,
 				"createNamespace": true,
 				"chart":           tc.chart,
 				"wait":            true,
 				"timeout":         "3m",
 				"values":          map[string]any{"replicaCount": 1.0},
+			}
+			// The path route mirrors what a Cluster $ref resolves to; the content
+			// route mirrors an inline external kubeconfig ($secret).
+			if tc.byPath {
+				m.Spec["kubeconfigPath"] = kcPath
+			} else {
+				m.Spec["kubeconfig"] = string(kc)
 			}
 
 			ar, err := p.Apply(ctx, pluginproto.ApplyParams{Manifest: m})
