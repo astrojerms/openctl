@@ -1007,8 +1007,16 @@ phase plan when ready to commit.
       drawing the native/GitOps seam at *infra coupling*. Payoff: the UI graph
       extends up into workloads and down to metal + edge (pod → cluster → VM →
       host; workload → Tunnel → DNSRecord) — the slice a cluster-scoped tool
-      like ArgoCD structurally can't show. Phased 1–6; **Phase 1 scoped** (the
-      `HelmRelease` engine).
+      like ArgoCD structurally can't show. Phased 1–6.
+  - [x] **Phase 1 — `plugins/k8s` + `HelmRelease` (the engine).** Native
+        pluginproto plugin driving the Helm Go SDK (`helm upgrade --install` /
+        get / list / uninstall) against an explicit kubeconfig; **HTTP + OCI**
+        charts; `$secret` values; wait-for-ready. Nearly stateless (Helm keeps
+        release state in-cluster). Tested hermetically (Helm memory driver +
+        fake kube client + a local chart) and **e2e against a live k3d
+        cluster** (published podinfo from HTTP *and* OCI: apply→get→upgrade→
+        delete→NotFound, gated on `KUBECONFIG_E2E`). *Next:* Phase 2 —
+        `spec.cluster: {$ref: Cluster/…}` kubeconfig resolution.
 - [x] **Provider credential editing** — new ConfigService RPCs
       (ListProviders / UpsertProvider / DeleteProvider) that read/
       write ~/.openctl/config.yaml. UI Providers page with add /

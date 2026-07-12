@@ -1,4 +1,4 @@
-.PHONY: all build build-cli build-controller build-controller-linux build-plugins build-plugin-proxmox build-plugin-k3s build-plugin-cloudflare build-plugin-k3s-agent build-plugin-k3s-agent-linux install clean test test-e2e fmt lint modernize modernize-check generate ui ui-install ui-clean codesign-setup
+.PHONY: all build build-cli build-controller build-controller-linux build-plugins build-plugin-proxmox build-plugin-k3s build-plugin-cloudflare build-plugin-k8s build-plugin-k3s-agent build-plugin-k3s-agent-linux install clean test test-e2e fmt lint modernize modernize-check generate ui ui-install ui-clean codesign-setup
 
 # Binary names
 CLI_BINARY=openctl
@@ -11,6 +11,7 @@ PLUGIN_K3S_AGENT_BINARY=openctl-k3s-agent
 BUILD_DIR=bin
 PROXMOX_PLUGIN_DIR=plugins/proxmox
 K3S_PLUGIN_DIR=plugins/k3s
+K8S_PLUGIN_DIR=plugins/k8s
 UI_DIR=ui
 UI_OUT=internal/controller/server/uiassets/dist
 
@@ -69,7 +70,14 @@ build-controller: ui
 	go build $(GOFLAGS) -o $(BUILD_DIR)/$(CONTROLLER_BINARY) ./cmd/openctl-controller
 	$(call codesign_binary,$(BUILD_DIR)/$(CONTROLLER_BINARY),io.openctl.controller)
 
-build-plugins: build-plugin-proxmox build-plugin-k3s build-plugin-cloudflare
+build-plugins: build-plugin-proxmox build-plugin-k3s build-plugin-cloudflare build-plugin-k8s
+
+# The k8s plugin (Helm-SDK workload provider) is a separate module.
+build-plugin-k8s:
+	@echo "Building k8s plugin..."
+	@mkdir -p $(BUILD_DIR)
+	cd $(K8S_PLUGIN_DIR) && go build $(GOFLAGS) -o ../../$(BUILD_DIR)/openctl-k8s ./cmd/openctl-k8s
+	$(call codesign_binary,$(BUILD_DIR)/openctl-k8s,io.openctl.plugin.k8s)
 
 # The cloudflare plugin lives in the root module (stdlib-only), so it builds
 # straight from ./plugins/cloudflare — no separate module / `cd` needed.
@@ -129,6 +137,7 @@ install: build build-plugin-k3s-agent-linux
 	cp $(BUILD_DIR)/$(PLUGIN_PROXMOX_BINARY) $(HOME)/.openctl/plugins/
 	cp $(BUILD_DIR)/$(PLUGIN_K3S_BINARY) $(HOME)/.openctl/plugins/
 	cp $(BUILD_DIR)/openctl-cloudflare $(HOME)/.openctl/plugins/
+	cp $(BUILD_DIR)/openctl-k8s $(HOME)/.openctl/plugins/
 	cp $(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-amd64 $(HOME)/.openctl/plugins/k3s-agents/
 	cp $(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-arm64 $(HOME)/.openctl/plugins/k3s-agents/
 	cp $(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-armv7 $(HOME)/.openctl/plugins/k3s-agents/
@@ -141,6 +150,7 @@ install-plugins: build-plugins build-plugin-k3s-agent-linux
 	cp $(BUILD_DIR)/$(PLUGIN_PROXMOX_BINARY) $(HOME)/.openctl/plugins/
 	cp $(BUILD_DIR)/$(PLUGIN_K3S_BINARY) $(HOME)/.openctl/plugins/
 	cp $(BUILD_DIR)/openctl-cloudflare $(HOME)/.openctl/plugins/
+	cp $(BUILD_DIR)/openctl-k8s $(HOME)/.openctl/plugins/
 	cp $(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-amd64 $(HOME)/.openctl/plugins/k3s-agents/
 	cp $(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-arm64 $(HOME)/.openctl/plugins/k3s-agents/
 	cp $(BUILD_DIR)/$(PLUGIN_K3S_AGENT_BINARY)-linux-armv7 $(HOME)/.openctl/plugins/k3s-agents/
@@ -194,6 +204,7 @@ test:
 	go test ./...
 	cd $(PROXMOX_PLUGIN_DIR) && go test ./...
 	cd $(K3S_PLUGIN_DIR) && go test ./...
+	cd $(K8S_PLUGIN_DIR) && go test ./...
 
 test-e2e: build-cli
 	go test -v ./test/e2e/...
@@ -214,6 +225,7 @@ deps:
 	go mod tidy
 	cd $(PROXMOX_PLUGIN_DIR) && go mod download && go mod tidy
 	cd $(K3S_PLUGIN_DIR) && go mod download && go mod tidy
+	cd $(K8S_PLUGIN_DIR) && go mod download && go mod tidy
 
 # Regenerate gRPC bindings from .proto files. Requires protoc + the Go
 # plugins (see DEVELOPMENT.md for install instructions). The generated
@@ -240,6 +252,8 @@ modernize:
 	cd $(PROXMOX_PLUGIN_DIR) && modernize -fix ./...
 	@echo "Running modernize on k3s plugin..."
 	cd $(K3S_PLUGIN_DIR) && modernize -fix ./...
+	@echo "Running modernize on k8s plugin..."
+	cd $(K8S_PLUGIN_DIR) && modernize -fix ./...
 	@echo "Done! Review changes with 'git diff'"
 
 # Check for modernize suggestions without applying fixes
