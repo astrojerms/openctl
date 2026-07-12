@@ -993,6 +993,22 @@ phase plan when ready to commit.
       This makes tfhost able to host real SDKv2 and framework providers
       (incl. the Terraform Cloudflare provider). *Next:* UpgradeResourceState
       wiring; real-provider validation in CI (currently gated/local).
+- [ ] **Workload deployment + unified cross-layer graph** *(design:
+      [docs/deployment-model.md](docs/deployment-model.md))* — grow openctl from
+      an infra control plane into a *unified* one that also manages/sees Layer 1
+      workloads. A **purpose-built** `plugins/k8s` provider (Helm Go SDK +
+      client-go — the Helm SDK is the per-release reconcile engine, so it's not
+      "reimplement Argo") deploys `HelmRelease`/`Manifest` to any cluster
+      (openctl `Cluster` by `$ref`, or an external kubeconfig); charts from HTTP
+      + OCI; values via `$secret`. **Argo** is bootstrapped + read/aggregated
+      (create-optional) for pure apps. An **opt-in `Platform` composite**
+      (nothing on by default) natively runs the infra-coupled layer —
+      **Traefik** ingress + **cloudflared** (token wired from the `Tunnel`) —
+      drawing the native/GitOps seam at *infra coupling*. Payoff: the UI graph
+      extends up into workloads and down to metal + edge (pod → cluster → VM →
+      host; workload → Tunnel → DNSRecord) — the slice a cluster-scoped tool
+      like ArgoCD structurally can't show. Phased 1–6; **Phase 1 scoped** (the
+      `HelmRelease` engine).
 - [x] **Provider credential editing** — new ConfigService RPCs
       (ListProviders / UpsertProvider / DeleteProvider) that read/
       write ~/.openctl/config.yaml. UI Providers page with add /
