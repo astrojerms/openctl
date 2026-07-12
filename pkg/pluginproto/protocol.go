@@ -253,6 +253,13 @@ type DoActionResult struct {
 type RefParams struct {
 	Kind string `json:"kind"`
 	Name string `json:"name"`
+	// State is the resource's opaque provider state, threaded through so a
+	// stateful plugin can answer a children query that needs cluster access
+	// (e.g. a HelmRelease enumerating its objects needs the kubeconfig, which
+	// lives only in state). Populated by the external adapter for stateful
+	// providers; empty for stateless ones and for OwnerOf. Backward-compatible:
+	// omitempty, and plugins that ignore it behave exactly as before.
+	State json.RawMessage `json:"state,omitempty"`
 }
 
 // OwnerOfResult reports ownership. Owned=false means unclaimed.

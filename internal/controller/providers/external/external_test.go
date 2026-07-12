@@ -532,3 +532,59 @@ func TestNewForwardsAdvancedKindsFromHandshake(t *testing.T) {
 		t.Errorf("AdvancedKinds[0] = %+v, want {Worker Cluster \"made by a Cluster\"}", adv[0])
 	}
 }
+
+// childrenStateHandler advertises State + Children and echoes back, as its
+// single child's name, the state blob it received on ChildrenOf — proving the
+// adapter loaded the resource's state and threaded it into the query (a
+// stateful plugin needs it to reach the cluster).
+type childrenStateHandler struct {
+	pluginproto.UnimplementedHandler
+}
+
+func (h *childrenStateHandler) Handshake(context.Context) (*pluginproto.HandshakeResult, error) {
+	return &pluginproto.HandshakeResult{
+		ProviderName:    "childstate",
+		ProtocolVersion: pluginproto.ProtocolVersion,
+		Capabilities:    []string{pluginproto.CapabilityState, pluginproto.CapabilityChildren},
+		Kinds:           []pluginproto.KindInfo{{Kind: "Thing"}},
+	}, nil
+}
+
+func (h *childrenStateHandler) Apply(_ context.Context, p pluginproto.ApplyParams) (*pluginproto.ApplyResult, error) {
+	return &pluginproto.ApplyResult{Resource: p.Manifest}, nil
+}
+func (h *childrenStateHandler) Get(context.Context, pluginproto.GetParams) (*pluginproto.GetResult, error) {
+	return nil, pluginproto.NotFound("x")
+}
+func (h *childrenStateHandler) List(context.Context, string) ([]*protocol.Resource, error) {
+	return nil, nil
+}
+func (h *childrenStateHandler) Delete(context.Context, pluginproto.DeleteParams) error { return nil }
+func (h *childrenStateHandler) ChildrenOf(_ context.Context, p pluginproto.RefParams) ([]pluginproto.ResourceRef, error) {
+	return []pluginproto.ResourceRef{{APIVersion: "x.openctl.io/v1", Kind: "Child", Name: string(p.State)}}, nil
+}
+
+func TestChildrenOfThreadsStateFromStore(t *testing.T) {
+	store := newMemStore()
+	// Seed the resource's state as if a prior Apply had persisted it.
+	seeded := []byte(`{"kubeconfigPath":"/tmp/kc"}`)
+	if err := store.SaveState(context.Background(), "childstate.openctl.io/v1", "Thing", "t1", seeded, nil, 0); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	prov, done := newStatefulAdapter(t, &childrenStateHandler{}, store)
+	defer done()
+
+	cl, ok := prov.(providers.ChildrenLister)
+	if !ok {
+		t.Fatal("adapter should implement ChildrenLister")
+	}
+	kids := cl.ChildrenOf("Thing", "t1")
+	if len(kids) != 1 {
+		t.Fatalf("want 1 child, got %d: %+v", len(kids), kids)
+	}
+	// The handler echoed the state it saw into the child name: proves threading.
+	if kids[0].Name != string(seeded) {
+		t.Errorf("ChildrenOf state not threaded to plugin: child name = %q, want %q", kids[0].Name, seeded)
+	}
+}
