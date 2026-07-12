@@ -67,6 +67,10 @@ import "openctl.io/schemas/base"
 		cores: int & >=1 | *2
 		// Number of CPU sockets exposed to the guest.
 		sockets?: int & >=1 | *1
+		// Proxmox CPU model. "host" exposes the physical CPU's full feature
+		// set (AVX etc.) — what compute / GPU / local-model workloads want.
+		// Omit for the Proxmox default (kvm64).
+		type?: string
 	}
 	// Memory size in MiB.
 	memory?: {
@@ -81,8 +85,46 @@ import "openctl.io/schemas/base"
 	// seabios is the traditional BIOS.
 	bios?: "seabios" | "ovmf"
 	// Virtual machine type. q35 is recommended for modern guests with
-	// PCIe; pc/i440fx is the legacy default.
+	// PCIe; pc/i440fx is the legacy default. q35 is required for PCIe
+	// passthrough (hostPCI with pcie=true).
 	machine?: "pc" | "q35" | "i440fx"
+
+	// EFI vars disk for OVMF/UEFI firmware. Set this whenever bios=ovmf —
+	// without it OVMF has nowhere to persist boot config. Also a prerequisite
+	// for a working GPU-passthrough VM (q35 + ovmf + efiDisk + hostPCI).
+	efiDisk?: {
+		// Proxmox storage ID to allocate the EFI vars volume on (e.g. "local-lvm").
+		storage: string @options(kind="ProxmoxNode", field="status.storages", dependsOn="spec.node")
+		// OVMF firmware size. "4m" (default) supports secure boot / larger var
+		// stores; "2m" is the legacy smaller image.
+		type?: "4m" | "2m"
+		// Enroll Microsoft's secure-boot keys. Off by default — GPU-passthrough
+		// and Linux guests generally run without secure boot.
+		preEnrolledKeys?: bool | *false
+	}
+
+	// Host PCI device passthrough (e.g. a GPU for a local model). Needs
+	// machine=q35, bios=ovmf, and an efiDisk. Give exactly one of device (a
+	// raw PCI address) or mapping (a Proxmox resource-mapping id — portable
+	// across hosts). The VM must be pinned (spec.node) to the host that owns
+	// the device.
+	hostPCI?: [...{
+		// Raw host PCI address, e.g. "0000:01:00" or "0000:01:00.0".
+		device?: string @oneOf(group="pci-source")
+		// Proxmox resource-mapping id (preferred — survives host moves).
+		mapping?: string @oneOf(group="pci-source")
+		// Expose as PCIe rather than legacy PCI. Requires machine=q35.
+		pcie?: bool | *false
+		// Mark as the primary GPU (Proxmox x-vga=1). Disables the emulated VGA.
+		primaryGPU?: bool | *false
+		// Map the device ROM BAR. On by default in Proxmox; set false for GPUs
+		// that misbehave with it mapped.
+		rombar?: bool
+		// Request a mediated device (vGPU) of this type instead of the whole card.
+		mdev?: string
+		// Custom device ROM filename under Proxmox's /usr/share/kvm.
+		romfile?: string
+	}]
 
 	// QEMU guest agent. Enabling needs qemu-guest-agent installed in the
 	// guest; openctl uses it for IP detection.

@@ -45,6 +45,55 @@ plugin protocol → Terraform/OpenTofu host → run-anywhere Linux daemon
 (OIDC slice) and CUE-WASM validation are parked behind that. (Mobile
 layout has since shipped.)
 
+## Homelab completion (ACTIVE — 2026-07-12)
+
+Backend-vs-vision gap audit for running the full homelab through openctl
+(GPU box for a local model / Ollama, two k3s clusters, self-hosted sites,
+a DriftlessAF-style GitOps loop, internal services like media / Home
+Assistant, Synology storage). The workload/deploy mechanism (HelmRelease /
+Manifest / Platform / Argo aggregation), two-cluster support, DNS + Traefik
+ingress, the unified cross-layer graph, and 5-min drift detection **already
+exist**. These are the remaining gaps, tracked as targets and checked off as
+they ship.
+
+### A. GPU / local-model (Ollama) enablement
+- [x] **A1 — Proxmox VM PCI/GPU passthrough.** `VMSpec.hostPCI[]` (device or
+      resource-mapping id, `pcie`, `primaryGPU`/x-vga, `rombar`, `mdev`,
+      `romfile`) → `hostpciN`; `cpu.type` (`host`) → `cpu`. Lets openctl hand a
+      GPU to a VM it creates. CUE schema + unit tests (emit + round-trip).
+- [x] **A2 — OVMF/UEFI completeness.** `VMSpec.efiDisk` (storage, `4m`/`2m`,
+      preEnrolledKeys) → allocates `efidisk0`, so a `q35` + `ovmf` passthrough
+      VM actually boots. Schema + tests.
+- [ ] **A3 — k3s node GPU request.** Let a k3s worker pool request a GPU —
+      pins the node to the GPU host and passes the device into the node VM,
+      composing A1 into the cluster node builder.
+- [ ] **A4 — GPU workload enablement.** NVIDIA device plugin / runtime as an
+      opt-in Platform component (or documented Manifest) so `nvidia.com/gpu`
+      scheduling works; Ollama then deploys as a HelmRelease onto the GPU node.
+
+### B. GitOps-from-git (the DriftlessAF loop)
+- [ ] **B1 — Git-as-source pull loop.** Poll a remote repo and feed changed
+      manifests into the existing apply engine — close the "commit to git →
+      openctl brings it up" loop (today git is a write-only mirror + a manual
+      ff-only `repo:pull` that applies nothing). Reuses the fsnotify watcher.
+- [ ] **B2 — Declarative desired-set + repo-wide prune.** Treat the repo as
+      the desired SET; prune openctl-managed resources removed from it (today
+      prune exists only inside a single k8s `Manifest`). Opt-in + guarded.
+- [ ] **B3 — GitHub / PR flow.** Webhook-triggered reconcile and/or PR-based
+      change proposal. Scope leans on the existing design (Argo drives pure-app
+      GitOps; openctl natively reconciles the infra-coupled layer it owns).
+
+### C. Storage
+- [ ] **C1 — First-class NFS / PV helper.** Optional convenience for
+      Synology-backed persistent volumes (workable today via raw `Manifest`
+      YAML). Lower priority.
+
+### D. Loose ends
+- [ ] **D1 — cloudflared token auto-wiring.** Bridge an action output (the
+      Tunnel token) into a `$secret` so the Platform cloudflared component
+      wires up without manual token copying. (Live tunnel metal-validation is
+      a separate user task.)
+
 ## Suggested next order
 
 The UI/controller feature build-out is essentially complete (all UI
