@@ -101,6 +101,33 @@ const platformSchema = `
 		// store the token).
 		traefik?: {...}
 		cloudflared?: {...}
+		// argocd installs Argo CD (bootstrap). Pair with an ArgoApplications
+		// resource to aggregate its Applications into openctl.
+		argocd?: {...}
+	}
+	...
+}
+`
+
+// argoApplicationsSchema is the CUE schema for the read-only ArgoApplications
+// aggregation kind: it surfaces a cluster's Argo CD Applications (name + health
+// + sync) into openctl for the unified view. Creating Applications is done via
+// the Manifest kind.
+const argoApplicationsSchema = `
+#ArgoApplications: {
+	apiVersion: "k8s.openctl.io/v1"
+	kind:       "ArgoApplications"
+	metadata: {
+		name: string
+		...
+	}
+	spec: {
+		// Target cluster (same as HelmRelease): kubeconfigPath ($ref) or inline
+		// kubeconfig ($secret).
+		kubeconfigPath?: string
+		kubeconfig?:     string
+		// namespace Argo CD runs in. Defaults to "argocd".
+		namespace?: string
 	}
 	...
 }

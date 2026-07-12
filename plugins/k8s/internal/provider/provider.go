@@ -40,6 +40,7 @@ func (p *provider) Handshake(context.Context) (*pluginproto.HandshakeResult, err
 			{Kind: kindHelmRelease, Schema: helmReleaseSchema},
 			{Kind: kindManifest, Schema: manifestSchema},
 			{Kind: kindPlatform, Schema: platformSchema},
+			{Kind: kindArgoApplications, Schema: argoApplicationsSchema},
 		},
 	}, nil
 }
@@ -119,6 +120,8 @@ func (p *provider) Apply(ctx context.Context, req pluginproto.ApplyParams) (*plu
 		return p.applyManifest(ctx, m, req.State)
 	case kindPlatform:
 		return p.applyPlatform(ctx, m, req.State)
+	case kindArgoApplications:
+		return p.applyArgoApplications(ctx, m)
 	default:
 		return nil, pluginproto.Unsupported("k8s provider handles HelmRelease, Manifest and Platform, not " + m.Kind)
 	}
@@ -132,6 +135,8 @@ func (p *provider) Get(ctx context.Context, req pluginproto.GetParams) (*pluginp
 		return p.getManifest(ctx, req)
 	case kindPlatform:
 		return p.getPlatform(ctx, req)
+	case kindArgoApplications:
+		return p.getArgoApplications(ctx, req)
 	default:
 		return nil, pluginproto.Unsupported("k8s provider handles HelmRelease, Manifest and Platform, not " + req.Kind)
 	}
