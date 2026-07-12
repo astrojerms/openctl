@@ -186,3 +186,79 @@ func TestE2EManifest(t *testing.T) {
 		t.Error("expected NotFound after delete")
 	}
 }
+
+// TestE2EPlatform drives the opt-in Platform composite against a real cluster:
+// enable the Traefik component (installs a real Helm release), Get, then prune
+// it (re-apply with it disabled → uninstalled), then Delete. Gated on
+// KUBECONFIG_E2E. Uses Traefik only (a reliable public chart); cloudflared needs
+// a real Cloudflare tunnel token and is covered by unit tests.
+func TestE2EPlatform(t *testing.T) {
+	kcPath := os.Getenv("KUBECONFIG_E2E")
+	if kcPath == "" {
+		t.Skip("set KUBECONFIG_E2E to a kubeconfig path to run the real-cluster e2e")
+	}
+	kc, err := os.ReadFile(kcPath)
+	if err != nil {
+		t.Fatalf("read kubeconfig: %v", err)
+	}
+	ctx := context.Background()
+	p := New()
+
+	m := &protocol.Resource{APIVersion: apiVersion, Kind: kindPlatform}
+	m.Metadata.Name = "edge"
+	m.Spec = map[string]any{
+		"kubeconfig": string(kc),
+		"traefik": map[string]any{
+			"enabled":   true,
+			"namespace": "traefik-e2e",
+			// Keep it light on k3d: no LB, single replica.
+			"values": map[string]any{
+				"service":    map[string]any{"type": "ClusterIP"},
+				"deployment": map[string]any{"replicas": 1},
+			},
+		},
+	}
+
+	ar, err := p.Apply(ctx, pluginproto.ApplyParams{Manifest: m})
+	if err != nil {
+		t.Fatalf("apply platform: %v", err)
+	}
+	if ar.Resource.Status["enabled"] != 1 {
+		t.Fatalf("enabled = %v, want 1", ar.Resource.Status["enabled"])
+	}
+	if _, leaked := ar.Resource.Spec["kubeconfig"]; leaked {
+		t.Error("platform observed spec leaked kubeconfig")
+	}
+
+	gr, err := p.Get(ctx, pluginproto.GetParams{Kind: kindPlatform, Name: "edge", State: ar.State})
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if gr.Resource.Status["phase"] != "Ready" {
+		t.Errorf("get phase = %v", gr.Resource.Status["phase"])
+	}
+
+	// Disable traefik → it is pruned (uninstalled).
+	m.Spec["traefik"] = map[string]any{"enabled": false}
+	ar2, err := p.Apply(ctx, pluginproto.ApplyParams{Manifest: m, State: ar.State})
+	if err != nil {
+		t.Fatalf("re-apply (disable): %v", err)
+	}
+	if ar2.Resource.Status["enabled"] != 0 {
+		t.Errorf("enabled after disable = %v, want 0", ar2.Resource.Status["enabled"])
+	}
+	// The traefik release must be gone.
+	cfg, _, cleanup, _ := newActionConfig(kc, "traefik-e2e")
+	if _, err := getRelease(cfg, "traefik"); err == nil {
+		t.Error("traefik release should have been pruned")
+	}
+	cleanup()
+
+	// Get is now NotFound (no components), and Delete is a no-op-safe teardown.
+	if _, err := p.Get(ctx, pluginproto.GetParams{Kind: kindPlatform, Name: "edge", State: ar2.State}); err == nil {
+		t.Error("expected NotFound after all components disabled")
+	}
+	if err := p.Delete(ctx, pluginproto.DeleteParams{Kind: kindPlatform, State: ar.State}); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+}

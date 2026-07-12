@@ -75,3 +75,33 @@ const manifestSchema = `
 	...
 }
 `
+
+// platformSchema is the CUE schema for the opt-in Platform composite: a curated,
+// infra-coupled platform layer. Nothing is enabled by default. Each component
+// installs a Helm release; disabling a previously-enabled one uninstalls it.
+const platformSchema = `
+#Platform: {
+	apiVersion: "k8s.openctl.io/v1"
+	kind:       "Platform"
+	metadata: {
+		name: string
+		...
+	}
+	spec: {
+		// Target cluster (same as HelmRelease): kubeconfigPath ($ref to a
+		// Cluster's status.outputs.kubeconfigPath) or inline kubeconfig ($secret).
+		kubeconfigPath?: string
+		kubeconfig?:     string
+		// Component toggles — opt in explicitly; each has optional overrides:
+		//   { enabled: bool, namespace?: string, wait?: bool,
+		//     chart?: {repo?, name?, version?}, values?: {...} }
+		// Traefik is the ingress. cloudflared wires a Cloudflare Tunnel; put its
+		// run token in cloudflared.values as a $secret (openctl has no
+		// action-output→secret bridge yet, so run the Tunnel's get-token once and
+		// store the token).
+		traefik?: {...}
+		cloudflared?: {...}
+	}
+	...
+}
+`

@@ -32,14 +32,25 @@ func (p *provider) Handshake(context.Context) (*pluginproto.HandshakeResult, err
 	return &pluginproto.HandshakeResult{
 		ProviderName:    providerName,
 		ProtocolVersion: pluginproto.ProtocolVersion,
-		// State carries the kubeconfig + release coordinates so Get/Delete can
-		// reconnect to the cluster (Get/Delete params don't include the spec).
-		Capabilities: []string{pluginproto.CapabilitySchema, pluginproto.CapabilityState},
+		// State carries the kubeconfig + release/object coordinates so Get/Delete
+		// can reconnect to the cluster (Get/Delete params don't include the spec).
+		// Plan lets the UI render the Platform composite's fan-out.
+		Capabilities: []string{pluginproto.CapabilitySchema, pluginproto.CapabilityState, pluginproto.CapabilityPlan},
 		Kinds: []pluginproto.KindInfo{
 			{Kind: kindHelmRelease, Schema: helmReleaseSchema},
 			{Kind: kindManifest, Schema: manifestSchema},
+			{Kind: kindPlatform, Schema: platformSchema},
 		},
 	}, nil
+}
+
+// Plan expands a Platform composite into its component HelmRelease children for
+// the UI graph. Only Platform composes; other kinds are applied directly.
+func (p *provider) Plan(_ context.Context, m *protocol.Resource) (*pluginproto.PlanResult, error) {
+	if m == nil || m.Kind != kindPlatform {
+		return nil, pluginproto.Unsupported("only Platform composes")
+	}
+	return p.planPlatform(m), nil
 }
 
 // kubeconfigState records how to reach the cluster for Get/Delete (which carry
@@ -106,8 +117,10 @@ func (p *provider) Apply(ctx context.Context, req pluginproto.ApplyParams) (*plu
 		return p.applyHelmRelease(m)
 	case kindManifest:
 		return p.applyManifest(ctx, m, req.State)
+	case kindPlatform:
+		return p.applyPlatform(ctx, m, req.State)
 	default:
-		return nil, pluginproto.Unsupported("k8s provider handles HelmRelease and Manifest, not " + m.Kind)
+		return nil, pluginproto.Unsupported("k8s provider handles HelmRelease, Manifest and Platform, not " + m.Kind)
 	}
 }
 
@@ -117,8 +130,10 @@ func (p *provider) Get(ctx context.Context, req pluginproto.GetParams) (*pluginp
 		return p.getHelmRelease(req)
 	case kindManifest:
 		return p.getManifest(ctx, req)
+	case kindPlatform:
+		return p.getPlatform(ctx, req)
 	default:
-		return nil, pluginproto.Unsupported("k8s provider handles HelmRelease and Manifest, not " + req.Kind)
+		return nil, pluginproto.Unsupported("k8s provider handles HelmRelease, Manifest and Platform, not " + req.Kind)
 	}
 }
 
@@ -128,6 +143,8 @@ func (p *provider) Delete(ctx context.Context, req pluginproto.DeleteParams) err
 		return p.deleteHelmRelease(req)
 	case kindManifest:
 		return p.deleteManifest(ctx, req)
+	case kindPlatform:
+		return p.deletePlatform(ctx, req)
 	default:
 		return nil
 	}
