@@ -1055,8 +1055,20 @@ phase plan when ready to commit.
         it's user-provided since openctl has no action-output→secret bridge yet.
         Verified: unit (fan-out, owner labels, prune diff) + **e2e vs k3d**
         (enable Traefik → real release installed → disable → pruned
-        (confirmed gone) → delete). *Next:* Phase 5 — Argo bootstrap +
-        aggregation.
+        (confirmed gone) → delete).
+  - [x] **Phase 5 — Argo bootstrap + aggregation.** Bootstrap: `argocd` is now a
+        `Platform` component (argo-cd chart). Aggregation: a read-only
+        `ArgoApplications` kind (cluster ref + optional namespace, default
+        `argocd`) whose Apply/Get read the live Argo `Application` CRs via the
+        dynamic client and summarize each app's name + health + sync into status
+        (Ready/Degraded); Delete is a no-op. This sidesteps the global-`List`
+        problem — aggregation is a named per-cluster resource. Creating
+        Applications declaratively is already covered by the `Manifest` kind, so
+        this stays read-only (create-optional, read-baseline as designed).
+        Verified: unit (summarize, observed phases, argocd component) + **e2e vs
+        k3d** (register the Application CRD + a sample Application with
+        health/sync → read it back through the provider). *Next:* Phase 6 —
+        unified cross-layer graph in the UI.
 - [x] **Provider credential editing** — new ConfigService RPCs
       (ListProviders / UpsertProvider / DeleteProvider) that read/
       write ~/.openctl/config.yaml. UI Providers page with add /

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/openctl/openctl/pkg/pluginproto"
 	"github.com/openctl/openctl/pkg/protocol"
@@ -213,8 +214,9 @@ func TestE2EPlatform(t *testing.T) {
 			"namespace": "traefik-e2e",
 			// Keep it light on k3d: no LB, single replica.
 			"values": map[string]any{
-				"service":    map[string]any{"type": "ClusterIP"},
-				"deployment": map[string]any{"replicas": 1},
+				"service":      map[string]any{"type": "ClusterIP"},
+				"deployment":   map[string]any{"replicas": 1},
+				"ingressClass": map[string]any{"enabled": false}, // k3d's built-in Traefik owns it
 			},
 		},
 	}
@@ -260,5 +262,120 @@ func TestE2EPlatform(t *testing.T) {
 	}
 	if err := p.Delete(ctx, pluginproto.DeleteParams{Kind: kindPlatform, State: ar.State}); err != nil {
 		t.Fatalf("delete: %v", err)
+	}
+}
+
+// TestE2EArgoApplications aggregates Argo CD Applications without a full argo-cd
+// install: it registers the Application CRD + a sample Application CR (with
+// health/sync in status), then reads them back through the provider. Gated on
+// KUBECONFIG_E2E.
+func TestE2EArgoApplications(t *testing.T) {
+	kcPath := os.Getenv("KUBECONFIG_E2E")
+	if kcPath == "" {
+		t.Skip("set KUBECONFIG_E2E to a kubeconfig path to run the real-cluster e2e")
+	}
+	kc, err := os.ReadFile(kcPath)
+	if err != nil {
+		t.Fatalf("read kubeconfig: %v", err)
+	}
+	ctx := context.Background()
+
+	// A minimal, no-status-subresource Application CRD so we can set status on
+	// create; plus the argocd namespace.
+	crd := `
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: applications.argoproj.io
+spec:
+  group: argoproj.io
+  scope: Namespaced
+  names: { plural: applications, singular: application, kind: Application }
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: v1
+kind: Namespace
+metadata: { name: argocd }
+`
+	client, err := newKubeClient(kc)
+	if err != nil {
+		t.Fatalf("kube client: %v", err)
+	}
+	objs, _ := parseObjects(crd)
+	for _, o := range objs {
+		if _, err := client.apply(ctx, o); err != nil {
+			t.Fatalf("apply CRD/ns: %v", err)
+		}
+	}
+
+	// The API server registers the CRD endpoint asynchronously; retry the read.
+	p := New()
+	m := &protocol.Resource{APIVersion: apiVersion, Kind: kindArgoApplications}
+	m.Metadata.Name = "edge-apps"
+	m.Spec = map[string]any{"kubeconfig": string(kc), "namespace": "argocd"}
+
+	var ar *pluginproto.ApplyResult
+	for range 20 {
+		ar, err = p.Apply(ctx, pluginproto.ApplyParams{Manifest: m})
+		if err == nil {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("apply ArgoApplications (CRD never became servable): %v", err)
+	}
+
+	// Register a sample Application with health/sync, then read it back.
+	app := `
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: { name: sample, namespace: argocd }
+status:
+  health: { status: Healthy }
+  sync: { status: Synced }
+`
+	appObjs, _ := parseObjects(app)
+	// Fresh client: the earlier one's RESTMapper predates the Application CRD.
+	client2, err := newKubeClient(kc)
+	if err != nil {
+		t.Fatalf("kube client: %v", err)
+	}
+	if _, err := client2.apply(ctx, appObjs[0]); err != nil {
+		t.Fatalf("apply Application: %v", err)
+	}
+
+	sampleRef := objectRef{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications", Kind: "Application", Namespace: "argocd", Name: "sample"}
+	t.Cleanup(func() { _ = client2.delete(ctx, sampleRef) })
+
+	gr, err := p.Get(ctx, pluginproto.GetParams{Kind: kindArgoApplications, Name: "edge-apps", State: ar.State})
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	// The sample must appear with its health/sync (other leftovers are tolerated).
+	apps, _ := gr.Resource.Status["applications"].([]any)
+	var found map[string]any
+	for _, a := range apps {
+		if m, ok := a.(map[string]any); ok && m["name"] == "sample" {
+			found = m
+		}
+	}
+	if found == nil {
+		t.Fatalf("sample Application not aggregated: %v", gr.Resource.Status["applications"])
+	}
+	if found["health"] != "Healthy" || found["sync"] != "Synced" {
+		t.Errorf("sample = %v, want Healthy/Synced", found)
+	}
+
+	// Delete is a no-op (read-only view resource).
+	if err := p.Delete(ctx, pluginproto.DeleteParams{Kind: kindArgoApplications, State: ar.State}); err != nil {
+		t.Errorf("delete should be a no-op, got %v", err)
 	}
 }

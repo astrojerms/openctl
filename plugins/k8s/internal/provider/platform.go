@@ -39,6 +39,7 @@ type component struct {
 var platformComponents = []component{
 	{"traefik", "https://traefik.github.io/charts", "traefik", "traefik"},
 	{"cloudflared", "https://cloudflare.github.io/helm-charts", "cloudflare-tunnel-remote", "cloudflared"},
+	{"argocd", "https://argoproj.github.io/argo-helm", "argo-cd", "argocd"},
 }
 
 // releaseCoord locates an installed component release for Get/Delete/prune.
