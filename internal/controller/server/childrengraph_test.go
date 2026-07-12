@@ -118,6 +118,91 @@ func (f *fakePlanner) Get(_ context.Context, kind, name string) (*protocol.Resou
 	return nil, providers.NotFound(kind, name)
 }
 
+// TestGetChildrenGraphSurfacesVMHostPlacement proves a VirtualMachine's plain
+// spec.node string surfaces as a graph edge to its ProxmoxNode host, and that
+// the host is a terminal node — added but not expanded, so a workload-rooted
+// graph doesn't fan out into every other guest on the box.
+func TestGetChildrenGraphSurfacesVMHostPlacement(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.Open(ctx, filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatalf("open storage: %v", err)
+	}
+	defer db.Close()
+	store := manifests.New(db)
+
+	// A VM manifest pinned to a host via a plain spec.node string (not a $ref).
+	vm := &protocol.Resource{APIVersion: "fake.openctl.io/v1", Kind: "VirtualMachine"}
+	vm.Metadata.Name = "vm-0"
+	vm.Spec = map[string]any{"node": "pve1351", "cpu": map[string]any{"cores": 2}}
+	if err := store.Save(ctx, vm); err != nil {
+		t.Fatalf("save manifest: %v", err)
+	}
+
+	// fakePlanner.Plan returns NotFound for non-Cluster kinds, so the VM is a
+	// leaf structurally — its only outgoing edge is the synthesized placement one.
+	fp := &fakePlanner{fakeProvider: &fakeProvider{}, present: map[string]bool{}}
+	reg := providers.NewRegistry()
+	reg.Register(fp)
+	h := newResourceHandler(reg, nil, nil, store)
+
+	resp, err := h.GetChildrenGraph(ctx, &apiv1.GetChildrenGraphRequest{
+		ApiVersion: "fake.openctl.io/v1", Kind: "VirtualMachine", Name: "vm-0",
+	})
+	if err != nil {
+		t.Fatalf("GetChildrenGraph: %v", err)
+	}
+	if !hasEdge(resp.GetEdges(), "VirtualMachine/vm-0", "ProxmoxNode/pve1351", "ref", "node") {
+		t.Errorf("missing VM→host placement edge; edges: %+v", resp.GetEdges())
+	}
+	// Root VM + host = 2 nodes; the host is terminal (no sibling fan-out).
+	if got := len(resp.GetNodes()); got != 2 {
+		t.Fatalf("node count = %d, want 2: %+v", got, resp.GetNodes())
+	}
+	// The host is observed-only infra: unmanaged, dimmed in the UI.
+	host := nodeByID(resp.GetNodes(), "ProxmoxNode/pve1351")
+	if host == nil {
+		t.Fatalf("missing ProxmoxNode host node")
+	}
+	if host.GetManaged() || host.GetRoot() {
+		t.Errorf("host should be unmanaged and non-root: %+v", host)
+	}
+}
+
+// TestGetChildrenGraphVMWithoutNodeHasNoPlacementEdge guards the guard: a VM
+// with no spec.node (provider-default placement) draws no placement edge.
+func TestGetChildrenGraphVMWithoutNodeHasNoPlacementEdge(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.Open(ctx, filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatalf("open storage: %v", err)
+	}
+	defer db.Close()
+	store := manifests.New(db)
+
+	vm := &protocol.Resource{APIVersion: "fake.openctl.io/v1", Kind: "VirtualMachine"}
+	vm.Metadata.Name = "vm-0"
+	vm.Spec = map[string]any{"cpu": map[string]any{"cores": 2}} // no node
+	if err := store.Save(ctx, vm); err != nil {
+		t.Fatalf("save manifest: %v", err)
+	}
+
+	fp := &fakePlanner{fakeProvider: &fakeProvider{}, present: map[string]bool{}}
+	reg := providers.NewRegistry()
+	reg.Register(fp)
+	h := newResourceHandler(reg, nil, nil, store)
+
+	resp, err := h.GetChildrenGraph(ctx, &apiv1.GetChildrenGraphRequest{
+		ApiVersion: "fake.openctl.io/v1", Kind: "VirtualMachine", Name: "vm-0",
+	})
+	if err != nil {
+		t.Fatalf("GetChildrenGraph: %v", err)
+	}
+	if got := len(resp.GetNodes()); got != 1 {
+		t.Fatalf("VM with no node should be root-only, got %d nodes: %+v", got, resp.GetNodes())
+	}
+}
+
 func nodeByID(nodes []*apiv1.GraphNode, id string) *apiv1.GraphNode {
 	for _, n := range nodes {
 		if n.GetId() == id {
