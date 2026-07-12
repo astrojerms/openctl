@@ -18,8 +18,12 @@ func TestHandshake(t *testing.T) {
 	if hs.ProviderName != "k8s" || hs.ProtocolVersion != pluginproto.ProtocolVersion {
 		t.Errorf("identity = %q/%q", hs.ProviderName, hs.ProtocolVersion)
 	}
-	if len(hs.Kinds) != 1 || hs.Kinds[0].Kind != kindHelmRelease || hs.Kinds[0].Schema == "" {
-		t.Fatalf("kinds = %+v", hs.Kinds)
+	kinds := map[string]string{}
+	for _, k := range hs.Kinds {
+		kinds[k.Kind] = k.Schema
+	}
+	if kinds[kindHelmRelease] == "" || kinds[kindManifest] == "" {
+		t.Fatalf("expected HelmRelease + Manifest with schemas, got %+v", hs.Kinds)
 	}
 	caps := map[string]bool{}
 	for _, c := range hs.Capabilities {
@@ -85,7 +89,7 @@ func TestParseHelmSpecKubeconfigPath(t *testing.T) {
 	}
 
 	// releaseState with a path re-loads from the file (not stored bytes).
-	st := releaseState{KubeconfigPath: path, ReleaseName: "app"}
+	st := releaseState{kubeconfigState: kubeconfigState{KubeconfigPath: path}, ReleaseName: "app"}
 	if !st.hasCluster() {
 		t.Error("hasCluster() = false, want true for path-based state")
 	}
@@ -94,7 +98,7 @@ func TestParseHelmSpecKubeconfigPath(t *testing.T) {
 		t.Errorf("loadKubeconfig = %q (err %v)", kc, err)
 	}
 	// A missing path surfaces an error rather than silently proceeding.
-	if _, err := (releaseState{KubeconfigPath: dir + "/gone", ReleaseName: "app"}).loadKubeconfig(); err == nil {
+	if _, err := (releaseState{kubeconfigState: kubeconfigState{KubeconfigPath: dir + "/gone"}, ReleaseName: "app"}).loadKubeconfig(); err == nil {
 		t.Error("loadKubeconfig on missing path should error")
 	}
 }

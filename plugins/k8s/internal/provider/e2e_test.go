@@ -115,3 +115,74 @@ func TestE2EHelmRelease(t *testing.T) {
 		})
 	}
 }
+
+// TestE2EManifest drives the Manifest kind against a real cluster: server-side
+// apply of two ConfigMaps, Get, prune (re-apply with one → the other is
+// deleted), and Delete. Gated on KUBECONFIG_E2E like TestE2EHelmRelease.
+func TestE2EManifest(t *testing.T) {
+	kcPath := os.Getenv("KUBECONFIG_E2E")
+	if kcPath == "" {
+		t.Skip("set KUBECONFIG_E2E to a kubeconfig path to run the real-cluster e2e")
+	}
+	kc, err := os.ReadFile(kcPath)
+	if err != nil {
+		t.Fatalf("read kubeconfig: %v", err)
+	}
+	ctx := context.Background()
+	p := New()
+
+	cm := func(name, val string) string {
+		return "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: " + name +
+			"\n  namespace: default\ndata:\n  k: \"" + val + "\"\n"
+	}
+	m := &protocol.Resource{APIVersion: apiVersion, Kind: kindManifest}
+	m.Metadata.Name = "glue"
+	m.Spec = map[string]any{
+		"kubeconfig": string(kc),
+		"manifest":   cm("openctl-a", "1") + "---\n" + cm("openctl-b", "2"),
+	}
+
+	ar, err := p.Apply(ctx, pluginproto.ApplyParams{Manifest: m})
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if ar.Resource.Status["applied"] != 2 {
+		t.Fatalf("applied = %v, want 2", ar.Resource.Status["applied"])
+	}
+
+	gr, err := p.Get(ctx, pluginproto.GetParams{Kind: kindManifest, Name: "glue", State: ar.State})
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if gr.Resource.Status["applied"] != 2 || gr.Resource.Status["phase"] != "Ready" {
+		t.Errorf("get status = %v", gr.Resource.Status)
+	}
+
+	// Re-apply with only openctl-a → openctl-b is pruned (deleted).
+	m.Spec["manifest"] = cm("openctl-a", "1")
+	ar2, err := p.Apply(ctx, pluginproto.ApplyParams{Manifest: m, State: ar.State})
+	if err != nil {
+		t.Fatalf("re-apply: %v", err)
+	}
+	if ar2.Resource.Status["applied"] != 1 {
+		t.Errorf("applied after prune = %v, want 1", ar2.Resource.Status["applied"])
+	}
+	// Confirm openctl-b is actually gone from the cluster.
+	client, _ := newKubeClient(kc)
+	bRef := objectRef{Version: "v1", Resource: "configmaps", Kind: "ConfigMap", Namespace: "default", Name: "openctl-b"}
+	if _, err := client.get(ctx, bRef); err == nil {
+		t.Error("openctl-b should have been pruned")
+	}
+
+	// Delete removes the rest.
+	if err := p.Delete(ctx, pluginproto.DeleteParams{Kind: kindManifest, State: ar2.State}); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	aRef := objectRef{Version: "v1", Resource: "configmaps", Kind: "ConfigMap", Namespace: "default", Name: "openctl-a"}
+	if _, err := client.get(ctx, aRef); err == nil {
+		t.Error("openctl-a should have been deleted")
+	}
+	if _, err := p.Get(ctx, pluginproto.GetParams{Kind: kindManifest, Name: "glue", State: ar2.State}); err == nil {
+		t.Error("expected NotFound after delete")
+	}
+}

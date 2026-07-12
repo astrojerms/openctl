@@ -17,6 +17,7 @@ const (
 	providerName    = "k8s"
 	apiVersion      = "k8s.openctl.io/v1"
 	kindHelmRelease = "HelmRelease"
+	kindManifest    = "Manifest"
 )
 
 // provider is the k8s pluginproto Handler. Phase 1 manages HelmRelease via the
@@ -36,43 +37,63 @@ func (p *provider) Handshake(context.Context) (*pluginproto.HandshakeResult, err
 		Capabilities: []string{pluginproto.CapabilitySchema, pluginproto.CapabilityState},
 		Kinds: []pluginproto.KindInfo{
 			{Kind: kindHelmRelease, Schema: helmReleaseSchema},
+			{Kind: kindManifest, Schema: manifestSchema},
 		},
 	}, nil
 }
 
-// releaseState is the opaque blob persisted for a HelmRelease: enough to Get and
-// Delete the release without the spec (Get/Delete params carry no spec). It
-// records how to reach the cluster:
+// kubeconfigState records how to reach the cluster for Get/Delete (which carry
+// no spec), shared by both kinds' state blobs. Fields are inlined into the
+// enclosing JSON (anonymous embed):
 //   - KubeconfigPath (preferred): a path on the controller host — typically a
 //     k3s Cluster's status.outputs.kubeconfigPath resolved via a $ref. Only the
 //     path is stored; Get/Delete re-read the file. No credential bytes persist.
 //   - Kubeconfig: inline content, for an explicit external kubeconfig with no
 //     stable path. Stored in openctl's local provider_state (SQLite, not git).
-type releaseState struct {
+type kubeconfigState struct {
 	KubeconfigPath string `json:"kubeconfigPath,omitempty"`
 	Kubeconfig     string `json:"kubeconfig,omitempty"`
-	Namespace      string `json:"namespace"`
-	ReleaseName    string `json:"releaseName"`
 }
 
-// loadKubeconfig returns the kubeconfig bytes for a stored release: re-read from
-// the path when path-based, else the inline content.
-func (st releaseState) loadKubeconfig() ([]byte, error) {
-	if st.KubeconfigPath != "" {
-		b, err := os.ReadFile(st.KubeconfigPath)
+// loadKubeconfig re-reads from the path when path-based, else the inline content.
+func (k kubeconfigState) loadKubeconfig() ([]byte, error) {
+	if k.KubeconfigPath != "" {
+		b, err := os.ReadFile(k.KubeconfigPath)
 		if err != nil {
-			return nil, fmt.Errorf("read kubeconfig %q: %w", st.KubeconfigPath, err)
+			return nil, fmt.Errorf("read kubeconfig %q: %w", k.KubeconfigPath, err)
 		}
 		return b, nil
 	}
-	if st.Kubeconfig != "" {
-		return []byte(st.Kubeconfig), nil
+	if k.Kubeconfig != "" {
+		return []byte(k.Kubeconfig), nil
 	}
 	return nil, fmt.Errorf("no kubeconfig in state")
 }
 
-func (st releaseState) hasCluster() bool {
-	return st.ReleaseName != "" && (st.KubeconfigPath != "" || st.Kubeconfig != "")
+func (k kubeconfigState) present() bool { return k.KubeconfigPath != "" || k.Kubeconfig != "" }
+
+// kubeconfigStateOf records the path when path-based (no credential bytes), else
+// the inline content.
+func kubeconfigStateOf(content []byte, path string) kubeconfigState {
+	if path != "" {
+		return kubeconfigState{KubeconfigPath: path}
+	}
+	return kubeconfigState{Kubeconfig: string(content)}
+}
+
+type releaseState struct {
+	kubeconfigState
+	Namespace   string `json:"namespace"`
+	ReleaseName string `json:"releaseName"`
+}
+
+func (st releaseState) hasCluster() bool { return st.ReleaseName != "" && st.present() }
+
+// manifestState persists the objects a Manifest applied (so openctl can prune
+// removed objects and delete on teardown) plus how to reach the cluster.
+type manifestState struct {
+	kubeconfigState
+	Objects []objectRef `json:"objects,omitempty"`
 }
 
 func (p *provider) Apply(ctx context.Context, req pluginproto.ApplyParams) (*pluginproto.ApplyResult, error) {
@@ -80,10 +101,48 @@ func (p *provider) Apply(ctx context.Context, req pluginproto.ApplyParams) (*plu
 	if m == nil {
 		return nil, pluginproto.Unsupported("apply: nil manifest")
 	}
-	if m.Kind != kindHelmRelease {
-		return nil, pluginproto.Unsupported("k8s provider handles HelmRelease, not " + m.Kind)
+	switch m.Kind {
+	case kindHelmRelease:
+		return p.applyHelmRelease(m)
+	case kindManifest:
+		return p.applyManifest(ctx, m, req.State)
+	default:
+		return nil, pluginproto.Unsupported("k8s provider handles HelmRelease and Manifest, not " + m.Kind)
 	}
+}
 
+func (p *provider) Get(ctx context.Context, req pluginproto.GetParams) (*pluginproto.GetResult, error) {
+	switch req.Kind {
+	case kindHelmRelease:
+		return p.getHelmRelease(req)
+	case kindManifest:
+		return p.getManifest(ctx, req)
+	default:
+		return nil, pluginproto.Unsupported("k8s provider handles HelmRelease and Manifest, not " + req.Kind)
+	}
+}
+
+func (p *provider) Delete(ctx context.Context, req pluginproto.DeleteParams) error {
+	switch req.Kind {
+	case kindHelmRelease:
+		return p.deleteHelmRelease(req)
+	case kindManifest:
+		return p.deleteManifest(ctx, req)
+	default:
+		return nil
+	}
+}
+
+// List has no cluster context (ListParams carries only the kind), and these
+// kinds are inherently per-cluster, so this returns nothing. Per-cluster
+// enumeration is a later phase (see docs/deployment-model.md).
+func (p *provider) List(context.Context, string) ([]*protocol.Resource, error) {
+	return nil, nil
+}
+
+// --- HelmRelease ---
+
+func (p *provider) applyHelmRelease(m *protocol.Resource) (*pluginproto.ApplyResult, error) {
 	spec, err := parseHelmSpec(m)
 	if err != nil {
 		return nil, err
@@ -103,20 +162,16 @@ func (p *provider) Apply(ctx context.Context, req pluginproto.ApplyParams) (*plu
 		return nil, err
 	}
 
-	rs := releaseState{Namespace: spec.namespace, ReleaseName: spec.opts.releaseName}
-	if spec.kubeconfigPath != "" {
-		rs.KubeconfigPath = spec.kubeconfigPath // path-based: store the path, not the bytes
-	} else {
-		rs.Kubeconfig = string(spec.kubeconfig)
+	rs := releaseState{
+		kubeconfigState: kubeconfigStateOf(spec.kubeconfig, spec.kubeconfigPath),
+		Namespace:       spec.namespace,
+		ReleaseName:     spec.opts.releaseName,
 	}
 	st, _ := json.Marshal(rs)
 	return &pluginproto.ApplyResult{Resource: observed(m, rel), State: st}, nil
 }
 
-func (p *provider) Get(_ context.Context, req pluginproto.GetParams) (*pluginproto.GetResult, error) {
-	if req.Kind != kindHelmRelease {
-		return nil, pluginproto.Unsupported("k8s provider handles HelmRelease, not " + req.Kind)
-	}
+func (p *provider) getHelmRelease(req pluginproto.GetParams) (*pluginproto.GetResult, error) {
 	var st releaseState
 	if len(req.State) > 0 {
 		_ = json.Unmarshal(req.State, &st)
@@ -138,21 +193,10 @@ func (p *provider) Get(_ context.Context, req pluginproto.GetParams) (*pluginpro
 	if err != nil {
 		return nil, pluginproto.NotFound(fmt.Sprintf("HelmRelease %q not found: %v", req.Name, err))
 	}
-	r := observedFromRelease(req.Name, rel)
-	return &pluginproto.GetResult{Resource: r, State: req.State}, nil
+	return &pluginproto.GetResult{Resource: observedFromRelease(req.Name, rel), State: req.State}, nil
 }
 
-// List has no cluster context (ListParams carries only the kind), and
-// HelmReleases are inherently per-cluster, so Phase 1 returns nothing.
-// Per-cluster enumeration is a later phase (see docs/deployment-model.md).
-func (p *provider) List(context.Context, string) ([]*protocol.Resource, error) {
-	return nil, nil
-}
-
-func (p *provider) Delete(_ context.Context, req pluginproto.DeleteParams) error {
-	if req.Kind != kindHelmRelease {
-		return nil
-	}
+func (p *provider) deleteHelmRelease(req pluginproto.DeleteParams) error {
 	var st releaseState
 	if len(req.State) > 0 {
 		_ = json.Unmarshal(req.State, &st)
@@ -172,6 +216,115 @@ func (p *provider) Delete(_ context.Context, req pluginproto.DeleteParams) error
 	return uninstall(cfg, st.ReleaseName)
 }
 
+// --- Manifest ---
+
+func (p *provider) applyManifest(ctx context.Context, m *protocol.Resource, prior json.RawMessage) (*pluginproto.ApplyResult, error) {
+	content, path, err := kubeconfigFromSpec(m.Spec, m.Metadata.Name)
+	if err != nil {
+		return nil, err
+	}
+	manifestYAML := specString(m.Spec, "manifest")
+	if manifestYAML == "" {
+		return nil, fmt.Errorf("spec.manifest is required for Manifest %q", m.Metadata.Name)
+	}
+	objs, err := parseObjects(manifestYAML)
+	if err != nil {
+		return nil, fmt.Errorf("parse Manifest %q: %w", m.Metadata.Name, err)
+	}
+	kc, err := newKubeClient(content)
+	if err != nil {
+		return nil, err
+	}
+
+	applied := make([]objectRef, 0, len(objs))
+	for _, obj := range objs {
+		ref, err := kc.apply(ctx, obj)
+		if err != nil {
+			return nil, err
+		}
+		applied = append(applied, ref)
+	}
+
+	// Prune objects that were in prior state but left the manifest.
+	var priorState manifestState
+	if len(prior) > 0 {
+		_ = json.Unmarshal(prior, &priorState)
+	}
+	for _, ref := range prunedRefs(priorState.Objects, applied) {
+		if err := kc.delete(ctx, ref); err != nil {
+			return nil, fmt.Errorf("prune %s: %w", ref, err)
+		}
+	}
+
+	st, _ := json.Marshal(manifestState{kubeconfigState: kubeconfigStateOf(content, path), Objects: applied})
+	return &pluginproto.ApplyResult{Resource: manifestObserved(m, applied), State: st}, nil
+}
+
+func (p *provider) getManifest(ctx context.Context, req pluginproto.GetParams) (*pluginproto.GetResult, error) {
+	var st manifestState
+	if len(req.State) > 0 {
+		_ = json.Unmarshal(req.State, &st)
+	}
+	if len(st.Objects) == 0 || !st.present() {
+		return nil, pluginproto.NotFound(fmt.Sprintf("Manifest %q has no prior state", req.Name))
+	}
+	kc, err := st.loadKubeconfig()
+	if err != nil {
+		return nil, err
+	}
+	client, err := newKubeClient(kc)
+	if err != nil {
+		return nil, err
+	}
+
+	present := 0
+	names := make([]string, 0, len(st.Objects))
+	for _, ref := range st.Objects {
+		if _, err := client.get(ctx, ref); err == nil {
+			present++
+			names = append(names, ref.String())
+		}
+	}
+	if present == 0 {
+		return nil, pluginproto.NotFound(fmt.Sprintf("Manifest %q objects not found in cluster", req.Name))
+	}
+	status := map[string]any{
+		"objects": names,
+		"applied": present,
+		"phase":   "Ready",
+	}
+	if present < len(st.Objects) {
+		status["phase"] = "Degraded"
+	}
+	r := &protocol.Resource{APIVersion: apiVersion, Kind: kindManifest, Status: status}
+	r.Metadata.Name = req.Name
+	return &pluginproto.GetResult{Resource: r, State: req.State}, nil
+}
+
+func (p *provider) deleteManifest(ctx context.Context, req pluginproto.DeleteParams) error {
+	var st manifestState
+	if len(req.State) > 0 {
+		_ = json.Unmarshal(req.State, &st)
+	}
+	if len(st.Objects) == 0 || !st.present() {
+		return nil
+	}
+	kc, err := st.loadKubeconfig()
+	if err != nil {
+		return err
+	}
+	client, err := newKubeClient(kc)
+	if err != nil {
+		return err
+	}
+	for _, ref := range st.Objects {
+		if err := client.delete(ctx, ref); err != nil {
+			return fmt.Errorf("delete %s: %w", ref, err)
+		}
+	}
+	return nil
+}
+
 // --- spec parsing ---
 
 type helmSpec struct {
@@ -182,25 +335,33 @@ type helmSpec struct {
 	opts           releaseOpts
 }
 
+// kubeconfigFromSpec resolves the kubeconfig bytes + the source path (empty when
+// inline) from a spec's kubeconfigPath ($ref-resolved) or kubeconfig (inline)
+// field. Exactly one must be present. Shared by both kinds.
+func kubeconfigFromSpec(s map[string]any, name string) (content []byte, path string, err error) {
+	if p := specString(s, "kubeconfigPath"); p != "" {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return nil, "", fmt.Errorf("%q: read kubeconfig %q: %w", name, p, err)
+		}
+		return b, p, nil
+	}
+	if inline := specString(s, "kubeconfig"); inline != "" {
+		return []byte(inline), "", nil
+	}
+	return nil, "", fmt.Errorf("%q: spec.kubeconfig or spec.kubeconfigPath is required", name)
+}
+
 func parseHelmSpec(m *protocol.Resource) (helmSpec, error) {
 	s := m.Spec
 	var hs helmSpec
 
-	// Kubeconfig comes from either a path (typically a Cluster's
-	// status.outputs.kubeconfigPath resolved via $ref — read the file) or inline
-	// content (an explicit external kubeconfig, usually a $secret).
-	if path := specString(s, "kubeconfigPath"); path != "" {
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return hs, fmt.Errorf("HelmRelease %q: read kubeconfig %q: %w", m.Metadata.Name, path, err)
-		}
-		hs.kubeconfig = content
-		hs.kubeconfigPath = path
-	} else if inline := specString(s, "kubeconfig"); inline != "" {
-		hs.kubeconfig = []byte(inline)
-	} else {
-		return hs, fmt.Errorf("HelmRelease %q: spec.kubeconfig or spec.kubeconfigPath is required", m.Metadata.Name)
+	content, path, err := kubeconfigFromSpec(s, m.Metadata.Name)
+	if err != nil {
+		return hs, err
 	}
+	hs.kubeconfig = content
+	hs.kubeconfigPath = path
 
 	hs.namespace = specString(s, "namespace")
 	if hs.namespace == "" {
@@ -264,6 +425,30 @@ func observed(m *protocol.Resource, rel *release.Release) *protocol.Resource {
 func observedFromRelease(name string, rel *release.Release) *protocol.Resource {
 	r := &protocol.Resource{APIVersion: apiVersion, Kind: kindHelmRelease, Status: releaseStatus(rel)}
 	r.Metadata.Name = name
+	return r
+}
+
+// manifestObserved builds the applied resource for a Manifest: spec echoes the
+// desired manifest (minus credentials), status lists the applied objects.
+func manifestObserved(m *protocol.Resource, refs []objectRef) *protocol.Resource {
+	names := make([]string, 0, len(refs))
+	for _, r := range refs {
+		names = append(names, r.String())
+	}
+	spec := map[string]any{}
+	for k, v := range m.Spec {
+		if k == "kubeconfig" || k == "kubeconfigPath" {
+			continue
+		}
+		spec[k] = v
+	}
+	r := &protocol.Resource{
+		APIVersion: apiVersion,
+		Kind:       kindManifest,
+		Spec:       spec,
+		Status:     map[string]any{"objects": names, "applied": len(refs), "phase": "Ready"},
+	}
+	r.Metadata.Name = m.Metadata.Name
 	return r
 }
 

@@ -50,3 +50,28 @@ const helmReleaseSchema = `
 	...
 }
 `
+
+// manifestSchema is the CUE schema for the Manifest kind: server-side apply of
+// raw Kubernetes YAML. The credential fields mirror HelmRelease (kubeconfigPath
+// via $ref, or inline kubeconfig via $secret).
+const manifestSchema = `
+#Manifest: {
+	apiVersion: "k8s.openctl.io/v1"
+	kind:       "Manifest"
+	metadata: {
+		name: string
+		...
+	}
+	spec: {
+		// See HelmRelease: supply exactly one of kubeconfigPath ($ref to a
+		// Cluster's status.outputs.kubeconfigPath) or kubeconfig (inline, $secret).
+		kubeconfigPath?: string
+		kubeconfig?:     string
+		// manifest is one or more Kubernetes objects as a YAML document (multi-doc
+		// with "---" is supported). Server-side-applied with field manager
+		// "openctl-k8s"; objects that leave the manifest on a later apply are pruned.
+		manifest: string
+	}
+	...
+}
+`
