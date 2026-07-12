@@ -1029,7 +1029,19 @@ phase plan when ready to commit.
         route, and a root-module refs test resolving a HelmRelease's `$ref` →
         Cluster nested `status.outputs.kubeconfigPath`. (Also corrected the
         design doc: the real marker is `$ref`, not the `valueFrom`/`spec.cluster`
-        shorthand.) *Next:* Phase 3 — `Manifest` (server-side apply).
+        shorthand.)
+  - [x] **Phase 3 — `Manifest` kind (server-side apply).** Applies raw
+        Kubernetes YAML (multi-doc) via a client-go dynamic client + discovery
+        RESTMapper, server-side-apply with field manager `openctl-k8s`. Tracks
+        applied objects in state (GVR+ns+name) so it **prunes** objects that
+        leave the manifest on a later apply and cleans up on delete; Get reports
+        how many tracked objects are live (Ready/Degraded). Credential fields
+        mirror HelmRelease (`kubeconfigPath` `$ref` or inline `kubeconfig`),
+        factored into a shared `kubeconfigState`. Verified: unit (multi-doc
+        parse, prune diff) + **e2e vs k3d** (SSA two ConfigMaps → get → prune one
+        (confirmed deleted) → delete). This is the escape hatch for non-Helm glue
+        (Namespaces, ConfigMaps) and, later, Argo `Application` CRs. *Next:*
+        Phase 4 — opt-in `Platform` composite (Traefik + cloudflared).
 - [x] **Provider credential editing** — new ConfigService RPCs
       (ListProviders / UpsertProvider / DeleteProvider) that read/
       write ~/.openctl/config.yaml. UI Providers page with add /
