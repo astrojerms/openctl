@@ -473,6 +473,15 @@ type graphWork struct {
 	depth                          int
 }
 
+// Kinds whose placement the graph surfaces without a $ref. A VirtualMachine
+// pins itself to a physical host via a plain spec.node string (never a $ref —
+// see the placement-edge synthesis in expandNode for why); the host is a
+// ProxmoxNode in the same provider group.
+const (
+	kindVirtualMachine = "VirtualMachine"
+	kindProxmoxNode    = "ProxmoxNode"
+)
+
 // expandNode adds the edges out of one node — its own-spec $refs plus its
 // structural children (Planner-preferred, else ChildrenOf) — enqueuing each
 // newly-discovered node, and returns the grown queue.
@@ -495,6 +504,21 @@ func (g *graphBuilder) expandNode(ctx context.Context, queue []graphWork, w grap
 		t := g.addNode(r.APIVersion, r.Kind, r.Name)
 		g.addEdge(w.nodeID, t.Id, "ref", r.Field)
 		enqueue(r.APIVersion, r.Kind, r.Name, t.Id)
+	}
+
+	// Placement edge: a VirtualMachine's spec.node names the physical host it
+	// runs on (a ProxmoxNode in the same provider group). That host is
+	// observed-only infra rather than a $ref — making spec.node a $ref would
+	// couple VM Apply to the node being fetchable (refs.Resolve errors on any
+	// unresolvable ref), so we synthesize the graph edge here instead. The host
+	// is TERMINAL: we add the edge but do NOT enqueue it, otherwise expanding it
+	// via ChildrenOf(ProxmoxNode) would drag every unrelated VM on the box into
+	// a workload-rooted graph. A ProxmoxNode-rooted query still lists its guests.
+	if w.kind == kindVirtualMachine {
+		if host, ok := spec["node"].(string); ok && host != "" {
+			n := g.addNode(w.apiVersion, kindProxmoxNode, host)
+			g.addEdge(w.nodeID, n.Id, "ref", "node")
+		}
 	}
 
 	p, err := g.h.registry.For(w.apiVersion)
