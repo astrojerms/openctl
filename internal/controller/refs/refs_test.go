@@ -41,6 +41,43 @@ func TestResolvePassesThroughMapsWithoutRefs(t *testing.T) {
 	}
 }
 
+// TestResolveHelmReleaseClusterKubeconfig pins the deployment-model Phase 2
+// cross-layer path: a HelmRelease resolves the kubeconfig path from a k3s
+// Cluster's nested status.outputs.kubeconfigPath. Confirms the k8s provider can
+// target an openctl-managed cluster by $ref with no new machinery.
+func TestResolveHelmReleaseClusterKubeconfig(t *testing.T) {
+	g := &stubGetter{data: map[string]*protocol.Resource{
+		"k3s.openctl.io/v1/Cluster/edge": {
+			APIVersion: "k3s.openctl.io/v1",
+			Kind:       "Cluster",
+			Metadata:   protocol.ResourceMetadata{Name: "edge"},
+			Status: map[string]any{
+				"outputs": map[string]any{
+					"kubeconfigPath": "/home/u/.openctl/k3s/edge-cp-0/kubeconfig",
+				},
+			},
+		},
+	}}
+	in := map[string]any{
+		"kubeconfigPath": map[string]any{
+			"$ref": map[string]any{
+				"apiVersion": "k3s.openctl.io/v1",
+				"kind":       "Cluster",
+				"name":       "edge",
+				"field":      "status.outputs.kubeconfigPath",
+			},
+		},
+		"chart": map[string]any{"repo": "https://x/charts", "name": "podinfo"},
+	}
+	out, err := New(g).Resolve(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got := out["kubeconfigPath"]; got != "/home/u/.openctl/k3s/edge-cp-0/kubeconfig" {
+		t.Errorf("resolved kubeconfigPath = %v, want the cluster's status path", got)
+	}
+}
+
 func TestResolveSubstitutesFieldRef(t *testing.T) {
 	g := &stubGetter{data: map[string]*protocol.Resource{
 		"k3s.openctl.io/v1/K3sNode/cp-0": {

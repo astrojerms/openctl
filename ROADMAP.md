@@ -1015,8 +1015,21 @@ phase plan when ready to commit.
         release state in-cluster). Tested hermetically (Helm memory driver +
         fake kube client + a local chart) and **e2e against a live k3d
         cluster** (published podinfo from HTTP *and* OCI: apply→get→upgrade→
-        delete→NotFound, gated on `KUBECONFIG_E2E`). *Next:* Phase 2 —
-        `spec.cluster: {$ref: Cluster/…}` kubeconfig resolution.
+        delete→NotFound, gated on `KUBECONFIG_E2E`).
+  - [x] **Phase 2 — cross-layer credential resolution.** A `HelmRelease`
+        targets an openctl-managed cluster by resolving its kubeconfig from the
+        k3s Cluster's `status.outputs.kubeconfigPath` via openctl's existing
+        `$ref` marker (no new controller machinery — `$ref` already resolves a
+        nested status field of another resource before the provider runs, and
+        DAG-orders the release after the cluster). The plugin reads the resolved
+        path and stores only the **path** (not the kubeconfig bytes) for
+        Get/Delete — improving on Phase 1's stored-content posture. Inline
+        `spec.kubeconfig` (external clusters) still supported. Verified: plugin
+        unit (path read + re-read), **e2e vs k3d** via the `kubeconfigPath`
+        route, and a root-module refs test resolving a HelmRelease's `$ref` →
+        Cluster nested `status.outputs.kubeconfigPath`. (Also corrected the
+        design doc: the real marker is `$ref`, not the `valueFrom`/`spec.cluster`
+        shorthand.) *Next:* Phase 3 — `Manifest` (server-side apply).
 - [x] **Provider credential editing** — new ConfigService RPCs
       (ListProviders / UpsertProvider / DeleteProvider) that read/
       write ~/.openctl/config.yaml. UI Providers page with add /

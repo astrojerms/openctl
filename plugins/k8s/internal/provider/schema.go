@@ -15,9 +15,17 @@ const helmReleaseSchema = `
 		...
 	}
 	spec: {
-		// kubeconfig for the target cluster (usually a $secret). Phase 2 adds
-		// spec.cluster: {$ref: Cluster/…} as the openctl-managed-cluster path.
-		kubeconfig: string
+		// Target cluster credentials — supply exactly one:
+		//  - kubeconfigPath: a path on the controller host. Typically a k3s
+		//    Cluster's kubeconfig resolved via $ref, e.g.
+		//      kubeconfigPath: {$ref: {apiVersion: "k3s.openctl.io/v1", kind:
+		//        "Cluster", name: "edge", field: "status.outputs.kubeconfigPath"}}
+		//    openctl resolves the $ref (and DAG-orders this release after the
+		//    cluster) before the provider runs; only the path is stored.
+		//  - kubeconfig: inline content for an external cluster (usually a
+		//    $secret).
+		kubeconfigPath?: string
+		kubeconfig?:     string
 		// namespace to install into. Defaults to "default".
 		namespace?: string
 		// createNamespace creates the namespace if absent.

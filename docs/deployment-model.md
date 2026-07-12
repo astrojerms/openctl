@@ -73,13 +73,26 @@ Proxmox provider.
     resources into openctl for the unified graph.
 - **Cluster credentials, generic by design.** A release/manifest just needs a
   kubeconfig, so the provider accepts a kubeconfig from either source:
-  - `spec.cluster: {$ref: Cluster/edge}` → openctl resolves the k3s Cluster's
-    produced kubeconfig (`status.outputs.kubeconfigPath`). The convenient path for
-    openctl-managed clusters.
+  - `spec.kubeconfigPath` resolved via `$ref` from the k3s Cluster's produced
+    `status.outputs.kubeconfigPath` — the convenient path for openctl-managed
+    clusters (the `$ref` also DAG-orders the release after the cluster):
+
+    ```yaml
+    kubeconfigPath:
+      $ref: { apiVersion: k3s.openctl.io/v1, kind: Cluster, name: edge,
+              field: status.outputs.kubeconfigPath }
+    ```
+
+    openctl resolves the `$ref` before the provider runs and the plugin reads
+    that file; only the path (never the kubeconfig bytes) is stored.
   - `spec.kubeconfig: {$secret: …}` → an explicit kubeconfig for an
     **external/non-openctl** cluster (e.g. a managed EKS). Free once the provider
     is kubeconfig-generic; supported from the start.
-- **Values + secrets** reuse openctl's `$secret`/`valueFrom`, resolved in the
+
+  > Note: `$ref` is openctl's real cross-resource marker (`{$ref: {apiVersion,
+  > kind, name, field}}`); the `valueFrom`/`spec.cluster` shorthands used
+  > elsewhere in early drafts of this doc are not implemented markers.
+- **Values + secrets** reuse openctl's `$secret` markers, resolved in the
   transient apply path so they never hit git. This is how the cloudflared token
   (issued by the openctl `Tunnel`) flows into chart values.
 - **Chart sourcing: HTTP repos and OCI registries** (the Helm SDK's registry
@@ -207,7 +220,7 @@ spec:
     name: podinfo
     version: "6.7.0"
   releaseName: podinfo        # defaults to metadata.name
-  values:                     # map[string]any; $secret/valueFrom resolved by openctl
+  values:                     # map[string]any; $secret resolved by openctl
     replicaCount: 2
   wait: true                  # wait for resources ready
   timeout: "5m"
@@ -244,7 +257,7 @@ spec:
 
 ### Secrets
 
-`spec.values` and `spec.kubeconfig` accept `$secret`/`valueFrom`; openctl
+`spec.values` and `spec.kubeconfig` accept `$secret`; openctl
 resolves them in the transient apply path (never persisted to git), then the
 plugin receives concrete values. No plaintext kubeconfig or token on disk/in
 git.

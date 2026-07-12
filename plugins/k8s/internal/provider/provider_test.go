@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -44,7 +45,7 @@ func TestParseHelmSpec(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if hs.kubeconfig != "KCONF" || hs.namespace != "demo" {
+	if string(hs.kubeconfig) != "KCONF" || hs.namespace != "demo" {
 		t.Errorf("kubeconfig/namespace = %q/%q", hs.kubeconfig, hs.namespace)
 	}
 	if hs.chart.Name != "podinfo" || hs.chart.Version != "6.7.0" {
@@ -55,6 +56,46 @@ func TestParseHelmSpec(t *testing.T) {
 	}
 	if !hs.opts.wait || hs.opts.timeout != 3*time.Minute {
 		t.Errorf("wait/timeout = %v/%v", hs.opts.wait, hs.opts.timeout)
+	}
+}
+
+func TestParseHelmSpecKubeconfigPath(t *testing.T) {
+	// A kubeconfigPath (as $ref would resolve to) is read from disk; the path —
+	// not the content — is what gets recorded for Get/Delete re-reads.
+	dir := t.TempDir()
+	path := dir + "/kubeconfig"
+	if err := os.WriteFile(path, []byte("KUBE-CONTENT"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := &protocol.Resource{Kind: kindHelmRelease}
+	m.Metadata.Name = "app"
+	m.Spec = map[string]any{
+		"kubeconfigPath": path,
+		"chart":          map[string]any{"repo": "https://x/charts", "name": "app"},
+	}
+	hs, err := parseHelmSpec(m)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if string(hs.kubeconfig) != "KUBE-CONTENT" {
+		t.Errorf("kubeconfig content = %q, want file content", hs.kubeconfig)
+	}
+	if hs.kubeconfigPath != path {
+		t.Errorf("kubeconfigPath = %q, want %q", hs.kubeconfigPath, path)
+	}
+
+	// releaseState with a path re-loads from the file (not stored bytes).
+	st := releaseState{KubeconfigPath: path, ReleaseName: "app"}
+	if !st.hasCluster() {
+		t.Error("hasCluster() = false, want true for path-based state")
+	}
+	kc, err := st.loadKubeconfig()
+	if err != nil || string(kc) != "KUBE-CONTENT" {
+		t.Errorf("loadKubeconfig = %q (err %v)", kc, err)
+	}
+	// A missing path surfaces an error rather than silently proceeding.
+	if _, err := (releaseState{KubeconfigPath: dir + "/gone", ReleaseName: "app"}).loadKubeconfig(); err == nil {
+		t.Error("loadKubeconfig on missing path should error")
 	}
 }
 
