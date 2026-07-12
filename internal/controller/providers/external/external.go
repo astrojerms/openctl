@@ -223,7 +223,18 @@ func (p *Provider) ChildrenOf(kind, name string) []providers.ResourceRef {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), metaCallTimeout)
 	defer cancel()
-	refs, err := p.client.ChildrenOf(ctx, pluginproto.RefParams{Kind: kind, Name: name})
+	params := pluginproto.RefParams{Kind: kind, Name: name}
+	// Thread state through so a stateful plugin can reach the cluster to
+	// enumerate children (e.g. a HelmRelease reads its objects from the release
+	// manifest, which needs the kubeconfig stored in state). Best-effort: a
+	// load failure just leaves State empty — the plugin returns no children
+	// rather than blocking the graph.
+	if p.stateful() {
+		if state, _, _, err := p.store.LoadState(ctx, p.apiVersion(), kind, name); err == nil {
+			params.State = state
+		}
+	}
+	refs, err := p.client.ChildrenOf(ctx, params)
 	if err != nil {
 		return nil
 	}

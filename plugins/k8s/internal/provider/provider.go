@@ -34,8 +34,9 @@ func (p *provider) Handshake(context.Context) (*pluginproto.HandshakeResult, err
 		ProtocolVersion: pluginproto.ProtocolVersion,
 		// State carries the kubeconfig + release/object coordinates so Get/Delete
 		// can reconnect to the cluster (Get/Delete params don't include the spec).
-		// Plan lets the UI render the Platform composite's fan-out.
-		Capabilities: []string{pluginproto.CapabilitySchema, pluginproto.CapabilityState, pluginproto.CapabilityPlan},
+		// Plan lets the UI render the Platform composite's fan-out. Children hangs
+		// a HelmRelease's / Manifest's in-cluster objects under it in the graph.
+		Capabilities: []string{pluginproto.CapabilitySchema, pluginproto.CapabilityState, pluginproto.CapabilityPlan, pluginproto.CapabilityChildren},
 		Kinds: []pluginproto.KindInfo{
 			{Kind: kindHelmRelease, Schema: helmReleaseSchema},
 			{Kind: kindManifest, Schema: manifestSchema},

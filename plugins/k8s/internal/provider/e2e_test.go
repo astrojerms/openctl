@@ -117,6 +117,70 @@ func TestE2EHelmRelease(t *testing.T) {
 	}
 }
 
+// TestE2EHelmReleaseChildren installs a real chart and proves ChildrenOf reads
+// the release's declared objects back out of the in-cluster manifest — the
+// upward-into-workloads view (Deployment/Service hang under the HelmRelease).
+// Gated on KUBECONFIG_E2E.
+func TestE2EHelmReleaseChildren(t *testing.T) {
+	kcPath := os.Getenv("KUBECONFIG_E2E")
+	if kcPath == "" {
+		t.Skip("set KUBECONFIG_E2E to a kubeconfig path to run the real-cluster e2e")
+	}
+	kc, err := os.ReadFile(kcPath)
+	if err != nil {
+		t.Fatalf("read kubeconfig: %v", err)
+	}
+	ctx := context.Background()
+	p := New()
+
+	relName := "podinfo-children"
+	m := &protocol.Resource{APIVersion: apiVersion, Kind: kindHelmRelease}
+	m.Metadata.Name = relName
+	m.Spec = map[string]any{
+		"kubeconfig":      string(kc),
+		"namespace":       "openctl-e2e-children",
+		"createNamespace": true,
+		"chart":           map[string]any{"repo": "https://stefanprodan.github.io/podinfo", "name": "podinfo", "version": "6.7.0"},
+		"wait":            true,
+		"timeout":         "3m",
+		"values":          map[string]any{"replicaCount": 1.0},
+	}
+	ar, err := p.Apply(ctx, pluginproto.ApplyParams{Manifest: m})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = p.Delete(ctx, pluginproto.DeleteParams{Kind: kindHelmRelease, State: ar.State})
+	})
+
+	kids, err := p.ChildrenOf(ctx, pluginproto.RefParams{Kind: kindHelmRelease, Name: relName, State: ar.State})
+	if err != nil {
+		t.Fatalf("ChildrenOf: %v", err)
+	}
+	// podinfo declares at least a Deployment and a Service.
+	var dep, svc *pluginproto.ResourceRef
+	for i := range kids {
+		switch kids[i].Kind {
+		case "Deployment":
+			dep = &kids[i]
+		case "Service":
+			svc = &kids[i]
+		}
+	}
+	if dep == nil || dep.APIVersion != "apps/v1" {
+		t.Errorf("expected an apps/v1 Deployment child, got %+v", kids)
+	}
+	if svc == nil || svc.APIVersion != "v1" {
+		t.Errorf("expected a v1 Service child, got %+v", kids)
+	}
+
+	// A resource with no state can't reach the cluster → no children, no error.
+	none, err := p.ChildrenOf(ctx, pluginproto.RefParams{Kind: kindHelmRelease, Name: "ghost"})
+	if err != nil || none != nil {
+		t.Errorf("no-state ChildrenOf = (%v, %v), want (nil, nil)", none, err)
+	}
+}
+
 // TestE2EManifest drives the Manifest kind against a real cluster: server-side
 // apply of two ConfigMaps, Get, prune (re-apply with one → the other is
 // deleted), and Delete. Gated on KUBECONFIG_E2E like TestE2EHelmRelease.

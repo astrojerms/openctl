@@ -1079,9 +1079,24 @@ phase plan when ready to commit.
         structurally can't show — and the existing UI renders it with **zero
         frontend changes**. Verified: unit (multi-level span with root-`$ref` +
         recursion into the Cluster's Planner; existing depth-1 tests still pass).
-        *Follow-ons:* VM→Proxmox-host edge (the k3s VM manifest doesn't `$ref`
-        its ProxmoxNode yet) and upward-into-pods (a `ChildrenOf` on
-        `plugins/k8s`). **Deployment model Phases 1–6 all shipped.**
+        **Deployment model Phases 1–6 all shipped.**
+  - [x] **Cross-layer graph follow-ons — both shipped.**
+    - **VM→host placement edge** (#129). A k3s `VirtualMachine` pins itself to a
+      host via a plain `spec.node` string; `GetChildrenGraph` now synthesizes a
+      `VM → ProxmoxNode` edge from it, completing the workload → Cluster →
+      K3sNode → VM → **host** spine. Graph-only, not a `$ref` (a `$ref` would
+      couple VM Apply to the observed-only ProxmoxNode being fetchable); the
+      host is a terminal node so it doesn't drag in every other guest on the box.
+    - **Upward-into-workloads** (`ChildrenOf` on `plugins/k8s`). A `HelmRelease`
+      / `Manifest` now hangs its in-cluster objects (Deployments/Services/…)
+      under it in the graph. Required one backward-compatible protocol change:
+      `pluginproto.RefParams` gained a `State` field so the external adapter can
+      thread a stateful plugin's kubeconfig into the children query; HelmRelease
+      enumerates via the in-cluster release manifest (`helm get manifest`),
+      Manifest from its persisted object refs. Verified: unit (manifest→refs
+      mapping, adapter state-threading) + e2e-vs-k3d (podinfo → real
+      Deployment/Service). Pods-per-Deployment (needs a live owner-ref walk) is
+      a possible future; the release's declared objects are the honest baseline.
 - [x] **Provider credential editing** — new ConfigService RPCs
       (ListProviders / UpsertProvider / DeleteProvider) that read/
       write ~/.openctl/config.yaml. UI Providers page with add /
