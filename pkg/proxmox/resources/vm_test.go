@@ -334,6 +334,107 @@ func TestVMSpec_ToProxmoxConfig(t *testing.T) {
 	}
 }
 
+func TestVMSpec_ToProxmoxConfig_GPUPassthrough(t *testing.T) {
+	rombarOff := false
+	spec := &VMSpec{
+		CPU:     &CPUSpec{Cores: 8, Type: "host"},
+		Machine: "q35",
+		BIOS:    "ovmf",
+		EFIDisk: &EFIDiskSpec{Storage: "local-lvm"},
+		HostPCI: []HostPCISpec{
+			{Device: "0000:01:00", PCIE: true, PrimaryGPU: true, ROMBAR: &rombarOff},
+			{Mapping: "nic-sriov", PCIE: true},
+			{Device: "", Mapping: ""}, // empty → skipped, must not shift indices
+		},
+	}
+
+	params := spec.ToProxmoxConfig()
+
+	if params["cpu"] != "host" {
+		t.Errorf("expected cpu=host, got %v", params["cpu"])
+	}
+	if params["machine"] != "q35" || params["bios"] != "ovmf" {
+		t.Errorf("expected q35/ovmf, got machine=%v bios=%v", params["machine"], params["bios"])
+	}
+	if params["efidisk0"] != "local-lvm:1,efitype=4m,pre-enrolled-keys=0" {
+		t.Errorf("unexpected efidisk0=%v", params["efidisk0"])
+	}
+	if params["hostpci0"] != "0000:01:00,pcie=1,x-vga=1,rombar=0" {
+		t.Errorf("unexpected hostpci0=%v", params["hostpci0"])
+	}
+	if params["hostpci1"] != "mapping=nic-sriov,pcie=1" {
+		t.Errorf("unexpected hostpci1=%v", params["hostpci1"])
+	}
+	// The empty device must be skipped without leaving a hostpci2 gap.
+	if _, ok := params["hostpci2"]; ok {
+		t.Errorf("empty hostPCI entry should not emit hostpci2, got %v", params["hostpci2"])
+	}
+}
+
+func TestVMSpec_ToProxmoxConfig_EFIDiskDefaults(t *testing.T) {
+	pek := true
+	spec := &VMSpec{EFIDisk: &EFIDiskSpec{Storage: "zfs", Type: "2m", PreEnrolledKeys: &pek}}
+	params := spec.ToProxmoxConfig()
+	if params["efidisk0"] != "zfs:1,efitype=2m,pre-enrolled-keys=1" {
+		t.Errorf("unexpected efidisk0=%v", params["efidisk0"])
+	}
+	// EFIDisk with no storage is a no-op.
+	if p := (&VMSpec{EFIDisk: &EFIDiskSpec{}}).ToProxmoxConfig(); p["efidisk0"] != nil {
+		t.Errorf("EFIDisk without storage should emit nothing, got %v", p["efidisk0"])
+	}
+}
+
+func TestParseVMSpec_GPUPassthrough(t *testing.T) {
+	resource := &protocol.Resource{
+		Spec: map[string]any{
+			"cpu": map[string]any{"cores": float64(8), "type": "host"},
+			"efiDisk": map[string]any{
+				"storage": "local-lvm", "type": "4m", "preEnrolledKeys": false,
+			},
+			"hostPCI": []any{
+				map[string]any{
+					"device": "0000:01:00.0", "pcie": true, "primaryGPU": true,
+					"rombar": false, "mdev": "nvidia-35", "romfile": "gpu.rom",
+				},
+				map[string]any{"mapping": "gpu-pool"},
+			},
+		},
+	}
+
+	spec, err := ParseVMSpec(resource)
+	if err != nil {
+		t.Fatalf("ParseVMSpec failed: %v", err)
+	}
+	if spec.CPU == nil || spec.CPU.Type != "host" {
+		t.Fatalf("cpu.type not parsed: %+v", spec.CPU)
+	}
+	if spec.EFIDisk == nil || spec.EFIDisk.Storage != "local-lvm" || spec.EFIDisk.Type != "4m" {
+		t.Fatalf("efiDisk not parsed: %+v", spec.EFIDisk)
+	}
+	if spec.EFIDisk.PreEnrolledKeys == nil || *spec.EFIDisk.PreEnrolledKeys {
+		t.Errorf("preEnrolledKeys should parse to explicit false: %+v", spec.EFIDisk.PreEnrolledKeys)
+	}
+	if len(spec.HostPCI) != 2 {
+		t.Fatalf("expected 2 hostPCI, got %d: %+v", len(spec.HostPCI), spec.HostPCI)
+	}
+	h0 := spec.HostPCI[0]
+	if h0.Device != "0000:01:00.0" || !h0.PCIE || !h0.PrimaryGPU || h0.MDev != "nvidia-35" || h0.ROMFile != "gpu.rom" {
+		t.Errorf("hostPCI[0] mis-parsed: %+v", h0)
+	}
+	if h0.ROMBAR == nil || *h0.ROMBAR {
+		t.Errorf("hostPCI[0].rombar should be explicit false: %+v", h0.ROMBAR)
+	}
+	if spec.HostPCI[1].Mapping != "gpu-pool" {
+		t.Errorf("hostPCI[1].mapping mis-parsed: %+v", spec.HostPCI[1])
+	}
+
+	// Round-trips back to the same Proxmox config.
+	params := spec.ToProxmoxConfig()
+	if params["hostpci0"] != "0000:01:00.0,pcie=1,x-vga=1,rombar=0,mdev=nvidia-35,romfile=gpu.rom" {
+		t.Errorf("round-trip hostpci0=%v", params["hostpci0"])
+	}
+}
+
 func TestVMSpec_ToProxmoxConfig_PackageUpgrade(t *testing.T) {
 	enabled := true
 	disabled := false

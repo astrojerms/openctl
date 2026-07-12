@@ -94,6 +94,12 @@ type VMSpec struct {
 	BIOS          string         `json:"bios"`
 	Machine       string         `json:"machine"`
 	Agent         *AgentSpec     `json:"agent"`
+	// HostPCI attaches host PCI devices (e.g. a GPU) to the VM. Requires
+	// machine=q35 + bios=ovmf + an EFIDisk for a working GPU passthrough VM.
+	HostPCI []HostPCISpec `json:"hostPCI"`
+	// EFIDisk allocates the OVMF EFI vars disk. Needed whenever bios=ovmf
+	// (UEFI) — without it OVMF has nowhere to persist boot config.
+	EFIDisk *EFIDiskSpec `json:"efiDisk"`
 }
 
 // TemplateRef references a template
@@ -143,6 +149,86 @@ type AgentSpec struct {
 type CPUSpec struct {
 	Cores   int `json:"cores"`
 	Sockets int `json:"sockets"`
+	// Type is the Proxmox CPU model (e.g. "host" to expose the physical CPU's
+	// full feature set — AVX etc. — which compute/GPU workloads want). Empty
+	// leaves the Proxmox default (kvm64).
+	Type string `json:"type"`
+}
+
+// HostPCISpec attaches one host PCI device (e.g. a GPU) to the VM, emitted as
+// Proxmox `hostpciN`. Provide exactly one of Device (raw PCI address like
+// "0000:01:00" or "0000:01:00.0") or Mapping (a Proxmox resource-mapping id,
+// the portable choice across hosts). The flags mirror Proxmox's hostpci
+// options and matter for GPU passthrough.
+type HostPCISpec struct {
+	Device  string `json:"device"`
+	Mapping string `json:"mapping"`
+	// PCIE exposes the device as PCIe rather than legacy PCI (q35 only).
+	PCIE bool `json:"pcie"`
+	// PrimaryGPU marks this as the primary VGA (Proxmox x-vga=1).
+	PrimaryGPU bool `json:"primaryGPU"`
+	// ROMBAR is on by default in Proxmox; set false to emit rombar=0 (some GPUs
+	// need this). Pointer so absent ≠ explicit false.
+	ROMBAR *bool `json:"rombar,omitempty"`
+	// MDev requests a mediated device (vGPU) of the given type.
+	MDev string `json:"mdev"`
+	// ROMFile names a custom device ROM under Proxmox's /usr/share/kvm.
+	ROMFile string `json:"romfile"`
+}
+
+// configString renders the Proxmox `hostpciN` value, e.g.
+// "0000:01:00,pcie=1,x-vga=1" or "mapping=gpu,pcie=1".
+func (h HostPCISpec) configString() string {
+	head := h.Device
+	if h.Mapping != "" {
+		head = "mapping=" + h.Mapping
+	}
+	parts := []string{head}
+	if h.PCIE {
+		parts = append(parts, "pcie=1")
+	}
+	if h.PrimaryGPU {
+		parts = append(parts, "x-vga=1")
+	}
+	// ROMBAR defaults on in Proxmox; only emit when explicitly disabled.
+	if h.ROMBAR != nil && !*h.ROMBAR {
+		parts = append(parts, "rombar=0")
+	}
+	if h.MDev != "" {
+		parts = append(parts, "mdev="+h.MDev)
+	}
+	if h.ROMFile != "" {
+		parts = append(parts, "romfile="+h.ROMFile)
+	}
+	return strings.Join(parts, ",")
+}
+
+// EFIDiskSpec allocates the OVMF EFI vars disk (Proxmox `efidisk0`).
+type EFIDiskSpec struct {
+	// Storage is the Proxmox storage ID to allocate the vars disk on
+	// (e.g. "local-lvm"). Required.
+	Storage string `json:"storage"`
+	// Type is the OVMF firmware size: "4m" (default, needed for secure boot /
+	// larger var stores) or "2m".
+	Type string `json:"type"`
+	// PreEnrolledKeys enrolls Microsoft's secure-boot keys. Defaults OFF —
+	// GPU-passthrough / Linux guests generally run without secure boot.
+	PreEnrolledKeys *bool `json:"preEnrolledKeys,omitempty"`
+}
+
+// configString renders the Proxmox `efidisk0` value. The ":1" tells Proxmox to
+// allocate a fresh EFI vars volume on the storage (the size is fixed by the
+// efitype regardless of the number).
+func (e EFIDiskSpec) configString() string {
+	efitype := e.Type
+	if efitype == "" {
+		efitype = "4m"
+	}
+	pek := "0"
+	if e.PreEnrolledKeys != nil && *e.PreEnrolledKeys {
+		pek = "1"
+	}
+	return fmt.Sprintf("%s:1,efitype=%s,pre-enrolled-keys=%s", e.Storage, efitype, pek)
 }
 
 // MemorySpec defines memory configuration
@@ -319,6 +405,56 @@ func ParseVMSpec(r *protocol.Resource) (*VMSpec, error) {
 		if sockets, ok := cpu["sockets"].(float64); ok {
 			spec.CPU.Sockets = int(sockets)
 		}
+		if cpuType, ok := cpu["type"].(string); ok {
+			spec.CPU.Type = cpuType
+		}
+	}
+
+	if devices, ok := r.Spec["hostPCI"].([]any); ok {
+		for _, d := range devices {
+			dev, ok := d.(map[string]any)
+			if !ok {
+				continue
+			}
+			h := HostPCISpec{}
+			if device, ok := dev["device"].(string); ok {
+				h.Device = device
+			}
+			if mapping, ok := dev["mapping"].(string); ok {
+				h.Mapping = mapping
+			}
+			if pcie, ok := dev["pcie"].(bool); ok {
+				h.PCIE = pcie
+			}
+			if primary, ok := dev["primaryGPU"].(bool); ok {
+				h.PrimaryGPU = primary
+			}
+			if rombar, ok := dev["rombar"].(bool); ok {
+				b := rombar
+				h.ROMBAR = &b
+			}
+			if mdev, ok := dev["mdev"].(string); ok {
+				h.MDev = mdev
+			}
+			if romfile, ok := dev["romfile"].(string); ok {
+				h.ROMFile = romfile
+			}
+			spec.HostPCI = append(spec.HostPCI, h)
+		}
+	}
+
+	if efi, ok := r.Spec["efiDisk"].(map[string]any); ok {
+		spec.EFIDisk = &EFIDiskSpec{}
+		if storage, ok := efi["storage"].(string); ok {
+			spec.EFIDisk.Storage = storage
+		}
+		if t, ok := efi["type"].(string); ok {
+			spec.EFIDisk.Type = t
+		}
+		if pek, ok := efi["preEnrolledKeys"].(bool); ok {
+			b := pek
+			spec.EFIDisk.PreEnrolledKeys = &b
+		}
 	}
 
 	if mem, ok := r.Spec["memory"].(map[string]any); ok {
@@ -449,6 +585,9 @@ func (s *VMSpec) ToProxmoxConfig() map[string]any {
 		if s.CPU.Sockets > 0 {
 			params["sockets"] = s.CPU.Sockets
 		}
+		if s.CPU.Type != "" {
+			params["cpu"] = s.CPU.Type
+		}
 	}
 
 	if s.Memory != nil && s.Memory.Size > 0 {
@@ -466,6 +605,21 @@ func (s *VMSpec) ToProxmoxConfig() map[string]any {
 	}
 	if s.Agent != nil && s.Agent.Enabled {
 		params["agent"] = "1"
+	}
+
+	// EFI vars disk for OVMF/UEFI (and a prerequisite for GPU passthrough).
+	if s.EFIDisk != nil && s.EFIDisk.Storage != "" {
+		params["efidisk0"] = s.EFIDisk.configString()
+	}
+
+	// Host PCI passthrough devices → hostpci0, hostpci1, …
+	i := 0
+	for _, h := range s.HostPCI {
+		if h.Device == "" && h.Mapping == "" {
+			continue // nothing to attach
+		}
+		params[fmt.Sprintf("hostpci%d", i)] = h.configString()
+		i++
 	}
 
 	for _, net := range s.Networks {
