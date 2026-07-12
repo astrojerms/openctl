@@ -55,6 +55,7 @@ jobs:
           go test -race ./...
           cd plugins/proxmox && go test -race ./...
           cd ../k3s && go test -race ./...
+          cd ../k8s && go test -race ./...
 
   lint:
     name: Lint
@@ -86,6 +87,9 @@ jobs:
       - name: Run golangci-lint (k3s plugin)
         run: cd plugins/k3s && golangci-lint run --config=../../.golangci.yml ./...
 
+      - name: Run golangci-lint (k8s plugin)
+        run: cd plugins/k8s && golangci-lint run --config=../../.golangci.yml ./...
+
   vet:
     name: Vet & Staticcheck
     runs-on: ubuntu-latest
@@ -110,6 +114,9 @@ jobs:
       - name: Run go vet (k3s plugin)
         run: cd plugins/k3s && go vet ./...
 
+      - name: Run go vet (k8s plugin)
+        run: cd plugins/k8s && go vet ./...
+
       - name: Install staticcheck
         run: go install honnef.co/go/tools/cmd/staticcheck@latest
 
@@ -121,6 +128,9 @@ jobs:
 
       - name: Run staticcheck (k3s plugin)
         run: cd plugins/k3s && staticcheck ./...
+
+      - name: Run staticcheck (k8s plugin)
+        run: cd plugins/k8s && staticcheck ./...
 
   format:
     name: Format Check
@@ -193,6 +203,18 @@ jobs:
           OUTPUT=$(modernize ./... 2>&1 | grep -v '\.pb\.go:' || true)
           if [ -n "$OUTPUT" ]; then
             echo "Modernize suggestions found in k3s plugin:"
+            echo "$OUTPUT"
+            echo ""
+            echo "Run 'make modernize' locally to apply fixes"
+            exit 1
+          fi
+
+      - name: Run modernize (k8s plugin)
+        run: |
+          cd plugins/k8s
+          OUTPUT=$(modernize ./... 2>&1 | grep -v '\.pb\.go:' || true)
+          if [ -n "$OUTPUT" ]; then
+            echo "Modernize suggestions found in k8s plugin:"
             echo "$OUTPUT"
             echo ""
             echo "Run 'make modernize' locally to apply fixes"
