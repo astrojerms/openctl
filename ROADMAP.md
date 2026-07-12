@@ -1040,8 +1040,23 @@ phase plan when ready to commit.
         factored into a shared `kubeconfigState`. Verified: unit (multi-doc
         parse, prune diff) + **e2e vs k3d** (SSA two ConfigMaps → get → prune one
         (confirmed deleted) → delete). This is the escape hatch for non-Helm glue
-        (Namespaces, ConfigMaps) and, later, Argo `Application` CRs. *Next:*
-        Phase 4 — opt-in `Platform` composite (Traefik + cloudflared).
+        (Namespaces, ConfigMaps) and, later, Argo `Application` CRs.
+  - [x] **Phase 4 — opt-in `Platform` composite.** A curated, infra-coupled
+        platform layer that fans out into one Helm release per **enabled**
+        component (nothing on by default): **Traefik** ingress + **cloudflared**.
+        Since an external plugin's `Plan` children aren't auto-applied by the
+        controller (`ChildDispatcherFrom` is k3s-only), `Apply` installs the
+        component releases directly (reusing the Helm engine); the provider
+        advertises `CapabilityPlan` so the UI graph shows the fan-out (children
+        with owner labels). Disabling a component uninstalls it (prune); Get
+        aggregates component health (Ready/Degraded). The cloudflared run token
+        flows as a `$secret` in that component's values — resolved before Apply
+        so Helm gets the real token, but only the raw marker persists (no leak);
+        it's user-provided since openctl has no action-output→secret bridge yet.
+        Verified: unit (fan-out, owner labels, prune diff) + **e2e vs k3d**
+        (enable Traefik → real release installed → disable → pruned
+        (confirmed gone) → delete). *Next:* Phase 5 — Argo bootstrap +
+        aggregation.
 - [x] **Provider credential editing** — new ConfigService RPCs
       (ListProviders / UpsertProvider / DeleteProvider) that read/
       write ~/.openctl/config.yaml. UI Providers page with add /
