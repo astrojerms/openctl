@@ -108,6 +108,30 @@ openctl ctl action --api-version cloudflare.openctl.io/v1 --kind Tunnel \
   --name home --action get-token
 ```
 
+### Routing a hostname to the tunnel (no manual id copying)
+
+A tunnel serves a hostname via a proxied `CNAME` → `<tunnel-id>.cfargotunnel.com`.
+The Tunnel exposes that ready-to-use target at `status.cnameTarget`, so a
+`DNSRecord` can `$ref` it directly — you never copy the tunnel id by hand, and
+openctl applies the tunnel first (the ref creates the dependency edge):
+
+```yaml
+apiVersion: cloudflare.openctl.io/v1
+kind: DNSRecord
+metadata:
+  name: app
+spec:
+  type: CNAME
+  name: app.example.com
+  proxied: true
+  content:
+    $ref:
+      apiVersion: cloudflare.openctl.io/v1
+      kind: Tunnel
+      name: home
+      field: status.cnameTarget
+```
+
 ## Notes / limitations (MVP)
 
 - `list` is a live inventory of the default zone/account, independent of
