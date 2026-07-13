@@ -286,6 +286,10 @@ func runServe(args []string) error {
 	dispatcher.Start(ctx)
 	defer dispatcher.Stop()
 
+	// gitOpsWebhook, when the push-triggered reconcile is configured, is built
+	// in the GitOps block below and mounted on the HTTP gateway further down.
+	var gitOpsWebhook *server.GitOpsWebhook
+
 	// Two-way GitOps: fsnotify watcher on the mirror dir. File edits
 	// become Apply ops tagged source="gitops". Opt-in (config
 	// manifests.gitops.enabled: true) — default remains one-way
@@ -391,6 +395,24 @@ func runServe(args []string) error {
 						}
 						gitRepo.StartPeriodicPull(ctx, interval, onChange, log.Printf)
 						log.Printf("  gitops:      git-as-source pull enabled (interval=%s, prune=%v)", interval, pull.Prune)
+
+						// Push-triggered reconcile: mount a webhook that pulls +
+						// reconciles on demand (same path as the ticker), so a
+						// git push converges immediately instead of within one
+						// interval. The handler is served by the HTTP gateway.
+						if wh := pull.Webhook; wh != nil && wh.Enabled {
+							repo := gitRepo
+							trigger := func(ctx context.Context) error {
+								_, err := repo.PullAndReconcile(ctx, onChange, log.Printf)
+								return err
+							}
+							gitOpsWebhook = server.NewGitOpsWebhook(wh.Path, wh.Secret, trigger)
+							whPath := wh.Path
+							if whPath == "" {
+								whPath = "/gitops/webhook"
+							}
+							log.Printf("  gitops:      push webhook enabled (path=%s, signed=%v)", whPath, wh.Secret != "")
+						}
 					}
 				}
 			}
@@ -507,7 +529,7 @@ func runServe(args []string) error {
 		go func() {
 			log.Printf("openctl-controller HTTP gateway listening on %s (HTTP/2 over TLS)", *httpListen)
 			log.Printf("  UI:          https://%s/ui/", *httpListen)
-			if err := server.ServeHTTPGateway(ctx, *httpListen, *listen, caBytes, host, mat.ServerCertPath, mat.ServerKeyPath, oidcHandler); err != nil {
+			if err := server.ServeHTTPGateway(ctx, *httpListen, *listen, caBytes, host, mat.ServerCertPath, mat.ServerKeyPath, oidcHandler, gitOpsWebhook); err != nil {
 				errCh <- fmt.Errorf("http gateway: %w", err)
 			}
 		}()

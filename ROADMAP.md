@@ -98,9 +98,20 @@ is a follow-up (config layers are unit-tested).
       (provenance from the ops table), only considers resources with no file on
       disk. Wired after `Watcher.Sync` in the pull loop. Unit tests cover every
       guard branch. Default OFF.
-- [ ] **B3 — GitHub / PR flow.** Webhook-triggered reconcile and/or PR-based
-      change proposal. Scope leans on the existing design (Argo drives pure-app
-      GitOps; openctl natively reconciles the infra-coupled layer it owns).
+- [x] **B3 — GitHub push webhook.** `server.GitOpsWebhook` — a POST-only,
+      HMAC-SHA256-verified (`X-Hub-Signature-256`) endpoint on the HTTP gateway
+      that triggers an immediate pull+reconcile (shared `Repo.PullAndReconcile`
+      path with the ticker), so a git push converges without waiting for the
+      interval. Config: `manifests.gitops.pull.webhook.{enabled, secret, path}`.
+      Threaded through the gateway like the OIDC handler. Unit tests: valid/bad/
+      missing signature, non-POST, unsigned mode, route mounting. (PR-based
+      *change proposal* left to Argo per the design; openctl reconciles the
+      infra layer it owns.)
+
+**Area B COMPLETE (B1–B3):** git is now a first-class *source*, not just a
+sink — remote commits pull → reconcile (B1), removed files prune with strong
+guards (B2), and a push webhook converges immediately (B3). The DriftlessAF
+loop for the infra layer is in place. All opt-in; defaults unchanged.
 
 ### C. Storage
 - [ ] **C1 — First-class NFS / PV helper.** Optional convenience for
