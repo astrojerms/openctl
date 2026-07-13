@@ -44,6 +44,11 @@ var platformComponents = []component{
 	// NVIDIA runtime + drivers, so GPU workloads (e.g. a local model / Ollama)
 	// can request a GPU. Pairs with a k3s worker pool that has GPU passthrough.
 	{"nvidiaDevicePlugin", "https://nvidia.github.io/k8s-device-plugin", "nvidia-device-plugin", "nvidia-device-plugin"},
+	// nfsProvisioner gives workloads a dynamic, NFS-backed StorageClass (e.g. a
+	// Synology share) so stateful services (media, Home Assistant) get
+	// persistent volumes on request. Set nfsProvisioner.values.nfs.{server,path}
+	// to the NAS export.
+	{"nfsProvisioner", "https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner", "nfs-subdir-external-provisioner", "nfs-provisioner"},
 }
 
 // releaseCoord locates an installed component release for Get/Delete/prune.

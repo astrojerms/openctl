@@ -108,6 +108,9 @@ const platformSchema = `
 		// local model) can schedule. Needs nodes with the NVIDIA runtime +
 		// drivers — pair with a k3s worker pool that has GPU passthrough.
 		nvidiaDevicePlugin?: {...}
+		// nfsProvisioner gives a dynamic NFS-backed StorageClass for persistent
+		// volumes (e.g. a Synology share). Set values.nfs.server + values.nfs.path.
+		nfsProvisioner?: {...}
 	}
 	...
 }
