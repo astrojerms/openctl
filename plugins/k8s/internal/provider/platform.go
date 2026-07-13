@@ -19,8 +19,11 @@ import (
 //
 // The cloudflared token flows through as a `$secret` in that component's values:
 // openctl resolves it before Apply (so Helm gets the real token) but persists
-// only the raw marker (no leak). openctl has no action-output→secret bridge yet,
-// so the token is user-provided (run the Tunnel's get-token once, store it).
+// only the raw marker (no leak). The token can be auto-wired from the Cloudflare
+// Tunnel via the `action` secret provider — e.g. token:
+// {$secret: {provider: action, key: "cloudflare.openctl.io/v1/Tunnel/<n>#get-token"}}
+// — which runs the Tunnel's get-token action at resolve time; or supplied by
+// hand (run get-token once, store the token) for a file/env secret.
 
 const kindPlatform = "Platform"
 
