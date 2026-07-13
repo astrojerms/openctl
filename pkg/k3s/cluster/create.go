@@ -135,6 +135,10 @@ func (c *Creator) GenerateDispatchRequests() []*protocol.DispatchRequest {
 			},
 		}
 
+		// GPU/PCI passthrough for this node's pool (q35 + OVMF + efidisk +
+		// cpu host + hostpci). No-op when the pool requests no GPU.
+		resources.ApplyGPUToVMSpec(manifest.Spec, resources.GPUForNode(i, len(cpNodes), c.spec))
+
 		// Place this VM on a specific provider endpoint/host when the
 		// pool defines placement; otherwise leave spec.context/spec.node
 		// unset so the provider uses its configured defaults.

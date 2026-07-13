@@ -120,3 +120,70 @@ func TestGenerateDispatchRequests_NoPlacement(t *testing.T) {
 		t.Errorf("expected spec.context to be unset without placement, got %v", requests[0].Manifest.Spec["context"])
 	}
 }
+
+// TestGenerateDispatchRequests_GPU verifies a per-pool GPU request stamps the
+// passthrough hardware (q35 + OVMF + efidisk + cpu host + hostpci) onto only
+// that pool's node VMs, leaving control-plane and non-GPU workers untouched.
+func TestGenerateDispatchRequests_GPU(t *testing.T) {
+	spec := &resources.ClusterSpec{
+		Compute: resources.ComputeSpec{
+			Provider: "proxmox",
+			Image:    resources.ImageSpec{Template: "ubuntu-template"},
+			Default:  resources.DefaultSizeSpec{CPUs: 2, MemoryMB: 4096, DiskGB: 40},
+		},
+		Nodes: resources.NodesSpec{
+			ControlPlane: resources.ControlPlaneSpec{Count: 1},
+			Workers: []resources.WorkerSpec{
+				{Name: "general", Count: 1},
+				{Name: "gpu", Count: 1, Nodes: []string{"pve-gpu"}, GPU: &resources.GPUSpec{
+					EFIStorage: "local-lvm",
+					Devices: []resources.PCIDevice{
+						{Mapping: "rtx4090", PrimaryGPU: true},
+					},
+				}},
+			},
+		},
+		SSH: resources.SSHSpec{User: "ubuntu"},
+	}
+
+	byID := map[string]*protocol.Resource{}
+	for _, req := range NewCreator("dev", spec, &protocol.ProviderConfig{}).GenerateDispatchRequests() {
+		byID[req.ID] = req.Manifest
+	}
+
+	// The GPU worker gets the full passthrough hardware.
+	gpu := byID["vm-dev-gpu-0"]
+	if gpu == nil {
+		t.Fatalf("missing gpu node request; got %v", byID)
+	}
+	if gpu.Spec["machine"] != "q35" || gpu.Spec["bios"] != "ovmf" {
+		t.Errorf("gpu node not built for passthrough: machine=%v bios=%v", gpu.Spec["machine"], gpu.Spec["bios"])
+	}
+	if cpu, _ := gpu.Spec["cpu"].(map[string]any); cpu["type"] != "host" || cpu["cores"] != 2 {
+		t.Errorf("gpu cpu wrong (want cores=2,type=host): %v", gpu.Spec["cpu"])
+	}
+	if efi, _ := gpu.Spec["efiDisk"].(map[string]any); efi["storage"] != "local-lvm" {
+		t.Errorf("gpu efiDisk wrong: %v", gpu.Spec["efiDisk"])
+	}
+	devs, _ := gpu.Spec["hostPCI"].([]map[string]any)
+	if len(devs) != 1 || devs[0]["mapping"] != "rtx4090" || devs[0]["pcie"] != true || devs[0]["primaryGPU"] != true {
+		t.Errorf("gpu hostPCI wrong: %v", gpu.Spec["hostPCI"])
+	}
+
+	// The non-GPU worker and the control plane must NOT get passthrough fields.
+	for _, id := range []string{"vm-dev-cp-0", "vm-dev-general-0"} {
+		m := byID[id]
+		if m == nil {
+			t.Fatalf("missing %s", id)
+		}
+		if _, ok := m.Spec["hostPCI"]; ok {
+			t.Errorf("%s should not have hostPCI", id)
+		}
+		if _, ok := m.Spec["machine"]; ok {
+			t.Errorf("%s should not have machine set", id)
+		}
+		if cpu, _ := m.Spec["cpu"].(map[string]any); cpu["type"] != nil {
+			t.Errorf("%s cpu.type should be unset, got %v", id, cpu["type"])
+		}
+	}
+}

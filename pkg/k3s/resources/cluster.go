@@ -94,6 +94,32 @@ type DefaultSizeSpec struct {
 	DiskGB   int `json:"diskGB"`
 }
 
+// GPUSpec requests PCI/GPU passthrough for every node in a pool. When set, the
+// pool's node VMs are built for passthrough — machine q35 + OVMF firmware + an
+// EFI vars disk + cpu type "host" — with the listed devices attached. The pool
+// must be pinned (Nodes/Targets) to hosts that actually have the device(s);
+// prefer a Proxmox resource-mapping id (PCIDevice.Mapping) so the same spec
+// works across hosts. Proxmox-specific (matches the provider's VM fields).
+type GPUSpec struct {
+	// Devices are the host PCI devices passed into each node VM in the pool.
+	Devices []PCIDevice `json:"devices"`
+	// EFIStorage is the Proxmox storage the OVMF EFI vars disk is allocated on
+	// (e.g. "local-lvm"). Required — UEFI/passthrough needs the vars disk.
+	EFIStorage string `json:"efiStorage"`
+	// CPUType overrides the Proxmox CPU model; defaults to "host" (exposes the
+	// physical CPU's full feature set, which GPU/compute workloads want).
+	CPUType string `json:"cpuType,omitempty"`
+}
+
+// PCIDevice is one passthrough device inside a GPUSpec. Give exactly one of
+// Device (a raw PCI address) or Mapping (a Proxmox resource-mapping id).
+type PCIDevice struct {
+	Device     string `json:"device,omitempty"`
+	Mapping    string `json:"mapping,omitempty"`
+	PrimaryGPU bool   `json:"primaryGPU,omitempty"`
+	MDev       string `json:"mdev,omitempty"`
+}
+
 // NodesSpec defines the cluster nodes
 type NodesSpec struct {
 	ControlPlane ControlPlaneSpec `json:"controlPlane"`
@@ -117,6 +143,9 @@ type ControlPlaneSpec struct {
 	// plane across endpoints (cross-endpoint HA quorum). Overrides
 	// Context/Nodes for this pool.
 	Targets []PlacementTarget `json:"targets,omitempty"`
+	// GPU requests PCI/GPU passthrough for the control-plane VMs. Rare — GPUs
+	// usually belong on workers — but supported for symmetry.
+	GPU *GPUSpec `json:"gpu,omitempty"`
 }
 
 // WorkerSpec defines a worker node pool
@@ -132,6 +161,10 @@ type WorkerSpec struct {
 	// Targets is the general placement form for this pool: explicit
 	// {context, node} slots spread round-robin. Overrides Context/Nodes.
 	Targets []PlacementTarget `json:"targets,omitempty"`
+	// GPU requests PCI/GPU passthrough for every node in this pool (e.g. a
+	// pool of one node that runs a local model). Pin the pool to the host(s)
+	// with the device via Nodes/Targets.
+	GPU *GPUSpec `json:"gpu,omitempty"`
 }
 
 // K3sSpec defines K3s configuration
@@ -207,6 +240,9 @@ func ParseClusterSpec(r *protocol.Resource) (*ClusterSpec, error) {
 			}
 			spec.Nodes.ControlPlane.Nodes = parseStringSlice(cp["nodes"])
 			spec.Nodes.ControlPlane.Targets = parsePlacementTargets(cp["targets"])
+			if gpu, ok := cp["gpu"].(map[string]any); ok {
+				spec.Nodes.ControlPlane.GPU = parseGPUSpec(gpu)
+			}
 		}
 		if workers, ok := nodes["workers"].([]any); ok {
 			for _, w := range workers {
@@ -226,6 +262,9 @@ func ParseClusterSpec(r *protocol.Resource) (*ClusterSpec, error) {
 					}
 					ws.Nodes = parseStringSlice(worker["nodes"])
 					ws.Targets = parsePlacementTargets(worker["targets"])
+					if gpu, ok := worker["gpu"].(map[string]any); ok {
+						ws.GPU = parseGPUSpec(gpu)
+					}
 					spec.Nodes.Workers = append(spec.Nodes.Workers, ws)
 				}
 			}
@@ -367,6 +406,107 @@ func parseSizeSpec(m map[string]any) *DefaultSizeSpec {
 		size.DiskGB = int(disk)
 	}
 	return size
+}
+
+func parseGPUSpec(m map[string]any) *GPUSpec {
+	gpu := &GPUSpec{}
+	if s, ok := m["efiStorage"].(string); ok {
+		gpu.EFIStorage = s
+	}
+	if s, ok := m["cpuType"].(string); ok {
+		gpu.CPUType = s
+	}
+	if devices, ok := m["devices"].([]any); ok {
+		for _, d := range devices {
+			dev, ok := d.(map[string]any)
+			if !ok {
+				continue
+			}
+			pci := PCIDevice{}
+			if s, ok := dev["device"].(string); ok {
+				pci.Device = s
+			}
+			if s, ok := dev["mapping"].(string); ok {
+				pci.Mapping = s
+			}
+			if b, ok := dev["primaryGPU"].(bool); ok {
+				pci.PrimaryGPU = b
+			}
+			if s, ok := dev["mdev"].(string); ok {
+				pci.MDev = s
+			}
+			gpu.Devices = append(gpu.Devices, pci)
+		}
+	}
+	return gpu
+}
+
+// GPUForNode resolves the GPU passthrough config for node index i (across the
+// flat control-plane-then-workers ordering NodeNames produces), or nil when the
+// node's pool requests none. Mirrors the per-pool size resolution used by both
+// VM-build paths so they stay in sync.
+func GPUForNode(i, cpCount int, spec *ClusterSpec) *GPUSpec {
+	if i < cpCount {
+		return spec.Nodes.ControlPlane.GPU
+	}
+	workerIdx := i - cpCount
+	for _, pool := range spec.Nodes.Workers {
+		if workerIdx < pool.Count {
+			return pool.GPU
+		}
+		workerIdx -= pool.Count
+	}
+	return nil
+}
+
+// ApplyGPUToVMSpec stamps PCI/GPU passthrough hardware onto a node VM's spec
+// map: q35 machine + OVMF bios + an EFI vars disk + cpu type + hostPCI devices.
+// No-op when gpu is nil. Shared by both VM-build paths (create.go and the Plan
+// mirror) so GPU nodes come out identical. It preserves an existing cpu.cores.
+func ApplyGPUToVMSpec(vmSpec map[string]any, gpu *GPUSpec) {
+	if gpu == nil {
+		return
+	}
+	vmSpec["machine"] = "q35"
+	vmSpec["bios"] = "ovmf"
+
+	cpuType := gpu.CPUType
+	if cpuType == "" {
+		cpuType = "host"
+	}
+	if cpu, ok := vmSpec["cpu"].(map[string]any); ok {
+		cpu["type"] = cpuType
+	} else {
+		vmSpec["cpu"] = map[string]any{"type": cpuType}
+	}
+
+	if gpu.EFIStorage != "" {
+		vmSpec["efiDisk"] = map[string]any{"storage": gpu.EFIStorage, "type": "4m"}
+	}
+
+	devices := make([]map[string]any, 0, len(gpu.Devices))
+	for _, d := range gpu.Devices {
+		if d.Device == "" && d.Mapping == "" {
+			continue // nothing to attach
+		}
+		// PCIe is required for GPU passthrough on q35.
+		dev := map[string]any{"pcie": true}
+		if d.Mapping != "" {
+			dev["mapping"] = d.Mapping
+		} else {
+			dev["device"] = d.Device
+		}
+		if d.PrimaryGPU {
+			dev["primaryGPU"] = true
+		}
+		if d.MDev != "" {
+			dev["mdev"] = d.MDev
+		}
+		devices = append(devices, dev)
+	}
+	if len(devices) > 0 {
+		vmSpec["hostPCI"] = devices
+	}
 }
 
 // ClusterToResource converts cluster state to a protocol Resource

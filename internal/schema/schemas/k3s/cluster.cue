@@ -33,6 +33,30 @@ import "openctl.io/schemas/base"
 	node?: string
 }
 
+// #GPU requests PCI/GPU passthrough for every node in a pool (e.g. a one-node
+// pool that runs a local model). Setting it builds the pool's VMs for
+// passthrough: q35 + OVMF + an EFI vars disk + cpu type "host". Pin the pool
+// to the host(s) that own the device via the pool's nodes/targets.
+#GPU: {
+	// Host PCI devices attached to each node in the pool. Give exactly one of
+	// device or mapping per entry.
+	devices: [...{
+		// Raw host PCI address, e.g. "0000:01:00" or "0000:01:00.0".
+		device?: string
+		// Proxmox resource-mapping id (preferred — portable across hosts).
+		mapping?: string
+		// Mark as the primary GPU (Proxmox x-vga=1).
+		primaryGPU?: bool | *false
+		// Request a mediated device (vGPU) of this type instead of the whole card.
+		mdev?: string
+	}]
+	// Proxmox storage to allocate the OVMF EFI vars disk on (e.g. "local-lvm").
+	// Required — UEFI/passthrough needs the vars disk.
+	efiStorage: string
+	// Proxmox CPU model. Defaults to "host" (full physical CPU feature set).
+	cpuType?: string | *"host"
+}
+
 #ClusterSpec: {
 	// Which infrastructure provider runs the VMs. Currently only
 	// "proxmox" is implemented; other providers may follow.
@@ -86,6 +110,9 @@ import "openctl.io/schemas/base"
 			// spread across round-robin. Use this to spread the CP across
 			// endpoints (cross-endpoint HA quorum). Overrides context/nodes.
 			targets?: [...#PlacementTarget]
+			// GPU/PCI passthrough for the control-plane VMs. Rare (GPUs usually
+			// belong on workers) but supported for symmetry.
+			gpu?: #GPU
 		}
 		// Worker (agent) node pools. Each pool can have its own size.
 		workers?: [...{
@@ -103,6 +130,9 @@ import "openctl.io/schemas/base"
 			// General placement: {context, node} slots this pool is spread
 			// across round-robin. Overrides context/nodes.
 			targets?: [...#PlacementTarget]
+			// GPU/PCI passthrough for every node in this pool. Pin the pool to
+			// the host(s) with the device via nodes/targets.
+			gpu?: #GPU
 		}]
 	}
 
