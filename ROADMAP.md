@@ -81,10 +81,14 @@ via the device plugin (A4). Real-hardware validation on the homelab GPU host
 is a follow-up (config layers are unit-tested).
 
 ### B. GitOps-from-git (the DriftlessAF loop)
-- [ ] **B1 — Git-as-source pull loop.** Poll a remote repo and feed changed
-      manifests into the existing apply engine — close the "commit to git →
-      openctl brings it up" loop (today git is a write-only mirror + a manual
-      ff-only `repo:pull` that applies nothing). Reuses the fsnotify watcher.
+- [x] **B1 — Git-as-source pull loop.** `Repo.StartPeriodicPull` pulls the
+      remote (`--ff-only`) on an interval and, when HEAD advances, calls
+      `Watcher.Sync` (new full-dir reconcile that applies every changed
+      manifest, reusing the fsnotify apply path). Closes the "commit to git →
+      openctl brings it up" loop. Config: `manifests.gitops.pull.{enabled,
+      interval}` (requires a remote + the watcher). Apply-only — repo-wide
+      prune is B2. Tests: `Watcher.Sync` (changed-only) + a real-git pull loop
+      (bare remote → new commit → reconcile fires).
 - [ ] **B2 — Declarative desired-set + repo-wide prune.** Treat the repo as
       the desired SET; prune openctl-managed resources removed from it (today
       prune exists only inside a single k8s `Manifest`). Opt-in + guarded.

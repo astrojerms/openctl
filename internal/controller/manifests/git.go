@@ -382,6 +382,67 @@ func (r *Repo) StartPeriodicPush(ctx context.Context, log func(format string, ar
 	}()
 }
 
+// head returns the current HEAD commit sha, or "" on error (e.g. an empty
+// repo with no commits yet). Used to detect whether a pull advanced history.
+func (r *Repo) head(ctx context.Context) string {
+	if err := r.lock.acquire(ctx); err != nil {
+		return ""
+	}
+	defer r.lock.release()
+	out, err := r.run(ctx, "rev-parse", "HEAD")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// StartPeriodicPull spawns a background goroutine that `git pull --ff-only`s
+// every interval and, when the pull advanced HEAD, invokes onChange to
+// reconcile the updated working tree. This closes the git-as-source loop:
+// commit to the remote → controller pulls → onChange applies the changes.
+// No-op without a remote or a positive interval. Stops when ctx is canceled.
+//
+// ff-only is deliberate: if local history has diverged from the remote (e.g.
+// the controller made its own commits), the pull fails and is logged rather
+// than force-merged — reconciling a foreign merge is not something to do
+// silently. onChange runs only on a real HEAD advance, so a steady-state
+// repo does no reconcile work.
+func (r *Repo) StartPeriodicPull(ctx context.Context, interval time.Duration, onChange func(context.Context) error, logf func(format string, args ...any)) {
+	if r.remote == "" || interval <= 0 {
+		return
+	}
+	go func() {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				before := r.head(ctx)
+				if err := r.Pull(ctx); err != nil {
+					if logf != nil {
+						logf("git pull (periodic): %v", err)
+					}
+					continue
+				}
+				after := r.head(ctx)
+				if after == "" || after == before {
+					continue // nothing new
+				}
+				if logf != nil {
+					logf("git pull (periodic): HEAD advanced, reconciling")
+				}
+				if onChange != nil {
+					if err := onChange(ctx); err != nil && logf != nil {
+						logf("git pull reconcile: %v", err)
+					}
+				}
+			}
+		}
+	}()
+}
+
 // run executes a git subcommand in r.dir and returns its stdout. stderr
 // is appended to the error message on failure so the operator sees git's
 // own complaint rather than a generic "exit status 1". Caller holds r.lock.

@@ -160,6 +160,21 @@ type ManifestsGitOps struct {
 	// from the mirror. Default false — most users prefer to move
 	// files around without triggering resource deletion.
 	DeleteOnRemove bool `yaml:"deleteOnRemove"`
+	// Pull enables git-as-source: periodically pull the configured remote
+	// (manifests.git.remote) into the mirror dir and reconcile the result,
+	// so committing to the remote brings the infra up. nil = off (the
+	// default; git stays a one-way mirror). Requires a remote and the
+	// watcher (Enabled) to be on.
+	Pull *ManifestsGitOpsPull `yaml:"pull,omitempty"`
+}
+
+// ManifestsGitOpsPull configures the git-as-source pull loop.
+type ManifestsGitOpsPull struct {
+	// Enabled turns on periodic remote pulling. Off unless explicitly true.
+	Enabled bool `yaml:"enabled"`
+	// Interval is the pull cadence (e.g. "1m", "30s"). Parsed as a
+	// time.Duration; defaults to 1m when empty or invalid.
+	Interval string `yaml:"interval"`
 }
 
 // ManifestsGit configures git tracking of the manifest directory. When

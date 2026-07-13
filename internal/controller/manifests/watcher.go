@@ -179,33 +179,59 @@ func (w *Watcher) process(ctx context.Context, ev fsnotify.Event) {
 		return
 	}
 	// Write/Create: read + parse + apply if content differs.
-	data, err := os.ReadFile(ev.Name) // #nosec G304 -- watching the controller-owned mirror dir
+	w.applyFileIfChanged(ctx, ev.Name)
+}
+
+// Sync walks the whole mirror dir and applies every manifest whose spec
+// differs from what's stored — a full reconcile pass over the tree. Used by
+// the git-as-source pull loop after a remote pull advances HEAD, so new
+// commits become applies without depending on fsnotify catching git's writes.
+// Idempotent: files matching the store are skipped. Apply-only — it does not
+// prune resources whose files were removed (that's a separate, guarded step).
+func (w *Watcher) Sync(ctx context.Context) error {
+	return filepath.WalkDir(w.root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".yaml") {
+			return nil
+		}
+		w.applyFileIfChanged(ctx, path)
+		return nil
+	})
+}
+
+// applyFileIfChanged reads one manifest file and submits an Apply when its
+// spec differs from the stored manifest. Shared by the fsnotify path and the
+// full-dir Sync. Loop-safe: a file matching applied_manifests (e.g. our own
+// DiskMirror write) is silently skipped.
+func (w *Watcher) applyFileIfChanged(ctx context.Context, path string) {
+	data, err := os.ReadFile(path) // #nosec G304 -- reading the controller-owned mirror dir
 	if err != nil {
 		if !os.IsNotExist(err) {
-			log.Printf("gitops: read %s: %v", ev.Name, err)
+			log.Printf("gitops: read %s: %v", path, err)
 		}
 		return
 	}
 	var r protocol.Resource
 	if err := yaml.Unmarshal(data, &r); err != nil {
-		log.Printf("gitops: parse %s: %v (skipping)", ev.Name, err)
+		log.Printf("gitops: parse %s: %v (skipping)", path, err)
 		return
 	}
 	if r.APIVersion == "" || r.Kind == "" || r.Metadata.Name == "" {
-		log.Printf("gitops: %s missing apiVersion/kind/name (skipping)", ev.Name)
+		log.Printf("gitops: %s missing apiVersion/kind/name (skipping)", path)
 		return
 	}
 	if same, err := w.matchesStored(ctx, &r); err != nil {
-		log.Printf("gitops: compare %s: %v", ev.Name, err)
+		log.Printf("gitops: compare %s: %v", path, err)
 	} else if same {
-		// No change vs stored manifest — nothing to do. This is the
-		// common case for the loop: our own DiskMirror write triggered
-		// the fsnotify event, and applied_manifests already reflects
-		// this content. Silently skip.
 		return
 	}
 	if err := w.apply(ctx, &r); err != nil {
-		log.Printf("gitops: apply %s: %v", ev.Name, err)
+		log.Printf("gitops: apply %s: %v", path, err)
 		return
 	}
 	log.Printf("gitops: applied %s/%s/%s (file changed)", r.APIVersion, r.Kind, r.Metadata.Name)

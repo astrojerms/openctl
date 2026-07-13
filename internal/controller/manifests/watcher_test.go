@@ -189,3 +189,50 @@ func TestWatcherHonoursDeleteWhenConfigured(t *testing.T) {
 		t.Fatal("watcher never called delete for the removed file")
 	}
 }
+
+// TestWatcherSyncAppliesChangedFilesOnly drives the full-dir reconcile Sync
+// uses for the git-as-source pull loop: unchanged files (matching the store)
+// are skipped, new/changed manifests are applied, non-manifest files ignored.
+func TestWatcherSyncAppliesChangedFilesOnly(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store := newWatcherTestStore(t)
+
+	// Pre-store "kept" so its file matches and Sync skips it.
+	kept := &protocol.Resource{APIVersion: "proxmox.openctl.io/v1", Kind: "VirtualMachine"}
+	kept.Metadata.Name = "kept"
+	kept.Spec = map[string]any{"node": "pve1"}
+	if err := store.Save(ctx, kept); err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+
+	dir := filepath.Join(root, "proxmox.openctl.io", "v1", "VirtualMachine")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, node string) {
+		y := "apiVersion: proxmox.openctl.io/v1\nkind: VirtualMachine\nmetadata:\n  name: " + name + "\nspec:\n  node: " + node + "\n"
+		if err := os.WriteFile(filepath.Join(dir, name+".yaml"), []byte(y), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("kept", "pve1")  // matches store → skip
+	write("fresh", "pve2") // absent from store → apply
+	// A stray non-manifest file must be ignored.
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("hi"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var applied []string
+	w := NewWatcher(root, store, func(_ context.Context, r *protocol.Resource) error {
+		applied = append(applied, r.Metadata.Name)
+		return nil
+	}, nil)
+
+	if err := w.Sync(ctx); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if !slices.Equal(applied, []string{"fresh"}) {
+		t.Fatalf("Sync should apply only the changed file, applied=%v", applied)
+	}
+}
