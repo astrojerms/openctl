@@ -122,10 +122,22 @@ loop for the infra layer is in place. All opt-in; defaults unchanged.
       provisioner over a static PV kind — more reusable, matches the A4 shape.)
 
 ### D. Loose ends
-- [ ] **D1 — cloudflared token auto-wiring.** Bridge an action output (the
-      Tunnel token) into a `$secret` so the Platform cloudflared component
-      wires up without manual token copying. (Live tunnel metal-validation is
-      a separate user task.)
+- [x] **D1 — action-output → secret bridge.** New `action` `$secret` provider
+      (`secrets.ActionProvider`): resolves a secret by running a resource
+      action and returning its output — e.g. the Cloudflare Tunnel run token
+      via `{$secret: {provider: action, key: ".../Tunnel/<n>#get-token"}}` →
+      cloudflared wires up with no manual token copying. General (any action,
+      field selector download|message|url), rides the dispatcher's git-safety
+      discipline (only the raw marker persists). Unit-tested with a fake
+      invoker (no Cloudflare account needed). k8s cloudflared docs updated.
+      (Live tunnel metal-validation is still a separate user task.)
+
+**Area D COMPLETE. ENTIRE "Homelab completion" roadmap done (A1–A4, B1–B3,
+C1, D1 — PRs #131–#138).** openctl can now: build a GPU box for a local model,
+reconcile the homelab from a git repo (pull/prune/webhook), provision
+Synology-backed storage, and auto-wire a Cloudflare Tunnel token. Remaining is
+metal validation on real hardware (GPU passthrough, live tunnel) — a hands-on
+homelab task, not code.
 
 ## Suggested next order
 

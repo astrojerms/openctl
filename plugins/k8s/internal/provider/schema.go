@@ -96,9 +96,10 @@ const platformSchema = `
 		//   { enabled: bool, namespace?: string, wait?: bool,
 		//     chart?: {repo?, name?, version?}, values?: {...} }
 		// Traefik is the ingress. cloudflared wires a Cloudflare Tunnel; put its
-		// run token in cloudflared.values as a $secret (openctl has no
-		// action-output→secret bridge yet, so run the Tunnel's get-token once and
-		// store the token).
+		// run token in cloudflared.values as a $secret — auto-wire it from the
+		// Tunnel via the "action" secret provider ({$secret: {provider: action,
+		// key: "cloudflare.openctl.io/v1/Tunnel/<name>#get-token"}}) or store it
+		// by hand (run get-token once) as a file/env secret.
 		traefik?: {...}
 		cloudflared?: {...}
 		// argocd installs Argo CD (bootstrap). Pair with an ArgoApplications

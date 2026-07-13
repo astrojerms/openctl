@@ -271,7 +271,17 @@ func runServe(args []string) error {
 	}
 	secretsReg := secrets.NewRegistry()
 	secrets.RegisterBuiltins(secretsReg, secretsDir)
-	secretProviderNames := []string{"file", "env"}
+	// action provider: resolve a $secret by running a resource action and
+	// returning its output (e.g. a Cloudflare Tunnel's run token from get-token),
+	// so an action's result wires into a manifest without manual copying.
+	secretsReg.Register(secrets.NewActionProvider(func(ctx context.Context, av, kind, name, action string) (*secrets.ActionOutput, error) {
+		res, err := registry.DoAction(ctx, av, kind, name, action, nil)
+		if err != nil {
+			return nil, err
+		}
+		return &secrets.ActionOutput{DownloadContent: res.DownloadContent, Message: res.Message, URL: res.URL}, nil
+	}))
+	secretProviderNames := []string{"file", "env", secrets.ActionProviderName}
 	// Tier 2: register configured backends (Vault, ...) from config.secrets.
 	if cfg, err := config.Load(); err == nil && cfg != nil && cfg.Secrets != nil {
 		names, err := registerConfiguredSecretProviders(secretsReg, cfg.Secrets.Providers)
