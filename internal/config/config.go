@@ -175,6 +175,12 @@ type ManifestsGitOpsPull struct {
 	// Interval is the pull cadence (e.g. "1m", "30s"). Parsed as a
 	// time.Duration; defaults to 1m when empty or invalid.
 	Interval string `yaml:"interval"`
+	// Prune enables repo-wide pruning: after a pull, resources whose manifest
+	// file was removed from the repo are deleted, making the repo the desired
+	// SET (not just an additive source). Default OFF — this deletes real
+	// infrastructure. Heavily guarded: never touches composite children or
+	// resources whose latest apply was cli/ui-sourced. Requires Enabled.
+	Prune bool `yaml:"prune"`
 }
 
 // ManifestsGit configures git tracking of the manifest directory. When

@@ -89,9 +89,15 @@ is a follow-up (config layers are unit-tested).
       interval}` (requires a remote + the watcher). Apply-only — repo-wide
       prune is B2. Tests: `Watcher.Sync` (changed-only) + a real-git pull loop
       (bare remote → new commit → reconcile fires).
-- [ ] **B2 — Declarative desired-set + repo-wide prune.** Treat the repo as
-      the desired SET; prune openctl-managed resources removed from it (today
-      prune exists only inside a single k8s `Manifest`). Opt-in + guarded.
+- [x] **B2 — Declarative desired-set + repo-wide prune.** `manifests.Pruner`
+      (opt-in `manifests.gitops.pull.prune`): after a pull, deletes managed
+      resources whose file left the repo — the repo becomes the desired SET.
+      Heavily guarded (deletes real infra): skips composite children (owner
+      labels + operative `k3s.openctl.io/cluster` label — deleting the parent
+      cascades), skips resources whose latest apply was cli/ui-sourced
+      (provenance from the ops table), only considers resources with no file on
+      disk. Wired after `Watcher.Sync` in the pull loop. Unit tests cover every
+      guard branch. Default OFF.
 - [ ] **B3 — GitHub / PR flow.** Webhook-triggered reconcile and/or PR-based
       change proposal. Scope leans on the existing design (Argo drives pure-app
       GitOps; openctl natively reconciles the infra-coupled layer it owns).
