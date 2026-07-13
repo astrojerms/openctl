@@ -44,6 +44,33 @@ func TestEnabledComponents(t *testing.T) {
 	}
 }
 
+func TestEnabledComponents_NfsProvisioner(t *testing.T) {
+	comps := enabledComponents(map[string]any{
+		"nfsProvisioner": map[string]any{
+			"enabled": true,
+			"values":  map[string]any{"nfs": map[string]any{"server": "10.0.0.5", "path": "/volume1/k8s"}},
+		},
+	})
+	if len(comps) != 1 {
+		t.Fatalf("enabled = %d, want 1 (nfsProvisioner)", len(comps))
+	}
+	c := comps[0]
+	if c.comp.name != "nfsProvisioner" {
+		t.Errorf("component = %q", c.comp.name)
+	}
+	if c.chart.Repo != "https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner" || c.chart.Name != "nfs-subdir-external-provisioner" {
+		t.Errorf("chart defaults wrong: %+v", c.chart)
+	}
+	if c.opts.namespace != "nfs-provisioner" {
+		t.Errorf("default namespace = %q", c.opts.namespace)
+	}
+	// The NAS export values pass through to the chart.
+	nfs, _ := c.values["nfs"].(map[string]any)
+	if nfs["server"] != "10.0.0.5" || nfs["path"] != "/volume1/k8s" {
+		t.Errorf("nfs values not threaded: %+v", c.values)
+	}
+}
+
 func TestEnabledComponents_NvidiaDevicePlugin(t *testing.T) {
 	comps := enabledComponents(map[string]any{
 		"nvidiaDevicePlugin": map[string]any{"enabled": true},

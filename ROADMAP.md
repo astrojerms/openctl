@@ -114,9 +114,12 @@ guards (B2), and a push webhook converges immediately (B3). The DriftlessAF
 loop for the infra layer is in place. All opt-in; defaults unchanged.
 
 ### C. Storage
-- [ ] **C1 — First-class NFS / PV helper.** Optional convenience for
-      Synology-backed persistent volumes (workable today via raw `Manifest`
-      YAML). Lower priority.
+- [x] **C1 — NFS-backed storage.** `nfsProvisioner` added to the opt-in
+      Platform components (nfs-subdir-external-provisioner chart): a dynamic,
+      NFS-backed StorageClass so stateful workloads (media, Home Assistant) get
+      persistent volumes on request from a Synology share
+      (`values.nfs.{server,path}`). Schema + unit test. (Chose the dynamic
+      provisioner over a static PV kind — more reusable, matches the A4 shape.)
 
 ### D. Loose ends
 - [ ] **D1 — cloudflared token auto-wiring.** Bridge an action output (the
