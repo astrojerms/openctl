@@ -104,6 +104,10 @@ const platformSchema = `
 		// argocd installs Argo CD (bootstrap). Pair with an ArgoApplications
 		// resource to aggregate its Applications into openctl.
 		argocd?: {...}
+		// nvidiaDevicePlugin advertises nvidia.com/gpu so GPU workloads (e.g. a
+		// local model) can schedule. Needs nodes with the NVIDIA runtime +
+		// drivers — pair with a k3s worker pool that has GPU passthrough.
+		nvidiaDevicePlugin?: {...}
 	}
 	...
 }

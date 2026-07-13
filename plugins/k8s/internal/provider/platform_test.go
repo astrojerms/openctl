@@ -44,6 +44,25 @@ func TestEnabledComponents(t *testing.T) {
 	}
 }
 
+func TestEnabledComponents_NvidiaDevicePlugin(t *testing.T) {
+	comps := enabledComponents(map[string]any{
+		"nvidiaDevicePlugin": map[string]any{"enabled": true},
+	})
+	if len(comps) != 1 {
+		t.Fatalf("enabled = %d, want 1 (nvidiaDevicePlugin)", len(comps))
+	}
+	c := comps[0]
+	if c.comp.name != "nvidiaDevicePlugin" {
+		t.Errorf("component = %q", c.comp.name)
+	}
+	if c.chart.Repo != "https://nvidia.github.io/k8s-device-plugin" || c.chart.Name != "nvidia-device-plugin" {
+		t.Errorf("chart defaults wrong: %+v", c.chart)
+	}
+	if c.opts.namespace != "nvidia-device-plugin" {
+		t.Errorf("default namespace = %q", c.opts.namespace)
+	}
+}
+
 func TestPlanPlatform(t *testing.T) {
 	p := New()
 	m := platformResource(map[string]any{

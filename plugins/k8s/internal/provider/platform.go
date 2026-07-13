@@ -40,6 +40,10 @@ var platformComponents = []component{
 	{"traefik", "https://traefik.github.io/charts", "traefik", "traefik"},
 	{"cloudflared", "https://cloudflare.github.io/helm-charts", "cloudflare-tunnel-remote", "cloudflared"},
 	{"argocd", "https://argoproj.github.io/argo-helm", "argo-cd", "argocd"},
+	// nvidiaDevicePlugin advertises nvidia.com/gpu on nodes that have the
+	// NVIDIA runtime + drivers, so GPU workloads (e.g. a local model / Ollama)
+	// can request a GPU. Pairs with a k3s worker pool that has GPU passthrough.
+	{"nvidiaDevicePlugin", "https://nvidia.github.io/k8s-device-plugin", "nvidia-device-plugin", "nvidia-device-plugin"},
 }
 
 // releaseCoord locates an installed component release for Get/Delete/prune.
