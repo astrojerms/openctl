@@ -49,7 +49,7 @@ var uiAssets embed.FS
 // the gRPC listen address (e.g. 127.0.0.1:9444) — typically the same
 // loopback host:port the controller itself listens on, since the HTTP
 // gateway runs alongside in the same process.
-func NewHTTPGateway(ctx context.Context, grpcAddr string, caCertPEM []byte, serverName string, oidc *OIDCHandler) (http.Handler, error) {
+func NewHTTPGateway(ctx context.Context, grpcAddr string, caCertPEM []byte, serverName string, oidc *OIDCHandler, webhook *GitOpsWebhook) (http.Handler, error) {
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(caCertPEM) {
 		return nil, fmt.Errorf("invalid CA cert PEM")
@@ -113,6 +113,10 @@ func NewHTTPGateway(ctx context.Context, grpcAddr string, caCertPEM []byte, serv
 	if oidc != nil {
 		oidc.register(mux)
 	}
+
+	// Git-as-source push webhook (POST-only, HMAC-verified). Mounted only when
+	// configured; triggers an immediate pull+reconcile.
+	webhook.register(mux)
 
 	// Bare / → /ui/ for convenience.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -331,8 +335,8 @@ func extractJSONString(body, name string) string {
 // interstitial the user clicks through; that doesn't downgrade the
 // protocol — the h2 connection is still established. Trusting the CA
 // (DEVELOPMENT.md) removes the warning.
-func ServeHTTPGateway(ctx context.Context, addr, grpcAddr string, caCertPEM []byte, serverName, certFile, keyFile string, oidc *OIDCHandler) error {
-	h, err := NewHTTPGateway(ctx, grpcAddr, caCertPEM, serverName, oidc)
+func ServeHTTPGateway(ctx context.Context, addr, grpcAddr string, caCertPEM []byte, serverName, certFile, keyFile string, oidc *OIDCHandler, webhook *GitOpsWebhook) error {
+	h, err := NewHTTPGateway(ctx, grpcAddr, caCertPEM, serverName, oidc, webhook)
 	if err != nil {
 		return err
 	}

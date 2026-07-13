@@ -419,28 +419,40 @@ func (r *Repo) StartPeriodicPull(ctx context.Context, interval time.Duration, on
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				before := r.head(ctx)
-				if err := r.Pull(ctx); err != nil {
-					if logf != nil {
-						logf("git pull (periodic): %v", err)
-					}
-					continue
-				}
-				after := r.head(ctx)
-				if after == "" || after == before {
-					continue // nothing new
-				}
-				if logf != nil {
-					logf("git pull (periodic): HEAD advanced, reconciling")
-				}
-				if onChange != nil {
-					if err := onChange(ctx); err != nil && logf != nil {
-						logf("git pull reconcile: %v", err)
-					}
+				if _, err := r.PullAndReconcile(ctx, onChange, logf); err != nil && logf != nil {
+					logf("git pull (periodic): %v", err)
 				}
 			}
 		}
 	}()
+}
+
+// PullAndReconcile does one `git pull --ff-only` and, when it advanced HEAD,
+// runs onChange to reconcile the updated tree. Returns whether a reconcile ran.
+// Shared by the periodic ticker and the push-webhook trigger so both take the
+// identical path. A pull error (e.g. a diverged local history under ff-only) is
+// returned, not swallowed, so callers can log it in their own context.
+func (r *Repo) PullAndReconcile(ctx context.Context, onChange func(context.Context) error, logf func(format string, args ...any)) (bool, error) {
+	if r.remote == "" {
+		return false, nil
+	}
+	before := r.head(ctx)
+	if err := r.Pull(ctx); err != nil {
+		return false, err
+	}
+	after := r.head(ctx)
+	if after == "" || after == before {
+		return false, nil // nothing new
+	}
+	if logf != nil {
+		logf("git pull: HEAD advanced, reconciling")
+	}
+	if onChange != nil {
+		if err := onChange(ctx); err != nil {
+			return true, err
+		}
+	}
+	return true, nil
 }
 
 // run executes a git subcommand in r.dir and returns its stdout. stderr

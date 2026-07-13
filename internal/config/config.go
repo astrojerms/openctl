@@ -181,6 +181,25 @@ type ManifestsGitOpsPull struct {
 	// infrastructure. Heavily guarded: never touches composite children or
 	// resources whose latest apply was cli/ui-sourced. Requires Enabled.
 	Prune bool `yaml:"prune"`
+	// Webhook enables a push-triggered reconcile: an HTTP endpoint on the
+	// controller's HTTP gateway that a GitHub (or compatible) push webhook
+	// calls to trigger an immediate pull+reconcile instead of waiting for the
+	// next interval. nil = off. Requires Enabled + a git remote.
+	Webhook *ManifestsGitOpsWebhook `yaml:"webhook,omitempty"`
+}
+
+// ManifestsGitOpsWebhook configures the push-triggered reconcile endpoint.
+type ManifestsGitOpsWebhook struct {
+	// Enabled mounts the webhook route on the HTTP gateway. Off unless true.
+	Enabled bool `yaml:"enabled"`
+	// Secret is the shared secret for HMAC-SHA256 verification of the
+	// X-Hub-Signature-256 header (GitHub's scheme). Strongly recommended:
+	// when empty, the endpoint accepts any POST (only acceptable on a trusted
+	// network). Prefer a base.#Secret reference over an inline value.
+	Secret string `yaml:"secret"`
+	// Path is the route the webhook is mounted at. Defaults to
+	// "/gitops/webhook" when empty.
+	Path string `yaml:"path"`
 }
 
 // ManifestsGit configures git tracking of the manifest directory. When
