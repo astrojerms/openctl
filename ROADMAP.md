@@ -70,9 +70,15 @@ they ship.
       cpu host + hostpci onto that pool's node VMs — wired into BOTH the
       operative `create.go` path and the Plan/graph mirror. CUE `#GPU` +
       unit tests (parse, resolve, stamp, per-pool isolation).
-- [ ] **A4 — GPU workload enablement.** NVIDIA device plugin / runtime as an
-      opt-in Platform component (or documented Manifest) so `nvidia.com/gpu`
-      scheduling works; Ollama then deploys as a HelmRelease onto the GPU node.
+- [x] **A4 — GPU workload enablement.** `nvidiaDevicePlugin` added to the
+      opt-in Platform components (NVIDIA k8s-device-plugin chart) so
+      `nvidia.com/gpu` is advertised on GPU nodes and workloads (e.g. Ollama,
+      as a plain HelmRelease) can request one. Schema + unit test.
+
+**Area A COMPLETE (A1–A4):** openctl can now build a GPU box end-to-end —
+passthrough VM hardware (A1/A2) → k3s GPU worker pool (A3) → GPU scheduling
+via the device plugin (A4). Real-hardware validation on the homelab GPU host
+is a follow-up (config layers are unit-tested).
 
 ### B. GitOps-from-git (the DriftlessAF loop)
 - [ ] **B1 — Git-as-source pull loop.** Poll a remote repo and feed changed
