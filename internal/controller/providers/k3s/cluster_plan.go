@@ -234,6 +234,9 @@ func buildVMManifest(clusterName, nodeName string, i, cpCount int, size k3sresou
 	} else if spec.Compute.Image.Template != "" {
 		vm.Spec["template"] = map[string]any{"name": spec.Compute.Image.Template}
 	}
+	// GPU/PCI passthrough for this node's pool — kept identical to the
+	// operative create.go path via the shared resources helpers.
+	k3sresources.ApplyGPUToVMSpec(vm.Spec, k3sresources.GPUForNode(i, cpCount, spec))
 	return vm
 }
 

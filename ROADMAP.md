@@ -64,9 +64,12 @@ they ship.
 - [x] **A2 — OVMF/UEFI completeness.** `VMSpec.efiDisk` (storage, `4m`/`2m`,
       preEnrolledKeys) → allocates `efidisk0`, so a `q35` + `ovmf` passthrough
       VM actually boots. Schema + tests.
-- [ ] **A3 — k3s node GPU request.** Let a k3s worker pool request a GPU —
-      pins the node to the GPU host and passes the device into the node VM,
-      composing A1 into the cluster node builder.
+- [x] **A3 — k3s node GPU request.** Per-pool `gpu` on control-plane / worker
+      specs (`devices[]`, `efiStorage`, `cpuType`). A shared
+      `resources.GPUForNode` + `ApplyGPUToVMSpec` stamps q35 + OVMF + efidisk +
+      cpu host + hostpci onto that pool's node VMs — wired into BOTH the
+      operative `create.go` path and the Plan/graph mirror. CUE `#GPU` +
+      unit tests (parse, resolve, stamp, per-pool isolation).
 - [ ] **A4 — GPU workload enablement.** NVIDIA device plugin / runtime as an
       opt-in Platform component (or documented Manifest) so `nvidia.com/gpu`
       scheduling works; Ollama then deploys as a HelmRelease onto the GPU node.
