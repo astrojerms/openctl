@@ -213,6 +213,13 @@ func tunnelIngress(spec map[string]any) []map[string]any {
 // deliberately NOT included (it's a secret; fetch it via the get-token action).
 func tunnelObserved(name string, tun *cfTunnel, acct string) *protocol.Resource {
 	status := map[string]any{"id": tun.ID, "name": tun.Name}
+	if tun.ID != "" {
+		// cnameTarget is the ready-to-use value for a proxied CNAME that routes
+		// a hostname through this tunnel. A DNSRecord can $ref it directly
+		// (content: {$ref: {kind: Tunnel, name: <n>, field: status.cnameTarget}})
+		// so the tunnel id never has to be copied by hand.
+		status["cnameTarget"] = tun.ID + ".cfargotunnel.com"
+	}
 	if tun.Status != "" {
 		status["connectionStatus"] = tun.Status
 	}

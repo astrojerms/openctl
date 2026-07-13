@@ -319,6 +319,11 @@ func TestTunnelLifecycleAndToken(t *testing.T) {
 	if _, leaked := ar.Resource.Status["token"]; leaked {
 		t.Error("tunnel run token leaked into status")
 	}
+	// cnameTarget is the ready-to-$ref DNS value, so a DNSRecord's content can
+	// pull it without the operator copying the tunnel id by hand.
+	if want := st.TunnelID + ".cfargotunnel.com"; ar.Resource.Status["cnameTarget"] != want {
+		t.Errorf("status.cnameTarget = %v, want %q", ar.Resource.Status["cnameTarget"], want)
+	}
 
 	// Ingress config was pushed, and a catch-all appended (host-scoped last rule).
 	cfg, _ := f.configs[st.TunnelID].(map[string]any)
@@ -370,11 +375,49 @@ func TestSchemasCompileAndValidate(t *testing.T) {
 		t.Errorf("valid DNSRecord rejected: %v", err)
 	}
 
+	// content may be a $ref to another resource's status (e.g. a Tunnel's
+	// status.cnameTarget) — the raw marker must pass schema validation, since
+	// refs are resolved later (in the dispatcher), not at validation time.
+	refd := &protocol.Resource{APIVersion: apiVersion, Kind: kindDNSRecord}
+	refd.Metadata.Name = "app"
+	refd.Spec = map[string]any{
+		"type": "CNAME", "name": "app.example.com", "proxied": true,
+		"content": map[string]any{"$ref": map[string]any{
+			"apiVersion": apiVersion, "kind": kindTunnel, "name": "home", "field": "status.cnameTarget",
+		}},
+	}
+	if err := schema.Validate(refd); err != nil {
+		t.Errorf("DNSRecord with a $ref content rejected: %v", err)
+	}
+
 	// Missing required spec.type must fail validation.
 	invalid := &protocol.Resource{APIVersion: apiVersion, Kind: kindDNSRecord}
 	invalid.Metadata.Name = "bad"
 	invalid.Spec = map[string]any{"name": "x.example.com", "content": "1.2.3.4"}
 	if err := schema.Validate(invalid); err == nil {
 		t.Error("DNSRecord missing spec.type should fail validation")
+	}
+
+	// A malformed content object (neither a string nor a well-formed $ref) is
+	// still rejected — the disjunction didn't open the field to anything.
+	badContent := &protocol.Resource{APIVersion: apiVersion, Kind: kindDNSRecord}
+	badContent.Metadata.Name = "bad2"
+	badContent.Spec = map[string]any{"type": "A", "name": "x.example.com", "content": map[string]any{"bogus": true}}
+	if err := schema.Validate(badContent); err == nil {
+		t.Error("DNSRecord with a non-string, non-ref content should fail validation")
+	}
+}
+
+func TestTunnelObservedCnameTarget(t *testing.T) {
+	// Populated id → ready-to-$ref CNAME target.
+	r := tunnelObserved("home", &cfTunnel{ID: "abc123", Name: "home"}, "acct-1")
+	if r.Status["cnameTarget"] != "abc123.cfargotunnel.com" {
+		t.Errorf("cnameTarget = %v", r.Status["cnameTarget"])
+	}
+	// No id (shouldn't happen, but guard) → no cnameTarget rather than a bogus
+	// ".cfargotunnel.com".
+	r = tunnelObserved("home", &cfTunnel{Name: "home"}, "acct-1")
+	if _, ok := r.Status["cnameTarget"]; ok {
+		t.Errorf("cnameTarget should be absent without an id, got %v", r.Status["cnameTarget"])
 	}
 }

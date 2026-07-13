@@ -5,6 +5,11 @@ package main
 // open with a trailing `...` so controller-managed fields (labels, status)
 // aren't rejected. apiVersion must match `<providerName>.openctl.io/v1`.
 const dnsRecordSchema = `
+// #ref is the {$ref: {...}} marker shape (openctl's ResourceRef). Inlined here
+// because this schema compiles standalone (no base import). Allowed on content
+// so a record can point at another resource's status — e.g. a Tunnel's
+// status.cnameTarget — instead of a hand-copied literal.
+#ref: {"$ref": {apiVersion: string, kind: string, name: string, field?: string}}
 #DNSRecord: {
 	apiVersion: "cloudflare.openctl.io/v1"
 	kind:       "DNSRecord"
@@ -20,8 +25,10 @@ const dnsRecordSchema = `
 		type: string
 		// name is the record name (FQDN, e.g. "www.example.com", or "@").
 		name: string
-		// content is the record value (an IP for A/AAAA, target for CNAME, ...).
-		content: string
+		// content is the record value (an IP for A/AAAA, target for CNAME, ...),
+		// or a $ref to another resource's status field (e.g. a Tunnel's
+		// status.cnameTarget).
+		content: string | #ref
 		// ttl in seconds; 1 means "automatic". Defaults to Cloudflare's default.
 		ttl?: int
 		// proxied routes the record through Cloudflare's proxy (orange cloud).
