@@ -347,8 +347,50 @@ func runServe(args []string) error {
 						log.Printf("  gitops:      pull enabled but no git remote configured — skipping")
 					} else {
 						interval := parseDurationDefault(pull.Interval, time.Minute)
-						gitRepo.StartPeriodicPull(ctx, interval, gitOpsWatcher.Sync, log.Printf)
-						log.Printf("  gitops:      git-as-source pull enabled (interval=%s)", interval)
+						onChange := gitOpsWatcher.Sync
+						if pull.Prune {
+							// Repo-wide prune: after each pull, delete managed
+							// resources whose file left the repo. Provenance
+							// (latest successful apply's source) comes from the
+							// ops table; deletes go through the same gitops-sourced
+							// Delete-op path as deleteOnRemove.
+							sourceOf := func(ctx context.Context, av, kind, name string) (string, bool) {
+								ops, err := opStore.List(ctx, operations.ListFilter{
+									Status: operations.StatusSucceeded, APIVersion: av, Kind: kind, ResourceName: name, Limit: 20,
+								})
+								if err != nil {
+									return "", false
+								}
+								for _, op := range ops { // newest-first
+									if op.Type == operations.TypeApply {
+										return op.Source, true
+									}
+								}
+								return "", false
+							}
+							pruneDelete := func(ctx context.Context, av, kind, name string) error {
+								_, err := opStore.Submit(ctx, &operations.Operation{
+									Type: operations.TypeDelete, APIVersion: av, Kind: kind, ResourceName: name,
+									Source: manifests.SourceGitOps,
+								})
+								if err != nil {
+									return err
+								}
+								dispatcher.Notify()
+								return nil
+							}
+							pruner := manifests.NewPruner(manifestStore, diskMirror.Root(), sourceOf, pruneDelete)
+							sync := gitOpsWatcher.Sync
+							onChange = func(ctx context.Context) error {
+								if err := sync(ctx); err != nil {
+									return err
+								}
+								_, err := pruner.Prune(ctx)
+								return err
+							}
+						}
+						gitRepo.StartPeriodicPull(ctx, interval, onChange, log.Printf)
+						log.Printf("  gitops:      git-as-source pull enabled (interval=%s, prune=%v)", interval, pull.Prune)
 					}
 				}
 			}
