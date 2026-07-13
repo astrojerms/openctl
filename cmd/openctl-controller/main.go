@@ -337,6 +337,20 @@ func runServe(args []string) error {
 			} else {
 				defer gitOpsWatcher.Stop()
 				log.Printf("  gitops:      enabled (deleteOnRemove=%v)", cfg2.Manifests.GitOps.DeleteOnRemove)
+
+				// Git-as-source: periodically pull the remote into the mirror
+				// and reconcile via the watcher's Sync, so committing to the
+				// remote brings the infra up. Requires a remote (from git
+				// tracking) and pull.enabled.
+				if pull := cfg2.Manifests.GitOps.Pull; pull != nil && pull.Enabled {
+					if gitRepo == nil || gitRepo.Remote() == "" {
+						log.Printf("  gitops:      pull enabled but no git remote configured — skipping")
+					} else {
+						interval := parseDurationDefault(pull.Interval, time.Minute)
+						gitRepo.StartPeriodicPull(ctx, interval, gitOpsWatcher.Sync, log.Printf)
+						log.Printf("  gitops:      git-as-source pull enabled (interval=%s)", interval)
+					}
+				}
 			}
 		}
 	}
@@ -509,6 +523,21 @@ func buildReconciler(reg *providers.Registry, mstore *manifests.Store) (*reconci
 		}
 	}
 	return reconciler.New(reg, mstore, interval), interval
+}
+
+// parseDurationDefault parses a duration string, falling back to def when the
+// string is empty or invalid (a bad value logs and uses the default rather
+// than failing startup).
+func parseDurationDefault(s string, def time.Duration) time.Duration {
+	if s == "" {
+		return def
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		log.Printf("config: invalid duration %q, using default %s", s, def)
+		return def
+	}
+	return d
 }
 
 // buildGitRepo initializes a git repo over the disk mirror when config has

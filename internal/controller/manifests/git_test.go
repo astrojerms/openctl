@@ -7,7 +7,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestDiskMirrorRelPathFor(t *testing.T) {
@@ -315,5 +317,73 @@ func TestCommitMessageFormat(t *testing.T) {
 			t.Errorf("commitMessage(%s,%s,%s,%s) = %q, want %q",
 				tt.verb, tt.kind, tt.name, tt.source, got, tt.want)
 		}
+	}
+}
+
+// TestRepoStartPeriodicPullReconcilesRemoteCommits proves the git-as-source
+// loop: when a new commit lands on the remote, the periodic pull advances the
+// local tree and invokes the reconcile callback.
+func TestRepoStartPeriodicPullReconcilesRemoteCommits(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary not on PATH; skipping git-dependent test")
+	}
+	ctx := t.Context() // canceled when the test ends, stopping the pull goroutine
+
+	base := t.TempDir()
+	bare := filepath.Join(base, "remote.git")
+	authorDir := filepath.Join(base, "author")
+	ctlDir := filepath.Join(base, "ctl")
+
+	run := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...) // #nosec G204 -- test args, paths from t.TempDir()
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	run(base, "init", "--bare", "-b", "main", bare)
+	// Author clone seeds an initial commit and pushes it.
+	run(base, "clone", bare, authorDir)
+	run(authorDir, "config", "user.email", "a@example.com")
+	run(authorDir, "config", "user.name", "Author")
+	if err := os.WriteFile(filepath.Join(authorDir, "seed.txt"), []byte("seed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run(authorDir, "add", "-A")
+	run(authorDir, "commit", "-m", "seed")
+	run(authorDir, "push", "origin", "HEAD")
+
+	// Controller clone bound to a Repo with the remote.
+	run(base, "clone", bare, ctlDir)
+	repo, err := NewRepo(RepoOptions{Dir: ctlDir, Remote: bare})
+	if err != nil {
+		t.Fatalf("NewRepo: %v", err)
+	}
+
+	var mu sync.Mutex
+	changes := 0
+	repo.StartPeriodicPull(ctx, 30*time.Millisecond, func(context.Context) error {
+		mu.Lock()
+		changes++
+		mu.Unlock()
+		return nil
+	}, nil)
+
+	// A new commit lands on the remote; the loop should pull + reconcile it.
+	if err := os.WriteFile(filepath.Join(authorDir, "new.txt"), []byte("v1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run(authorDir, "add", "-A")
+	run(authorDir, "commit", "-m", "add new")
+	run(authorDir, "push", "origin", "HEAD")
+
+	if !waitFor(3*time.Second, func() bool { mu.Lock(); defer mu.Unlock(); return changes >= 1 }) {
+		t.Fatal("pull loop never reconciled the new remote commit")
+	}
+	// The pulled tree must contain the new file.
+	if _, err := os.Stat(filepath.Join(ctlDir, "new.txt")); err != nil {
+		t.Errorf("pulled working tree missing new.txt: %v", err)
 	}
 }
