@@ -192,6 +192,63 @@ prerequisite (Longhorn); the rest are convenience + robustness.
       static blog behind the tunnel) — the deploy-today path, documented
       end-to-end. Not a code gap; lowers the activation energy.
 
+## Architecture & consolidation (2026-07-13)
+
+Health, debt, and direction items from an architecture review — worth banking
+**before** piling on more workload features (E–J). The code is cohesive today
+(features slot into stable seams — one `protocol.Resource` behind a uniform
+`Provider`, `$ref`/`$secret` resolution centralized in the dispatcher), but
+these are the corners where drift would start if it starts anywhere.
+
+- [ ] **K1 — Unify the two k3s VM-build paths.** `pkg/k3s/cluster/create.go`
+      `GenerateDispatchRequests` (the operative create path) and
+      `internal/controller/providers/k3s/cluster_plan.go` `buildVMManifest`
+      (the Plan/graph mirror) produce structurally-identical VM manifests but
+      must be kept in sync **by hand** — a documented "keep these identical"
+      that already bit the GPU-pool work (A3 edited both + factored a shared
+      helper). Switch the operative create onto the Plan path (the long-intended
+      unification) so there's one source of VM shape. **Known unpaid debt.**
+
+- [ ] **K2 — One GitOps source-of-truth model.** git-as-source (B1–B3) was
+      layered on top of git-as-sink (disk mirror + push), leaving overlapping
+      machinery — disk mirror, push, pull, watcher, prune, drift reconciler,
+      webhook — with subtle interactions (startup reconcile *re-materializes*
+      files that prune wants gone; `--ff-only` pull fights auto-commit-on-apply).
+      Collapse into **two explicit, non-overlapping modes**: **mirror** (SQLite
+      is truth, git is a read-only audit mirror — no pull/prune) and **gitops**
+      (the repo is truth — pull/apply/prune; the controller does NOT auto-commit
+      desired specs, and startup does NOT revive missing files). One config
+      switch; only the machinery for the chosen mode runs. Write the invariants
+      down first (short design doc), then reconcile the code to them. Pairs with
+      K3 (gitops mode needs reliable `source=git`).
+
+- [ ] **K3 — Make provenance explicit.** `applied_manifests` has no `source`
+      column; the prune (B2) had to **reconstruct** "who applied this" from the
+      ops table (which is GC'd). Model provenance/ownership as first-class — a
+      `source` (and possibly owner) column on the applied manifest — so prune,
+      multi-source reconciliation, and any "who owns this resource" question
+      read one authoritative field instead of inferring.
+
+- [ ] **K4 — Generic Platform + deployment methods as providers.** The intent
+      for `Platform` is NOT a curated grab-bag of preferred charts but **generic
+      support**, Terraform-provider style: (a) make Platform components
+      data-declared (any chart via `{name, chart, namespace, values}`), with
+      traefik/cloudflared/nvidia/nfs/… as optional named **presets** or examples
+      — not baked-in opinion; (b) treat the deployment **method** itself as a
+      provider — Helm/Manifest/Argo are already kinds; add new methods
+      (Kustomize, Flux, …) as new kinds/providers rather than bespoke code.
+      openctl already has the provider bones (it's TF-like for infra); extend
+      the same shape to workload deployment so breadth comes from providers, not
+      special cases.
+
+- [ ] **K5 — Re-baseline the scope wedge (`direction.md`).** The doc originally
+      vetoed workloads/PaaS ("stop at cluster-Ready"); the deployment model +
+      homelab workloads crossed that line deliberately (infra-IaC → homelab
+      PaaS). Decide + document on record which openctl is — infra IaC
+      (Terraform-like) with workloads as a **bounded** convenience, or a homelab
+      PaaS — so the next N features check against a rule instead of drifting
+      feature-by-feature. Frames K4.
+
 ## Suggested next order
 
 The UI/controller feature build-out is essentially complete (all UI
