@@ -45,7 +45,7 @@ plugin protocol → Terraform/OpenTofu host → run-anywhere Linux daemon
 (OIDC slice) and CUE-WASM validation are parked behind that. (Mobile
 layout has since shipped.)
 
-## Homelab completion (ACTIVE — 2026-07-12)
+## Homelab completion (COMPLETE — 2026-07-12)
 
 Backend-vs-vision gap audit for running the full homelab through openctl
 (GPU box for a local model / Ollama, two k3s clusters, self-hosted sites,
@@ -138,6 +138,59 @@ reconcile the homelab from a git repo (pull/prune/webhook), provision
 Synology-backed storage, and auto-wire a Cloudflare Tunnel token. Remaining is
 metal validation on real hardware (GPU passthrough, live tunnel) — a hands-on
 homelab task, not code.
+
+## Homelab workloads (ACTIVE — 2026-07-13)
+
+Gap analysis for deploying the target workload set — a few blogs / public
+sites, the Driftless GitOps architecture, MinIO, Longhorn, Infisical,
+Authentik, Jellyfin, Open WebUI, Ollama. **Most are stock Helm charts and
+deploy TODAY** on the primitives already shipped (k3s cluster, HelmRelease /
+Manifest, NFS provisioner + k3s built-in local-path storage, GPU passthrough +
+device plugin, Traefik + Cloudflare Tunnel/DNS with the `$ref` cnameTarget
+wiring). These targets close the remaining gaps. Only **E1** is a genuine
+prerequisite (Longhorn); the rest are convenience + robustness.
+
+### E. Node customization
+- [ ] **E1 — cloud-init `packages` + `runcmd`.** Extend the Proxmox VM
+      `cloudInit` spec (today user/ssh/network/packageUpgrade only) to install
+      host packages and run first-boot commands. Unblocks node-level
+      prerequisites — e.g. `open-iscsi` for Longhorn — and general node tuning.
+      *The one true prerequisite in this list.*
+- [ ] **E2 — k3s node-pool node prep.** Surface E1 through the k3s Cluster
+      spec (a per-pool `nodePrep`/`packages`/`runcmd` block) so a worker pool
+      installs its own host deps, composed into the node VMs (mirrors the
+      GPU-per-pool shape from A3).
+
+### F. Storage
+- [ ] **F1 — Longhorn Platform component.** Add `longhorn` to the opt-in
+      Platform set (replicated block storage, the tier NFS/local-path don't
+      cover). Depends on E1 (open-iscsi on nodes); document the
+      iscsi-installer DaemonSet as the interim fallback.
+
+### G. Public exposure
+- [ ] **G1 — expose-app convenience.** A composite (or documented pattern)
+      that wires an in-cluster service to a public hostname in ONE place: the
+      Cloudflare Tunnel ingress rule + the CNAME `DNSRecord` (`$ref`
+      cnameTarget — already shipped #139). Removes the per-app two-resource
+      dance for blogs, sites, Jellyfin, Open WebUI, Authentik, etc.
+
+### H. Integrations (optional — deploying the app works without these)
+- [ ] **H1 — Infisical `$secret` provider.** Register a self-hosted Infisical
+      as a Tier-2 secrets backend (like Vault) so openctl *reads* secrets from
+      it. Deploying Infisical itself is a plain HelmRelease.
+- [x] **H2 — Authentik as openctl SSO.** Already works, no new code: Authentik
+      is an OIDC IdP; point `auth.oidc` at it (OIDC backend shipped #110).
+
+### I. GitOps
+- [ ] **I1 — plan-on-PR (optional).** Surface a dry-run diff on a pull request
+      before merge, for a PR-gated Driftless workflow (openctl reconciles on
+      merge/webhook today — B1–B3; PR-preview was deferred to Argo). Enhancement.
+
+### J. App catalog / examples
+- [ ] **J1 — example manifests** for the target apps under `examples/`
+      (Ollama + Open WebUI on GPU, Jellyfin on NFS, MinIO, Authentik-as-SSO, a
+      static blog behind the tunnel) — the deploy-today path, documented
+      end-to-end. Not a code gap; lowers the activation energy.
 
 ## Suggested next order
 
