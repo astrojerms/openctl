@@ -222,12 +222,19 @@ these are the corners where drift would start if it starts anywhere.
       down first (short design doc), then reconcile the code to them. Pairs with
       K3 (gitops mode needs reliable `source=git`).
 
-- [ ] **K3 — Make provenance explicit.** `applied_manifests` has no `source`
-      column; the prune (B2) had to **reconstruct** "who applied this" from the
-      ops table (which is GC'd). Model provenance/ownership as first-class — a
-      `source` (and possibly owner) column on the applied manifest — so prune,
-      multi-source reconciliation, and any "who owns this resource" question
-      read one authoritative field instead of inferring.
+- [x] **K3 — Make provenance explicit.** `applied_manifests` now carries a
+      first-class `source` column (migration 0011). The dispatcher already
+      attaches the op's source to the context before the manifest sink runs
+      (`manifests.WithSource`); the store persists that value on every apply
+      (`SaveWithRefsHash` reads `SourceFromContext`), and `ListAll` surfaces it
+      as `Ref.Source`. The B2 Pruner's hand-managed guard reads the column
+      directly — the fragile ops-table `SourceLookup` reconstruction (and its
+      main.go closure) is **retired**, so provenance survives op GC. Empty
+      source ("unknown", e.g. pre-migration rows) is not protected, preserving
+      the prior behavior. Tests: source round-trip + in-place update
+      (`TestSaveRecordsSourceFromContext`), all prune guards driven by the
+      column (`TestPrunerGuards`), child guard independent of source. **Unblocks
+      K2** (gitops mode needs reliable `source=git`).
 
 - [ ] **K4 — Generic Platform + deployment methods as providers.** The intent
       for `Platform` is NOT a curated grab-bag of preferred charts but **generic

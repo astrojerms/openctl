@@ -66,23 +66,30 @@ func (s *Store) SaveWithRefsHash(ctx context.Context, r *protocol.Resource, refs
 	if err != nil {
 		return fmt.Errorf("encode metadata: %w", err)
 	}
+	// Provenance (K3): the dispatcher attaches the op's source to ctx via
+	// WithSource before calling the sink, so the row records who applied it
+	// ("cli"/"ui"/"gitops"/"auto-reconcile") as a first-class field. Empty
+	// when no source was attached — read back as "provenance unknown", which
+	// the Pruner treats like the old GC'd-op case (not protected).
+	source := SourceFromContext(ctx)
 	// SQLite treats "" as NULL-adjacent for this workflow — we store
 	// the empty string when no refs_hash is supplied, and read it back
 	// via COALESCE. This keeps the schema uniform without requiring
 	// callers to plumb sql.NullString values.
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO applied_manifests (api_version, kind, name, spec_json, metadata_json, applied_at, input_hash, refs_hash)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO applied_manifests (api_version, kind, name, spec_json, metadata_json, applied_at, input_hash, refs_hash, source)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(api_version, kind, name) DO UPDATE SET
 		   spec_json = excluded.spec_json,
 		   metadata_json = excluded.metadata_json,
 		   applied_at = excluded.applied_at,
 		   input_hash = excluded.input_hash,
-		   refs_hash = excluded.refs_hash`,
+		   refs_hash = excluded.refs_hash,
+		   source = excluded.source`,
 		r.APIVersion, r.Kind, r.Metadata.Name,
 		string(specJSON), string(metaJSON),
 		time.Now().UTC().Format(time.RFC3339Nano),
-		Hash(r), refsHash,
+		Hash(r), refsHash, source,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert applied_manifest: %w", err)
@@ -174,21 +181,27 @@ func (s *Store) LoadWithTime(ctx context.Context, apiVersion, kind, name string)
 	return r, ts, nil
 }
 
-// Ref is a (apiVersion, kind, name) tuple. Returned by ListAll for callers
-// that need to enumerate the set of applied manifests without loading every
-// spec — e.g. startup reconciliation against the disk mirror.
+// Ref is a (apiVersion, kind, name) tuple plus provenance. Returned by ListAll
+// for callers that need to enumerate the set of applied manifests without
+// loading every spec — e.g. startup reconciliation against the disk mirror, or
+// the Pruner deciding which resources are hand-managed. Source is the last
+// successful apply's originator ("cli"/"ui"/"gitops"/"auto-reconcile"), or ""
+// when provenance is unknown (row predates the source column, or the apply
+// carried no source).
 type Ref struct {
 	APIVersion string
 	Kind       string
 	Name       string
+	Source     string
 }
 
-// ListAll returns every applied manifest's identity, oldest first by
-// applied_at. Cheap: doesn't decode spec/metadata. Used by the disk mirror's
-// startup reconciliation to compare against what's on disk.
+// ListAll returns every applied manifest's identity + provenance, oldest first
+// by applied_at. Cheap: doesn't decode spec/metadata. Used by the disk mirror's
+// startup reconciliation to compare against what's on disk, and by the Pruner's
+// hand-managed guard (Ref.Source).
 func (s *Store) ListAll(ctx context.Context) ([]Ref, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT api_version, kind, name FROM applied_manifests ORDER BY applied_at ASC`)
+		`SELECT api_version, kind, name, COALESCE(source, '') FROM applied_manifests ORDER BY applied_at ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("list applied_manifests: %w", err)
 	}
@@ -196,7 +209,7 @@ func (s *Store) ListAll(ctx context.Context) ([]Ref, error) {
 	var out []Ref
 	for rows.Next() {
 		var r Ref
-		if err := rows.Scan(&r.APIVersion, &r.Kind, &r.Name); err != nil {
+		if err := rows.Scan(&r.APIVersion, &r.Kind, &r.Name, &r.Source); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

@@ -1,0 +1,15 @@
+-- K3 — make provenance explicit. Records the source ("cli"/"ui"/"gitops"/
+-- "auto-reconcile") of a resource's last successful apply directly on the
+-- desired-state row, so prune (and any "who applied this" question) reads one
+-- authoritative field instead of reconstructing it from the operations table
+-- (whose rows are GC'd — provenance would silently vanish).
+--
+-- The dispatcher already attaches the op's source to the context before it
+-- calls the manifest sink (manifests.WithSource); the store now persists that
+-- value here.
+--
+-- Nullable / empty for backward compatibility: rows written before this
+-- migration (and applies with no source on the context) read back as "" —
+-- "provenance unknown", which the Pruner treats the same as the old GC'd-op
+-- case (not protected), so behavior is unchanged for pre-existing rows.
+ALTER TABLE applied_manifests ADD COLUMN source TEXT;

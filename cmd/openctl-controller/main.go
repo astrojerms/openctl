@@ -365,23 +365,10 @@ func runServe(args []string) error {
 						if pull.Prune {
 							// Repo-wide prune: after each pull, delete managed
 							// resources whose file left the repo. Provenance
-							// (latest successful apply's source) comes from the
-							// ops table; deletes go through the same gitops-sourced
-							// Delete-op path as deleteOnRemove.
-							sourceOf := func(ctx context.Context, av, kind, name string) (string, bool) {
-								ops, err := opStore.List(ctx, operations.ListFilter{
-									Status: operations.StatusSucceeded, APIVersion: av, Kind: kind, ResourceName: name, Limit: 20,
-								})
-								if err != nil {
-									return "", false
-								}
-								for _, op := range ops { // newest-first
-									if op.Type == operations.TypeApply {
-										return op.Source, true
-									}
-								}
-								return "", false
-							}
+							// (latest successful apply's source) is read directly
+							// from the applied_manifests source column (K3); deletes
+							// go through the same gitops-sourced Delete-op path as
+							// deleteOnRemove.
 							pruneDelete := func(ctx context.Context, av, kind, name string) error {
 								_, err := opStore.Submit(ctx, &operations.Operation{
 									Type: operations.TypeDelete, APIVersion: av, Kind: kind, ResourceName: name,
@@ -393,7 +380,7 @@ func runServe(args []string) error {
 								dispatcher.Notify()
 								return nil
 							}
-							pruner := manifests.NewPruner(manifestStore, diskMirror.Root(), sourceOf, pruneDelete)
+							pruner := manifests.NewPruner(manifestStore, diskMirror.Root(), pruneDelete)
 							sync := gitOpsWatcher.Sync
 							onChange = func(ctx context.Context) error {
 								if err := sync(ctx); err != nil {

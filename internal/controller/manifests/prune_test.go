@@ -12,18 +12,22 @@ import (
 
 // TestPrunerGuards exercises every prune decision branch: file-present keeps,
 // top-level gitops/unknown-provenance prunes, and the two safety guards
-// (composite children, hand-managed cli/ui resources) skip.
+// (composite children, hand-managed cli/ui resources) skip. Provenance is read
+// from the applied_manifests source column (K3), recorded via WithSource on the
+// Save context — not a separate lookup.
 func TestPrunerGuards(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	store := newWatcherTestStore(t)
 
-	save := func(name string, labels map[string]string) {
+	// save records the resource with the given provenance source (empty =
+	// unknown, e.g. a row written before the source column existed).
+	save := func(name, source string, labels map[string]string) {
 		r := &protocol.Resource{APIVersion: "proxmox.openctl.io/v1", Kind: "VirtualMachine"}
 		r.Metadata.Name = name
 		r.Metadata.Labels = labels
 		r.Spec = map[string]any{"x": 1}
-		if err := store.Save(ctx, r); err != nil {
+		if err := store.Save(WithSource(ctx, source), r); err != nil {
 			t.Fatalf("save %s: %v", name, err)
 		}
 	}
@@ -38,30 +42,21 @@ func TestPrunerGuards(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	save("keep", nil)                                                                      // file present → keep
-	save("gone", nil)                                                                      // no file, gitops → prune
-	save("unknown", nil)                                                                   // no file, provenance GC'd → prune
-	save("manual", nil)                                                                    // no file, cli-sourced → keep
-	save("child-owner", map[string]string{labelOwnerKind: "Cluster", labelOwnerName: "c"}) // child → keep
-	save("child-k3s", map[string]string{labelK3sCluster: "c"})                             // child → keep
+	save("keep", SourceGitOps, nil)                                                                      // file present → keep
+	save("gone", SourceGitOps, nil)                                                                      // no file, gitops → prune
+	save("unknown", "", nil)                                                                             // no file, provenance unknown → prune
+	save("manual", SourceCLI, nil)                                                                       // no file, cli-sourced → keep
+	save("manual-ui", SourceUI, nil)                                                                     // no file, ui-sourced → keep
+	save("child-owner", SourceGitOps, map[string]string{labelOwnerKind: "Cluster", labelOwnerName: "c"}) // child → keep
+	save("child-k3s", SourceGitOps, map[string]string{labelK3sCluster: "c"})                             // child → keep
 
-	sourceOf := func(_ context.Context, _, _, name string) (string, bool) {
-		switch name {
-		case "gone":
-			return SourceGitOps, true
-		case "manual":
-			return SourceCLI, true
-		default:
-			return "", false // GC'd / never recorded
-		}
-	}
 	var deleted []string
 	del := func(_ context.Context, _, _, name string) error {
 		deleted = append(deleted, name)
 		return nil
 	}
 
-	pruned, err := NewPruner(store, root, sourceOf, del).Prune(ctx)
+	pruned, err := NewPruner(store, root, del).Prune(ctx)
 	if err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
@@ -75,16 +70,16 @@ func TestPrunerGuards(t *testing.T) {
 	}
 	// Belt-and-suspenders: the protected ones must never appear.
 	for _, n := range deleted {
-		if n == "keep" || n == "manual" || n == "child-owner" || n == "child-k3s" {
+		if n == "keep" || n == "manual" || n == "manual-ui" || n == "child-owner" || n == "child-k3s" {
 			t.Errorf("%s must not be pruned", n)
 		}
 	}
 }
 
-// TestPrunerNoSourceLookupStillGuardsChildren proves the composite-child guard
-// holds even without a provenance lookup (source=nil): children are skipped,
-// plain top-level resources are pruned.
-func TestPrunerNoSourceLookupStillGuardsChildren(t *testing.T) {
+// TestPrunerChildGuardIndependentOfSource proves the composite-child guard holds
+// regardless of provenance: a child with no recorded source (empty) is still
+// skipped, while a plain top-level resource with unknown provenance is pruned.
+func TestPrunerChildGuardIndependentOfSource(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	store := newWatcherTestStore(t)
@@ -93,7 +88,7 @@ func TestPrunerNoSourceLookupStillGuardsChildren(t *testing.T) {
 		r := &protocol.Resource{APIVersion: "proxmox.openctl.io/v1", Kind: "VirtualMachine"}
 		r.Metadata.Name = name
 		r.Metadata.Labels = labels
-		if err := store.Save(ctx, r); err != nil {
+		if err := store.Save(ctx, r); err != nil { // no source → unknown provenance
 			t.Fatalf("save: %v", err)
 		}
 	}
@@ -101,7 +96,7 @@ func TestPrunerNoSourceLookupStillGuardsChildren(t *testing.T) {
 	save("child", map[string]string{labelK3sCluster: "c"})
 
 	var deleted []string
-	pruned, err := NewPruner(store, root, nil, func(_ context.Context, _, _, name string) error {
+	pruned, err := NewPruner(store, root, func(_ context.Context, _, _, name string) error {
 		deleted = append(deleted, name)
 		return nil
 	}).Prune(ctx)
@@ -109,7 +104,7 @@ func TestPrunerNoSourceLookupStillGuardsChildren(t *testing.T) {
 		t.Fatalf("Prune: %v", err)
 	}
 	if !slices.Equal(deleted, []string{"plain"}) {
-		t.Fatalf("deleted = %v, want [plain] (child guarded even with nil source)", deleted)
+		t.Fatalf("deleted = %v, want [plain] (child guarded even with unknown source)", deleted)
 	}
 	if len(pruned) != 1 {
 		t.Errorf("pruned = %d, want 1", len(pruned))
