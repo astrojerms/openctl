@@ -249,7 +249,18 @@ these are the corners where drift would start if it starts anywhere.
       PaaS — so the next N features check against a rule instead of drifting
       feature-by-feature. Frames K4.
 
-## Suggested next order
+- [x] **K6 — Providers declare their status/outputs.** `status` was fully open
+      (`status?: _`), so `$ref` targets like `status.outputs.kubeconfigPath`
+      weren't discoverable or validatable. Kinds now declare an open, all-
+      optional `status`/`outputs` block in their CUE schema (k3s Cluster,
+      proxmox VM, cloudflare Tunnel), `schema.OutputsFor(apiVersion, kind)`
+      enumerates them structured (path/type/doc), and `openctl explain
+      <apiVersion> <kind>` prints "what you can `$ref`." Descriptive-only
+      (never rejects a manifest or the provider's output). Flows through
+      `GetSchema`/`GetFormSchema` to the UI for free. Follow-on: author-time
+      `$ref` field-path validation against the declared status (reuse the same
+      declaration). Think "typed status for a controller," not "Terraform
+      outputs."
 
 The UI/controller feature build-out is essentially complete (all UI
 phases + arch Phase 8 shipped). The next round is driven by the

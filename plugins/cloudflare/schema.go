@@ -69,6 +69,23 @@ const tunnelSchema = `
 			path?: string
 		}]
 	}
+	// status documents the observed fields a Tunnel exposes — the values other
+	// resources $ref. Open + all-optional, so it describes without constraining
+	// the provider's output.
+	status?: {
+		// Cloudflare tunnel id.
+		id?: string
+		// Ready-to-use CNAME target (<id>.cfargotunnel.com) — $ref this from a
+		// DNSRecord's content to route a hostname through the tunnel.
+		cnameTarget?: string
+		// Tunnel name (mirrors metadata.name).
+		name?: string
+		// Connection status reported by Cloudflare (e.g. "healthy", "down").
+		connectionStatus?: string
+		// Creation timestamp.
+		createdAt?: string
+		...
+	}
 	...
 }
 `

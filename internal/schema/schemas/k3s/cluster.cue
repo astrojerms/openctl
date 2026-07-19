@@ -6,6 +6,45 @@ import "openctl.io/schemas/base"
 	apiVersion: "k3s.openctl.io/v1"
 	kind:       "Cluster"
 	spec:       #ClusterSpec
+	status?:    #ClusterStatus
+}
+
+// #ClusterStatus documents the observed fields a Cluster exposes once it's up —
+// notably status.outputs, the stable results other resources $ref (e.g. a
+// HelmRelease's kubeconfigPath). Descriptive, not prescriptive: every field is
+// optional and each level is open (...), so declaring it never rejects a
+// manifest or constrains what the provider actually emits — it just tells
+// tooling what you can reference.
+#ClusterStatus: {
+	// Coarse lifecycle phase (e.g. "Ready", "Provisioning").
+	phase?: string
+	// Human-readable detail about the current phase.
+	message?: string
+	// outputs are the stable, $ref-able results of standing up the cluster.
+	outputs?: {
+		// Path on the controller host to the cluster's kubeconfig file. The
+		// canonical $ref target for deploying workloads onto this cluster.
+		kubeconfigPath?: string
+		// IP address of the first control-plane node (the API server).
+		serverIP?: string
+		// Per-node openctl-k3s-agent connection details.
+		agent?: {
+			// Directory holding the cluster's agent cert bundle.
+			bundleDir?: string
+			// Path to the agent CA certificate.
+			caPath?: string
+			// Path to the agent client certificate / key.
+			clientCertPath?: string
+			clientKeyPath?:  string
+			// Agent mTLS port.
+			port?: int
+			// node name → IP address.
+			endpoints?: {[string]: string}
+			...
+		}
+		...
+	}
+	...
 }
 
 // #NodeSize captures the per-VM sizing knobs. Used both as the default

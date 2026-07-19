@@ -421,3 +421,24 @@ func TestTunnelObservedCnameTarget(t *testing.T) {
 		t.Errorf("cnameTarget should be absent without an id, got %v", r.Status["cnameTarget"])
 	}
 }
+
+func TestTunnelSchemaDeclaresOutputs(t *testing.T) {
+	t.Cleanup(schema.ResetExternal)
+	schema.RegisterExternal(apiVersion, kindTunnel, tunnelSchema)
+
+	outs, ok := schema.OutputsFor(apiVersion, kindTunnel)
+	if !ok {
+		t.Fatal("Tunnel schema should declare status outputs")
+	}
+	byPath := map[string]string{}
+	for _, o := range outs {
+		byPath[o.Path] = o.Type
+	}
+	// cnameTarget is the value a DNSRecord $refs to route a hostname.
+	if byPath["status.cnameTarget"] != "string" {
+		t.Errorf("Tunnel should declare status.cnameTarget:string; got %v", byPath)
+	}
+	if byPath["status.id"] != "string" {
+		t.Errorf("Tunnel should declare status.id:string; got %v", byPath)
+	}
+}
