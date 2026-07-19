@@ -10,14 +10,6 @@ import (
 	"strings"
 )
 
-// SourceLookup reports the source ("gitops"/"cli"/"ui"/…) of a resource's most
-// recent successful apply, and whether such an op was found. Provenance lives
-// on the operations table, not applied_manifests, so main.go wires this to an
-// operations-store query. found=false means the history was GC'd or never
-// recorded — the Pruner treats that as "provenance unknown", not "safe to
-// delete as non-gitops".
-type SourceLookup func(ctx context.Context, apiVersion, kind, name string) (source string, found bool)
-
 // Pruner implements the git-as-source repo-wide prune: after a pull, delete the
 // managed resources whose manifest file was removed from the mirror, so the
 // repo becomes the desired SET rather than an additive source.
@@ -31,21 +23,24 @@ type SourceLookup func(ctx context.Context, apiVersion, kind, name string) (sour
 //   - A resource whose latest apply was explicitly cli- or ui-sourced is
 //     protected — the operator manages it by hand, not via the repo.
 //
+// Provenance is read directly from the applied_manifests row's source column
+// (K3), which the dispatcher records on every apply — no longer reconstructed
+// from the GC'd operations table. An empty source ("provenance unknown", e.g. a
+// row written before the source column existed) is not protected, matching the
+// prior GC'd-op behavior.
+//
 // Everything else absent from the repo (top-level, gitops/auto-reconcile or
 // unknown provenance) is deleted through the same Delete-op path the watcher's
 // deleteOnRemove uses.
 type Pruner struct {
-	store  *Store
-	root   string
-	source SourceLookup
-	del    GitOpsDeleteFunc
+	store *Store
+	root  string
+	del   GitOpsDeleteFunc
 }
 
-// NewPruner constructs a Pruner. source may be nil (then provenance is treated
-// as unknown for every resource — the child guard still applies). del is
-// required: it submits the actual Delete.
-func NewPruner(store *Store, root string, source SourceLookup, del GitOpsDeleteFunc) *Pruner {
-	return &Pruner{store: store, root: root, source: source, del: del}
+// NewPruner constructs a Pruner. del is required: it submits the actual Delete.
+func NewPruner(store *Store, root string, del GitOpsDeleteFunc) *Pruner {
+	return &Pruner{store: store, root: root, del: del}
 }
 
 // Prune runs one pass and returns the refs it deleted. Errors from individual
@@ -79,12 +74,13 @@ func (p *Pruner) Prune(ctx context.Context) ([]Ref, error) {
 			log.Printf("gitops prune: skip %s/%s (composite child — deleted with its parent)", ref.Kind, ref.Name)
 			continue
 		}
-		// Guard 2: protect explicitly hand-managed (cli/ui) resources.
-		if p.source != nil {
-			if src, found := p.source(ctx, ref.APIVersion, ref.Kind, ref.Name); found && (src == SourceCLI || src == SourceUI) {
-				log.Printf("gitops prune: skip %s/%s (last applied via %s, not the repo)", ref.Kind, ref.Name, src)
-				continue
-			}
+		// Guard 2: protect explicitly hand-managed (cli/ui) resources. The
+		// source is recorded on the applied_manifests row (K3), read here via
+		// Ref.Source — no ops-table reconstruction. Empty source (unknown
+		// provenance) is not protected.
+		if ref.Source == SourceCLI || ref.Source == SourceUI {
+			log.Printf("gitops prune: skip %s/%s (last applied via %s, not the repo)", ref.Kind, ref.Name, ref.Source)
+			continue
 		}
 		if err := p.del(ctx, ref.APIVersion, ref.Kind, ref.Name); err != nil {
 			log.Printf("gitops prune: delete %s/%s/%s: %v", ref.APIVersion, ref.Kind, ref.Name, err)

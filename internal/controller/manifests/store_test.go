@@ -71,6 +71,65 @@ func TestSaveOverwrites(t *testing.T) {
 	}
 }
 
+// TestSaveRecordsSourceFromContext verifies K3 provenance: the source attached
+// to the Save context is persisted on the applied_manifests row and surfaced
+// via ListAll's Ref.Source. Re-saving with a different source updates it; a
+// Save with no source records "" (unknown provenance).
+func TestSaveRecordsSourceFromContext(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	sourceOf := func(name string) string {
+		refs, err := s.ListAll(ctx)
+		if err != nil {
+			t.Fatalf("ListAll: %v", err)
+		}
+		for _, r := range refs {
+			if r.Name == name {
+				return r.Source
+			}
+		}
+		t.Fatalf("ref %q not found in ListAll", name)
+		return ""
+	}
+
+	vm := func(name string) *protocol.Resource {
+		return &protocol.Resource{
+			APIVersion: "proxmox.openctl.io/v1", Kind: "VirtualMachine",
+			Metadata: protocol.ResourceMetadata{Name: name},
+			Spec:     map[string]any{"cpus": 1},
+		}
+	}
+
+	if err := s.Save(WithSource(ctx, SourceGitOps), vm("from-git")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Save(WithSource(ctx, SourceCLI), vm("from-cli")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Save(ctx, vm("no-source")); err != nil { // no source attached
+		t.Fatal(err)
+	}
+
+	if got := sourceOf("from-git"); got != SourceGitOps {
+		t.Errorf("from-git source = %q, want %q", got, SourceGitOps)
+	}
+	if got := sourceOf("from-cli"); got != SourceCLI {
+		t.Errorf("from-cli source = %q, want %q", got, SourceCLI)
+	}
+	if got := sourceOf("no-source"); got != "" {
+		t.Errorf("no-source source = %q, want \"\" (unknown provenance)", got)
+	}
+
+	// Re-apply from-git via the UI: the source column updates in place.
+	if err := s.Save(WithSource(ctx, SourceUI), vm("from-git")); err != nil {
+		t.Fatal(err)
+	}
+	if got := sourceOf("from-git"); got != SourceUI {
+		t.Errorf("from-git source after UI re-apply = %q, want %q", got, SourceUI)
+	}
+}
+
 func TestLoadMissingReturnsNil(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
