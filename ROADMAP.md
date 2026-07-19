@@ -262,6 +262,18 @@ these are the corners where drift would start if it starts anywhere.
       declaration). Think "typed status for a controller," not "Terraform
       outputs."
 
+- [ ] **K7 — Expose the scheduling DAG / plan-preview.** Today only a *rooted*
+      composition graph is exposed (`GetChildrenGraph` → UI DagView: a resource's
+      `owns`/`ref` edges outward). The **operation-scheduling DAG** the dispatcher
+      builds from `$ref` edges — the actual apply *order* and *why* — is internal
+      and never surfaced. And `DryRunApply` previews one resource's diff, not a
+      whole submission's ordering. Add a batch **plan-preview**: given a set of
+      manifests (or a repo dir), return the dependency DAG + the topological
+      apply order (+ per-resource dry-run diff), so an operator can see "what
+      will happen, in what order, and what waits on what" before applying —
+      including for a GitOps sync. Pairs with I1 (plan-on-PR: the same preview,
+      rendered on a PR).
+
 The UI/controller feature build-out is essentially complete (all UI
 phases + arch Phase 8 shipped). The next round is driven by the
 strategic direction in [docs/direction.md](docs/direction.md) — go
