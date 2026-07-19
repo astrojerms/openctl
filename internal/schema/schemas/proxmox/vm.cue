@@ -6,6 +6,27 @@ import "openctl.io/schemas/base"
 	apiVersion: "proxmox.openctl.io/v1"
 	kind:       "VirtualMachine"
 	spec:       #VMSpec
+	status?:    #VMStatus
+}
+
+// #VMStatus documents the observed fields a VirtualMachine exposes. Notably
+// status.ip is $ref-able (e.g. a K3sNode reads its VM's IP). Open + all-optional
+// so it describes without constraining the provider's output or rejecting a
+// manifest.
+#VMStatus: {
+	// Proxmox numeric VM id.
+	vmid?: int
+	// Power state, e.g. "running", "stopped".
+	state?: string
+	// Guest IP address (from the QEMU guest agent). Empty until the agent
+	// reports it; a common $ref target.
+	ip?: string
+	// Uptime in seconds.
+	uptime?: int
+	// Fractional CPU usage (0–1) and used memory in bytes.
+	cpuUsed?: number
+	memUsed?: int
+	...
 }
 
 #VMSpec: {
