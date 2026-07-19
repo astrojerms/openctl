@@ -344,7 +344,8 @@ func (h *Handler) createVMFromTemplate(ctx context.Context, name, node string, s
 		}
 	}
 
-	// If cloud-init is configured, try to enable qemu-guest-agent via cicustom vendor data
+	// If cloud-init is configured, attach the cicustom vendor snippet
+	// (qemu-guest-agent enablement + any requested packages/runcmd).
 	if spec.CloudInit != nil {
 		// Use config storage if available, otherwise try "local"
 		snippetStorage := "local"
@@ -353,15 +354,7 @@ func (h *Handler) createVMFromTemplate(ctx context.Context, name, node string, s
 				snippetStorage = s
 			}
 		}
-		if err := h.client.EnsureQemuAgentSnippet(ctx, node, snippetStorage); err != nil {
-			debugf("createVMFromTemplate: failed to ensure snippet: %v", err)
-		} else {
-			cicustom := fmt.Sprintf("vendor=%s:snippets/%s", snippetStorage, client.QemuAgentSnippetName)
-			debugf("createVMFromTemplate: setting cicustom=%s", cicustom)
-			if err := h.client.ConfigureVM(ctx, node, vmid, map[string]any{"cicustom": cicustom}); err != nil {
-				debugf("createVMFromTemplate: failed to set cicustom: %v", err)
-			}
-		}
+		h.applyCloudInitVendorSnippet(ctx, node, vmid, snippetStorage, spec.CloudInit)
 	}
 
 	if spec.StartOnCreate {
@@ -374,6 +367,42 @@ func (h *Handler) createVMFromTemplate(ctx context.Context, name, node string, s
 		Status:  protocol.StatusSuccess,
 		Message: fmt.Sprintf("VM %s created (vmid: %d)", name, vmid),
 	}, nil
+}
+
+// applyCloudInitVendorSnippet attaches a cicustom vendor snippet to the VM. When
+// the VM declares custom packages/runcmd it uploads a per-VM combined snippet
+// (qemu-guest-agent enablement folded in, so IP discovery still works);
+// otherwise it uses the shared static qemu-agent snippet — the pre-existing,
+// metal-validated path, byte-identical.
+//
+// Every failure is non-fatal and surfaced via debug logs: a storage that can't
+// hold snippets (e.g. LVM) just means no agent/packages, not a failed create —
+// matching the prior behavior.
+func (h *Handler) applyCloudInitVendorSnippet(ctx context.Context, node string, vmid int, snippetStorage string, ci *resources.CloudInitSpec) {
+	var snippetName string
+	if ci != nil && (len(ci.Packages) > 0 || len(ci.RunCmd) > 0) {
+		content, err := client.RenderVendorData(ci.Packages, ci.RunCmd)
+		if err != nil {
+			debugf("applyCloudInitVendorSnippet: render vendor data: %v", err)
+			return
+		}
+		snippetName = client.VendorSnippetName(vmid)
+		if err := h.client.UploadSnippet(ctx, node, snippetStorage, snippetName, content); err != nil {
+			debugf("applyCloudInitVendorSnippet: upload vendor snippet: %v", err)
+			return
+		}
+	} else {
+		if err := h.client.EnsureQemuAgentSnippet(ctx, node, snippetStorage); err != nil {
+			debugf("applyCloudInitVendorSnippet: ensure agent snippet: %v", err)
+			return
+		}
+		snippetName = client.QemuAgentSnippetName
+	}
+	cicustom := fmt.Sprintf("vendor=%s:snippets/%s", snippetStorage, snippetName)
+	debugf("applyCloudInitVendorSnippet: setting cicustom=%s", cicustom)
+	if err := h.client.ConfigureVM(ctx, node, vmid, map[string]any{"cicustom": cicustom}); err != nil {
+		debugf("applyCloudInitVendorSnippet: set cicustom: %v", err)
+	}
 }
 
 func primaryDiskStorage(spec *resources.VMSpec) string {
@@ -475,20 +504,11 @@ func (h *Handler) createVMFromCloudImage(ctx context.Context, name, node string,
 		}
 	}
 
-	// Enable qemu-guest-agent via cicustom vendor data (for IP detection)
-	// Using vendor= instead of user= so it merges with cloud-init config instead of replacing it
-	snippetStorage := spec.CloudImage.Storage
-	if err := h.client.EnsureQemuAgentSnippet(ctx, node, snippetStorage); err != nil {
-		// Try to continue - storage might not support snippets
-		debugf("createVMFromCloudImage: failed to ensure snippet: %v", err)
-	} else {
-		// Add cicustom vendor data to VM config
-		cicustom := fmt.Sprintf("vendor=%s:snippets/%s", snippetStorage, client.QemuAgentSnippetName)
-		debugf("createVMFromCloudImage: setting cicustom=%s", cicustom)
-		if err := h.client.ConfigureVM(ctx, node, vmid, map[string]any{"cicustom": cicustom}); err != nil {
-			debugf("createVMFromCloudImage: failed to set cicustom: %v", err)
-		}
-	}
+	// Attach the cicustom vendor snippet (qemu-guest-agent enablement for IP
+	// detection, plus any requested packages/runcmd). Using vendor= (not
+	// user=) so it merges with Proxmox's generated cloud-init user-data
+	// instead of replacing it.
+	h.applyCloudInitVendorSnippet(ctx, node, vmid, spec.CloudImage.Storage, spec.CloudInit)
 
 	// Regenerate cloud-init with new settings (error ignored - non-fatal)
 	if spec.CloudInit != nil {

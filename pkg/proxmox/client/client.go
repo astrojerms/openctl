@@ -17,6 +17,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 var debugEnabled = os.Getenv("OPENCTL_DEBUG") != ""
@@ -1106,6 +1108,55 @@ runcmd:
   - systemctl enable qemu-guest-agent
   - systemctl start qemu-guest-agent
 `
+
+// vendorCloudConfig is the subset of cloud-init vendor-data openctl emits: the
+// qemu-guest-agent enablement commands (openctl relies on the agent for IP
+// discovery) plus optional host packages and first-boot commands. Marshaled
+// via yaml so arbitrary runcmd/package strings are escaped correctly rather
+// than hand-concatenated.
+type vendorCloudConfig struct {
+	PackageUpdate bool     `yaml:"package_update,omitempty"`
+	Packages      []string `yaml:"packages,omitempty"`
+	RunCmd        []string `yaml:"runcmd,omitempty"`
+}
+
+// agentRunCmds enables + starts qemu-guest-agent. Prepended to every rendered
+// vendor snippet so a VM with custom packages/runcmd keeps IP discovery — the
+// same commands the shared QemuAgentSnippetContent carries.
+var agentRunCmds = []string{
+	"systemctl enable qemu-guest-agent",
+	"systemctl start qemu-guest-agent",
+}
+
+// RenderVendorData builds a #cloud-config vendor-data snippet enabling
+// qemu-guest-agent, installing any requested packages (with a package index
+// refresh), and running any first-boot commands after the agent commands.
+//
+// Emitted as vendor-data (attached via `cicustom vendor=`), which is ADDITIVE
+// to Proxmox's generated user-data — so ciuser/cipassword/sshkeys/etc. are
+// preserved. A `user=` snippet would REPLACE that generated user-data, which
+// is why openctl never uses the user slot here.
+func RenderVendorData(packages, runcmd []string) (string, error) {
+	cfg := vendorCloudConfig{
+		Packages: packages,
+		RunCmd:   append(append([]string{}, agentRunCmds...), runcmd...),
+	}
+	if len(packages) > 0 {
+		cfg.PackageUpdate = true
+	}
+	out, err := yaml.Marshal(cfg)
+	if err != nil {
+		return "", fmt.Errorf("marshal vendor cloud-config: %w", err)
+	}
+	return "#cloud-config\n# Created by openctl\n" + string(out), nil
+}
+
+// VendorSnippetName is the per-VM vendor snippet filename, keyed by vmid. Per-VM
+// (unlike the shared static QemuAgentSnippetName) because the content varies
+// with the VM's packages/runcmd.
+func VendorSnippetName(vmid int) string {
+	return fmt.Sprintf("openctl-vendor-%d.yaml", vmid)
+}
 
 // EnsureQemuAgentSnippet ensures the qemu-agent enablement snippet exists
 func (c *Client) EnsureQemuAgentSnippet(ctx context.Context, node, storage string) error {
