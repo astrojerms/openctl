@@ -1003,6 +1003,56 @@ func TestParseVMSpec_CloudInitDNS(t *testing.T) {
 	}
 }
 
+func TestParseVMSpec_CloudInitPackagesRunCmd(t *testing.T) {
+	resource := &protocol.Resource{
+		APIVersion: "proxmox.openctl.io/v1",
+		Kind:       "VirtualMachine",
+		Metadata:   protocol.ResourceMetadata{Name: "prep-vm"},
+		Spec: map[string]any{
+			"cloudInit": map[string]any{
+				"packages": []any{"open-iscsi", "nfs-common"},
+				"runcmd":   []any{"systemctl enable iscsid", "modprobe iscsi_tcp"},
+			},
+		},
+	}
+	spec, err := ParseVMSpec(resource)
+	if err != nil {
+		t.Fatalf("ParseVMSpec failed: %v", err)
+	}
+	if spec.CloudInit == nil {
+		t.Fatal("expected cloudInit set")
+	}
+	if len(spec.CloudInit.Packages) != 2 || spec.CloudInit.Packages[0] != "open-iscsi" {
+		t.Errorf("packages = %v, want [open-iscsi nfs-common]", spec.CloudInit.Packages)
+	}
+	if len(spec.CloudInit.RunCmd) != 2 || spec.CloudInit.RunCmd[1] != "modprobe iscsi_tcp" {
+		t.Errorf("runcmd = %v, want [systemctl enable iscsid, modprobe iscsi_tcp]", spec.CloudInit.RunCmd)
+	}
+}
+
+// TestParseVMSpec_CloudInitPackagesIgnoreNonStrings proves the parser tolerates
+// malformed list entries (non-strings) by skipping them, matching the existing
+// sshKeys/nameservers parse behavior.
+func TestParseVMSpec_CloudInitPackagesIgnoreNonStrings(t *testing.T) {
+	resource := &protocol.Resource{
+		APIVersion: "proxmox.openctl.io/v1",
+		Kind:       "VirtualMachine",
+		Metadata:   protocol.ResourceMetadata{Name: "prep-vm"},
+		Spec: map[string]any{
+			"cloudInit": map[string]any{
+				"packages": []any{"open-iscsi", 42, "curl"},
+			},
+		},
+	}
+	spec, err := ParseVMSpec(resource)
+	if err != nil {
+		t.Fatalf("ParseVMSpec failed: %v", err)
+	}
+	if len(spec.CloudInit.Packages) != 2 || spec.CloudInit.Packages[1] != "curl" {
+		t.Errorf("packages = %v, want [open-iscsi curl]", spec.CloudInit.Packages)
+	}
+}
+
 func TestVMSpec_ToProxmoxConfig_CloudInitDNS(t *testing.T) {
 	spec := &VMSpec{
 		CloudInit: &CloudInitSpec{

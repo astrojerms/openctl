@@ -151,11 +151,23 @@ wiring). These targets close the remaining gaps. Only **E1** is a genuine
 prerequisite (Longhorn); the rest are convenience + robustness.
 
 ### E. Node customization
-- [ ] **E1 — cloud-init `packages` + `runcmd`.** Extend the Proxmox VM
-      `cloudInit` spec (today user/ssh/network/packageUpgrade only) to install
-      host packages and run first-boot commands. Unblocks node-level
-      prerequisites — e.g. `open-iscsi` for Longhorn — and general node tuning.
-      *The one true prerequisite in this list.*
+- [x] **E1 — cloud-init `packages` + `runcmd`.** The Proxmox VM `cloudInit`
+      spec now takes `packages: [...string]` (installed on first boot with a
+      preceding index refresh — `package_update: true`) and `runcmd: [...string]`
+      (first-boot commands, after the qemu-guest-agent enablement). Rendered
+      into a **per-VM cloud-init vendor snippet** (`client.RenderVendorData` via
+      `yaml.Marshal` so arbitrary commands escape safely) uploaded to snippets
+      storage and attached via `cicustom vendor=` — Proxmox has no native `ci*`
+      option for arbitrary packages, and vendor-data is additive (doesn't clobber
+      the generated ciuser/sshkeys user-data that a `user=` snippet would). The
+      no-packages path keeps the shared static qemu-agent snippet **byte-
+      identical** (zero risk to the metal-validated QGA flow); the combined path
+      folds the agent runcmd in so IP discovery still works. Also added the
+      previously-undocumented `packageUpgrade` to the CUE schema. Unblocks F1
+      (Longhorn needs `open-iscsi`). Tests: render (packages/runcmd ordering,
+      omitempty, special-char round-trip), spec parse, and a handler wiring test
+      asserting the per-VM upload + cicustom. *Metal validation (does open-iscsi
+      actually install) is a homelab follow-up, like A1–A4.*
 - [ ] **E2 — k3s node-pool node prep.** Surface E1 through the k3s Cluster
       spec (a per-pool `nodePrep`/`packages`/`runcmd` block) so a worker pool
       installs its own host deps, composed into the node VMs (mirrors the

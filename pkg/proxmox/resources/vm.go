@@ -305,6 +305,18 @@ type CloudInitSpec struct {
 	// so clones boot fast and deterministically. Set true to opt back in.
 	// Requires Proxmox VE 8.2 or newer (the param didn't exist before).
 	PackageUpgrade *bool `json:"packageUpgrade"`
+	// Packages installs host packages on first boot via cloud-init
+	// (`packages:` in the emitted vendor-data, with `package_update: true`
+	// so the index is refreshed first). Used for node prerequisites such as
+	// `open-iscsi` for Longhorn. Rendered into a per-VM cloud-init vendor
+	// snippet (see the handler), not a Proxmox native `ci*` option — Proxmox
+	// has none for arbitrary packages.
+	Packages []string `json:"packages"`
+	// RunCmd runs first-boot shell commands via cloud-init (`runcmd:` in the
+	// emitted vendor-data), after the qemu-guest-agent enablement commands.
+	// General node tuning / prerequisite hooks. Rendered into the same per-VM
+	// vendor snippet as Packages.
+	RunCmd []string `json:"runcmd"`
 }
 
 // IPConfig defines IP configuration
@@ -544,6 +556,20 @@ func ParseVMSpec(r *protocol.Resource) (*VMSpec, error) {
 		}
 		if pu, ok := ci["packageUpgrade"].(bool); ok {
 			spec.CloudInit.PackageUpgrade = &pu
+		}
+		if pkgs, ok := ci["packages"].([]any); ok {
+			for _, p := range pkgs {
+				if pkg, ok := p.(string); ok {
+					spec.CloudInit.Packages = append(spec.CloudInit.Packages, pkg)
+				}
+			}
+		}
+		if cmds, ok := ci["runcmd"].([]any); ok {
+			for _, c := range cmds {
+				if cmd, ok := c.(string); ok {
+					spec.CloudInit.RunCmd = append(spec.CloudInit.RunCmd, cmd)
+				}
+			}
 		}
 		if sd, ok := ci["searchDomain"].(string); ok {
 			spec.CloudInit.SearchDomain = sd

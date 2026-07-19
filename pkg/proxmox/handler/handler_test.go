@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -339,6 +340,94 @@ func TestCreateVMFromTemplatePassesDiskStorageToClone(t *testing.T) {
 	}
 	if cloneForm.Get("newid") != "200" || cloneForm.Get("name") != "controller-vm" || cloneForm.Get("full") != "1" {
 		t.Fatalf("clone form missing default params: %v", cloneForm)
+	}
+}
+
+// TestCreateVMUploadsPerVMVendorSnippet drives the create path for a VM that
+// declares cloud-init packages/runcmd and asserts the E1 wiring: a per-VM
+// vendor snippet (named by vmid) is uploaded with the packages + agent runcmd,
+// and the VM is configured with cicustom pointing at it.
+func TestCreateVMUploadsPerVMVendorSnippet(t *testing.T) {
+	var (
+		uploadedName    string
+		uploadedContent string
+		cicustom        string
+	)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api2/json/nodes" && r.Method == "GET":
+			json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"node": "pve1"}}})
+		case r.URL.Path == "/api2/json/nodes/pve1/qemu" && r.Method == "GET":
+			json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{
+				{"vmid": 9000, "name": "ubuntu-template", "template": 1, "status": "stopped"},
+			}})
+		case r.URL.Path == "/api2/json/cluster/nextid" && r.Method == "GET":
+			json.NewEncoder(w).Encode(map[string]any{"data": "200"})
+		case r.URL.Path == "/api2/json/nodes/pve1/qemu/9000/clone" && r.Method == "POST":
+			json.NewEncoder(w).Encode(map[string]any{"data": ""})
+		case r.URL.Path == "/api2/json/nodes/pve1/storage/local/upload" && r.Method == "POST":
+			if err := r.ParseMultipartForm(1 << 20); err != nil {
+				t.Fatalf("ParseMultipartForm: %v", err)
+			}
+			files := r.MultipartForm.File["filename"]
+			if len(files) != 1 {
+				t.Fatalf("upload: want 1 file field, got %d", len(files))
+			}
+			uploadedName = files[0].Filename
+			f, _ := files[0].Open()
+			b, _ := io.ReadAll(f)
+			uploadedContent = string(b)
+			json.NewEncoder(w).Encode(map[string]any{"data": ""})
+		case r.URL.Path == "/api2/json/nodes/pve1/qemu/200/config":
+			// ConfigureVM issues PUT; capture the cicustom-bearing call.
+			if err := r.ParseForm(); err != nil {
+				t.Fatalf("ParseForm: %v", err)
+			}
+			if c := r.Form.Get("cicustom"); c != "" {
+				cicustom = c
+			}
+			json.NewEncoder(w).Encode(map[string]any{"data": ""})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	h := New(&protocol.ProviderConfig{Endpoint: server.URL, TokenID: "t", TokenSecret: "s", Node: "pve1"})
+	resp, err := h.Handle(context.Background(), &protocol.Request{
+		Version:      protocol.ProtocolVersion,
+		Action:       protocol.ActionCreate,
+		ResourceType: "VirtualMachine",
+		Manifest: &protocol.Resource{
+			APIVersion: "proxmox.openctl.io/v1",
+			Kind:       "VirtualMachine",
+			Metadata:   protocol.ResourceMetadata{Name: "longhorn-node"},
+			Spec: map[string]any{
+				"node":     "pve1",
+				"template": map[string]any{"name": "ubuntu-template"},
+				"cloudInit": map[string]any{
+					"packages": []any{"open-iscsi"},
+					"runcmd":   []any{"systemctl enable iscsid"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if resp.Status != protocol.StatusSuccess {
+		t.Fatalf("status = %s, resp=%+v", resp.Status, resp)
+	}
+	if uploadedName != "openctl-vendor-200.yaml" {
+		t.Errorf("uploaded snippet name = %q, want openctl-vendor-200.yaml", uploadedName)
+	}
+	for _, want := range []string{"#cloud-config", "open-iscsi", "systemctl enable qemu-guest-agent", "systemctl enable iscsid"} {
+		if !strings.Contains(uploadedContent, want) {
+			t.Errorf("uploaded snippet missing %q:\n%s", want, uploadedContent)
+		}
+	}
+	if cicustom != "vendor=local:snippets/openctl-vendor-200.yaml" {
+		t.Errorf("cicustom = %q, want vendor=local:snippets/openctl-vendor-200.yaml", cicustom)
 	}
 }
 

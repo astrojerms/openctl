@@ -215,6 +215,20 @@ import "openctl.io/schemas/base"
 		searchDomain?: string
 		// DNS resolver addresses to write to /etc/resolv.conf.
 		nameservers?: [...string]
+		// Run a full package upgrade (`apt dist-upgrade`) on first boot
+		// (Proxmox `ciupgrade`). Defaults OFF so clones boot fast and
+		// deterministically — a slow upgrade over a flaky link can wedge
+		// cloud-init. Requires Proxmox VE 8.2+. Set true to opt back in.
+		packageUpgrade?: bool
+		// Host packages to install on first boot (cloud-init `packages:`,
+		// with the index refreshed first). For node prerequisites such as
+		// "open-iscsi" (Longhorn). Rendered into a per-VM cloud-init vendor
+		// snippet — Proxmox has no native option for arbitrary packages.
+		packages?: [...string]
+		// First-boot shell commands (cloud-init `runcmd:`), run after the
+		// qemu-guest-agent enablement commands. General node tuning /
+		// prerequisite hooks. Rendered into the same vendor snippet as packages.
+		runcmd?: [...string]
 		// Per-interface IP configuration. Key is the interface name (e.g.
 		// "net0"). Use "dhcp" as ip to request DHCP, or "<addr>/<cidr>"
 		// for static with optional gateway.
