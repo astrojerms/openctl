@@ -264,17 +264,22 @@ these are the corners where drift would start if it starts anywhere.
       column (`TestPrunerGuards`), child guard independent of source. **Unblocks
       K2** (gitops mode needs reliable `source=git`).
 
-- [ ] **K4 — Generic Platform + deployment methods as providers.** The intent
+- [~] **K4 — Generic Platform + deployment methods as providers.** The intent
       for `Platform` is NOT a curated grab-bag of preferred charts but **generic
-      support**, Terraform-provider style: (a) make Platform components
-      data-declared (any chart via `{name, chart, namespace, values}`), with
-      traefik/cloudflared/nvidia/nfs/… as optional named **presets** or examples
-      — not baked-in opinion; (b) treat the deployment **method** itself as a
-      provider — Helm/Manifest/Argo are already kinds; add new methods
-      (Kustomize, Flux, …) as new kinds/providers rather than bespoke code.
-      openctl already has the provider bones (it's TF-like for infra); extend
-      the same shape to workload deployment so breadth comes from providers, not
-      special cases.
+      support**, Terraform-provider style.
+      - [x] **(a) Data-declared components — SHIPPED.** Platform now installs
+        ANY chart with no code change via a generic `components: {<name>:
+        {chart: {repo, name, version?}, namespace?, values?, wait?, enabled?}}`
+        map (`enabled` defaults true; a generic name overrides a same-named
+        preset). `traefik/cloudflared/argocd/nvidia/nfs/longhorn` are now
+        explicitly **presets** — default chart coords layered on the generic
+        path, not baked-in opinion. `enabledComponents` merges presets +
+        generic deterministically; `#Platform.components?` schema. Tests: generic
+        install, enabled:false + missing-chart skip, preset override, ordering.
+      - [ ] **(b) Deployment methods as providers.** Treat the deployment
+        **method** itself as a provider — Helm/Manifest/Argo are already kinds;
+        add new methods (Kustomize, Flux, …) as new kinds/providers rather than
+        bespoke code, so breadth comes from providers, not special cases.
 
 - [ ] **K5 — Re-baseline the scope wedge (`direction.md`).** The doc originally
       vetoed workloads/PaaS ("stop at cluster-Ready"); the deployment model +

@@ -117,6 +117,90 @@ func TestEnabledComponents_NvidiaDevicePlugin(t *testing.T) {
 	}
 }
 
+// TestEnabledComponents_Generic covers the K4(a) generic path: an arbitrary
+// chart declared under `components` installs with no preset, defaults enabled
+// to true, defaults its namespace to its name, and threads chart+values.
+func TestEnabledComponents_Generic(t *testing.T) {
+	comps := enabledComponents(map[string]any{
+		"components": map[string]any{
+			"prometheus": map[string]any{
+				"chart":  map[string]any{"repo": "https://prometheus-community.github.io/helm-charts", "name": "kube-prometheus-stack", "version": "65.0.0"},
+				"values": map[string]any{"grafana": map[string]any{"enabled": false}},
+			},
+		},
+	})
+	if len(comps) != 1 {
+		t.Fatalf("enabled = %d, want 1 (generic prometheus)", len(comps))
+	}
+	c := comps[0]
+	if c.comp.name != "prometheus" || c.opts.releaseName != "prometheus" {
+		t.Errorf("name/release = %s/%s", c.comp.name, c.opts.releaseName)
+	}
+	if c.chart.Repo != "https://prometheus-community.github.io/helm-charts" || c.chart.Name != "kube-prometheus-stack" || c.chart.Version != "65.0.0" {
+		t.Errorf("chart wrong: %+v", c.chart)
+	}
+	if c.opts.namespace != "prometheus" { // defaults to the release name
+		t.Errorf("namespace = %q, want prometheus (defaulted to name)", c.opts.namespace)
+	}
+	g, _ := c.values["grafana"].(map[string]any)
+	if g["enabled"] != false {
+		t.Errorf("values not threaded: %+v", c.values)
+	}
+}
+
+// TestEnabledComponents_GenericDisabledAndInvalid: an explicit enabled:false
+// generic component is skipped, and one without chart coordinates is skipped
+// (defensive — the schema requires chart.repo+name).
+func TestEnabledComponents_GenericDisabledAndInvalid(t *testing.T) {
+	comps := enabledComponents(map[string]any{
+		"components": map[string]any{
+			"off":       map[string]any{"enabled": false, "chart": map[string]any{"repo": "r", "name": "n"}},
+			"nochart":   map[string]any{"namespace": "x"},
+			"malformed": map[string]any{"chart": map[string]any{"repo": "r"}}, // no name
+		},
+	})
+	if len(comps) != 0 {
+		t.Fatalf("enabled = %d, want 0 (all skipped)", len(comps))
+	}
+}
+
+// TestEnabledComponents_GenericOverridesPreset: a generic component sharing a
+// preset's name overrides that preset's chart, keeping a single release.
+func TestEnabledComponents_GenericOverridesPreset(t *testing.T) {
+	comps := enabledComponents(map[string]any{
+		"traefik": map[string]any{"enabled": true},
+		"components": map[string]any{
+			"traefik": map[string]any{"chart": map[string]any{"repo": "https://example.test/charts", "name": "my-traefik"}},
+		},
+	})
+	if len(comps) != 1 {
+		t.Fatalf("enabled = %d, want 1 (deduped)", len(comps))
+	}
+	if comps[0].chart.Name != "my-traefik" || comps[0].chart.Repo != "https://example.test/charts" {
+		t.Errorf("generic should override preset chart, got %+v", comps[0].chart)
+	}
+}
+
+// TestEnabledComponents_PresetAndGenericOrder: presets come first in
+// declaration order, then generic components sorted by name.
+func TestEnabledComponents_PresetAndGenericOrder(t *testing.T) {
+	comps := enabledComponents(map[string]any{
+		"traefik": map[string]any{"enabled": true},
+		"components": map[string]any{
+			"zzz": map[string]any{"chart": map[string]any{"repo": "r", "name": "z"}},
+			"aaa": map[string]any{"chart": map[string]any{"repo": "r", "name": "a"}},
+		},
+	})
+	got := []string{}
+	for _, c := range comps {
+		got = append(got, c.comp.name)
+	}
+	want := []string{"traefik", "aaa", "zzz"}
+	if len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Errorf("order = %v, want %v", got, want)
+	}
+}
+
 func TestPlanPlatform(t *testing.T) {
 	p := New()
 	m := platformResource(map[string]any{

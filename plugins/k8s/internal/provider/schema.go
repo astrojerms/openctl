@@ -117,6 +117,23 @@ const platformSchema = `
 		// a k3s worker pool's nodePrep.packages, or Longhorn's iscsi-installer
 		// DaemonSet as a fallback.
 		longhorn?: {...}
+		// components installs ANY Helm chart, no code change required — the
+		// generic, Terraform-provider-style path (the named fields above are
+		// just presets layered on this). Key is the release name. enabled
+		// defaults true (listing a component opts in); set false to disable it
+		// without removing the block. A generic component sharing a preset's
+		// name overrides that preset.
+		components?: {[string]: {
+			enabled?: bool | *true
+			chart: {
+				repo:     string
+				name:     string
+				version?: string
+			}
+			namespace?: string
+			wait?:      bool
+			values?: {...}
+		}}
 	}
 	...
 }
