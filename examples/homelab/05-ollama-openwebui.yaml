@@ -1,0 +1,69 @@
+# Local model stack: Ollama (the model server, scheduled onto the GPU pool via
+# nvidia.com/gpu) + Open WebUI (the chat front-end, exposed at chat.example.com
+# through the Tunnel). Both are stock Helm charts — openctl just installs them
+# onto the cluster the kubeconfigPath $ref points at.
+apiVersion: k8s.openctl.io/v1
+kind: HelmRelease
+metadata:
+  name: ollama
+spec:
+  kubeconfigPath:
+    $ref:
+      apiVersion: k3s.openctl.io/v1
+      kind: Cluster
+      name: home
+      field: status.outputs.kubeconfigPath
+  namespace: ai
+  createNamespace: true
+  chart:
+    repo: https://otwld.github.io/ollama-helm
+    name: ollama
+    version: "1.30.0"
+  values:
+    ollama:
+      gpu:
+        enabled: true
+        type: nvidia
+        number: 1
+      models:
+        pull:
+          - llama3.2
+    # Request the GPU advertised by the nvidiaDevicePlugin Platform component;
+    # nodeSelector/tolerations pin it to the GPU pool if you label those nodes.
+    resources:
+      limits:
+        nvidia.com/gpu: 1
+    persistentVolume:
+      enabled: true
+      storageClass: longhorn
+      size: 50Gi
+---
+apiVersion: k8s.openctl.io/v1
+kind: HelmRelease
+metadata:
+  name: open-webui
+spec:
+  kubeconfigPath:
+    $ref:
+      apiVersion: k3s.openctl.io/v1
+      kind: Cluster
+      name: home
+      field: status.outputs.kubeconfigPath
+  namespace: ai
+  createNamespace: true
+  chart:
+    repo: https://helm.openwebui.com
+    name: open-webui
+    version: "5.4.0"
+  values:
+    # Point the UI at the in-cluster Ollama service instead of bundling one.
+    ollama:
+      enabled: false
+    ollamaUrls:
+      - http://ollama.ai.svc.cluster.local:11434
+    persistence:
+      enabled: true
+      storageClass: longhorn
+    ingress:
+      enabled: true
+      host: chat.example.com

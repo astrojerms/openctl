@@ -1,0 +1,23 @@
+# Cloudflare Tunnel: one connector fronting every public app. Ingress rules map
+# public hostnames to in-cluster Traefik (or a service directly). cloudflared
+# (installed by the Platform) runs the connector using this tunnel's token.
+#
+# A catch-all 404 is appended automatically after the last host-scoped rule.
+apiVersion: cloudflare.openctl.io/v1
+kind: Tunnel
+metadata:
+  name: home
+spec:
+  # accountId optional if the provider config sets defaults.accountId.
+  ingress:
+    # Everything routes through Traefik, which does host-based routing in-cluster.
+    - hostname: "chat.example.com"
+      service: "https://traefik.traefik.svc.cluster.local:443"
+    - hostname: "jellyfin.example.com"
+      service: "https://traefik.traefik.svc.cluster.local:443"
+    - hostname: "minio.example.com"
+      service: "https://traefik.traefik.svc.cluster.local:443"
+    - hostname: "auth.example.com"
+      service: "https://traefik.traefik.svc.cluster.local:443"
+    - hostname: "blog.example.com"
+      service: "https://traefik.traefik.svc.cluster.local:443"
