@@ -71,6 +71,33 @@ func TestEnabledComponents_NfsProvisioner(t *testing.T) {
 	}
 }
 
+func TestEnabledComponents_Longhorn(t *testing.T) {
+	comps := enabledComponents(map[string]any{
+		"longhorn": map[string]any{
+			"enabled": true,
+			"values":  map[string]any{"defaultSettings": map[string]any{"defaultReplicaCount": 2}},
+		},
+	})
+	if len(comps) != 1 {
+		t.Fatalf("enabled = %d, want 1 (longhorn)", len(comps))
+	}
+	c := comps[0]
+	if c.comp.name != "longhorn" {
+		t.Errorf("component = %q", c.comp.name)
+	}
+	if c.chart.Repo != "https://charts.longhorn.io" || c.chart.Name != "longhorn" {
+		t.Errorf("chart defaults wrong: %+v", c.chart)
+	}
+	if c.opts.namespace != "longhorn-system" {
+		t.Errorf("default namespace = %q, want longhorn-system", c.opts.namespace)
+	}
+	// User values (e.g. replica count) thread through to the chart.
+	ds, _ := c.values["defaultSettings"].(map[string]any)
+	if ds["defaultReplicaCount"] != 2 {
+		t.Errorf("longhorn values not threaded: %+v", c.values)
+	}
+}
+
 func TestEnabledComponents_NvidiaDevicePlugin(t *testing.T) {
 	comps := enabledComponents(map[string]any{
 		"nvidiaDevicePlugin": map[string]any{"enabled": true},

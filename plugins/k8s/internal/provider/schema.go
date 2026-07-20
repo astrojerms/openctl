@@ -112,6 +112,11 @@ const platformSchema = `
 		// nfsProvisioner gives a dynamic NFS-backed StorageClass for persistent
 		// volumes (e.g. a Synology share). Set values.nfs.server + values.nfs.path.
 		nfsProvisioner?: {...}
+		// longhorn is replicated block storage (RWO volumes with node-to-node
+		// replication + snapshots). Every node needs open-iscsi — install it via
+		// a k3s worker pool's nodePrep.packages, or Longhorn's iscsi-installer
+		// DaemonSet as a fallback.
+		longhorn?: {...}
 	}
 	...
 }

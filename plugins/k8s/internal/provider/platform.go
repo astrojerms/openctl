@@ -52,6 +52,12 @@ var platformComponents = []component{
 	// persistent volumes on request. Set nfsProvisioner.values.nfs.{server,path}
 	// to the NAS export.
 	{"nfsProvisioner", "https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner", "nfs-subdir-external-provisioner", "nfs-provisioner"},
+	// longhorn is replicated block storage — the tier NFS/local-path don't
+	// cover (RWO volumes with node-to-node replication + snapshots). Every node
+	// needs `open-iscsi` installed; provision it via a k3s worker pool's
+	// nodePrep (E2) — e.g. nodePrep.packages: ["open-iscsi"] — or Longhorn's
+	// own iscsi-installer DaemonSet as an interim fallback.
+	{"longhorn", "https://charts.longhorn.io", "longhorn", "longhorn-system"},
 }
 
 // releaseCoord locates an installed component release for Get/Delete/prune.
