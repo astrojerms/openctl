@@ -168,10 +168,20 @@ prerequisite (Longhorn); the rest are convenience + robustness.
       omitempty, special-char round-trip), spec parse, and a handler wiring test
       asserting the per-VM upload + cicustom. *Metal validation (does open-iscsi
       actually install) is a homelab follow-up, like A1–A4.*
-- [ ] **E2 — k3s node-pool node prep.** Surface E1 through the k3s Cluster
-      spec (a per-pool `nodePrep`/`packages`/`runcmd` block) so a worker pool
-      installs its own host deps, composed into the node VMs (mirrors the
-      GPU-per-pool shape from A3).
+- [x] **E2 — k3s node-pool node prep.** The k3s Cluster spec now takes a
+      per-pool `nodePrep: {packages, runcmd}` block (on control-plane and each
+      worker pool), stamped onto that pool's node VMs' `cloudInit` (which the
+      Proxmox provider renders via E1). Mirrors the GPU-per-pool shape from A3
+      exactly: `NodePrepSpec` + `parseNodePrepSpec` + `NodePrepForNode(i,cpCount)`
+      + `ApplyNodePrepToVMSpec` (writes into the existing `cloudInit` map,
+      preserving user/sshKeys/ipConfig), wired into **both** VM-build paths
+      (operative `create.go` + Plan mirror `cluster_plan.go`) via the shared
+      helper. `#NodePrep` CUE def on both pools. So a worker pool installs its
+      own host deps — e.g. `open-iscsi` for a Longhorn storage pool. Tests:
+      parse+resolve across the flat node ordering, apply-into-cloudInit
+      (nil/empty no-op, preserves siblings), and an operative-path
+      `GenerateDispatchRequests` test asserting only the target pool's VMs get
+      the prereqs. **Makes F1 (Longhorn) usable.**
 
 ### F. Storage
 - [ ] **F1 — Longhorn Platform component.** Add `longhorn` to the opt-in

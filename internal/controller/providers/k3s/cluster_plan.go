@@ -237,6 +237,9 @@ func buildVMManifest(clusterName, nodeName string, i, cpCount int, size k3sresou
 	// GPU/PCI passthrough for this node's pool — kept identical to the
 	// operative create.go path via the shared resources helpers.
 	k3sresources.ApplyGPUToVMSpec(vm.Spec, k3sresources.GPUForNode(i, cpCount, spec))
+	// Host prerequisites (cloud-init packages/runcmd) for this node's pool —
+	// same shared helper as create.go so both paths emit identical VMs.
+	k3sresources.ApplyNodePrepToVMSpec(vm.Spec, k3sresources.NodePrepForNode(i, cpCount, spec))
 	return vm
 }
 

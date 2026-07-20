@@ -139,6 +139,10 @@ func (c *Creator) GenerateDispatchRequests() []*protocol.DispatchRequest {
 		// cpu host + hostpci). No-op when the pool requests no GPU.
 		resources.ApplyGPUToVMSpec(manifest.Spec, resources.GPUForNode(i, len(cpNodes), c.spec))
 
+		// Host prerequisites for this node's pool (cloud-init packages/runcmd,
+		// e.g. open-iscsi for Longhorn). No-op when the pool requests none.
+		resources.ApplyNodePrepToVMSpec(manifest.Spec, resources.NodePrepForNode(i, len(cpNodes), c.spec))
+
 		// Place this VM on a specific provider endpoint/host when the
 		// pool defines placement; otherwise leave spec.context/spec.node
 		// unset so the provider uses its configured defaults.
