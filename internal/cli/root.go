@@ -104,6 +104,7 @@ func init() {
 	rootCmd.AddCommand(newConfigCommand())
 	rootCmd.AddCommand(newApplyCommand())
 	rootCmd.AddCommand(newValidateCommand())
+	rootCmd.AddCommand(newPlanCommand())
 	rootCmd.AddCommand(newExplainCommand())
 	rootCmd.AddCommand(newVersionCommand())
 	rootCmd.AddCommand(newStateCommand())

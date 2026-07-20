@@ -320,17 +320,22 @@ these are the corners where drift would start if it starts anywhere.
       declaration). Think "typed status for a controller," not "Terraform
       outputs."
 
-- [ ] **K7 — Expose the scheduling DAG / plan-preview.** Today only a *rooted*
-      composition graph is exposed (`GetChildrenGraph` → UI DagView: a resource's
-      `owns`/`ref` edges outward). The **operation-scheduling DAG** the dispatcher
-      builds from `$ref` edges — the actual apply *order* and *why* — is internal
-      and never surfaced. And `DryRunApply` previews one resource's diff, not a
-      whole submission's ordering. Add a batch **plan-preview**: given a set of
-      manifests (or a repo dir), return the dependency DAG + the topological
-      apply order (+ per-resource dry-run diff), so an operator can see "what
-      will happen, in what order, and what waits on what" before applying —
-      including for a GitOps sync. Pairs with I1 (plan-on-PR: the same preview,
-      rendered on a PR).
+- [~] **K7 — Expose the scheduling DAG / plan-preview.** New **`openctl plan
+      -f <files|dirs>`** (`internal/plan` + `internal/cli/plan.go`): loads a set
+      of manifests (`.cue`/`.yaml`/`.yml`, dirs walked recursively), derives the
+      cross-resource `$ref` dependency graph (via the same `refs.Collect`
+      primitive the dispatcher uses, keyed on the full apiVersion|kind|name
+      triple), topologically sorts it (Kahn) into **waves** — resources in a
+      wave have no inter-dependency and can apply concurrently — prints each
+      resource's direct deps (`← Kind/Name`), flags `$ref` targets **not** in the
+      set (must already exist), and errors on a dependency cycle (naming the
+      stuck resources). Offline: no controller connection. Validated by planning
+      the shipped `examples/homelab/` set (11 resources → 2 waves). Unit-tested
+      (chain/diamond/external/cycle/duplicate/full-triple-key + the batch
+      loader + output). **Remaining:** per-resource dry-run **diff** (`--diff`)
+      is server-only — it needs the controller's `DryRunApply` (drift vs stored
+      last-applied + live provider Get) — and a batch RPC to expose the DAG to
+      the UI. Pairs with I1 (plan-on-PR: render this preview on a PR).
 
 The UI/controller feature build-out is essentially complete (all UI
 phases + arch Phase 8 shipped). The next round is driven by the
