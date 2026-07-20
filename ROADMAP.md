@@ -203,9 +203,20 @@ prerequisite (Longhorn); the rest are convenience + robustness.
       dance for blogs, sites, Jellyfin, Open WebUI, Authentik, etc.
 
 ### H. Integrations (optional — deploying the app works without these)
-- [ ] **H1 — Infisical `$secret` provider.** Register a self-hosted Infisical
-      as a Tier-2 secrets backend (like Vault) so openctl *reads* secrets from
-      it. Deploying Infisical itself is a plain HelmRelease.
+- [x] **H1 — Infisical `$secret` provider.** `secrets.InfisicalProvider`
+      registers a self-hosted (or cloud) Infisical as a Tier-2 backend, mirroring
+      the Vault provider (dependency-free net/http). Auth is either **Universal
+      Auth** (machine identity: `clientId` + a client secret → short-lived access
+      token) or a **static** service/access token; secrets are read via
+      `GET /api/v3/secrets/raw/<name>?workspaceId&environment&secretPath`. Marker
+      key grammar `[<secretPath>#]<secretName>` (path defaults to `/`); project +
+      environment are fixed per named provider. Config: a `type: infisical` entry
+      under `secrets.providers` (reuses `address`/`tokenSecret*`, adds
+      `clientId`/`projectId`/`environment`). Only the resolved value is used
+      transiently — never persisted. Unit-tested with a fake Infisical server
+      (universal-auth + static-token happy paths, bad creds, 404, malformed key,
+      through-resolver). Deploying Infisical itself is a plain HelmRelease (see
+      the J1 examples pattern).
 - [x] **H2 — Authentik as openctl SSO.** Already works, no new code: Authentik
       is an OIDC IdP; point `auth.oidc` at it (OIDC backend shipped #110).
 

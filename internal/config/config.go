@@ -71,16 +71,26 @@ type Secrets struct {
 type SecretProviderConfig struct {
 	// Name is the identifier a $secret marker's `provider` field references.
 	Name string `yaml:"name"`
-	// Type selects the backend implementation. Currently "vault".
+	// Type selects the backend implementation: "vault" or "infisical".
 	Type string `yaml:"type"`
-	// Address is the backend base URL (e.g. https://vault.lan:8200).
+	// Address is the backend base URL (e.g. https://vault.lan:8200 or
+	// https://infisical.lan).
 	Address string `yaml:"address"`
 	// Token authenticates to the backend. Prefer TokenSecretFile (0600) over
-	// an inline TokenSecret — never commit a real token.
+	// an inline TokenSecret — never commit a real token. For Vault this is the
+	// Vault token; for Infisical it is the Universal Auth client secret (when
+	// ClientID is set) or a static service/access token (when it isn't).
 	TokenSecret     string `yaml:"tokenSecret,omitempty"`
 	TokenSecretFile string `yaml:"tokenSecretFile,omitempty"`
 	// Namespace is an optional Vault Enterprise namespace (X-Vault-Namespace).
 	Namespace string `yaml:"namespace,omitempty"`
+	// Infisical-only. ClientID enables Universal Auth (machine identity) — the
+	// client secret comes from TokenSecret/TokenSecretFile; leave empty to use
+	// that token directly as a Bearer service/access token. ProjectID and
+	// Environment scope which secrets this named provider reads.
+	ClientID    string `yaml:"clientId,omitempty"`
+	ProjectID   string `yaml:"projectId,omitempty"`
+	Environment string `yaml:"environment,omitempty"`
 }
 
 // ResolveToken returns the backend token, reading TokenSecretFile when set
