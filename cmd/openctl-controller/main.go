@@ -57,7 +57,8 @@ func resolveRetainPerResource() int {
 // backend must surface loudly, not silently leave a $secret marker unresolved.
 func registerConfiguredSecretProviders(reg *secrets.Registry, providers []config.SecretProviderConfig) ([]string, error) {
 	var names []string
-	for _, pc := range providers {
+	for i := range providers {
+		pc := &providers[i]
 		if pc.Name == "" {
 			return nil, fmt.Errorf("a secret provider is missing its name")
 		}
@@ -72,6 +73,21 @@ func registerConfiguredSecretProviders(reg *secrets.Registry, providers []config
 			}
 			reg.Register(secrets.NewVaultProvider(pc.Name, pc.Address, token, pc.Namespace))
 			names = append(names, pc.Name+" (vault)")
+		case "infisical":
+			if pc.Address == "" {
+				return nil, fmt.Errorf("secret provider %q (infisical) requires an address", pc.Name)
+			}
+			if pc.ProjectID == "" || pc.Environment == "" {
+				return nil, fmt.Errorf("secret provider %q (infisical) requires projectId and environment", pc.Name)
+			}
+			// The token is the Universal Auth client secret (with ClientID) or a
+			// static service/access token (without).
+			token, err := pc.ResolveToken()
+			if err != nil {
+				return nil, fmt.Errorf("secret provider %q token: %w", pc.Name, err)
+			}
+			reg.Register(secrets.NewInfisicalProvider(pc.Name, pc.Address, pc.ClientID, token, pc.ProjectID, pc.Environment))
+			names = append(names, pc.Name+" (infisical)")
 		default:
 			return nil, fmt.Errorf("secret provider %q: unknown type %q", pc.Name, pc.Type)
 		}
