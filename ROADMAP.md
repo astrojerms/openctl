@@ -184,10 +184,16 @@ prerequisite (Longhorn); the rest are convenience + robustness.
       the prereqs. **Makes F1 (Longhorn) usable.**
 
 ### F. Storage
-- [ ] **F1 — Longhorn Platform component.** Add `longhorn` to the opt-in
-      Platform set (replicated block storage, the tier NFS/local-path don't
-      cover). Depends on E1 (open-iscsi on nodes); document the
-      iscsi-installer DaemonSet as the interim fallback.
+- [x] **F1 — Longhorn Platform component.** `longhorn` added to the opt-in
+      Platform set (chart `longhorn` from `charts.longhorn.io`, ns
+      `longhorn-system`) — replicated block storage (RWO volumes with
+      node-to-node replication + snapshots), the tier NFS/local-path don't
+      cover. `#Platform.longhorn?` schema entry + unit test (chart/ns defaults,
+      values thread-through). Every node needs `open-iscsi`: install it via a
+      k3s worker pool's `nodePrep.packages` (**E2**, now shipped) — documented in
+      both the component comment and schema — or Longhorn's own iscsi-installer
+      DaemonSet as the interim fallback. Enabling is `platform.longhorn.enabled:
+      true`.
 
 ### G. Public exposure
 - [ ] **G1 — expose-app convenience.** A composite (or documented pattern)
