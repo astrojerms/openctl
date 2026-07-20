@@ -221,9 +221,17 @@ prerequisite (Longhorn); the rest are convenience + robustness.
       is an OIDC IdP; point `auth.oidc` at it (OIDC backend shipped #110).
 
 ### I. GitOps
-- [ ] **I1 — plan-on-PR (optional).** Surface a dry-run diff on a pull request
-      before merge, for a PR-gated Driftless workflow (openctl reconciles on
-      merge/webhook today — B1–B3; PR-preview was deferred to Argo). Enhancement.
+- [x] **I1 — plan-on-PR.** A reusable GitHub Actions workflow template
+      (`examples/gitops-pr-plan/`, kept out of `.github/workflows/` so it doesn't
+      self-activate on openctl's own repo) that runs `openctl plan` (K7) on every
+      PR touching manifests and posts the apply order + `$ref` dependency graph
+      as a **sticky** PR comment — the PR-gated front half of the DriftlessAF
+      loop (openctl reconciles on merge/webhook via B1–B3). Offline (no
+      controller), self-contained (only `gh` + `pull-requests: write`), and a
+      dependency **cycle** makes `openctl plan` exit non-zero → the check fails
+      and blocks merge. README covers adoption. Per-resource dry-run **diffs**
+      stay server-only (K7) and are intentionally out of scope for this offline
+      preview.
 
 ### J. App catalog / examples
 - [x] **J1 — example manifests** under `examples/homelab/` — the full stack

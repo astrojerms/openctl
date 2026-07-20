@@ -1,0 +1,87 @@
+# openctl plan-on-PR — a reusable GitHub Actions workflow TEMPLATE.
+#
+# Copy this into YOUR infra repo at .github/workflows/openctl-plan.yml. It runs
+# `openctl plan` on every pull request that touches your manifests and posts the
+# apply order + $ref dependency graph as a sticky PR comment, so a reviewer sees
+# "what will happen, in what order, and what waits on what" before merge — the
+# PR-gated half of the DriftlessAF loop (openctl reconciles on merge/webhook;
+# see manifests.gitops in the controller config).
+#
+# It is offline: `openctl plan` needs no controller connection. Per-resource
+# dry-run diffs are server-only and are NOT included (see docs/gitops-modes.md
+# and the K7 plan-preview notes). A dependency cycle makes `openctl plan` exit
+# non-zero, which fails the check and blocks the merge.
+#
+# It lives under examples/ in the openctl repo on purpose — it must NOT run on
+# openctl's own repo; it's a template for yours.
+name: openctl plan
+
+on:
+  pull_request:
+    # Adjust to where your manifests live.
+    paths:
+      - "manifests/**"
+      - "**/*.cue"
+      - "**/*.yaml"
+      - "**/*.yml"
+
+permissions:
+  contents: read
+  pull-requests: write # to post/update the sticky comment
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    env:
+      # Directory (or space-separated -f args) to plan. Override as needed.
+      MANIFESTS: manifests
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Install openctl
+        # Pin @vX.Y.Z for reproducible checks once you track a release.
+        run: go install github.com/openctl/openctl/cmd/openctl@latest
+
+      - name: Run openctl plan
+        id: plan
+        run: |
+          set +e
+          out="$(openctl plan -f "$MANIFESTS" 2>&1)"
+          code=$?
+          set -e
+          echo "$out"
+          # Stash the output for the comment step (multiline-safe).
+          {
+            echo 'output<<PLAN_EOF'
+            echo "$out"
+            echo 'PLAN_EOF'
+          } >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+      - name: Post sticky PR comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          OUT: ${{ steps.plan.outputs.output }}
+          CODE: ${{ steps.plan.outputs.code }}
+        run: |
+          marker='<!-- openctl-plan -->'
+          if [ "$CODE" = "0" ]; then status='✅ plan computed'; else status='❌ plan failed (see below — a dependency cycle blocks merge)'; fi
+          body="$(printf '%s\n### openctl plan — %s\n\n```\n%s\n```\n' "$marker" "$status" "$OUT")"
+          # Sticky: update an existing openctl-plan comment if present, else create.
+          cid="$(gh api "repos/$REPO/issues/$PR/comments" --jq ".[] | select(.body | contains(\"$marker\")) | .id" | head -n1)"
+          if [ -n "$cid" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$cid" -f body="$body" >/dev/null
+          else
+            gh api -X POST "repos/$REPO/issues/$PR/comments" -f body="$body" >/dev/null
+          fi
+
+      - name: Fail the check on a plan error
+        if: always()
+        run: exit ${{ steps.plan.outputs.code }}
