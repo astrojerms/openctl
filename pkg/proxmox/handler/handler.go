@@ -354,7 +354,9 @@ func (h *Handler) createVMFromTemplate(ctx context.Context, name, node string, s
 				snippetStorage = s
 			}
 		}
-		h.applyCloudInitVendorSnippet(ctx, node, vmid, snippetStorage, spec.CloudInit)
+		if err := h.applyCloudInitVendorSnippet(ctx, node, vmid, snippetStorage, spec.CloudInit); err != nil {
+			return nil, err
+		}
 	}
 
 	if spec.StartOnCreate {
@@ -375,34 +377,62 @@ func (h *Handler) createVMFromTemplate(ctx context.Context, name, node string, s
 // otherwise it uses the shared static qemu-agent snippet — the pre-existing,
 // metal-validated path, byte-identical.
 //
-// Every failure is non-fatal and surfaced via debug logs: a storage that can't
-// hold snippets (e.g. LVM) just means no agent/packages, not a failed create —
-// matching the prior behavior.
-func (h *Handler) applyCloudInitVendorSnippet(ctx context.Context, node string, vmid int, snippetStorage string, ci *resources.CloudInitSpec) {
+// The snippet storage is resolved automatically: `preferredStorage` is used
+// when it can hold snippets, otherwise the node's first snippets-capable
+// storage — so a node whose default/disk storage is LVM-only (which can't hold
+// snippets) still works, and the qemu-guest-agent snippet lands instead of
+// silently no-op'ing (which stalls DHCP-mode IP discovery for ~10 minutes).
+//
+// Failure handling depends on intent:
+//   - When the VM explicitly requested packages/runcmd, any failure (no
+//     snippets-capable storage, upload, config) is FATAL and returned — the
+//     user asked for node prep we can't deliver, so fail fast at create rather
+//     than produce a silently-broken node.
+//   - For the best-effort qemu-guest-agent-only case (no packages/runcmd), a
+//     failure degrades gracefully (logged, nil) — matching the prior behavior.
+func (h *Handler) applyCloudInitVendorSnippet(ctx context.Context, node string, vmid int, preferredStorage string, ci *resources.CloudInitSpec) error {
+	custom := ci != nil && (len(ci.Packages) > 0 || len(ci.RunCmd) > 0)
+	// fail returns err when the caller explicitly requested packages/runcmd,
+	// else swallows it (best-effort agent snippet).
+	fail := func(err error) error {
+		if custom {
+			return err
+		}
+		debugf("applyCloudInitVendorSnippet: %v (best-effort agent snippet skipped)", err)
+		return nil
+	}
+
+	storages, err := h.client.ListNodeStorages(ctx, node)
+	if err != nil {
+		return fail(fmt.Errorf("list storages on %s: %w", node, err))
+	}
+	storage, ok := client.PickSnippetsStorage(storages, preferredStorage)
+	if !ok {
+		return fail(fmt.Errorf("no snippets-capable storage on node %q (cloud-init needs a storage with the \"snippets\" content type, e.g. \"local\")", node))
+	}
+
 	var snippetName string
-	if ci != nil && (len(ci.Packages) > 0 || len(ci.RunCmd) > 0) {
+	if custom {
 		content, err := client.RenderVendorData(ci.Packages, ci.RunCmd)
 		if err != nil {
-			debugf("applyCloudInitVendorSnippet: render vendor data: %v", err)
-			return
+			return fail(fmt.Errorf("render vendor data: %w", err))
 		}
 		snippetName = client.VendorSnippetName(vmid)
-		if err := h.client.UploadSnippet(ctx, node, snippetStorage, snippetName, content); err != nil {
-			debugf("applyCloudInitVendorSnippet: upload vendor snippet: %v", err)
-			return
+		if err := h.client.UploadSnippet(ctx, node, storage, snippetName, content); err != nil {
+			return fail(fmt.Errorf("upload vendor snippet: %w", err))
 		}
 	} else {
-		if err := h.client.EnsureQemuAgentSnippet(ctx, node, snippetStorage); err != nil {
-			debugf("applyCloudInitVendorSnippet: ensure agent snippet: %v", err)
-			return
+		if err := h.client.EnsureQemuAgentSnippet(ctx, node, storage); err != nil {
+			return fail(fmt.Errorf("ensure agent snippet: %w", err))
 		}
 		snippetName = client.QemuAgentSnippetName
 	}
-	cicustom := fmt.Sprintf("vendor=%s:snippets/%s", snippetStorage, snippetName)
+	cicustom := fmt.Sprintf("vendor=%s:snippets/%s", storage, snippetName)
 	debugf("applyCloudInitVendorSnippet: setting cicustom=%s", cicustom)
 	if err := h.client.ConfigureVM(ctx, node, vmid, map[string]any{"cicustom": cicustom}); err != nil {
-		debugf("applyCloudInitVendorSnippet: set cicustom: %v", err)
+		return fail(fmt.Errorf("set cicustom: %w", err))
 	}
+	return nil
 }
 
 func primaryDiskStorage(spec *resources.VMSpec) string {
@@ -508,7 +538,9 @@ func (h *Handler) createVMFromCloudImage(ctx context.Context, name, node string,
 	// detection, plus any requested packages/runcmd). Using vendor= (not
 	// user=) so it merges with Proxmox's generated cloud-init user-data
 	// instead of replacing it.
-	h.applyCloudInitVendorSnippet(ctx, node, vmid, spec.CloudImage.Storage, spec.CloudInit)
+	if err := h.applyCloudInitVendorSnippet(ctx, node, vmid, spec.CloudImage.Storage, spec.CloudInit); err != nil {
+		return nil, err
+	}
 
 	// Regenerate cloud-init with new settings (error ignored - non-fatal)
 	if spec.CloudInit != nil {

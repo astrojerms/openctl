@@ -550,16 +550,21 @@ plan/state); harden the provider contract before the ecosystem widens.
       no-ops when the disk storage is `local-lvm` (LVM storages can't hold
       `snippets` content). Use a static `ip=…` or a snippet-capable storage
       until the QGA-install path is hardened (follow-up below).
-- [~] **Bootstrap QGA robustness (follow-up).** `EnsureQemuAgentSnippet`
-      needs a `snippets`-capable storage; on a `local-lvm`-only node it
-      no-ops, so DHCP-mode bootstrap can't discover the VM's IP. *Done:* the
-      DHCP IP-wait timeout now fails with an **actionable** error naming the
-      likely cause (qemu-guest-agent not running) and the static-IP
-      workaround, instead of a bare timeout. *Remaining (the real fix):*
-      install qemu-guest-agent without depending on the disk storage — pick a
-      snippets-capable storage automatically (the proxmox client now has
-      `ListNodeStorages`), or fail fast at create time when no such storage
-      exists rather than after a 10-minute IP-wait.
+- [x] **Bootstrap QGA robustness (follow-up) — FIXED.** `EnsureQemuAgentSnippet`
+      needed a `snippets`-capable storage; on a `local-lvm`-only node it
+      no-op'd, so DHCP-mode bootstrap couldn't discover the VM's IP. *Earlier:*
+      the DHCP IP-wait timeout fails with an **actionable** error naming the
+      likely cause + the static-IP workaround. *Now the real fix:* the
+      cloud-init snippet path **auto-selects a snippets-capable storage** —
+      `client.PickSnippetsStorage` (pure, unit-tested) prefers the configured
+      storage when it can hold snippets, else the node's first snippets-capable
+      one; the handler resolves it via `ListNodeStorages` before uploading. So a
+      node whose default/disk storage is LVM-only still gets its qemu-guest-agent
+      (and E1 packages/runcmd) snippet on `local`. When a VM **explicitly**
+      requested `packages`/`runcmd` and the node has **no** snippets-capable
+      storage, create now **fails fast** with a clear error instead of producing
+      a silently-broken node; the agent-only case still degrades gracefully.
+      Also hardens the E1 per-VM vendor snippet, which shares this path.
 - [x] **Bug: Cluster apply doesn't detect an out-of-band child-VM
       deletion — FIXED.** Surfaced 2026-07-07 recovering a k3s worker whose
       VM had been deleted outside openctl: Cluster `Get` reported `Ready`

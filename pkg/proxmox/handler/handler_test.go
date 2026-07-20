@@ -363,6 +363,11 @@ func TestCreateVMUploadsPerVMVendorSnippet(t *testing.T) {
 			}})
 		case r.URL.Path == "/api2/json/cluster/nextid" && r.Method == "GET":
 			json.NewEncoder(w).Encode(map[string]any{"data": "200"})
+		case r.URL.Path == "/api2/json/nodes/pve1/storage" && r.Method == "GET":
+			json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{
+				{"storage": "local", "type": "dir", "content": "snippets,vztmpl,iso", "active": 1},
+				{"storage": "local-lvm", "type": "lvmthin", "content": "images,rootdir", "active": 1},
+			}})
 		case r.URL.Path == "/api2/json/nodes/pve1/qemu/9000/clone" && r.Method == "POST":
 			json.NewEncoder(w).Encode(map[string]any{"data": ""})
 		case r.URL.Path == "/api2/json/nodes/pve1/storage/local/upload" && r.Method == "POST":
@@ -428,6 +433,112 @@ func TestCreateVMUploadsPerVMVendorSnippet(t *testing.T) {
 	}
 	if cicustom != "vendor=local:snippets/openctl-vendor-200.yaml" {
 		t.Errorf("cicustom = %q, want vendor=local:snippets/openctl-vendor-200.yaml", cicustom)
+	}
+}
+
+// snippetHardeningServer is a create-path fake whose /storage response is
+// configurable, so tests can exercise auto-selection and the no-snippets case.
+// It records the upload target storage and the cicustom value.
+func snippetHardeningServer(t *testing.T, storageData []map[string]any, uploadStorage *string, cicustom *string) *httptest.Server {
+	t.Helper()
+	return httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api2/json/nodes" && r.Method == "GET":
+			json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"node": "pve1"}}})
+		case r.URL.Path == "/api2/json/nodes/pve1/qemu" && r.Method == "GET":
+			json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{
+				{"vmid": 9000, "name": "ubuntu-template", "template": 1, "status": "stopped"},
+			}})
+		case r.URL.Path == "/api2/json/cluster/nextid" && r.Method == "GET":
+			json.NewEncoder(w).Encode(map[string]any{"data": "200"})
+		case r.URL.Path == "/api2/json/nodes/pve1/storage" && r.Method == "GET":
+			json.NewEncoder(w).Encode(map[string]any{"data": storageData})
+		case r.URL.Path == "/api2/json/nodes/pve1/qemu/9000/clone" && r.Method == "POST":
+			json.NewEncoder(w).Encode(map[string]any{"data": ""})
+		case strings.HasSuffix(r.URL.Path, "/upload") && r.Method == "POST":
+			// /api2/json/nodes/pve1/storage/<storage>/upload
+			parts := strings.Split(r.URL.Path, "/")
+			*uploadStorage = parts[len(parts)-2]
+			json.NewEncoder(w).Encode(map[string]any{"data": ""})
+		case r.URL.Path == "/api2/json/nodes/pve1/qemu/200/config":
+			if err := r.ParseForm(); err != nil {
+				t.Fatalf("ParseForm: %v", err)
+			}
+			if c := r.Form.Get("cicustom"); c != "" {
+				*cicustom = c
+			}
+			json.NewEncoder(w).Encode(map[string]any{"data": ""})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+}
+
+func createVMWithPackages(t *testing.T, h *Handler) (*protocol.Response, error) {
+	t.Helper()
+	return h.Handle(context.Background(), &protocol.Request{
+		Version:      protocol.ProtocolVersion,
+		Action:       protocol.ActionCreate,
+		ResourceType: "VirtualMachine",
+		Manifest: &protocol.Resource{
+			APIVersion: "proxmox.openctl.io/v1",
+			Kind:       "VirtualMachine",
+			Metadata:   protocol.ResourceMetadata{Name: "longhorn-node"},
+			Spec: map[string]any{
+				"node":      "pve1",
+				"template":  map[string]any{"name": "ubuntu-template"},
+				"cloudInit": map[string]any{"packages": []any{"open-iscsi"}},
+			},
+		},
+	})
+}
+
+// TestCreateVMAutoSelectsSnippetsStorage: the preferred/default storage is
+// LVM-only (no snippets), so the vendor snippet must land on the node's
+// snippets-capable storage instead of silently failing.
+func TestCreateVMAutoSelectsSnippetsStorage(t *testing.T) {
+	var uploadStorage, cicustom string
+	server := snippetHardeningServer(t, []map[string]any{
+		{"storage": "local-lvm", "type": "lvmthin", "content": "images,rootdir", "active": 1},
+		{"storage": "local", "type": "dir", "content": "snippets,vztmpl", "active": 1},
+	}, &uploadStorage, &cicustom)
+	defer server.Close()
+
+	// Default storage is the LVM one (can't hold snippets).
+	h := New(&protocol.ProviderConfig{Endpoint: server.URL, TokenID: "t", TokenSecret: "s", Node: "pve1",
+		Defaults: map[string]string{"storage": "local-lvm"}})
+	resp, err := createVMWithPackages(t, h)
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if resp.Status != protocol.StatusSuccess {
+		t.Fatalf("status = %s, resp=%+v", resp.Status, resp)
+	}
+	if uploadStorage != "local" {
+		t.Errorf("uploaded to %q, want local (auto-selected snippets-capable storage)", uploadStorage)
+	}
+	if cicustom != "vendor=local:snippets/openctl-vendor-200.yaml" {
+		t.Errorf("cicustom = %q, want vendor=local:snippets/openctl-vendor-200.yaml", cicustom)
+	}
+}
+
+// TestCreateVMFailsFastWhenNoSnippetsStorage: packages/runcmd were explicitly
+// requested but the node has no snippets-capable storage, so create must fail
+// fast with an actionable error rather than produce a silently-broken node.
+func TestCreateVMFailsFastWhenNoSnippetsStorage(t *testing.T) {
+	var uploadStorage, cicustom string
+	server := snippetHardeningServer(t, []map[string]any{
+		{"storage": "local-lvm", "type": "lvmthin", "content": "images,rootdir", "active": 1},
+	}, &uploadStorage, &cicustom)
+	defer server.Close()
+
+	h := New(&protocol.ProviderConfig{Endpoint: server.URL, TokenID: "t", TokenSecret: "s", Node: "pve1"})
+	_, err := createVMWithPackages(t, h)
+	if err == nil {
+		t.Fatal("expected a fail-fast error when no snippets-capable storage exists")
+	}
+	if !strings.Contains(err.Error(), "snippets") {
+		t.Errorf("error should mention snippets storage, got: %v", err)
 	}
 }
 

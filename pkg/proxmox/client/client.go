@@ -135,6 +135,42 @@ func (c *Client) ListNodeStorages(ctx context.Context, node string) ([]*NodeStor
 	return out, nil
 }
 
+// storageSupportsSnippets reports whether a storage lists the "snippets"
+// content type — required to host cloud-init user/vendor-data. LVM-backed
+// stores (local-lvm, etc.) can't; a "dir" store like "local" typically can.
+func storageSupportsSnippets(s *NodeStorage) bool {
+	for c := range strings.SplitSeq(s.Content, ",") {
+		if strings.TrimSpace(c) == "snippets" {
+			return true
+		}
+	}
+	return false
+}
+
+// PickSnippetsStorage chooses a storage that can hold cloud-init snippets from a
+// node's storage list. It prefers `preferred` when that storage exists and is
+// snippets-capable; otherwise it returns the first snippets-capable storage
+// (sorted by ID for determinism). ok is false when the node has none — callers
+// should fail fast at create time rather than after a long IP-discovery wait.
+// Pure (no network) so it is unit-testable independent of the API.
+func PickSnippetsStorage(storages []*NodeStorage, preferred string) (storage string, ok bool) {
+	var capable []string
+	for _, s := range storages {
+		if !storageSupportsSnippets(s) {
+			continue
+		}
+		if s.Storage == preferred {
+			return preferred, true
+		}
+		capable = append(capable, s.Storage)
+	}
+	if len(capable) == 0 {
+		return "", false
+	}
+	sort.Strings(capable)
+	return capable[0], true
+}
+
 // NodeBridge is a network bridge on a node, as returned by
 // /nodes/<node>/network?type=bridge.
 type NodeBridge struct {
