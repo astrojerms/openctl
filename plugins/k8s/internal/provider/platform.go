@@ -36,9 +36,14 @@ type component struct {
 	defaultNS    string
 }
 
-// platformComponents is the curated, opinionated set. Traefik is the ingress
-// (ingress-nginx is in maintenance; no Cilium-CNI dependency); cloudflared wires
-// a Cloudflare Tunnel to in-cluster services.
+// platformComponents is a set of named PRESETS — convenience defaults for
+// common charts, NOT an exclusive list. A preset only fills in default chart
+// coordinates so you enable it with `<name>: {enabled: true}`; the generic
+// `components` map (see enabledComponents) installs ANY chart without a code
+// change, which is the primary, Terraform-provider-style path. Presets are
+// examples/shortcuts layered on top of that generic support, not baked-in
+// opinion. Traefik is the ingress (ingress-nginx is in maintenance; no
+// Cilium-CNI dependency); cloudflared wires a Cloudflare Tunnel to services.
 var platformComponents = []component{
 	{"traefik", "https://traefik.github.io/charts", "traefik", "traefik"},
 	{"cloudflared", "https://cloudflare.github.io/helm-charts", "cloudflare-tunnel-remote", "cloudflared"},
@@ -80,43 +85,105 @@ type componentRelease struct {
 	values map[string]any
 }
 
+// buildComponentRelease resolves one component from its raw spec block, layering
+// per-component overrides (namespace/chart/values/wait) over the supplied
+// defaults. For a named preset, def carries the default chart coords; for a
+// generic component, def is zero and the chart must be fully declared.
+func buildComponentRelease(name string, raw map[string]any, def component) componentRelease {
+	ns := specString(raw, "namespace")
+	if ns == "" {
+		ns = def.defaultNS
+	}
+	if ns == "" {
+		ns = name // generic component with no namespace → its own name
+	}
+	chart := chartSpec{Repo: def.defaultRepo, Name: def.defaultChart}
+	if cr, ok := raw["chart"].(map[string]any); ok {
+		if v := specString(cr, "repo"); v != "" {
+			chart.Repo = v
+		}
+		if v := specString(cr, "name"); v != "" {
+			chart.Name = v
+		}
+		chart.Version = specString(cr, "version")
+	}
+	values, _ := raw["values"].(map[string]any)
+	return componentRelease{
+		comp:  component{name: name, defaultRepo: chart.Repo, defaultChart: chart.Name, defaultNS: ns},
+		chart: chart,
+		opts: releaseOpts{
+			releaseName:     name,
+			namespace:       ns,
+			createNamespace: true,
+			values:          values,
+			wait:            specBool(raw, "wait"),
+			timeout:         5 * time.Minute,
+		},
+		values: values,
+	}
+}
+
 // enabledComponents parses the Platform spec into the set of enabled component
-// releases, applying per-component overrides over the curated defaults.
+// releases. Two sources feed it, both opt-in:
+//
+//   - Named PRESETS (platformComponents): enable with `<name>: {enabled: true}`;
+//     the preset supplies default chart coordinates, which the block may still
+//     override (chart/namespace/values/wait).
+//   - The generic `components` map: `components: {<name>: {chart: {repo, name,
+//     version?}, namespace?, values?, wait?, enabled?}}` installs ANY chart with
+//     no code change (the Terraform-provider-style path). `enabled` defaults
+//     true for a listed generic component (set false to disable without
+//     removing). A generic entry sharing a preset's name overrides it.
+//
+// Order is deterministic: presets in declaration order, then generic components
+// sorted by name; a generic override keeps the earlier slot.
 func enabledComponents(spec map[string]any) []componentRelease {
-	var out []componentRelease
+	byName := map[string]componentRelease{}
+	var order []string
+	put := func(name string, cr componentRelease) {
+		if _, seen := byName[name]; !seen {
+			order = append(order, name)
+		}
+		byName[name] = cr
+	}
+
 	for _, c := range platformComponents {
 		raw, _ := spec[c.name].(map[string]any)
 		if raw == nil || !specBool(raw, "enabled") {
 			continue
 		}
-		ns := specString(raw, "namespace")
-		if ns == "" {
-			ns = c.defaultNS
+		put(c.name, buildComponentRelease(c.name, raw, c))
+	}
+
+	if generic, ok := spec["components"].(map[string]any); ok {
+		names := make([]string, 0, len(generic))
+		for name := range generic {
+			names = append(names, name)
 		}
-		chart := chartSpec{Repo: c.defaultRepo, Name: c.defaultChart}
-		if cr, ok := raw["chart"].(map[string]any); ok {
-			if v := specString(cr, "repo"); v != "" {
-				chart.Repo = v
+		sort.Strings(names)
+		for _, name := range names {
+			raw, _ := generic[name].(map[string]any)
+			if raw == nil {
+				continue
 			}
-			if v := specString(cr, "name"); v != "" {
-				chart.Name = v
+			// enabled defaults true for a listed generic component; only an
+			// explicit false disables it.
+			if v, ok := raw["enabled"].(bool); ok && !v {
+				continue
 			}
-			chart.Version = specString(cr, "version")
+			cr := buildComponentRelease(name, raw, component{})
+			// Can't install without chart coordinates; skip (the CUE schema
+			// requires chart.repo + chart.name, so this is defensive).
+			if cr.chart.Repo == "" || cr.chart.Name == "" {
+				continue
+			}
+			put(name, cr)
 		}
-		values, _ := raw["values"].(map[string]any)
-		out = append(out, componentRelease{
-			comp:  c,
-			chart: chart,
-			opts: releaseOpts{
-				releaseName:     c.name,
-				namespace:       ns,
-				createNamespace: true,
-				values:          values,
-				wait:            specBool(raw, "wait"),
-				timeout:         5 * time.Minute,
-			},
-			values: values,
-		})
+	}
+
+	out := make([]componentRelease, 0, len(order))
+	for _, n := range order {
+		out = append(out, byName[n])
 	}
 	return out
 }
