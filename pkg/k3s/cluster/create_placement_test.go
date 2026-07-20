@@ -187,3 +187,66 @@ func TestGenerateDispatchRequests_GPU(t *testing.T) {
 		}
 	}
 }
+
+// TestGenerateDispatchRequests_NodePrep verifies a per-pool nodePrep block
+// stamps cloud-init packages/runcmd onto only that pool's node VMs (via the
+// operative create path), leaving other pools' cloudInit untouched.
+func TestGenerateDispatchRequests_NodePrep(t *testing.T) {
+	spec := &resources.ClusterSpec{
+		Compute: resources.ComputeSpec{
+			Provider: "proxmox",
+			Image:    resources.ImageSpec{Template: "ubuntu-template"},
+			Default:  resources.DefaultSizeSpec{CPUs: 2, MemoryMB: 4096, DiskGB: 40},
+		},
+		Nodes: resources.NodesSpec{
+			ControlPlane: resources.ControlPlaneSpec{Count: 1},
+			Workers: []resources.WorkerSpec{
+				{Name: "general", Count: 1},
+				{Name: "storage", Count: 1, NodePrep: &resources.NodePrepSpec{
+					Packages: []string{"open-iscsi"},
+					RunCmd:   []string{"systemctl enable iscsid"},
+				}},
+			},
+		},
+		SSH: resources.SSHSpec{User: "ubuntu"},
+	}
+
+	byID := map[string]*protocol.Resource{}
+	for _, req := range NewCreator("dev", spec, &protocol.ProviderConfig{}).GenerateDispatchRequests() {
+		byID[req.ID] = req.Manifest
+	}
+
+	// The storage worker's cloudInit carries the prereqs, preserving user.
+	storage := byID["vm-dev-storage-0"]
+	if storage == nil {
+		t.Fatalf("missing storage node request; got %v", byID)
+	}
+	ci, _ := storage.Spec["cloudInit"].(map[string]any)
+	if ci == nil || ci["user"] != "ubuntu" {
+		t.Fatalf("storage cloudInit missing/clobbered: %v", storage.Spec["cloudInit"])
+	}
+	if pkgs, _ := ci["packages"].([]string); len(pkgs) != 1 || pkgs[0] != "open-iscsi" {
+		t.Errorf("storage packages wrong: %v", ci["packages"])
+	}
+	if cmds, _ := ci["runcmd"].([]string); len(cmds) != 1 || cmds[0] != "systemctl enable iscsid" {
+		t.Errorf("storage runcmd wrong: %v", ci["runcmd"])
+	}
+
+	// The general worker and control plane must NOT get packages/runcmd.
+	for _, id := range []string{"vm-dev-cp-0", "vm-dev-general-0"} {
+		m := byID[id]
+		if m == nil {
+			t.Fatalf("missing %s", id)
+		}
+		ci, _ := m.Spec["cloudInit"].(map[string]any)
+		if ci == nil {
+			t.Fatalf("%s missing cloudInit", id)
+		}
+		if _, ok := ci["packages"]; ok {
+			t.Errorf("%s should not have cloudInit.packages", id)
+		}
+		if _, ok := ci["runcmd"]; ok {
+			t.Errorf("%s should not have cloudInit.runcmd", id)
+		}
+	}
+}

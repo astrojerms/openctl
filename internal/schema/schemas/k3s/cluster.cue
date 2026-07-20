@@ -96,6 +96,16 @@ import "openctl.io/schemas/base"
 	cpuType?: string | *"host"
 }
 
+// #NodePrep installs host prerequisites on every node in a pool via the node
+// VM's cloud-init — e.g. "open-iscsi" for a Longhorn storage pool. Rendered
+// into a cloud-init vendor snippet by the Proxmox provider.
+#NodePrep: {
+	// Host packages installed on first boot (package index refreshed first).
+	packages?: [...string]
+	// First-boot shell commands, run after qemu-guest-agent is enabled.
+	runcmd?: [...string]
+}
+
 #ClusterSpec: {
 	// Which infrastructure provider runs the VMs. Currently only
 	// "proxmox" is implemented; other providers may follow.
@@ -152,6 +162,9 @@ import "openctl.io/schemas/base"
 			// GPU/PCI passthrough for the control-plane VMs. Rare (GPUs usually
 			// belong on workers) but supported for symmetry.
 			gpu?: #GPU
+			// Host prerequisites (packages/runcmd) installed on the
+			// control-plane VMs via cloud-init.
+			nodePrep?: #NodePrep
 		}
 		// Worker (agent) node pools. Each pool can have its own size.
 		workers?: [...{
@@ -172,6 +185,9 @@ import "openctl.io/schemas/base"
 			// GPU/PCI passthrough for every node in this pool. Pin the pool to
 			// the host(s) with the device via nodes/targets.
 			gpu?: #GPU
+			// Host prerequisites (packages/runcmd) installed on every node in
+			// this pool via cloud-init — e.g. open-iscsi for a Longhorn pool.
+			nodePrep?: #NodePrep
 		}]
 	}
 

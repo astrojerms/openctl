@@ -120,6 +120,20 @@ type PCIDevice struct {
 	MDev       string `json:"mdev,omitempty"`
 }
 
+// NodePrepSpec installs host prerequisites on every node in a pool via the
+// underlying VM's cloud-init (packages + first-boot commands). Use it for node
+// dependencies that must exist before workloads land — e.g. `open-iscsi` for
+// Longhorn. Stamped onto each node VM's `cloudInit` block, which the Proxmox
+// provider renders into a cloud-init vendor snippet (see E1). Proxmox-specific.
+type NodePrepSpec struct {
+	// Packages are host packages installed on first boot (with the package
+	// index refreshed first).
+	Packages []string `json:"packages,omitempty"`
+	// RunCmd are first-boot shell commands, run after the node's
+	// qemu-guest-agent enablement.
+	RunCmd []string `json:"runcmd,omitempty"`
+}
+
 // NodesSpec defines the cluster nodes
 type NodesSpec struct {
 	ControlPlane ControlPlaneSpec `json:"controlPlane"`
@@ -146,6 +160,9 @@ type ControlPlaneSpec struct {
 	// GPU requests PCI/GPU passthrough for the control-plane VMs. Rare — GPUs
 	// usually belong on workers — but supported for symmetry.
 	GPU *GPUSpec `json:"gpu,omitempty"`
+	// NodePrep installs host prerequisites (packages/runcmd) on the
+	// control-plane VMs via cloud-init.
+	NodePrep *NodePrepSpec `json:"nodePrep,omitempty"`
 }
 
 // WorkerSpec defines a worker node pool
@@ -165,6 +182,9 @@ type WorkerSpec struct {
 	// pool of one node that runs a local model). Pin the pool to the host(s)
 	// with the device via Nodes/Targets.
 	GPU *GPUSpec `json:"gpu,omitempty"`
+	// NodePrep installs host prerequisites (packages/runcmd) on every node in
+	// this pool via cloud-init — e.g. `open-iscsi` for a Longhorn storage pool.
+	NodePrep *NodePrepSpec `json:"nodePrep,omitempty"`
 }
 
 // K3sSpec defines K3s configuration
@@ -243,6 +263,9 @@ func ParseClusterSpec(r *protocol.Resource) (*ClusterSpec, error) {
 			if gpu, ok := cp["gpu"].(map[string]any); ok {
 				spec.Nodes.ControlPlane.GPU = parseGPUSpec(gpu)
 			}
+			if np, ok := cp["nodePrep"].(map[string]any); ok {
+				spec.Nodes.ControlPlane.NodePrep = parseNodePrepSpec(np)
+			}
 		}
 		if workers, ok := nodes["workers"].([]any); ok {
 			for _, w := range workers {
@@ -264,6 +287,9 @@ func ParseClusterSpec(r *protocol.Resource) (*ClusterSpec, error) {
 					ws.Targets = parsePlacementTargets(worker["targets"])
 					if gpu, ok := worker["gpu"].(map[string]any); ok {
 						ws.GPU = parseGPUSpec(gpu)
+					}
+					if np, ok := worker["nodePrep"].(map[string]any); ok {
+						ws.NodePrep = parseNodePrepSpec(np)
 					}
 					spec.Nodes.Workers = append(spec.Nodes.Workers, ws)
 				}
@@ -506,6 +532,68 @@ func ApplyGPUToVMSpec(vmSpec map[string]any, gpu *GPUSpec) {
 	}
 	if len(devices) > 0 {
 		vmSpec["hostPCI"] = devices
+	}
+}
+
+// parseNodePrepSpec parses a pool's nodePrep block (packages + runcmd) from the
+// untyped manifest map. Returns nil-safe empty slices; callers no-op on empty.
+func parseNodePrepSpec(m map[string]any) *NodePrepSpec {
+	np := &NodePrepSpec{}
+	if pkgs, ok := m["packages"].([]any); ok {
+		for _, p := range pkgs {
+			if pkg, ok := p.(string); ok {
+				np.Packages = append(np.Packages, pkg)
+			}
+		}
+	}
+	if cmds, ok := m["runcmd"].([]any); ok {
+		for _, c := range cmds {
+			if cmd, ok := c.(string); ok {
+				np.RunCmd = append(np.RunCmd, cmd)
+			}
+		}
+	}
+	return np
+}
+
+// NodePrepForNode resolves the node-prep config for node index i (across the
+// flat control-plane-then-workers ordering NodeNames produces), or nil when the
+// node's pool requests none. Mirrors GPUForNode so both VM-build paths stay in
+// sync.
+func NodePrepForNode(i, cpCount int, spec *ClusterSpec) *NodePrepSpec {
+	if i < cpCount {
+		return spec.Nodes.ControlPlane.NodePrep
+	}
+	workerIdx := i - cpCount
+	for _, pool := range spec.Nodes.Workers {
+		if workerIdx < pool.Count {
+			return pool.NodePrep
+		}
+		workerIdx -= pool.Count
+	}
+	return nil
+}
+
+// ApplyNodePrepToVMSpec stamps a pool's host prerequisites onto a node VM's
+// cloud-init block (packages + runcmd), which the Proxmox provider renders into
+// a cloud-init vendor snippet. No-op when np is nil or carries nothing. Shared
+// by both VM-build paths (create.go and the Plan mirror) so nodes come out
+// identical. It writes into the existing vmSpec["cloudInit"] map (built by both
+// paths just before this call), preserving user/sshKeys/ipConfig.
+func ApplyNodePrepToVMSpec(vmSpec map[string]any, np *NodePrepSpec) {
+	if np == nil || (len(np.Packages) == 0 && len(np.RunCmd) == 0) {
+		return
+	}
+	ci, ok := vmSpec["cloudInit"].(map[string]any)
+	if !ok {
+		ci = map[string]any{}
+		vmSpec["cloudInit"] = ci
+	}
+	if len(np.Packages) > 0 {
+		ci["packages"] = np.Packages
+	}
+	if len(np.RunCmd) > 0 {
+		ci["runcmd"] = np.RunCmd
 	}
 }
 
