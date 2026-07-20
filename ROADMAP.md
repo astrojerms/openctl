@@ -215,10 +215,17 @@ prerequisite (Longhorn); the rest are convenience + robustness.
       merge/webhook today — B1–B3; PR-preview was deferred to Argo). Enhancement.
 
 ### J. App catalog / examples
-- [ ] **J1 — example manifests** for the target apps under `examples/`
-      (Ollama + Open WebUI on GPU, Jellyfin on NFS, MinIO, Authentik-as-SSO, a
-      static blog behind the tunnel) — the deploy-today path, documented
-      end-to-end. Not a code gap; lowers the activation energy.
+- [x] **J1 — example manifests** under `examples/homelab/` — the full stack
+      end-to-end: a GPU-capable k3s `Cluster` (`.cue`, `openctl validate`-checked
+      offline) with a GPU pool + a Longhorn-prepped storage pool (`nodePrep:
+      open-iscsi`); a `Platform` (traefik/cloudflared/longhorn/nfs/nvidia + a
+      generic `kube-prometheus-stack`); a Cloudflare `Tunnel` + `DNSRecord`s that
+      `$ref` its `cnameTarget`; and `HelmRelease`s for Ollama+Open WebUI (GPU),
+      Jellyfin (NFS), MinIO, Authentik (SSO). README walks the deploy-today path
+      and the three wiring mechanisms (`$ref` outputs, `$secret` credentials,
+      `nodePrep` prerequisites). Not a code gap; lowers activation energy. The
+      `.cue` cluster validates against the compiled-in schema; the plugin-kind
+      YAML is well-formed and schema-accurate.
 
 ## Architecture & consolidation (2026-07-13)
 

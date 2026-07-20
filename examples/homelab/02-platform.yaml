@@ -1,0 +1,69 @@
+# Platform: the opt-in infra layer for the cluster — ingress, tunnel, storage
+# classes, GPU scheduling. Each enabled component installs one Helm release.
+# Nothing is enabled by default; this is the homelab's chosen set.
+#
+# The kubeconfigPath $ref targets the k3s Cluster from 01-cluster.cue: openctl
+# resolves it to the on-disk kubeconfig path AND orders this apply after the
+# cluster is Ready.
+apiVersion: k8s.openctl.io/v1
+kind: Platform
+metadata:
+  name: home
+spec:
+  kubeconfigPath:
+    $ref:
+      apiVersion: k3s.openctl.io/v1
+      kind: Cluster
+      name: home
+      field: status.outputs.kubeconfigPath
+
+  # --- Named presets (default chart coords; enable with a flag) ---
+
+  # Ingress controller.
+  traefik:
+    enabled: true
+
+  # Cloudflare Tunnel connector. Its run token is pulled straight from the
+  # Tunnel's get-token action via the `action` $secret provider — no manual
+  # token copying, and only the marker is persisted (never the token).
+  cloudflared:
+    enabled: true
+    values:
+      cloudflare:
+        tunnel_token:
+          $secret:
+            provider: action
+            key: "cloudflare.openctl.io/v1/Tunnel/home#get-token"
+
+  # Replicated block storage. The storage worker pool already has open-iscsi
+  # (see 01-cluster.cue nodePrep), which Longhorn requires.
+  longhorn:
+    enabled: true
+    values:
+      defaultSettings:
+        defaultReplicaCount: 2
+
+  # Dynamic NFS-backed StorageClass off the Synology (media, Home Assistant).
+  nfsProvisioner:
+    enabled: true
+    values:
+      nfs:
+        server: "192.168.1.10"
+        path: "/volume1/k8s"
+
+  # Advertise nvidia.com/gpu on the GPU pool so Ollama can request one.
+  nvidiaDevicePlugin:
+    enabled: true
+
+  # --- Generic components: any chart, no code change (K4a) ---
+  # These install exactly like the presets but aren't baked into openctl.
+  components:
+    kube-prometheus-stack:
+      chart:
+        repo: https://prometheus-community.github.io/helm-charts
+        name: kube-prometheus-stack
+        version: "65.0.0"
+      namespace: monitoring
+      values:
+        grafana:
+          enabled: true

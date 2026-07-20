@@ -1,0 +1,94 @@
+# The rest of the self-hosted stack, each a stock Helm chart onto the same
+# cluster: Jellyfin (media, on NFS), MinIO (S3-compatible object store, on
+# Longhorn), and Authentik (the SSO IdP — also openctl's own OIDC provider via
+# auth.oidc). Exposed through Traefik + the Tunnel (see 03/04).
+apiVersion: k8s.openctl.io/v1
+kind: HelmRelease
+metadata:
+  name: jellyfin
+spec:
+  kubeconfigPath:
+    $ref:
+      apiVersion: k3s.openctl.io/v1
+      kind: Cluster
+      name: home
+      field: status.outputs.kubeconfigPath
+  namespace: media
+  createNamespace: true
+  chart:
+    repo: https://jellyfin.github.io/jellyfin-helm
+    name: jellyfin
+    version: "2.3.0"
+  values:
+    persistence:
+      config:
+        storageClass: longhorn
+        size: 10Gi
+      # Media library lives on the NFS share (nfsProvisioner StorageClass).
+      media:
+        storageClass: nfs-client
+        size: 2Ti
+    ingress:
+      enabled: true
+      hosts:
+        - host: jellyfin.example.com
+          paths: [{path: "/"}]
+---
+apiVersion: k8s.openctl.io/v1
+kind: HelmRelease
+metadata:
+  name: minio
+spec:
+  kubeconfigPath:
+    $ref:
+      apiVersion: k3s.openctl.io/v1
+      kind: Cluster
+      name: home
+      field: status.outputs.kubeconfigPath
+  namespace: minio
+  createNamespace: true
+  chart:
+    repo: https://charts.min.io
+    name: minio
+    version: "5.4.0"
+  values:
+    mode: standalone
+    persistence:
+      enabled: true
+      storageClass: longhorn
+      size: 200Gi
+    # Prefer a $secret for the root credentials in a real deployment.
+    rootUser: admin
+    rootPassword:
+      $secret:
+        provider: vault
+        key: "secret/data/minio#rootPassword"
+---
+apiVersion: k8s.openctl.io/v1
+kind: HelmRelease
+metadata:
+  name: authentik
+spec:
+  kubeconfigPath:
+    $ref:
+      apiVersion: k3s.openctl.io/v1
+      kind: Cluster
+      name: home
+      field: status.outputs.kubeconfigPath
+  namespace: authentik
+  createNamespace: true
+  chart:
+    repo: https://charts.goauthentik.io
+    name: authentik
+    version: "2024.10.1"
+  values:
+    authentik:
+      secret_key:
+        $secret:
+          provider: vault
+          key: "secret/data/authentik#secretKey"
+    server:
+      ingress:
+        enabled: true
+        hosts:
+          - auth.example.com

@@ -1,0 +1,50 @@
+# Public DNS: one CNAME per app, each pointing at the Tunnel. Instead of
+# hand-copying "<tunnel-id>.cfargotunnel.com", the content $refs the Tunnel's
+# status.cnameTarget — openctl resolves it at apply time (and orders each
+# record after the Tunnel). Change the tunnel and the records follow.
+#
+# One document per record (YAML --- separated).
+apiVersion: cloudflare.openctl.io/v1
+kind: DNSRecord
+metadata:
+  name: chat
+spec:
+  type: CNAME
+  name: "chat.example.com"
+  proxied: true
+  content:
+    $ref:
+      apiVersion: cloudflare.openctl.io/v1
+      kind: Tunnel
+      name: home
+      field: status.cnameTarget
+---
+apiVersion: cloudflare.openctl.io/v1
+kind: DNSRecord
+metadata:
+  name: jellyfin
+spec:
+  type: CNAME
+  name: "jellyfin.example.com"
+  proxied: true
+  content:
+    $ref:
+      apiVersion: cloudflare.openctl.io/v1
+      kind: Tunnel
+      name: home
+      field: status.cnameTarget
+---
+apiVersion: cloudflare.openctl.io/v1
+kind: DNSRecord
+metadata:
+  name: blog
+spec:
+  type: CNAME
+  name: "blog.example.com"
+  proxied: true
+  content:
+    $ref:
+      apiVersion: cloudflare.openctl.io/v1
+      kind: Tunnel
+      name: home
+      field: status.cnameTarget
