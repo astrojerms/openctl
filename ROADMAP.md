@@ -255,7 +255,7 @@ these are the corners where drift would start if it starts anywhere.
       helper). Switch the operative create onto the Plan path (the long-intended
       unification) so there's one source of VM shape. **Known unpaid debt.**
 
-- [ ] **K2 — One GitOps source-of-truth model.** git-as-source (B1–B3) was
+- [~] **K2 — One GitOps source-of-truth model.** git-as-source (B1–B3) was
       layered on top of git-as-sink (disk mirror + push), leaving overlapping
       machinery — disk mirror, push, pull, watcher, prune, drift reconciler,
       webhook — with subtle interactions (startup reconcile *re-materializes*
@@ -264,9 +264,19 @@ these are the corners where drift would start if it starts anywhere.
       is truth, git is a read-only audit mirror — no pull/prune) and **gitops**
       (the repo is truth — pull/apply/prune; the controller does NOT auto-commit
       desired specs, and startup does NOT revive missing files). One config
-      switch; only the machinery for the chosen mode runs. Write the invariants
-      down first (short design doc), then reconcile the code to them. Pairs with
-      K3 (gitops mode needs reliable `source=git`).
+      switch; only the machinery for the chosen mode runs.
+      - [x] **Design doc — SHIPPED.** [docs/gitops-modes.md](docs/gitops-modes.md)
+        fixes the invariants (exactly one mode; mirror never reads git; gitops
+        never writes desired specs / never revives files; drift reconciler is
+        mode-agnostic; prune trusts K3 provenance), the `manifests.mode:
+        mirror|gitops` config + contradictory-combo rejection, back-compat
+        (default `mirror`), a per-component code-reconciliation checklist, and a
+        test plan. The two known conflicts are resolved by the invariants.
+      - [ ] **Code reconciliation.** Implement the doc's checklist (add
+        `Manifests.Mode` + validation; branch the main.go wiring; gate
+        startup-revive + auto-commit to mirror mode; construct pull/prune/webhook
+        only in gitops mode). Best paired with real homelab validation of both
+        modes. Uses K3's `source=git` (shipped).
 
 - [x] **K3 — Make provenance explicit.** `applied_manifests` now carries a
       first-class `source` column (migration 0011). The dispatcher already
