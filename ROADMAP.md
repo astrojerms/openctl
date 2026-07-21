@@ -317,13 +317,19 @@ these are the corners where drift would start if it starts anywhere.
         add new methods (Kustomize, Flux, …) as new kinds/providers rather than
         bespoke code, so breadth comes from providers, not special cases.
 
-- [ ] **K5 — Re-baseline the scope wedge (`direction.md`).** The doc originally
-      vetoed workloads/PaaS ("stop at cluster-Ready"); the deployment model +
-      homelab workloads crossed that line deliberately (infra-IaC → homelab
-      PaaS). Decide + document on record which openctl is — infra IaC
-      (Terraform-like) with workloads as a **bounded** convenience, or a homelab
-      PaaS — so the next N features check against a rule instead of drifting
-      feature-by-feature. Frames K4.
+- [x] **K5 — Re-baseline the scope wedge (`direction.md`) — DECIDED: homelab
+      PaaS.** The doc originally vetoed workloads/PaaS ("stop at cluster-Ready");
+      the deployment model + homelab workloads crossed that line deliberately.
+      **Decision (user, 2026-07): openctl IS a bounded homelab PaaS** — infra
+      *and* the workloads a homelab runs on it, wired by `$ref`/`$secret`, bound
+      to "what a home lab needs" (the "AWS console for homelab" target), NOT a
+      general cloud PaaS. Deployment methods are providers (Helm/Manifest/
+      Kustomize/Argo as kinds) so breadth stays in the ecosystem; the
+      per-resource wedge (no global plan/state) still holds → PaaS-by-
+      composition. Recorded in `direction.md` (scope bullet + Tier-3 note). This
+      is the rule the next features check against — and it greenlights **K4(b)**
+      (deployment-methods-as-providers) and **G1** as first-class, not
+      "bounded convenience."
 
 - [x] **K6 — Providers declare their status/outputs.** `status` was fully open
       (`status?: _`), so `$ref` targets like `status.outputs.kubeconfigPath`

@@ -56,9 +56,19 @@ best portfolio story.
   can be extended to *any* infra provider over gold-plating Proxmox +
   k3s. openctl should lay down an interoperable substrate; providers
   plug into it.
-- **Infra, not workloads.** Explicitly **not** a workload/app platform
-  or PaaS — that's scope creep into a crowded space. Stop at "the
-  cluster is Ready; kubectl takes it from here."
+- **A bounded homelab PaaS** (re-baselined — K5, 2026-07). The original
+  line was "infra, not workloads — stop at cluster-Ready, kubectl takes it
+  from here." The deployment model (HelmRelease / Manifest / Platform /
+  Kustomize) and the homelab-workloads epics (GPU box, storage, node prep,
+  tunnel exposure) crossed that line **deliberately**, and this is now the
+  ratified scope: openctl **is** a homelab PaaS — infra *and* the workloads
+  a homelab runs on it, wired together by `$ref`/`$secret`. The bound is
+  **"what a home lab actually needs"** ("AWS console for homelab"), NOT a
+  general cloud PaaS competing with Heroku/Cloud Foundry. Deployment methods
+  are providers (Helm/Manifest/Kustomize/Argo as kinds), so breadth stays
+  in the plugin ecosystem rather than bespoke platform code. The per-resource
+  wedge still holds — no global plan/state — so this is PaaS-by-composition,
+  not a monolithic control plane.
 - **Run anywhere.** Workstation (dev convenience) → portable Linux
   daemon → in-cluster. Deliberately avoid Crossplane's chicken-and-egg
   (needing a k8s cluster to run the thing that manages your infra).
@@ -121,7 +131,10 @@ what the priority order below attacks.
 6. **Client-side CUE WASM validation** — pure editor-latency polish, off
    the critical path.
 7. **Mobile-friendly layout** — cosmetic.
-8. **Workloads / PaaS** — vetoed by scope (see above); keep it vetoed.
+8. **General cloud PaaS** — still out of scope. The homelab-PaaS
+   re-baseline (K5) brought *homelab* workloads in scope, but competing
+   with Heroku/Cloud Foundry for general app hosting is not the goal. Bound
+   workload features to "what a home lab needs."
 
 ### Cross-cutting, ongoing
 
