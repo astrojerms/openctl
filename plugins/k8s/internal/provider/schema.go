@@ -76,6 +76,35 @@ const manifestSchema = `
 }
 `
 
+// kustomizeSchema is the CUE schema for the Kustomize kind — a deployment
+// method as a provider (K4b). It renders a kustomization from an in-memory file
+// tree and applies the result like a Manifest.
+const kustomizeSchema = `
+#Kustomize: {
+	apiVersion: "k8s.openctl.io/v1"
+	kind:       "Kustomize"
+	metadata: {
+		name: string
+		...
+	}
+	spec: {
+		// See HelmRelease: supply exactly one of kubeconfigPath ($ref to a
+		// Cluster's status.outputs.kubeconfigPath) or kubeconfig (inline, $secret).
+		kubeconfigPath?: string
+		kubeconfig?:     string
+		// files is the kustomization tree: a map of relative path -> file content.
+		// It must include a kustomization.yaml at the build directory (see path),
+		// and may include the resource YAMLs, patches, and generator inputs it
+		// references. Rendered in-memory via kustomize build.
+		files: {[string]: string}
+		// path is the build directory within files (the dir holding
+		// kustomization.yaml). Defaults to "." (kustomization.yaml at the root).
+		path?: string
+	}
+	...
+}
+`
+
 // platformSchema is the CUE schema for the opt-in Platform composite: a curated,
 // infra-coupled platform layer. Nothing is enabled by default. Each component
 // installs a Helm release; disabling a previously-enabled one uninstalls it.
