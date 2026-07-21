@@ -89,3 +89,36 @@ const tunnelSchema = `
 	...
 }
 `
+
+// tunnelRouteSchema is the CUE schema for the TunnelRoute kind (G1): one app's
+// ingress rule contributed to a named Tunnel. Many TunnelRoutes share a Tunnel
+// without clobbering (the provider merges by hostname). Pair with a CNAME
+// DNSRecord that $refs the Tunnel's status.cnameTarget.
+const tunnelRouteSchema = `
+#TunnelRoute: {
+	apiVersion: "cloudflare.openctl.io/v1"
+	kind:       "TunnelRoute"
+	metadata: {
+		name: string
+		...
+	}
+	spec: {
+		// accountId is the Cloudflare account. Optional when the provider config
+		// sets defaults.accountId.
+		accountId?: string
+		// tunnel is the metadata.name of the Tunnel this route attaches to. The
+		// Tunnel must already exist (order this route after it).
+		tunnel: string
+		// hostname is the public name routed to the service (e.g.
+		// "chat.example.com"). Unique per tunnel — re-applying the same hostname
+		// updates its rule in place.
+		hostname: string
+		// service is the local origin the hostname maps to, e.g.
+		// "https://traefik.traefik.svc.cluster.local:443".
+		service: string
+		// path optionally scopes the rule to a URL path.
+		path?: string
+	}
+	...
+}
+`

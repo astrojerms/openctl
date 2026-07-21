@@ -148,6 +148,8 @@ func (f *fakeCF) handleTunnel(w http.ResponseWriter, r *http.Request, parts []st
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		f.configs[parts[3]] = body["config"]
 		f.ok(w, body)
+	case len(parts) == 5 && parts[4] == "configurations" && r.Method == "GET":
+		f.ok(w, map[string]any{"config": f.configs[parts[3]]})
 	case len(parts) == 5 && parts[4] == "token" && r.Method == "GET":
 		f.ok(w, "run-token-"+parts[3])
 	case len(parts) == 5 && parts[4] == "connections" && r.Method == "DELETE":
