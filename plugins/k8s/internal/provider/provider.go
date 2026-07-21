@@ -40,6 +40,7 @@ func (p *provider) Handshake(context.Context) (*pluginproto.HandshakeResult, err
 		Kinds: []pluginproto.KindInfo{
 			{Kind: kindHelmRelease, Schema: helmReleaseSchema},
 			{Kind: kindManifest, Schema: manifestSchema},
+			{Kind: kindKustomize, Schema: kustomizeSchema},
 			{Kind: kindPlatform, Schema: platformSchema},
 			{Kind: kindArgoApplications, Schema: argoApplicationsSchema},
 		},
@@ -119,12 +120,14 @@ func (p *provider) Apply(ctx context.Context, req pluginproto.ApplyParams) (*plu
 		return p.applyHelmRelease(m)
 	case kindManifest:
 		return p.applyManifest(ctx, m, req.State)
+	case kindKustomize:
+		return p.applyKustomize(ctx, m, req.State)
 	case kindPlatform:
 		return p.applyPlatform(ctx, m, req.State)
 	case kindArgoApplications:
 		return p.applyArgoApplications(ctx, m)
 	default:
-		return nil, pluginproto.Unsupported("k8s provider handles HelmRelease, Manifest and Platform, not " + m.Kind)
+		return nil, pluginproto.Unsupported("k8s provider handles HelmRelease, Manifest, Kustomize and Platform, not " + m.Kind)
 	}
 }
 
@@ -134,12 +137,14 @@ func (p *provider) Get(ctx context.Context, req pluginproto.GetParams) (*pluginp
 		return p.getHelmRelease(req)
 	case kindManifest:
 		return p.getManifest(ctx, req)
+	case kindKustomize:
+		return p.getKustomize(ctx, req)
 	case kindPlatform:
 		return p.getPlatform(ctx, req)
 	case kindArgoApplications:
 		return p.getArgoApplications(ctx, req)
 	default:
-		return nil, pluginproto.Unsupported("k8s provider handles HelmRelease, Manifest and Platform, not " + req.Kind)
+		return nil, pluginproto.Unsupported("k8s provider handles HelmRelease, Manifest, Kustomize and Platform, not " + req.Kind)
 	}
 }
 
@@ -147,7 +152,8 @@ func (p *provider) Delete(ctx context.Context, req pluginproto.DeleteParams) err
 	switch req.Kind {
 	case kindHelmRelease:
 		return p.deleteHelmRelease(req)
-	case kindManifest:
+	case kindManifest, kindKustomize:
+		// Identical: both delete the recorded object set.
 		return p.deleteManifest(ctx, req)
 	case kindPlatform:
 		return p.deletePlatform(ctx, req)
@@ -250,9 +256,19 @@ func (p *provider) applyManifest(ctx context.Context, m *protocol.Resource, prio
 	if manifestYAML == "" {
 		return nil, fmt.Errorf("spec.manifest is required for Manifest %q", m.Metadata.Name)
 	}
+	return p.applyObjectSet(ctx, m, content, path, manifestYAML, kindManifest, prior)
+}
+
+// applyObjectSet applies a rendered multi-document manifest to the cluster,
+// prunes objects that left the set since the prior apply, and records the
+// applied object refs as state. Shared by the Manifest kind (YAML from
+// spec.manifest) and the Kustomize kind (YAML from `kustomize build`) — both
+// are "a set of applied cluster objects", so their apply/get/delete/state are
+// identical apart from the rendered content and the kind label.
+func (p *provider) applyObjectSet(ctx context.Context, m *protocol.Resource, content []byte, path, manifestYAML, kind string, prior json.RawMessage) (*pluginproto.ApplyResult, error) {
 	objs, err := parseObjects(manifestYAML)
 	if err != nil {
-		return nil, fmt.Errorf("parse Manifest %q: %w", m.Metadata.Name, err)
+		return nil, fmt.Errorf("parse %s %q: %w", kind, m.Metadata.Name, err)
 	}
 	kc, err := newKubeClient(content)
 	if err != nil {
@@ -268,7 +284,7 @@ func (p *provider) applyManifest(ctx context.Context, m *protocol.Resource, prio
 		applied = append(applied, ref)
 	}
 
-	// Prune objects that were in prior state but left the manifest.
+	// Prune objects that were in prior state but left the rendered set.
 	var priorState manifestState
 	if len(prior) > 0 {
 		_ = json.Unmarshal(prior, &priorState)
@@ -280,16 +296,23 @@ func (p *provider) applyManifest(ctx context.Context, m *protocol.Resource, prio
 	}
 
 	st, _ := json.Marshal(manifestState{kubeconfigState: kubeconfigStateOf(content, path), Objects: applied})
-	return &pluginproto.ApplyResult{Resource: manifestObserved(m, applied), State: st}, nil
+	return &pluginproto.ApplyResult{Resource: manifestObserved(m, applied, kind), State: st}, nil
 }
 
 func (p *provider) getManifest(ctx context.Context, req pluginproto.GetParams) (*pluginproto.GetResult, error) {
+	return p.getObjectSet(ctx, req, kindManifest)
+}
+
+// getObjectSet reports the health of a previously-applied object set by probing
+// each recorded object in the cluster. Shared by Manifest and Kustomize (their
+// state is the same object-ref list); kind labels the returned resource.
+func (p *provider) getObjectSet(ctx context.Context, req pluginproto.GetParams, kind string) (*pluginproto.GetResult, error) {
 	var st manifestState
 	if len(req.State) > 0 {
 		_ = json.Unmarshal(req.State, &st)
 	}
 	if len(st.Objects) == 0 || !st.present() {
-		return nil, pluginproto.NotFound(fmt.Sprintf("Manifest %q has no prior state", req.Name))
+		return nil, pluginproto.NotFound(fmt.Sprintf("%s %q has no prior state", kind, req.Name))
 	}
 	kc, err := st.loadKubeconfig()
 	if err != nil {
@@ -309,7 +332,7 @@ func (p *provider) getManifest(ctx context.Context, req pluginproto.GetParams) (
 		}
 	}
 	if present == 0 {
-		return nil, pluginproto.NotFound(fmt.Sprintf("Manifest %q objects not found in cluster", req.Name))
+		return nil, pluginproto.NotFound(fmt.Sprintf("%s %q objects not found in cluster", kind, req.Name))
 	}
 	status := map[string]any{
 		"objects": names,
@@ -319,7 +342,7 @@ func (p *provider) getManifest(ctx context.Context, req pluginproto.GetParams) (
 	if present < len(st.Objects) {
 		status["phase"] = "Degraded"
 	}
-	r := &protocol.Resource{APIVersion: apiVersion, Kind: kindManifest, Status: status}
+	r := &protocol.Resource{APIVersion: apiVersion, Kind: kind, Status: status}
 	r.Metadata.Name = req.Name
 	return &pluginproto.GetResult{Resource: r, State: req.State}, nil
 }
@@ -453,7 +476,7 @@ func observedFromRelease(name string, rel *release.Release) *protocol.Resource {
 
 // manifestObserved builds the applied resource for a Manifest: spec echoes the
 // desired manifest (minus credentials), status lists the applied objects.
-func manifestObserved(m *protocol.Resource, refs []objectRef) *protocol.Resource {
+func manifestObserved(m *protocol.Resource, refs []objectRef, kind string) *protocol.Resource {
 	names := make([]string, 0, len(refs))
 	for _, r := range refs {
 		names = append(names, r.String())
@@ -467,7 +490,7 @@ func manifestObserved(m *protocol.Resource, refs []objectRef) *protocol.Resource
 	}
 	r := &protocol.Resource{
 		APIVersion: apiVersion,
-		Kind:       kindManifest,
+		Kind:       kind,
 		Spec:       spec,
 		Status:     map[string]any{"objects": names, "applied": len(refs), "phase": "Ready"},
 	}

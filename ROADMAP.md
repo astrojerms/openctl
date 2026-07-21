@@ -300,9 +300,9 @@ these are the corners where drift would start if it starts anywhere.
       column (`TestPrunerGuards`), child guard independent of source. **Unblocks
       K2** (gitops mode needs reliable `source=git`).
 
-- [~] **K4 — Generic Platform + deployment methods as providers.** The intent
-      for `Platform` is NOT a curated grab-bag of preferred charts but **generic
-      support**, Terraform-provider style.
+- [x] **K4 — Generic Platform + deployment methods as providers — COMPLETE.**
+      The intent for `Platform` is NOT a curated grab-bag of preferred charts but
+      **generic support**, Terraform-provider style.
       - [x] **(a) Data-declared components — SHIPPED.** Platform now installs
         ANY chart with no code change via a generic `components: {<name>:
         {chart: {repo, name, version?}, namespace?, values?, wait?, enabled?}}`
@@ -312,10 +312,18 @@ these are the corners where drift would start if it starts anywhere.
         path, not baked-in opinion. `enabledComponents` merges presets +
         generic deterministically; `#Platform.components?` schema. Tests: generic
         install, enabled:false + missing-chart skip, preset override, ordering.
-      - [ ] **(b) Deployment methods as providers.** Treat the deployment
-        **method** itself as a provider — Helm/Manifest/Argo are already kinds;
-        add new methods (Kustomize, Flux, …) as new kinds/providers rather than
-        bespoke code, so breadth comes from providers, not special cases.
+      - [x] **(b) Deployment methods as providers — SHIPPED.** Added a
+        **Kustomize** kind to plugins/k8s (alongside HelmRelease/Manifest/Argo),
+        proving deployment *methods* are just kinds. `spec.files` is an in-memory
+        kustomization tree rendered via `kustomize build`
+        (`sigs.k8s.io/kustomize/api` krusty over an in-memory filesystem — no temp
+        dirs, no network) into object YAML, then applied through the **shared**
+        Manifest object-apply/get/delete/prune core (`applyObjectSet`/
+        `getObjectSet` — a Kustomize is a Manifest whose content is computed).
+        `#Kustomize` schema. Tests: render (transforms, overlay build-dir,
+        invalid errors), `spec.files` parsing. Flux/others follow the same
+        pattern as future kinds, no framework change. Bounded per K5 (homelab
+        PaaS via methods-as-providers).
 
 - [ ] **K5 — Re-baseline the scope wedge (`direction.md`).** The doc originally
       vetoed workloads/PaaS ("stop at cluster-Ready"); the deployment model +

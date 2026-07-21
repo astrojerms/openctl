@@ -1,0 +1,60 @@
+# Kustomize deployment kind (K4b): a deployment *method* as a provider. The
+# spec.files map is an in-memory kustomization tree; openctl renders it with
+# `kustomize build` and applies the result onto the cluster the kubeconfigPath
+# $ref points at — the same object-apply path as the Manifest kind.
+apiVersion: k8s.openctl.io/v1
+kind: Kustomize
+metadata:
+  name: guestbook
+spec:
+  kubeconfigPath:
+    $ref:
+      apiVersion: k3s.openctl.io/v1
+      kind: Cluster
+      name: home
+      field: status.outputs.kubeconfigPath
+  # path defaults to "." (kustomization.yaml at the tree root).
+  files:
+    kustomization.yaml: |
+      namespace: guestbook
+      namePrefix: gb-
+      commonLabels:
+        app.kubernetes.io/part-of: guestbook
+      resources:
+        - namespace.yaml
+        - deployment.yaml
+        - service.yaml
+    namespace.yaml: |
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: guestbook
+    deployment.yaml: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: web
+      spec:
+        replicas: 2
+        selector:
+          matchLabels: { app: web }
+        template:
+          metadata:
+            labels: { app: web }
+          spec:
+            containers:
+              - name: web
+                image: registry.k8s.io/e2e-test-images/agnhost:2.53
+                args: ["netexec", "--http-port=8080"]
+                ports:
+                  - containerPort: 8080
+    service.yaml: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: web
+      spec:
+        selector: { app: web }
+        ports:
+          - port: 80
+            targetPort: 8080
