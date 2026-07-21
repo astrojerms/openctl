@@ -196,11 +196,22 @@ prerequisite (Longhorn); the rest are convenience + robustness.
       true`.
 
 ### G. Public exposure
-- [ ] **G1 — expose-app convenience.** A composite (or documented pattern)
-      that wires an in-cluster service to a public hostname in ONE place: the
-      Cloudflare Tunnel ingress rule + the CNAME `DNSRecord` (`$ref`
-      cnameTarget — already shipped #139). Removes the per-app two-resource
-      dance for blogs, sites, Jellyfin, Open WebUI, Authentik, etc.
+- [x] **G1 — expose-app convenience (TunnelRoute).** Decided **model C** (per
+      the K5 homelab-PaaS scope — a real primitive, not just docs). A Tunnel's
+      ingress is one ordered list, so managing it from N per-app resources would
+      clobber (last-writer-wins). New **`TunnelRoute`** kind in the cloudflare
+      provider contributes ONE host-scoped rule (`{tunnel, hostname, service,
+      path?}`) to a named Tunnel via a **read-modify-write keyed by hostname**
+      (`mergeIngressRule`/`removeIngressRule` — pure, keep a single trailing
+      catch-all), so many apps share one tunnel, each owning its own resource;
+      delete pulls just its rule. Get probes the live config for its hostname.
+      Pair with the app's CNAME `DNSRecord` (`$ref` the Tunnel's cnameTarget,
+      #139) — so "expose an app" is a self-contained per-app unit instead of
+      hand-editing the shared Tunnel. `#TunnelRoute` schema; unit-tested against
+      the fake CF API (aggregation: two routes coexist, delete leaves the other;
+      upsert-by-hostname; catch-all invariant). Concurrency caveat (documented):
+      routes to the *same* tunnel should apply serially (shared-config RMW).
+      Not yet validated against a real Cloudflare account (needs a token).
 
 ### H. Integrations (optional — deploying the app works without these)
 - [x] **H1 — Infisical `$secret` provider.** `secrets.InfisicalProvider`

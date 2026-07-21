@@ -49,6 +49,7 @@ func (p *provider) Handshake(context.Context) (*pluginproto.HandshakeResult, err
 		Kinds: []pluginproto.KindInfo{
 			{Kind: kindDNSRecord, Schema: dnsRecordSchema},
 			{Kind: kindTunnel, Schema: tunnelSchema, Actions: []string{actionGetToken}},
+			{Kind: kindTunnelRoute, Schema: tunnelRouteSchema},
 		},
 	}, nil
 }
@@ -76,8 +77,10 @@ func (p *provider) Apply(ctx context.Context, req pluginproto.ApplyParams) (*plu
 		return p.applyDNSRecord(ctx, m, req.State)
 	case kindTunnel:
 		return p.applyTunnel(ctx, m, req.State)
+	case kindTunnelRoute:
+		return p.applyTunnelRoute(ctx, m, req.State)
 	default:
-		return nil, pluginproto.Unsupported("cloudflare handles DNSRecord and Tunnel, not " + m.Kind)
+		return nil, pluginproto.Unsupported("cloudflare handles DNSRecord, Tunnel and TunnelRoute, not " + m.Kind)
 	}
 }
 
@@ -87,8 +90,10 @@ func (p *provider) Get(ctx context.Context, req pluginproto.GetParams) (*pluginp
 		return p.getDNSRecord(ctx, req.Name, req.State)
 	case kindTunnel:
 		return p.getTunnel(ctx, req.Name, req.State)
+	case kindTunnelRoute:
+		return p.getTunnelRoute(ctx, req.Name, req.State)
 	default:
-		return nil, pluginproto.Unsupported("cloudflare handles DNSRecord and Tunnel, not " + req.Kind)
+		return nil, pluginproto.Unsupported("cloudflare handles DNSRecord, Tunnel and TunnelRoute, not " + req.Kind)
 	}
 }
 
@@ -109,6 +114,8 @@ func (p *provider) Delete(ctx context.Context, req pluginproto.DeleteParams) err
 		return p.deleteDNSRecord(ctx, req.State)
 	case kindTunnel:
 		return p.deleteTunnel(ctx, req.State)
+	case kindTunnelRoute:
+		return p.deleteTunnelRoute(ctx, req.State)
 	default:
 		return nil
 	}

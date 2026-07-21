@@ -1,0 +1,31 @@
+# Expose one app publicly (G1). Per app, a self-contained pair:
+#   1. a TunnelRoute — contributes this app's ingress rule to the shared Tunnel
+#      (merged by hostname, so many apps coexist without clobbering the list).
+#   2. a CNAME DNSRecord — points the public hostname at the Tunnel, resolving
+#      the target from the Tunnel's status.cnameTarget via $ref (no hand-copying).
+#
+# The Tunnel itself (kind: Tunnel, name: home) is defined once elsewhere (see
+# examples/homelab/03-tunnel.yaml). Add a pair like this for each new app.
+apiVersion: cloudflare.openctl.io/v1
+kind: TunnelRoute
+metadata:
+  name: chat-route
+spec:
+  tunnel: home
+  hostname: chat.example.com
+  service: https://traefik.traefik.svc.cluster.local:443
+---
+apiVersion: cloudflare.openctl.io/v1
+kind: DNSRecord
+metadata:
+  name: chat-dns
+spec:
+  type: CNAME
+  name: chat.example.com
+  proxied: true
+  content:
+    $ref:
+      apiVersion: cloudflare.openctl.io/v1
+      kind: Tunnel
+      name: home
+      field: status.cnameTarget
