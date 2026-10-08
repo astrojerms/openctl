@@ -78,13 +78,15 @@ func TestApplyUnknownContextErrors(t *testing.T) {
 // configured endpoint, merged into one result set.
 func TestListMergesAcrossEndpoints(t *testing.T) {
 	srvA := mockProxmox(t, map[string]string{
-		"/api2/json/nodes":           `{"data":[{"node":"pveA","status":"online"}]}`,
-		"/api2/json/nodes/pveA/qemu": `{"data":[{"vmid":100,"name":"web-01","status":"running","node":"pveA","template":0}]}`,
+		"/api2/json/nodes":                      `{"data":[{"node":"pveA","status":"online"}]}`,
+		"/api2/json/nodes/pveA/qemu":            `{"data":[{"vmid":100,"name":"web-01","status":"running","node":"pveA","template":0}]}`,
+		"/api2/json/nodes/pveA/qemu/100/config": `{"data":{"cores":2,"sockets":1,"memory":"2048"}}`,
 	})
 	defer srvA.Close()
 	srvB := mockProxmox(t, map[string]string{
-		"/api2/json/nodes":           `{"data":[{"node":"pveB","status":"online"}]}`,
-		"/api2/json/nodes/pveB/qemu": `{"data":[{"vmid":200,"name":"cache-01","status":"running","node":"pveB","template":0}]}`,
+		"/api2/json/nodes":                      `{"data":[{"node":"pveB","status":"online"}]}`,
+		"/api2/json/nodes/pveB/qemu":            `{"data":[{"vmid":200,"name":"cache-01","status":"running","node":"pveB","template":0}]}`,
+		"/api2/json/nodes/pveB/qemu/200/config": `{"data":{"cores":2,"sockets":1,"memory":"2048"}}`,
 	})
 	defer srvB.Close()
 
@@ -115,8 +117,9 @@ func TestGetRoutesToOwningEndpoint(t *testing.T) {
 	})
 	defer srvA.Close()
 	srvB := mockProxmox(t, map[string]string{
-		"/api2/json/nodes":           `{"data":[{"node":"pveB","status":"online"}]}`,
-		"/api2/json/nodes/pveB/qemu": `{"data":[{"vmid":200,"name":"cache-01","status":"running","node":"pveB","template":0}]}`,
+		"/api2/json/nodes":                      `{"data":[{"node":"pveB","status":"online"}]}`,
+		"/api2/json/nodes/pveB/qemu":            `{"data":[{"vmid":200,"name":"cache-01","status":"running","node":"pveB","template":0}]}`,
+		"/api2/json/nodes/pveB/qemu/200/config": `{"data":{"cores":2,"sockets":1,"memory":"2048"}}`,
 	})
 	defer srvB.Close()
 

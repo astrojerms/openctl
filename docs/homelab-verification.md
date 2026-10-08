@@ -22,12 +22,12 @@ sees every VM on the node (so the collision guard can't be fooled) and its `-o
 yaml` surfaces the **vmid** — the field that proves an in-place resize did not
 recreate the VM.
 
-The verify VM is created **stopped** on purpose. A resize test doesn't need a
-booted guest, it's faster, and it keeps memory observation reliable: `proxmox
-get vms` reports a *running* VM's live `MaxMem`, which lags a config change until
-reboot — so a running VM would show the old memory even though the config was
-correctly updated. (This nuance was found on the first real-hardware run and is
-why the harness now creates stopped.)
+The verify VM is created **stopped** on purpose: booting a guest is unnecessary
+for a resize test and makes the harness slower. Get/List now report configured
+CPU/RAM from Proxmox's configuration API, even while a running guest still uses
+its pre-reboot allocation. Guest-visible resources can therefore differ until
+the guest applies the change or reboots; the configuration API is authoritative
+for validating the resize.
 
 ## Safety
 

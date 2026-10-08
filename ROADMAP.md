@@ -45,6 +45,14 @@ plugin protocol → Terraform/OpenTofu host → run-anywhere Linux daemon
 (OIDC slice) and CUE-WASM validation are parked behind that. (Mobile
 layout has since shipped.)
 
+**Proxmox VM observation correction (2026-10-08):** Get/List now decode numeric
+configuration strings and observe native managed settings instead of partial
+runtime inventory. Get/List/Watch and reconciliation share provider-owned drift
+semantics: declared disk/NIC slots matched by name, equivalent sizes normalized,
+creation/write-only inputs excluded, and read outages reported rather than
+mistaken for deletion. Root/plugin tests and a read-only homelab Get/List smoke
+on `dev-system` pass with zero drift; no VM configuration was changed.
+
 ## Homelab completion (COMPLETE — 2026-07-12)
 
 Backend-vs-vision gap audit for running the full homelab through openctl

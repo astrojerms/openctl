@@ -16,10 +16,8 @@ import (
 // nil result here regresses that contract (and would fail the shared
 // providertest conformance battery once proxmox is bound to it).
 //
-// This drives the apply-on-existing path: the VM "vm0" already exists, so the
-// handler's applyVM takes the no-op branch (returns observed state, no clone),
-// and Apply then reads it back. A permissive catch-all keeps incidental calls (config, guest-agent
-// IP) benign so the test asserts only the return-value contract.
+// The desired manifest only specifies placement; the returned resource must
+// still expose independently observed configured hardware.
 func TestApplyReturnsObservedVM(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -28,6 +26,8 @@ func TestApplyReturnsObservedVM(t *testing.T) {
 			_, _ = io.WriteString(w, `{"data":[{"node":"pve1","status":"online"}]}`)
 		case "/api2/json/nodes/pve1/qemu":
 			_, _ = io.WriteString(w, `{"data":[{"vmid":100,"name":"vm0","status":"running","node":"pve1","template":0}]}`)
+		case "/api2/json/nodes/pve1/qemu/100/config":
+			_, _ = io.WriteString(w, `{"data":{"cores":4,"sockets":1,"memory":"4096"}}`)
 		default:
 			// config / resize / agent-network-get / etc. — benign success so
 			// the update path completes without hitting an unhandled route.
@@ -52,7 +52,7 @@ func TestApplyReturnsObservedVM(t *testing.T) {
 	if got.Kind != kindVM || got.Metadata.Name != "vm0" {
 		t.Errorf("Apply returned %s/%s, want %s/vm0", got.Kind, got.Metadata.Name, kindVM)
 	}
-	if got.APIVersion == "" {
-		t.Error("Apply result APIVersion is empty; providers must stamp it")
+	if got.Spec["cpu"].(map[string]any)["cores"] != 4 || got.Spec["memory"].(map[string]any)["size"] != 4096 {
+		t.Errorf("Apply returned incomplete or invented hardware: %v", got.Spec)
 	}
 }

@@ -57,6 +57,23 @@ type ObservedOnly interface {
 	ObservedOnlyKinds() []string
 }
 
+// DriftProjector supplies provider-specific observation comparison semantics.
+// Creation-only and write-only inputs cannot be compared to live state, and
+// named collections may need alignment. Projections must not mutate either
+// spec or substitute desired values for missing live configuration.
+type DriftProjector interface {
+	DriftSpecs(kind string, desired, observed map[string]any) (map[string]any, map[string]any)
+}
+
+// DriftSpecs projects desired-versus-live comparison inputs. Manifest editing
+// and dry-run desired-versus-desired diffs must retain the original specs.
+func DriftSpecs(p Provider, kind string, desired, observed map[string]any) (map[string]any, map[string]any) {
+	if projector, ok := p.(DriftProjector); ok {
+		return projector.DriftSpecs(kind, desired, observed)
+	}
+	return desired, observed
+}
+
 // DryRunner is an optional provider capability for previewing what an
 // Apply would do without performing it. Composite providers (k3s Cluster
 // → VMs) implement this to surface per-child actions and the gates the

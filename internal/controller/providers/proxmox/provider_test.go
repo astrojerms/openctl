@@ -130,6 +130,9 @@ func TestProviderChildrenOfNodeReturnsVMs(t *testing.T) {
 		"/api2/json/nodes/pve2/qemu": `{"data":[
 			{"vmid":200,"name":"cache-01","status":"running","node":"pve2","template":0}
 		]}`,
+		"/api2/json/nodes/pve1/qemu/100/config": `{"data":{"cores":2,"sockets":1,"memory":"2048"}}`,
+		"/api2/json/nodes/pve1/qemu/101/config": `{"data":{"cores":2,"sockets":1,"memory":"2048"}}`,
+		"/api2/json/nodes/pve2/qemu/200/config": `{"data":{"cores":2,"sockets":1,"memory":"2048"}}`,
 	})
 	defer srv.Close()
 
@@ -161,8 +164,9 @@ func TestProviderChildrenOfNodeReturnsVMs(t *testing.T) {
 
 func TestProviderListReturnsVMs(t *testing.T) {
 	srv := mockProxmox(t, map[string]string{
-		"/api2/json/nodes":           `{"data":[{"node":"pve1","status":"online"}]}`,
-		"/api2/json/nodes/pve1/qemu": `{"data":[{"vmid":100,"name":"web-01","status":"running","node":"pve1","template":0},{"vmid":200,"name":"tpl-x","status":"stopped","node":"pve1","template":1}]}`,
+		"/api2/json/nodes":                      `{"data":[{"node":"pve1","status":"online"}]}`,
+		"/api2/json/nodes/pve1/qemu":            `{"data":[{"vmid":100,"name":"web-01","status":"running","node":"pve1","template":0},{"vmid":200,"name":"tpl-x","status":"stopped","node":"pve1","template":1}]}`,
+		"/api2/json/nodes/pve1/qemu/100/config": `{"data":{"cores":2,"sockets":1,"memory":"2048"}}`,
 	})
 	defer srv.Close()
 

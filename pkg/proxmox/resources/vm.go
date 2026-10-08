@@ -21,13 +21,7 @@ func VMToResourceWithIP(vm *client.VM, config *client.VMConfig, ip string) *prot
 	}
 
 	if config != nil {
-		spec["cpu"] = map[string]any{
-			"cores":   config.Cores,
-			"sockets": config.Sockets,
-		}
-		spec["memory"] = map[string]any{
-			"size": config.Memory,
-		}
+		observeVMConfig(spec, config)
 	} else {
 		spec["cpu"] = map[string]any{
 			"cores": vm.CPUs,

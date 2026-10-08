@@ -20,10 +20,21 @@ in. Any change requires re-opening the discussion.
   gap-filling.
 - **Comparison:** loose. Only manifest-specified fields are tracked.
   Provider-set defaults are unmanaged.
+- **VM observation:** Get and List read authoritative Proxmox configuration,
+  including configured CPU/RAM, disks, NICs, agent, native cloud-init settings,
+  firmware, EFI, and PCI passthrough. Configuration-read/decoding failures are
+  errors, not incomplete observations; numeric JSON strings are accepted.
+- **VM comparison:** declared disk/NIC slots are matched by name; undeclared
+  slots remain unmanaged. Equivalent binary disk-size units and MAC address
+  casing compare equal. Creation/routing inputs (`context`, `template`,
+  `image`, `cloudImage`, `startOnCreate`) and unobservable cloud-init inputs
+  (`password`, `packages`, `runcmd`) are excluded from live drift, not echoed
+  into observations. They remain in desired manifests and desired-to-desired
+  dry-run diffs; changing creation/first-boot inputs requires replacement.
 - **Apply on existing atomic resource (e.g. `VirtualMachine`):** update in
   place for the fields the provider can change live — for `VirtualMachine`:
   memory, CPU (cores/sockets), and disk **growth**. Non-resizable differences
-  (template, networks, cloud-init) are not mutated; they surface as drift and
+  (networks, native cloud-init settings) are not mutated; they surface as drift and
   still require delete + re-apply. Disk **shrink** is rejected (Proxmox can't
   shrink) — delete + re-apply to size down. Re-applying an unchanged spec is a
   no-op (identical config, disks already at size).
@@ -362,9 +373,12 @@ destructive guardrails enforced.
       `internal/controller/server/drift.go` walks the desired spec and
       surfaces only the keys where desired ≠ observed; provider-set
       defaults are unmanaged.
-- [x] VirtualMachine drift on Get: works generically via the loose
-      comparison (proxmox `VMToResource` returns spec keys that overlap
-      with the manifest, e.g. `cpu.cores`, `memory.size`).
+- [x] VirtualMachine drift on Get/List/Watch and periodic reconciliation uses
+      the same provider-owned comparison projection over native configuration.
+      Missing declared settings still drift; only explicit creation-only,
+      routing, write-only, and first-boot execution inputs are excluded.
+      Failed configuration reads surface as errors, including name-scoped
+      Watch (an outage must not masquerade as deletion).
 - [x] Cluster structural drift on Get: the k3s provider synthesizes
       `spec.nodes.controlPlane.count` and each `spec.nodes.workers[*]
       .count` from the *actual* children list, so post-apply Gets reveal

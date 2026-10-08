@@ -267,6 +267,99 @@ func TestGetVMConfig(t *testing.T) {
 	}
 }
 
+func TestGetVMConfigNumericCompatibility(t *testing.T) {
+	for _, numbers := range []string{
+		`"cores":8,"sockets":1,"memory":10240`,
+		`"cores":"8","sockets":"1","memory":"10240"`,
+		`"cores":8,"sockets":1,"memory":"10240"`,
+	} {
+		t.Run(numbers, func(t *testing.T) {
+			server := mockServer(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api2/json/nodes/pve1/qemu/101/config" {
+					t.Errorf("unexpected request: %s", r.URL.Path)
+					http.NotFound(w, r)
+					return
+				}
+				_, _ = w.Write([]byte(`{"data":{` + numbers + `,"name":"dev-system","scsi1":"local-lvm:vm-101-disk-1,size=300G","net2":"virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0","ipconfig2":"ip=dhcp","hostpci3":"0000:01:00.0","agent":"1"}}`))
+			})
+			defer server.Close()
+			c := New(server.URL, "test", "test")
+			c.httpClient = server.Client()
+			config, err := c.GetVMConfig(context.Background(), "pve1", 101)
+			if err != nil {
+				t.Fatalf("GetVMConfig: %v", err)
+			}
+			if config.Cores != 8 || config.Sockets != 1 || config.Memory != 10240 || config.Name != "dev-system" {
+				t.Fatalf("decoded config = %+v", config)
+			}
+			for key, want := range map[string]any{
+				"scsi1":     "local-lvm:vm-101-disk-1,size=300G",
+				"net2":      "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0",
+				"ipconfig2": "ip=dhcp",
+				"hostpci3":  "0000:01:00.0",
+				"agent":     "1",
+			} {
+				if got := config.Raw[key]; got != want {
+					t.Errorf("Raw[%q] = %v, want %v", key, got, want)
+				}
+			}
+			if len(config.Raw) != 9 {
+				t.Errorf("Raw has %d fields, want 9", len(config.Raw))
+			}
+			encoded, err := json.Marshal(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(encoded), `"Raw"`) || strings.Contains(string(encoded), `"hostpci3"`) {
+				t.Errorf("Raw leaked into encoded typed config: %s", encoded)
+			}
+		})
+	}
+}
+
+func TestGetVMConfigRejectsInvalidNumbers(t *testing.T) {
+	for _, field := range []string{"cores", "sockets", "memory"} {
+		for _, value := range []string{
+			`"bad"`, `""`, `"8.5"`, `8.5`, `8.0`, `1e3`,
+			`true`, `null`, `{}`, `[]`, `" 8"`, `"8 "`,
+			`9223372036854775808`, `"9223372036854775808"`,
+			`-9223372036854775809`, `"-9223372036854775809"`,
+		} {
+			t.Run(field+"/"+value, func(t *testing.T) {
+				server := mockServer(t, func(w http.ResponseWriter, r *http.Request) {
+					_, _ = w.Write([]byte(`{"data":{"` + field + `":` + value + `}}`))
+				})
+				defer server.Close()
+				c := New(server.URL, "test", "test")
+				c.httpClient = server.Client()
+				config, err := c.GetVMConfig(context.Background(), "pve1", 101)
+				if err == nil || config != nil {
+					t.Fatalf("expected decoding failure, got config=%+v, err=%v", config, err)
+				}
+				if !strings.Contains(err.Error(), field) {
+					t.Errorf("error does not identify %s: %v", field, err)
+				}
+			})
+		}
+	}
+}
+
+func TestGetVMConfigRejectsMissingData(t *testing.T) {
+	for _, response := range []string{`{}`, `{"data":null}`, `{"data":[]}`, `{"data":""}`} {
+		t.Run(response, func(t *testing.T) {
+			server := mockServer(t, func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(response))
+			})
+			defer server.Close()
+			c := New(server.URL, "test", "test")
+			c.httpClient = server.Client()
+			if config, err := c.GetVMConfig(context.Background(), "pve1", 101); err == nil || config != nil {
+				t.Fatalf("expected failure, got config=%+v, err=%v", config, err)
+			}
+		})
+	}
+}
+
 func TestListTemplates(t *testing.T) {
 	server := mockServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

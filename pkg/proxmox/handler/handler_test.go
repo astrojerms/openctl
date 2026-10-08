@@ -767,3 +767,120 @@ func TestCreateVMFromImage_MissingFile(t *testing.T) {
 		t.Errorf("expected error about missing file, got: %s", resp.Error.Message)
 	}
 }
+
+func TestVMObservationUsesConfiguredHardware(t *testing.T) {
+	for _, action := range []string{protocol.ActionGet, protocol.ActionList} {
+		t.Run(action, func(t *testing.T) {
+			configReads, guestReads := 0, 0
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api2/json/nodes":
+					_, _ = io.WriteString(w, `{"data":[{"node":"pve1"}]}`)
+				case "/api2/json/nodes/pve1/qemu":
+					// Runtime usage and vCPU count are deliberately different from config.
+					_, _ = io.WriteString(w, `{"data":[{"vmid":101,"name":"dev-system","status":"running","cpus":16,"maxmem":2147483648,"mem":1048576},{"vmid":9000,"name":"template","template":1}]}`)
+				case "/api2/json/nodes/pve1/qemu/101/config":
+					configReads++
+					_, _ = io.WriteString(w, `{"data":{"cores":8,"sockets":"1","memory":"10240","scsi0":"local-lvm:vm-101-disk-0,size=300G","net0":"virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0","agent":"1","ciuser":"ubuntu","sshkeys":"ssh-ed25519%20AAAA%20test","ipconfig0":"ip=dhcp"}}`)
+				case "/api2/json/nodes/pve1/qemu/101/agent/network-get-interfaces":
+					guestReads++
+					http.Error(w, "guest agent unavailable", http.StatusInternalServerError)
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			h := New(&protocol.ProviderConfig{Endpoint: server.URL, TokenID: "t", TokenSecret: "s"})
+			resp, err := h.Handle(context.Background(), &protocol.Request{
+				Action: action, ResourceType: "VirtualMachine", ResourceName: "dev-system",
+			})
+			if err != nil {
+				t.Fatalf("Handle: %v", err)
+			}
+			if resp.Status != protocol.StatusSuccess {
+				t.Fatalf("expected success, got %+v", resp)
+			}
+			resource := resp.Resource
+			if action == protocol.ActionList {
+				if len(resp.Resources) != 1 {
+					t.Fatalf("listed %d resources, want one non-template VM", len(resp.Resources))
+				}
+				resource = resp.Resources[0]
+			}
+			if resource == nil {
+				t.Fatal("missing observation")
+			}
+			cpu, ok := resource.Spec["cpu"].(map[string]any)
+			if !ok || cpu["cores"] != 8 || cpu["sockets"] != 1 {
+				t.Errorf("observed CPU = %v, want configured cores=8 sockets=1", resource.Spec["cpu"])
+			}
+			memory, ok := resource.Spec["memory"].(map[string]any)
+			if !ok || memory["size"] != 10240 {
+				t.Errorf("observed memory = %v, want configured size=10240", resource.Spec["memory"])
+			}
+			if configReads != 1 {
+				t.Errorf("config reads = %d, want exactly one", configReads)
+			}
+			if action == protocol.ActionList && guestReads != 0 {
+				t.Errorf("List made %d guest-agent calls, want zero", guestReads)
+			}
+			if _, ok := resource.Status["ip"]; ok {
+				t.Errorf("unexpected guest IP: %v", resource.Status["ip"])
+			}
+		})
+	}
+}
+
+func TestVMObservationPropagatesConfigFailure(t *testing.T) {
+	for _, action := range []string{protocol.ActionGet, protocol.ActionList} {
+		for _, failure := range []string{"api", "decode"} {
+			t.Run(action+"/"+failure, func(t *testing.T) {
+				configReads, guestReads := 0, 0
+				server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					switch r.URL.Path {
+					case "/api2/json/nodes":
+						_, _ = io.WriteString(w, `{"data":[{"node":"pve1"}]}`)
+					case "/api2/json/nodes/pve1/qemu":
+						_, _ = io.WriteString(w, `{"data":[{"vmid":100,"name":"healthy","status":"stopped"},{"vmid":101,"name":"dev-system","status":"running"}]}`)
+					case "/api2/json/nodes/pve1/qemu/100/config":
+						configReads++
+						_, _ = io.WriteString(w, `{"data":{"cores":2,"sockets":1,"memory":2048}}`)
+					case "/api2/json/nodes/pve1/qemu/101/config":
+						configReads++
+						if failure == "api" {
+							http.Error(w, "config unavailable", http.StatusInternalServerError)
+						} else {
+							_, _ = io.WriteString(w, `{"data":{"cores":8,"memory":"invalid"}}`)
+						}
+					default:
+						guestReads++
+						t.Errorf("unexpected request after config failure: %s", r.URL.Path)
+						http.NotFound(w, r)
+					}
+				}))
+				defer server.Close()
+				h := New(&protocol.ProviderConfig{Endpoint: server.URL, TokenID: "t", TokenSecret: "s"})
+				resp, err := h.Handle(context.Background(), &protocol.Request{
+					Action: action, ResourceType: "VirtualMachine", ResourceName: "dev-system",
+				})
+				if err == nil || resp != nil {
+					t.Fatalf("expected error and no partial observation, got resp=%+v, err=%v", resp, err)
+				}
+				if !strings.Contains(err.Error(), "dev-system") {
+					t.Errorf("error does not identify VM: %v", err)
+				}
+				wantReads := 1
+				if action == protocol.ActionList {
+					wantReads = 2
+				}
+				if configReads != wantReads {
+					t.Errorf("config reads = %d, want %d", configReads, wantReads)
+				}
+				if guestReads != 0 {
+					t.Errorf("guest reads after config failure = %d, want zero", guestReads)
+				}
+			})
+		}
+	}
+}

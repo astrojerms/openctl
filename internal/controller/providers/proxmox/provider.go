@@ -17,6 +17,7 @@ import (
 	"github.com/openctl/openctl/internal/controller/providers"
 	"github.com/openctl/openctl/pkg/protocol"
 	pmhandler "github.com/openctl/openctl/pkg/proxmox/handler"
+	pmresources "github.com/openctl/openctl/pkg/proxmox/resources"
 )
 
 const (
@@ -147,6 +148,14 @@ func (p *Provider) Kinds() []string { return []string{kindVM, kindNode} }
 // API rather than provisioning them — they can never be in applied_manifests.
 func (p *Provider) ObservedOnlyKinds() []string { return []string{kindNode} }
 
+// DriftSpecs compares observable VM settings, excluding creation-only inputs.
+func (p *Provider) DriftSpecs(kind string, desired, observed map[string]any) (map[string]any, map[string]any) {
+	if kind == kindVM {
+		return pmresources.ComparableVMSpecs(desired, observed)
+	}
+	return desired, observed
+}
+
 // Actions implements providers.Actioner. VirtualMachine supports the
 // standard power-lifecycle set plus "console" (opens Proxmox noVNC in
 // a new tab); ProxmoxNode has no runtime actions.
@@ -216,9 +225,8 @@ func (p *Provider) DoAction(ctx context.Context, kind, name, action string) (*pr
 	}
 }
 
-// Apply creates a VM if missing; otherwise returns the observed state
-// without mutating (per the no-op-on-existing rule). ProxmoxNode is
-// observed-only and rejects Apply.
+// Apply creates a missing VM or resizes an existing VM's CPU, memory, and disks,
+// then returns observed state. ProxmoxNode is observed-only and rejects Apply.
 func (p *Provider) Apply(ctx context.Context, manifest *protocol.Resource) (*protocol.Resource, error) {
 	if manifest.Kind == kindNode {
 		return nil, fmt.Errorf("%s is observed-only; cannot be applied", kindNode)

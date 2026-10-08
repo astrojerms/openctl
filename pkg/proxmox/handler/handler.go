@@ -208,7 +208,11 @@ func (h *Handler) listVMs(ctx context.Context) (*protocol.Response, error) {
 		if vm.Template == 1 {
 			continue
 		}
-		result = append(result, resources.VMToResource(vm, nil))
+		config, err := h.client.GetVMConfig(ctx, vm.Node, vm.VMID)
+		if err != nil {
+			return nil, fmt.Errorf("read VM %q config: %w", vm.Name, err)
+		}
+		result = append(result, resources.VMToResourceWithIP(vm, config, ""))
 	}
 
 	return &protocol.Response{
@@ -228,7 +232,10 @@ func (h *Handler) getVM(ctx context.Context, name string) (*protocol.Response, e
 		return nil, err
 	}
 
-	config, _ := h.client.GetVMConfig(ctx, vm.Node, vm.VMID)
+	config, err := h.client.GetVMConfig(ctx, vm.Node, vm.VMID)
+	if err != nil {
+		return nil, fmt.Errorf("read VM %q config: %w", vm.Name, err)
+	}
 
 	// Try to get IP if VM is running (non-blocking)
 	var ip string
