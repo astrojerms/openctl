@@ -3,6 +3,7 @@ package operations
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -115,7 +116,7 @@ func RunGraph(ctx context.Context, concurrency int, tasks []Task) error {
 			continue // drain remaining in-flight, launch nothing new
 		}
 
-		newlyReady := ready[:len(ready):len(ready)]
+		newlyReady := slices.Clip(ready)
 		for _, dep := range dependents[res.id] {
 			indegree[dep]--
 			if indegree[dep] == 0 {

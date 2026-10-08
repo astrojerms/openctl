@@ -3,6 +3,7 @@ package resources
 import (
 	"fmt"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,8 +34,8 @@ func observeVMConfig(spec map[string]any, config *client.VMConfig) {
 		memory = 512
 	}
 	cpu, _ := configParts(text("cpu", "kvm64"))
-	if strings.HasPrefix(cpu, "cputype=") {
-		cpu = strings.TrimPrefix(cpu, "cputype=")
+	if after, ok := strings.CutPrefix(cpu, "cputype="); ok {
+		cpu = after
 	}
 	spec["cpu"] = map[string]any{"cores": cores, "sockets": sockets, "type": cpu}
 	spec["memory"] = map[string]any{"size": memory}
@@ -130,7 +131,7 @@ func observeVMConfig(spec map[string]any, config *client.VMConfig) {
 		keysText = decoded
 	}
 	sshKeys := []any{}
-	for _, key := range strings.Split(keysText, "\n") {
+	for key := range strings.SplitSeq(keysText, "\n") {
 		if key = strings.TrimSpace(key); key != "" {
 			sshKeys = append(sshKeys, key)
 		}
@@ -138,7 +139,7 @@ func observeVMConfig(spec map[string]any, config *client.VMConfig) {
 	ci["sshKeys"] = sshKeys
 	ci["searchDomain"] = text("searchdomain", "")
 	nameservers := []any{}
-	for _, server := range strings.Fields(text("nameserver", "")) {
+	for server := range strings.FieldsSeq(text("nameserver", "")) {
 		nameservers = append(nameservers, server)
 	}
 	ci["nameservers"] = nameservers
@@ -184,10 +185,5 @@ func numberedSlot(key string, prefixes ...string) bool {
 	if prefix == key {
 		return false
 	}
-	for _, candidate := range prefixes {
-		if prefix == candidate {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(prefixes, prefix)
 }
