@@ -59,7 +59,9 @@ import "openctl.io/schemas/base"
 		url: string
 		// Proxmox storage that will host the downloaded image and template VM disk.
 		storage: string
-		// Optional checksum to verify the download (e.g. "sha256:abc123").
+		// Optional algorithm:hex-digest verified by Proxmox before image import.
+		// Supports md5, sha1, sha224, sha256 (64 hex characters), sha384, and sha512.
+		// Cached templates must carry the same verified digest.
 		checksum?: string
 		// Override the auto-generated template name (otherwise derived from URL).
 		templateName?: string

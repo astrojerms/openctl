@@ -162,7 +162,7 @@ func (p *ProxmoxProvider) createFromCloudImage(ctx context.Context, node, name s
 	} else {
 		// Download and create template
 		filename := extractFilenameFromURL(spec.CloudImage.URL)
-		upid, err := p.client.DownloadToStorage(ctx, node, storage, spec.CloudImage.URL, filename, "iso")
+		upid, err := p.client.DownloadToStorage(ctx, node, storage, spec.CloudImage.URL, filename, "iso", client.ImageChecksum{})
 		if err != nil {
 			return 0, fmt.Errorf("failed to download cloud image: %w", err)
 		}

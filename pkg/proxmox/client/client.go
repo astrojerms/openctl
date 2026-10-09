@@ -805,15 +805,19 @@ func (c *Client) GetStorageInfo(ctx context.Context, storage string) (*StorageIn
 	return &result.Data, nil
 }
 
-// DownloadToStorage downloads a file from URL to Proxmox storage
-// Returns the task UPID for tracking progress
-func (c *Client) DownloadToStorage(ctx context.Context, node, storage, url, filename, contentType string) (string, error) {
+// DownloadToStorage starts a storage download, optionally verified by Proxmox.
+// It requires a task UPID so callers can check completion before using the file.
+func (c *Client) DownloadToStorage(ctx context.Context, node, storage, url, filename, contentType string, checksum ImageChecksum) (string, error) {
 	path := fmt.Sprintf("/api2/json/nodes/%s/storage/%s/download-url", node, storage)
 
 	params := map[string]any{
 		"url":      url,
 		"filename": filename,
 		"content":  contentType,
+	}
+	if checksum.algorithm != "" {
+		params["checksum-algorithm"] = checksum.algorithm
+		params["checksum"] = checksum.digest
 	}
 
 	debugf("DownloadToStorage: downloading %s to %s:%s/%s", url, storage, contentType, filename)
@@ -827,7 +831,10 @@ func (c *Client) DownloadToStorage(ctx context.Context, node, storage, url, file
 		Data string `json:"data"`
 	}
 	if err := json.Unmarshal(resp, &result); err != nil {
-		return "", nil
+		return "", fmt.Errorf("failed to parse download task: %w", err)
+	}
+	if result.Data == "" {
+		return "", fmt.Errorf("download response did not contain a task UPID")
 	}
 
 	return result.Data, nil
@@ -909,11 +916,15 @@ func (c *Client) getTaskStatus(ctx context.Context, node, upid string) (string, 
 
 	var result struct {
 		Data struct {
-			Status string `json:"status"`
+			Status     string `json:"status"`
+			ExitStatus string `json:"exitstatus"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(resp, &result); err != nil {
 		return "", err
+	}
+	if result.Data.Status == "stopped" && result.Data.ExitStatus != "OK" {
+		return "", fmt.Errorf("task %s failed: exitstatus %q", upid, result.Data.ExitStatus)
 	}
 
 	return result.Data.Status, nil

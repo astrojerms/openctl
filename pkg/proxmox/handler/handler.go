@@ -477,6 +477,16 @@ func (h *Handler) createVMFromCloudImage(ctx context.Context, name, node string,
 			},
 		}, nil
 	}
+	checksum, err := client.ParseImageChecksum(spec.CloudImage.Checksum)
+	if err != nil {
+		return &protocol.Response{
+			Status: protocol.StatusError,
+			Error: &protocol.Error{
+				Code:    protocol.ErrorCodeInvalidRequest,
+				Message: fmt.Sprintf("invalid cloudImage.checksum: %v", err),
+			},
+		}, nil
+	}
 
 	// Determine template name from URL or explicit setting
 	templateName := spec.CloudImage.TemplateName
@@ -495,11 +505,28 @@ func (h *Handler) createVMFromCloudImage(ctx context.Context, name, node string,
 	var templateVMID int
 
 	if existingTemplate != nil {
-		// Template exists, use it
+		// A checksum pin must never silently reuse an unverified cached image.
+		if tag := checksum.TemplateTag(); tag != "" {
+			config, err := h.client.GetVMConfig(ctx, existingTemplate.Node, existingTemplate.VMID)
+			if err != nil {
+				return nil, fmt.Errorf("check cached template checksum: %w", err)
+			}
+			tags, _ := config.Raw["tags"].(string)
+			verified := false
+			for existingTag := range strings.SplitSeq(tags, ";") {
+				if existingTag == tag {
+					verified = true
+					break
+				}
+			}
+			if !verified {
+				return nil, fmt.Errorf("cached template %q was not verified with the requested checksum; choose an unused cloudImage.templateName", templateName)
+			}
+		}
 		templateVMID = existingTemplate.VMID
 	} else {
 		// Template doesn't exist, create it
-		templateVMID, err = h.createCloudImageTemplate(ctx, node, templateName, spec)
+		templateVMID, err = h.createCloudImageTemplate(ctx, node, templateName, spec, checksum)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create cloud image template: %w", err)
 		}
@@ -577,7 +604,7 @@ func (h *Handler) createVMFromCloudImage(ctx context.Context, name, node string,
 }
 
 // createCloudImageTemplate downloads a cloud image and creates a template from it
-func (h *Handler) createCloudImageTemplate(ctx context.Context, node, templateName string, spec *resources.VMSpec) (int, error) {
+func (h *Handler) createCloudImageTemplate(ctx context.Context, node, templateName string, spec *resources.VMSpec, checksum client.ImageChecksum) (int, error) {
 	storage := spec.CloudImage.Storage
 
 	// Step 1: Download the cloud image to storage
@@ -587,26 +614,28 @@ func (h *Handler) createCloudImageTemplate(ctx context.Context, node, templateNa
 	// Proxmox import content type only accepts .qcow2 or .raw extensions
 	// Cloud images often use .img extension but are qcow2 format internally
 	filename = normalizeImageExtension(filename)
-	upid, err := h.client.DownloadToStorage(ctx, node, storage, spec.CloudImage.URL, filename, "import")
+	upid, err := h.client.DownloadToStorage(ctx, node, storage, spec.CloudImage.URL, filename, "import", checksum)
 	if err != nil {
 		return 0, fmt.Errorf("failed to download cloud image: %w", err)
 	}
 
 	// Wait for download to complete
-	if upid != "" {
-		if waitErr := h.client.WaitForTask(ctx, node, upid, 30*time.Minute); waitErr != nil {
-			return 0, fmt.Errorf("download task failed: %w", waitErr)
-		}
+	if waitErr := h.client.WaitForTask(ctx, node, upid, 30*time.Minute); waitErr != nil {
+		return 0, fmt.Errorf("download task failed: %w", waitErr)
 	}
 
 	// Step 2: Create base VM
-	nextID, err := h.client.CreateVM(ctx, node, map[string]any{
+	params := map[string]any{
 		"name":   templateName,
 		"ostype": "l26",
 		"scsihw": "virtio-scsi-pci",
 		"boot":   "order=scsi0",
 		"agent":  "1",
-	})
+	}
+	if tag := checksum.TemplateTag(); tag != "" {
+		params["tags"] = tag
+	}
+	nextID, err := h.client.CreateVM(ctx, node, params)
 	if err != nil {
 		return 0, fmt.Errorf("failed to create template VM: %w", err)
 	}
