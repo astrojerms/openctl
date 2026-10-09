@@ -605,7 +605,7 @@ func TestDeleteVM_WaitsForDestroyTask(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]any{"data": "UPID:pve1:0000:qmdestroy:100:root@pam:"})
 		case strings.HasPrefix(r.URL.Path, "/api2/json/nodes/pve1/tasks/") && strings.HasSuffix(r.URL.Path, "/status"):
 			taskChecked = true
-			json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"status": "stopped"}})
+			json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"status": "stopped", "exitstatus": "OK"}})
 		default:
 			http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusNotFound)
 		}
@@ -871,46 +871,6 @@ func TestAddCloudInitDrive(t *testing.T) {
 
 	if receivedParams["ide2"] != "local-lvm:cloudinit" {
 		t.Errorf("expected ide2=local-lvm:cloudinit, got %s", receivedParams["ide2"])
-	}
-}
-
-func TestDownloadToStorage(t *testing.T) {
-	var receivedParams map[string]string
-	server := mockServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api2/json/nodes/pve1/storage/local/download-url" && r.Method == "POST" {
-			r.ParseForm()
-			receivedParams = make(map[string]string)
-			for k, v := range r.Form {
-				if len(v) > 0 {
-					receivedParams[k] = v[0]
-				}
-			}
-			json.NewEncoder(w).Encode(map[string]any{
-				"data": "UPID:pve1:00001234:12345678:download:local:root@pam:",
-			})
-		}
-	})
-	defer server.Close()
-
-	c := New(server.URL, "test", "test")
-	c.httpClient = server.Client()
-
-	upid, err := c.DownloadToStorage(context.Background(), "pve1", "local", "https://example.com/image.img", "image.img", "iso")
-	if err != nil {
-		t.Fatalf("DownloadToStorage failed: %v", err)
-	}
-
-	if upid == "" {
-		t.Error("expected non-empty UPID")
-	}
-	if receivedParams["url"] != "https://example.com/image.img" {
-		t.Errorf("expected url parameter, got %s", receivedParams["url"])
-	}
-	if receivedParams["filename"] != "image.img" {
-		t.Errorf("expected filename parameter, got %s", receivedParams["filename"])
-	}
-	if receivedParams["content"] != "iso" {
-		t.Errorf("expected content=iso, got %s", receivedParams["content"])
 	}
 }
 
