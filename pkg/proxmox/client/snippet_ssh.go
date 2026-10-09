@@ -111,7 +111,7 @@ func (c *Client) UploadSnippet(ctx context.Context, node, storage, filename, con
 	volid := storage + ":snippets/" + filename
 	command := "sh -c " + shellQuote(snippetUploadScript) + " sh " + shellQuote(volid) + " " + strconv.Itoa(len(content))
 	args = append(args, "--", host, command)
-	cmd := exec.CommandContext(ctx, "ssh", args...)
+	cmd := exec.CommandContext(ctx, "ssh", args...) // #nosec G204 -- fixed executable; validated host/user/components, -- ends options, remote arguments are shell-quoted
 	cmd.Stdin = strings.NewReader(content)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
