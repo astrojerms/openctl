@@ -327,7 +327,9 @@ func TestRepoStartPeriodicPullReconcilesRemoteCommits(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git binary not on PATH; skipping git-dependent test")
 	}
-	ctx := t.Context() // canceled when the test ends, stopping the pull goroutine
+	// T.Context cancels before cleanup; wait for any git command before canceling.
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 
 	base := t.TempDir()
 	bare := filepath.Join(base, "remote.git")
@@ -362,6 +364,14 @@ func TestRepoStartPeriodicPullReconcilesRemoteCommits(t *testing.T) {
 		t.Fatalf("NewRepo: %v", err)
 	}
 
+	t.Cleanup(func() {
+		if err := repo.lock.acquire(context.Background()); err != nil {
+			t.Errorf("wait for repository operations: %v", err)
+			return
+		}
+		cancel()
+		repo.lock.release()
+	})
 	var mu sync.Mutex
 	changes := 0
 	repo.StartPeriodicPull(ctx, 30*time.Millisecond, func(context.Context) error {

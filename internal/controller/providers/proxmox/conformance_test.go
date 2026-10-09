@@ -59,6 +59,10 @@ func (f *fakeProxmox) newServer(t *testing.T) *httptest.Server {
 			newid, _ := strconv.Atoi(r.Form.Get("newid"))
 			f.vms[r.Form.Get("name")] = newid
 			_ = json.NewEncoder(w).Encode(map[string]any{"data": ""})
+		case strings.HasSuffix(path, "/config") && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+				"cores": 1, "sockets": 1, "memory": "512",
+			}})
 		case r.Method == http.MethodDelete && strings.Contains(path, "/qemu/"):
 			vmid, _ := strconv.Atoi(path[strings.LastIndex(path, "/")+1:])
 			for name, id := range f.vms {

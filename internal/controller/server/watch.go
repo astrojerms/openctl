@@ -11,6 +11,7 @@ import (
 
 	"github.com/openctl/openctl/internal/controller/manifests"
 	"github.com/openctl/openctl/internal/controller/operations"
+	"github.com/openctl/openctl/internal/controller/providers"
 	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 	"github.com/openctl/openctl/pkg/protocol"
 )
@@ -168,8 +169,11 @@ func (h *resourceHandler) listForWatch(ctx context.Context, apiVersion, kind, na
 	if name != "" {
 		r, err := p.Get(ctx, kind, name)
 		if err != nil {
-			// NotFound is normal during watch — return empty, let DELETED fire.
-			return nil, nil // #nosec — intentional: surface as DELETED
+			var notFound *providers.NotFoundError
+			if errors.As(err, &notFound) {
+				return nil, nil
+			}
+			return nil, err
 		}
 		if r == nil {
 			return nil, nil

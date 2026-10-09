@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -232,18 +233,66 @@ type VM struct {
 
 // VMConfig represents VM configuration
 type VMConfig struct {
-	Name      string `json:"name"`
-	Cores     int    `json:"cores"`
-	Sockets   int    `json:"sockets"`
-	Memory    int    `json:"memory"`
-	Boot      string `json:"boot"`
-	OSType    string `json:"ostype"`
-	SCSI0     string `json:"scsi0"`
-	Net0      string `json:"net0"`
-	IDE2      string `json:"ide2"`
-	IPConfig0 string `json:"ipconfig0"`
-	CIUser    string `json:"ciuser"`
-	SSHKeys   string `json:"sshkeys"`
+	Name      string         `json:"name"`
+	Cores     int            `json:"cores"`
+	Sockets   int            `json:"sockets"`
+	Memory    int            `json:"memory"`
+	Boot      string         `json:"boot"`
+	OSType    string         `json:"ostype"`
+	SCSI0     string         `json:"scsi0"`
+	Net0      string         `json:"net0"`
+	IDE2      string         `json:"ide2"`
+	IPConfig0 string         `json:"ipconfig0"`
+	CIUser    string         `json:"ciuser"`
+	SSHKeys   string         `json:"sshkeys"`
+	Raw       map[string]any `json:"-"`
+}
+
+// UnmarshalJSON preserves the full configuration while accepting Proxmox's
+// integer fields as either JSON integers or decimal integer strings.
+func (config *VMConfig) UnmarshalJSON(data []byte) error {
+	type plainVMConfig VMConfig
+	var decoded struct {
+		plainVMConfig
+		Cores   json.RawMessage `json:"cores"`
+		Sockets json.RawMessage `json:"sockets"`
+		Memory  json.RawMessage `json:"memory"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(data, &decoded.Raw); err != nil {
+		return err
+	}
+	if decoded.Raw == nil {
+		return errors.New("VM config must be a JSON object")
+	}
+	for _, field := range []struct {
+		name  string
+		value json.RawMessage
+		dest  *int
+	}{
+		{"cores", decoded.Cores, &decoded.plainVMConfig.Cores},
+		{"sockets", decoded.Sockets, &decoded.plainVMConfig.Sockets},
+		{"memory", decoded.Memory, &decoded.plainVMConfig.Memory},
+	} {
+		if len(field.value) == 0 {
+			continue
+		}
+		text := string(field.value)
+		if field.value[0] == '"' {
+			if err := json.Unmarshal(field.value, &text); err != nil {
+				return fmt.Errorf("invalid VM config %s: %w", field.name, err)
+			}
+		}
+		value, err := strconv.ParseInt(text, 10, strconv.IntSize)
+		if err != nil {
+			return fmt.Errorf("invalid VM config %s: %w", field.name, err)
+		}
+		*field.dest = int(value)
+	}
+	*config = VMConfig(decoded.plainVMConfig)
+	return nil
 }
 
 // Template represents a VM template
@@ -312,13 +361,16 @@ func (c *Client) GetVMConfig(ctx context.Context, node string, vmid int) (*VMCon
 	}
 
 	var result struct {
-		Data VMConfig `json:"data"`
+		Data *VMConfig `json:"data"`
 	}
 	if err := json.Unmarshal(resp, &result); err != nil {
 		return nil, fmt.Errorf("failed to parse VM config: %w", err)
 	}
 
-	return &result.Data, nil
+	if result.Data == nil {
+		return nil, errors.New("missing VM config data")
+	}
+	return result.Data, nil
 }
 
 // CreateVM creates a new VM with the given parameters
@@ -475,10 +527,8 @@ func (c *Client) ConfigureVM(ctx context.Context, node string, vmid int, params 
 	return err
 }
 
-// GetVMConfigRaw returns the full VM config as a generic map. Unlike
-// GetVMConfig (which uses a struct that only models a fixed subset of
-// keys), this surfaces all disk and network slots that the VM actually
-// has — necessary when merging flags into an arbitrary disk entry.
+// GetVMConfigRaw returns the full VM config as a generic map without decoding
+// typed fields, for callers merging flags into arbitrary disk entries.
 func (c *Client) GetVMConfigRaw(ctx context.Context, node string, vmid int) (map[string]any, error) {
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/config", node, vmid)
 	resp, err := c.get(ctx, path)

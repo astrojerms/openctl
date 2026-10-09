@@ -226,7 +226,8 @@ func (r *Reconciler) reconcileOne(ctx context.Context, ref manifests.Ref) {
 		return
 	}
 
-	drifted := !specsEqual(desired.Spec, observed.Spec)
+	desiredSpec, observedSpec := providers.DriftSpecs(p, ref.Kind, desired.Spec, observed.Spec)
+	drifted := !specsEqual(desiredSpec, observedSpec)
 	reason := ""
 	if drifted {
 		reason = "spec drift"

@@ -191,7 +191,8 @@ func (h *resourceHandler) Get(ctx context.Context, req *apiv1.GetRequest) (*apiv
 			return nil, status.Errorf(codes.Internal, "load applied manifest: %v", lerr)
 		}
 		if desired != nil {
-			out.Drift = computeDrift(desired.Spec, r.Spec)
+			desiredSpec, observedSpec := providers.DriftSpecs(p, r.Kind, desired.Spec, r.Spec)
+			out.Drift = computeDrift(desiredSpec, observedSpec)
 			applied, perr := resourceToProto(desired)
 			if perr != nil {
 				return nil, status.Errorf(codes.Internal, "encode applied: %v", perr)
@@ -824,7 +825,12 @@ func (h *resourceHandler) attachDrift(ctx context.Context, out *apiv1.Resource, 
 	if desired == nil {
 		return nil
 	}
-	out.Drift = computeDrift(desired.Spec, observed.Spec)
+	p, err := h.registry.For(observed.APIVersion)
+	if err != nil {
+		return err
+	}
+	desiredSpec, observedSpec := providers.DriftSpecs(p, observed.Kind, desired.Spec, observed.Spec)
+	out.Drift = computeDrift(desiredSpec, observedSpec)
 	return nil
 }
 

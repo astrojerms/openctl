@@ -12,8 +12,9 @@ import (
 
 // resizeVM applies in-place changes to an existing VM for the fields Proxmox
 // can update live: memory, CPU (cores/sockets), and disk growth. Other spec
-// differences (template, networks, cloud-init) are NOT touched here — changing
-// them still requires delete + re-apply, and they surface as drift via Get.
+// differences in networks and native cloud-init settings are not applied here
+// and remain visible as drift. Creation-only inputs are not live-state
+// comparison targets; changing their effects requires replacement.
 //
 // This realizes the CONTROLLER.md decision to update atomic resources in place
 // for resizable fields rather than no-op. Idempotent: re-applying an unchanged
