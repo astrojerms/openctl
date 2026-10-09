@@ -44,7 +44,7 @@ func ParseImageChecksum(value string) (ImageChecksum, error) {
 	}
 	for i := range len(digest) {
 		b := digest[i]
-		if !(b >= '0' && b <= '9' || b >= 'a' && b <= 'f' || b >= 'A' && b <= 'F') {
+		if (b < '0' || b > '9') && (b < 'a' || b > 'f') && (b < 'A' || b > 'F') {
 			return ImageChecksum{}, fmt.Errorf("%s checksum contains a non-hexadecimal character", algorithm)
 		}
 	}
