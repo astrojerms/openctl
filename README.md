@@ -176,6 +176,11 @@ providers:
         endpoint: https://pve.home.local:8006
         node: pve1
         credentials: homelab-token
+        snippetSSH:
+          hosts:
+            pve1: pve.home.local
+          user: root
+          identityFile: ~/.ssh/proxmox
     credentials:
       homelab-token:
         tokenId: root@pam!openctl
@@ -184,6 +189,17 @@ providers:
       storage: local-lvm
       network: vmbr0
 ```
+
+Cloud-init vendor snippets (`packages` / `runcmd`, plus guest-agent enablement)
+are written through SSH: Proxmox's REST upload endpoint does not accept snippets.
+Map each Proxmox node explicitly under `snippetSSH.hosts`; the SSH account must
+be able to run `pvesm path` and write the selected storage's snippet directory.
+`identityFile` is a path on the machine running openctl/controller, not key
+material in a manifest. Omit it to use normal OpenSSH agent/default identities.
+Uploads use batch authentication, strict host-key checking, and atomic file
+replacement. Verify and trust the node's host-key fingerprint beforehand;
+unknown or changed host keys fail rather than being accepted automatically.
+
 
 Full controller behavior config:
 
@@ -205,6 +221,11 @@ providers:
         endpoint: https://pve.home.local:8006
         node: pve1
         credentials: homelab-token
+        snippetSSH:
+          hosts:
+            pve1: pve.home.local
+          user: root
+          identityFile: ~/.ssh/proxmox
     credentials:
       homelab-token:
         tokenId: root@pam!openctl

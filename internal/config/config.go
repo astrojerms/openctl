@@ -295,9 +295,10 @@ type TerraformResourceMap struct {
 
 // Context represents a provider context (like a cluster or endpoint)
 type Context struct {
-	Endpoint    string `yaml:"endpoint"`
-	Node        string `yaml:"node"`
-	Credentials string `yaml:"credentials"`
+	Endpoint    string                     `yaml:"endpoint"`
+	Node        string                     `yaml:"node"`
+	Credentials string                     `yaml:"credentials"`
+	SnippetSSH  *protocol.SnippetSSHConfig `yaml:"snippetSSH,omitempty"`
 }
 
 // Credential represents credentials for a provider
@@ -371,6 +372,16 @@ func (c *Config) GetProviderConfig(providerName, contextName string) (*protocol.
 		Endpoint: ctx.Endpoint,
 		Node:     ctx.Node,
 		Defaults: provider.Defaults,
+	}
+
+	if ctx.SnippetSSH != nil {
+		snippetSSH := *ctx.SnippetSSH
+		identityFile, err := ExpandPath(snippetSSH.IdentityFile)
+		if err != nil {
+			return nil, fmt.Errorf("resolve snippet SSH identity file: %w", err)
+		}
+		snippetSSH.IdentityFile = identityFile
+		cfg.SnippetSSH = &snippetSSH
 	}
 
 	if ctx.Credentials != "" {

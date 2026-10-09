@@ -24,6 +24,14 @@ type ProviderConfig struct {
 	TokenID     string            `json:"tokenId,omitempty"`
 	TokenSecret string            `json:"tokenSecret,omitempty"`
 	Defaults    map[string]string `json:"defaults,omitempty"`
+	SnippetSSH  *SnippetSSHConfig `json:"snippetSSH,omitempty"`
+}
+
+// SnippetSSHConfig configures SSH uploads to explicitly mapped Proxmox nodes.
+type SnippetSSHConfig struct {
+	Hosts        map[string]string `json:"hosts" yaml:"hosts"`
+	User         string            `json:"user,omitempty" yaml:"user,omitempty"`
+	IdentityFile string            `json:"identityFile,omitempty" yaml:"identityFile,omitempty"`
 }
 
 // Action constants
