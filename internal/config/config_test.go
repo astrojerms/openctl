@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -284,6 +285,107 @@ providers:
 
 	if providerCfg.TokenSecret != "file-based-secret" {
 		t.Errorf("expected file-based-secret, got %s", providerCfg.TokenSecret)
+	}
+}
+
+func TestGetProviderConfig_SnippetSSHIdentityRemainsPortable(t *testing.T) {
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "config.yaml")
+	content := `
+providers:
+  proxmox:
+    default-context: home
+    contexts:
+      home:
+        endpoint: https://pve.home:8006
+        snippetSSH:
+          hosts:
+            pve1: pve.home
+          identityFile: ~/.ssh/proxmox
+      remote:
+        endpoint: https://pve.remote:8006
+`
+	if err := os.WriteFile(configFile, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadFromFile(configFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The key need not exist: resolution passes a path to OpenSSH, not key bytes.
+	firstHome := filepath.Join(dir, "first-home")
+	t.Setenv("HOME", firstHome)
+	first, err := cfg.GetProviderConfig("proxmox", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.SnippetSSH == nil || first.SnippetSSH.IdentityFile != filepath.Join(firstHome, ".ssh/proxmox") {
+		t.Fatalf("identity was not resolved for this machine: %+v", first.SnippetSSH)
+	}
+	if err := cfg.SaveToFile(configFile); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := os.ReadFile(configFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(saved), firstHome) {
+		t.Fatal("resolving a provider persisted a machine-specific identity path")
+	}
+
+	secondHome := filepath.Join(dir, "second-home")
+	t.Setenv("HOME", secondHome)
+	reloaded, err := LoadFromFile(configFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := reloaded.GetProviderConfig("proxmox", "home")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.SnippetSSH == nil || second.SnippetSSH.IdentityFile != filepath.Join(secondHome, ".ssh/proxmox") {
+		t.Fatalf("saved config is not portable to another home: %+v", second.SnippetSSH)
+	}
+	remote, err := reloaded.GetProviderConfig("proxmox", "remote")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remote.SnippetSSH != nil {
+		t.Fatal("SSH access leaked into a context with no snippet transport configured")
+	}
+}
+
+func TestGetProviderConfig_SnippetSSHIdentityExpansionFailure(t *testing.T) {
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "config.yaml")
+	content := `
+providers:
+  proxmox:
+    contexts:
+      explicit:
+        snippetSSH:
+          hosts:
+            pve1: pve.home
+          identityFile: ~/.ssh/proxmox
+      agent:
+        snippetSSH:
+          hosts:
+            pve1: pve.home
+`
+	if err := os.WriteFile(configFile, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadFromFile(configFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", "")
+	if resolved, err := cfg.GetProviderConfig("proxmox", "explicit"); err == nil || resolved != nil {
+		t.Fatalf("unresolvable explicit identity must fail, got config=%+v err=%v", resolved, err)
+	}
+	if _, err := cfg.GetProviderConfig("proxmox", "agent"); err != nil {
+		t.Fatalf("ambient SSH credentials must not require a home expansion: %v", err)
 	}
 }
 

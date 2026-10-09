@@ -29,9 +29,13 @@ type Handler struct {
 
 // New creates a new Handler
 func New(config *protocol.ProviderConfig) *Handler {
+	c := client.New(config.Endpoint, config.TokenID, config.TokenSecret)
+	if config.SnippetSSH != nil {
+		c.SetSnippetSSH(config.SnippetSSH.Hosts, config.SnippetSSH.User, config.SnippetSSH.IdentityFile)
+	}
 	return &Handler{
 		config: config,
-		client: client.New(config.Endpoint, config.TokenID, config.TokenSecret),
+		client: c,
 	}
 }
 
@@ -537,6 +541,11 @@ func (h *Handler) createVMFromCloudImage(ctx context.Context, name, node string,
 		if disk.Size != "" && disk.Name != "" {
 			if err := h.client.ResizeVMDisk(ctx, node, vmid, disk.Name, disk.Size); err != nil {
 				return nil, fmt.Errorf("failed to resize disk %s: %w", disk.Name, err)
+			}
+		}
+		if opts := disk.Options(); len(opts) > 0 {
+			if err := h.client.SetDiskOptions(ctx, node, vmid, disk.Name, opts); err != nil {
+				return nil, fmt.Errorf("failed to set options on disk %s: %w", disk.Name, err)
 			}
 		}
 	}

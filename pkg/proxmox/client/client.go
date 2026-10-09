@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"mime/multipart"
 	"net"
 	"net/http"
 	"net/url"
@@ -41,10 +40,13 @@ var ErrNotFound = errors.New("not found")
 
 // Client is a Proxmox API client
 type Client struct {
-	endpoint    string
-	tokenID     string
-	tokenSecret string
-	httpClient  *http.Client
+	endpoint               string
+	tokenID                string
+	tokenSecret            string
+	httpClient             *http.Client
+	snippetSSHHosts        map[string]string
+	snippetSSHUser         string
+	snippetSSHIdentityFile string
 }
 
 // New creates a new Proxmox client with API token authentication
@@ -1121,66 +1123,6 @@ func (c *Client) SnippetExists(ctx context.Context, node, storage, filename stri
 	}
 
 	return false, nil
-}
-
-// UploadSnippet uploads a snippet file to storage
-// This uses multipart form upload to the Proxmox API
-func (c *Client) UploadSnippet(ctx context.Context, node, storage, filename, content string) error {
-	path := fmt.Sprintf("/api2/json/nodes/%s/storage/%s/upload", node, storage)
-
-	debugf("UploadSnippet: uploading %s to %s:snippets/", filename, storage)
-
-	// Create multipart form body
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-
-	// Add content type field (must be "snippets" for snippet files)
-	if err := writer.WriteField("content", "snippets"); err != nil {
-		return fmt.Errorf("failed to write content field: %w", err)
-	}
-
-	// Add file content as the "filename" form field
-	// Proxmox expects the file to be in the "filename" field with the filename as the form file name
-	part, err := writer.CreateFormFile("filename", filename)
-	if err != nil {
-		return fmt.Errorf("failed to create form file: %w", err)
-	}
-	if _, writeErr := part.Write([]byte(content)); writeErr != nil {
-		return fmt.Errorf("failed to write file content: %w", writeErr)
-	}
-
-	if closeErr := writer.Close(); closeErr != nil {
-		return fmt.Errorf("failed to close multipart writer: %w", closeErr)
-	}
-
-	// Create request
-	reqURL := c.endpoint + path
-	req, err := http.NewRequestWithContext(ctx, "POST", reqURL, &body)
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Authorization", fmt.Sprintf("PVEAPIToken=%s=%s", c.tokenID, c.tokenSecret))
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("upload request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read response: %w", err)
-	}
-
-	debugf("UploadSnippet: response status %d, body: %s", resp.StatusCode, truncate(string(respBody), 200))
-
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("upload failed (status %d): %s", resp.StatusCode, string(respBody))
-	}
-
-	return nil
 }
 
 // QemuAgentSnippetName is the standard name for the qemu-agent enablement snippet

@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/openctl/openctl/pkg/protocol"
+	"github.com/openctl/openctl/pkg/proxmox/resources"
 )
 
 func TestHandler_HandleUnknownResourceType(t *testing.T) {
@@ -343,103 +345,9 @@ func TestCreateVMFromTemplatePassesDiskStorageToClone(t *testing.T) {
 	}
 }
 
-// TestCreateVMUploadsPerVMVendorSnippet drives the create path for a VM that
-// declares cloud-init packages/runcmd and asserts the E1 wiring: a per-VM
-// vendor snippet (named by vmid) is uploaded with the packages + agent runcmd,
-// and the VM is configured with cicustom pointing at it.
-func TestCreateVMUploadsPerVMVendorSnippet(t *testing.T) {
-	var (
-		uploadedName    string
-		uploadedContent string
-		cicustom        string
-	)
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/api2/json/nodes" && r.Method == "GET":
-			json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"node": "pve1"}}})
-		case r.URL.Path == "/api2/json/nodes/pve1/qemu" && r.Method == "GET":
-			json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{
-				{"vmid": 9000, "name": "ubuntu-template", "template": 1, "status": "stopped"},
-			}})
-		case r.URL.Path == "/api2/json/cluster/nextid" && r.Method == "GET":
-			json.NewEncoder(w).Encode(map[string]any{"data": "200"})
-		case r.URL.Path == "/api2/json/nodes/pve1/storage" && r.Method == "GET":
-			json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{
-				{"storage": "local", "type": "dir", "content": "snippets,vztmpl,iso", "active": 1},
-				{"storage": "local-lvm", "type": "lvmthin", "content": "images,rootdir", "active": 1},
-			}})
-		case r.URL.Path == "/api2/json/nodes/pve1/qemu/9000/clone" && r.Method == "POST":
-			json.NewEncoder(w).Encode(map[string]any{"data": ""})
-		case r.URL.Path == "/api2/json/nodes/pve1/storage/local/upload" && r.Method == "POST":
-			if err := r.ParseMultipartForm(1 << 20); err != nil {
-				t.Fatalf("ParseMultipartForm: %v", err)
-			}
-			files := r.MultipartForm.File["filename"]
-			if len(files) != 1 {
-				t.Fatalf("upload: want 1 file field, got %d", len(files))
-			}
-			uploadedName = files[0].Filename
-			f, _ := files[0].Open()
-			b, _ := io.ReadAll(f)
-			uploadedContent = string(b)
-			json.NewEncoder(w).Encode(map[string]any{"data": ""})
-		case r.URL.Path == "/api2/json/nodes/pve1/qemu/200/config":
-			// ConfigureVM issues PUT; capture the cicustom-bearing call.
-			if err := r.ParseForm(); err != nil {
-				t.Fatalf("ParseForm: %v", err)
-			}
-			if c := r.Form.Get("cicustom"); c != "" {
-				cicustom = c
-			}
-			json.NewEncoder(w).Encode(map[string]any{"data": ""})
-		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	h := New(&protocol.ProviderConfig{Endpoint: server.URL, TokenID: "t", TokenSecret: "s", Node: "pve1"})
-	resp, err := h.Handle(context.Background(), &protocol.Request{
-		Version:      protocol.ProtocolVersion,
-		Action:       protocol.ActionCreate,
-		ResourceType: "VirtualMachine",
-		Manifest: &protocol.Resource{
-			APIVersion: "proxmox.openctl.io/v1",
-			Kind:       "VirtualMachine",
-			Metadata:   protocol.ResourceMetadata{Name: "longhorn-node"},
-			Spec: map[string]any{
-				"node":     "pve1",
-				"template": map[string]any{"name": "ubuntu-template"},
-				"cloudInit": map[string]any{
-					"packages": []any{"open-iscsi"},
-					"runcmd":   []any{"systemctl enable iscsid"},
-				},
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	if resp.Status != protocol.StatusSuccess {
-		t.Fatalf("status = %s, resp=%+v", resp.Status, resp)
-	}
-	if uploadedName != "openctl-vendor-200.yaml" {
-		t.Errorf("uploaded snippet name = %q, want openctl-vendor-200.yaml", uploadedName)
-	}
-	for _, want := range []string{"#cloud-config", "open-iscsi", "systemctl enable qemu-guest-agent", "systemctl enable iscsid"} {
-		if !strings.Contains(uploadedContent, want) {
-			t.Errorf("uploaded snippet missing %q:\n%s", want, uploadedContent)
-		}
-	}
-	if cicustom != "vendor=local:snippets/openctl-vendor-200.yaml" {
-		t.Errorf("cicustom = %q, want vendor=local:snippets/openctl-vendor-200.yaml", cicustom)
-	}
-}
-
-// snippetHardeningServer is a create-path fake whose /storage response is
-// configurable, so tests can exercise auto-selection and the no-snippets case.
-// It records the upload target storage and the cicustom value.
-func snippetHardeningServer(t *testing.T, storageData []map[string]any, uploadStorage *string, cicustom *string) *httptest.Server {
+// snippetHardeningServer supports create-path storage selection and an already
+// existing shared agent snippet. It deliberately has no HTTP upload endpoint.
+func snippetHardeningServer(t *testing.T, storageData []map[string]any, cicustom *string) *httptest.Server {
 	t.Helper()
 	return httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -455,11 +363,10 @@ func snippetHardeningServer(t *testing.T, storageData []map[string]any, uploadSt
 			json.NewEncoder(w).Encode(map[string]any{"data": storageData})
 		case r.URL.Path == "/api2/json/nodes/pve1/qemu/9000/clone" && r.Method == "POST":
 			json.NewEncoder(w).Encode(map[string]any{"data": ""})
-		case strings.HasSuffix(r.URL.Path, "/upload") && r.Method == "POST":
-			// /api2/json/nodes/pve1/storage/<storage>/upload
-			parts := strings.Split(r.URL.Path, "/")
-			*uploadStorage = parts[len(parts)-2]
-			json.NewEncoder(w).Encode(map[string]any{"data": ""})
+		case r.URL.Path == "/api2/json/nodes/pve1/storage/local/content" && r.Method == "GET":
+			json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{
+				{"volid": "local:snippets/openctl-qemu-agent.yaml", "content": "snippets"},
+			}})
 		case r.URL.Path == "/api2/json/nodes/pve1/qemu/200/config":
 			if err := r.ParseForm(); err != nil {
 				t.Fatalf("ParseForm: %v", err)
@@ -485,40 +392,34 @@ func createVMWithPackages(t *testing.T, h *Handler) (*protocol.Response, error) 
 			Kind:       "VirtualMachine",
 			Metadata:   protocol.ResourceMetadata{Name: "longhorn-node"},
 			Spec: map[string]any{
-				"node":      "pve1",
-				"template":  map[string]any{"name": "ubuntu-template"},
-				"cloudInit": map[string]any{"packages": []any{"open-iscsi"}},
+				"node":          "pve1",
+				"template":      map[string]any{"name": "ubuntu-template"},
+				"cloudInit":     map[string]any{"packages": []any{"open-iscsi"}},
+				"startOnCreate": true,
 			},
 		},
 	})
 }
 
-// TestCreateVMAutoSelectsSnippetsStorage: the preferred/default storage is
-// LVM-only (no snippets), so the vendor snippet must land on the node's
-// snippets-capable storage instead of silently failing.
+// The default storage cannot hold snippets; an existing shared agent snippet
+// on the selected snippets-capable storage must still be attached to the VM.
 func TestCreateVMAutoSelectsSnippetsStorage(t *testing.T) {
-	var uploadStorage, cicustom string
+	var cicustom string
 	server := snippetHardeningServer(t, []map[string]any{
 		{"storage": "local-lvm", "type": "lvmthin", "content": "images,rootdir", "active": 1},
 		{"storage": "local", "type": "dir", "content": "snippets,vztmpl", "active": 1},
-	}, &uploadStorage, &cicustom)
+	}, &cicustom)
 	defer server.Close()
 
 	// Default storage is the LVM one (can't hold snippets).
 	h := New(&protocol.ProviderConfig{Endpoint: server.URL, TokenID: "t", TokenSecret: "s", Node: "pve1",
 		Defaults: map[string]string{"storage": "local-lvm"}})
-	resp, err := createVMWithPackages(t, h)
+	err := h.applyCloudInitVendorSnippet(context.Background(), "pve1", 200, h.config.Defaults["storage"], &resources.CloudInitSpec{})
 	if err != nil {
-		t.Fatalf("Handle: %v", err)
+		t.Fatalf("applyCloudInitVendorSnippet: %v", err)
 	}
-	if resp.Status != protocol.StatusSuccess {
-		t.Fatalf("status = %s, resp=%+v", resp.Status, resp)
-	}
-	if uploadStorage != "local" {
-		t.Errorf("uploaded to %q, want local (auto-selected snippets-capable storage)", uploadStorage)
-	}
-	if cicustom != "vendor=local:snippets/openctl-vendor-200.yaml" {
-		t.Errorf("cicustom = %q, want vendor=local:snippets/openctl-vendor-200.yaml", cicustom)
+	if cicustom != "vendor=local:snippets/openctl-qemu-agent.yaml" {
+		t.Errorf("cicustom = %q, want vendor=local:snippets/openctl-qemu-agent.yaml", cicustom)
 	}
 }
 
@@ -526,10 +427,10 @@ func TestCreateVMAutoSelectsSnippetsStorage(t *testing.T) {
 // requested but the node has no snippets-capable storage, so create must fail
 // fast with an actionable error rather than produce a silently-broken node.
 func TestCreateVMFailsFastWhenNoSnippetsStorage(t *testing.T) {
-	var uploadStorage, cicustom string
+	var cicustom string
 	server := snippetHardeningServer(t, []map[string]any{
 		{"storage": "local-lvm", "type": "lvmthin", "content": "images,rootdir", "active": 1},
-	}, &uploadStorage, &cicustom)
+	}, &cicustom)
 	defer server.Close()
 
 	h := New(&protocol.ProviderConfig{Endpoint: server.URL, TokenID: "t", TokenSecret: "s", Node: "pve1"})
@@ -539,6 +440,31 @@ func TestCreateVMFailsFastWhenNoSnippetsStorage(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "snippets") {
 		t.Errorf("error should mention snippets storage, got: %v", err)
+	}
+	if cicustom != "" {
+		t.Fatalf("failed creation attached a snippet: %q", cicustom)
+	}
+}
+
+func TestCreateVMFailsWhenSnippetNodeHasNoSSHMapping(t *testing.T) {
+	var cicustom string
+	server := snippetHardeningServer(t, []map[string]any{
+		{"storage": "local", "type": "dir", "content": "snippets,vztmpl", "active": 1},
+	}, &cicustom)
+	defer server.Close()
+
+	// A mapping for another node must not authorize uploads to pve1, even
+	// though the API endpoint can list and clone VMs there.
+	h := New(&protocol.ProviderConfig{
+		Endpoint: server.URL, TokenID: "t", TokenSecret: "s", Node: "pve1",
+		SnippetSSH: &protocol.SnippetSSHConfig{Hosts: map[string]string{"pve2": "pve2.home"}},
+	})
+	_, err := createVMWithPackages(t, h)
+	if err == nil {
+		t.Fatal("explicit cloud-init packages must fail when their node has no SSH mapping")
+	}
+	if cicustom != "" {
+		t.Fatalf("failed upload attached a snippet: %q", cicustom)
 	}
 }
 
@@ -882,5 +808,89 @@ func TestVMObservationPropagatesConfigFailure(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestCloudImageDiskOptionsPreserveVolumeAndBlockFailedStart(t *testing.T) {
+	for _, rejectOptions := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reject-options=%t", rejectOptions), func(t *testing.T) {
+			disk := "local-lvm:vm-200-disk-0,size=3500M,cache=writethrough,backup=0"
+			started := false
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.URL.Path == "/api2/json/nodes":
+					json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"node": "pve1"}}})
+				case r.URL.Path == "/api2/json/nodes/pve1/qemu":
+					json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{{"vmid": 9000, "name": "cached-noble", "template": 1, "status": "stopped"}}})
+				case r.URL.Path == "/api2/json/cluster/nextid":
+					json.NewEncoder(w).Encode(map[string]any{"data": "200"})
+				case r.URL.Path == "/api2/json/nodes/pve1/qemu/9000/clone":
+					json.NewEncoder(w).Encode(map[string]any{"data": ""})
+				case r.URL.Path == "/api2/json/nodes/pve1/qemu/200/resize":
+					disk = strings.Replace(disk, "size=3500M", "size=300G", 1)
+					json.NewEncoder(w).Encode(map[string]any{"data": ""})
+				case r.URL.Path == "/api2/json/nodes/pve1/qemu/200/config" && r.Method == http.MethodGet:
+					json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"scsi0": disk}})
+				case r.URL.Path == "/api2/json/nodes/pve1/qemu/200/config" && r.Method == http.MethodPut:
+					if err := r.ParseForm(); err != nil {
+						t.Fatal(err)
+					}
+					if updated := r.Form.Get("scsi0"); updated != "" {
+						if rejectOptions {
+							http.Error(w, "storage rejects option change", http.StatusBadRequest)
+							return
+						}
+						disk = updated
+					}
+					json.NewEncoder(w).Encode(map[string]any{"data": ""})
+				case r.URL.Path == "/api2/json/nodes/pve1/storage":
+					json.NewEncoder(w).Encode(map[string]any{"data": []any{}})
+				case r.URL.Path == "/api2/json/nodes/pve1/qemu/200/status/start":
+					started = true
+					json.NewEncoder(w).Encode(map[string]any{"data": ""})
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+					http.Error(w, "unexpected request", http.StatusBadRequest)
+				}
+			}))
+			defer server.Close()
+			h := New(&protocol.ProviderConfig{Endpoint: server.URL, Node: "pve1"})
+			_, err := h.Handle(context.Background(), &protocol.Request{
+				Action: protocol.ActionCreate, ResourceType: "VirtualMachine",
+				Manifest: &protocol.Resource{
+					APIVersion: "proxmox.openctl.io/v1", Kind: "VirtualMachine",
+					Metadata: protocol.ResourceMetadata{Name: "dev-system"},
+					Spec: map[string]any{
+						"node":          "pve1",
+						"cloudImage":    map[string]any{"url": "https://example.invalid/noble.img", "storage": "local", "templateName": "cached-noble", "diskStorage": "local-lvm"},
+						"disks":         []any{map[string]any{"name": "scsi0", "storage": "local-lvm", "size": "300G", "ssd": true, "discard": true}},
+						"startOnCreate": true,
+					},
+				},
+			})
+			if rejectOptions {
+				if err == nil || started {
+					t.Fatalf("failed disk configuration must fail creation before start: err=%v started=%t", err, started)
+				}
+				return
+			}
+			if err != nil || !started {
+				t.Fatalf("configured VM must start: err=%v started=%t", err, started)
+			}
+			parts := strings.Split(disk, ",")
+			if parts[0] != "local-lvm:vm-200-disk-0" {
+				t.Fatalf("imported volume reference changed: %s", disk)
+			}
+			options := map[string]string{}
+			for _, part := range parts[1:] {
+				key, value, _ := strings.Cut(part, "=")
+				options[key] = value
+			}
+			for key, value := range map[string]string{"size": "300G", "ssd": "1", "discard": "on", "cache": "writethrough", "backup": "0"} {
+				if options[key] != value {
+					t.Errorf("disk %s=%q, want %q (config %s)", key, options[key], value, disk)
+				}
+			}
+		})
 	}
 }
