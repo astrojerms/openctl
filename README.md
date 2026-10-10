@@ -750,6 +750,9 @@ self-hosted runner labeled `openctl-linux` for pushes to `main` and
 same-repository pull requests. Fork pull requests use GitHub-hosted
 `ubuntu-latest` runners instead, even when their workflow runs are approved.
 Do not use `pull_request_target` to run fork code on the homelab runner.
+Keep repository Actions settings at `all_external_contributors` approval.
+The routing expression is not a security boundary: PRs can modify workflow
+YAML, so review workflow changes before approving an external contributor's run.
 
 CI installs Go 1.25, and the UI build explicitly installs Node 24.
 Workflow tokens have read-only repository contents access, and checkouts do
