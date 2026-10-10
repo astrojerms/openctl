@@ -743,6 +743,19 @@ make lint
 make modernize-check
 ```
 
+### CI runners
+
+All six Linux jobs in `.github/workflows/ci.yaml` use the repository's
+self-hosted runner labeled `openctl-linux` for pushes to `main` and
+same-repository pull requests. Fork pull requests use GitHub-hosted
+`ubuntu-latest` runners instead, even when their workflow runs are approved.
+Do not use `pull_request_target` to run fork code on the homelab runner.
+
+CI installs Go 1.25, and the UI build explicitly installs Node 24.
+Workflow tokens have read-only repository contents access, and checkouts do
+not persist credentials. With one registered self-hosted runner, trusted CI
+jobs execute sequentially and queue while that runner is busy or offline.
+
 ## Project Layout
 
 ```text
