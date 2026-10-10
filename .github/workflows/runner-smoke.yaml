@@ -1,0 +1,51 @@
+name: Temporary openctl runner verification
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  runner-smoke:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.actor == 'astrojerms' && github.event.pull_request.head.ref == 'ops/verify-openctl-runner-20261010-143803'
+    runs-on: [self-hosted, Linux, X64, openctl-linux]
+    timeout-minutes: 40
+    steps:
+      - name: Verify unprivileged account and network boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(id -un)" = actions
+          test "$(id -G)" = "$(id -g)"
+          test "$(awk '/NoNewPrivs/ {print $2}' /proc/self/status)" = 1
+          if sudo -n true; then echo 'Unexpected privileged access'; exit 1; fi
+          python3 - <<'PY'
+          import socket
+          with socket.socket() as listener:
+              listener.bind(('127.0.0.1', 0))
+              listener.listen(1)
+              with socket.create_connection(listener.getsockname(), timeout=3):
+                  conn, _ = listener.accept()
+                  conn.close()
+          try:
+              with socket.create_connection(('192.168.0.182', 22), timeout=3):
+                  raise SystemExit('Private Proxmox SSH unexpectedly reachable')
+          except OSError as e:
+              print('Private-network access denied:', type(e).__name__)
+          PY
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: make deps
+      - run: make build
+      - run: make test
+      - name: Run the built CLI
+        run: ./bin/openctl --help
