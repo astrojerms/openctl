@@ -12,6 +12,10 @@ import (
 	"strings"
 	"testing"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+
 	"github.com/openctl/openctl/internal/controller/auth"
 	"github.com/openctl/openctl/internal/controller/manifests"
 	"github.com/openctl/openctl/internal/controller/operations"
@@ -20,9 +24,6 @@ import (
 	"github.com/openctl/openctl/internal/controller/storage"
 	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 	"github.com/openctl/openctl/pkg/protocol"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 )
 
 func migrationVM() *protocol.Resource {
