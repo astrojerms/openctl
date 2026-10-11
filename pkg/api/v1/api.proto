@@ -36,17 +36,12 @@ message PingResponse {
   string build_time = 4;
 }
 
-// ResourceService is the controller's primary surface for managing resources
-// declaratively. From Phase 2 it operates synchronously per the
-// no-op-on-existing semantics; Phase 3 adds async dispatch via OperationService
-// for long-running applies (Cluster create, etc).
-//
-// Phase 2 supports atomic resources (VirtualMachine). Phase 4 adds composite
-// resources (Cluster) which spawn child operations.
+// ResourceService manages desired state and observed infrastructure. Apply
+// and Delete submit asynchronous operations; migration RPCs synchronously
+// transfer controller tracking without applying or deleting infrastructure.
 service ResourceService {
-  // Apply creates a resource. Phase 2 is no-op-on-existing: if a resource
-  // with the manifest's name already exists, the response carries its
-  // observed state without mutating it.
+  // Apply converges a resource, creating or updating infrastructure as needed.
+  // To adopt an existing VM without changing it, use AdoptResource instead.
   rpc Apply(ApplyRequest) returns (ApplyResponse) {
     option (google.api.http) = { post: "/v1/resources:apply" body: "*" };
   }
@@ -116,6 +111,62 @@ service ResourceService {
   rpc GetChildrenGraph(GetChildrenGraphRequest) returns (GetChildrenGraphResponse) {
     option (google.api.http) = { post: "/v1/resources:childrenGraph" body: "*" };
   }
+
+  // Export preserves ownership and packages desired intent with live identity.
+  rpc ExportResource(ExportResourceRequest) returns (ExportResourceResponse) {
+    option (google.api.http) = { post: "/v1/resources:export" body: "*" };
+  }
+
+  // Adopt tracks an existing standalone VM without changing the provider.
+  rpc AdoptResource(AdoptResourceRequest) returns (AdoptResourceResponse) {
+    option (google.api.http) = { post: "/v1/resources:adopt" body: "*" };
+  }
+
+  // Forget releases only controller tracking; the provider VM remains intact.
+  rpc ForgetResource(ForgetResourceRequest) returns (ForgetResourceResponse) {
+    option (google.api.http) = { post: "/v1/resources:forget" body: "*" };
+  }
+}
+
+// MigrationBundle contains desired intent, not observed state. Treat it as
+// sensitive: manifests may contain literal cloud-init credentials.
+message MigrationBundle {
+  uint32 version = 1;
+  Resource resource = 2;
+  string controller_id = 3;
+  string manifest_digest = 4;
+  string identity = 5;
+}
+
+message ExportResourceRequest {
+  string api_version = 1;
+  string kind = 2;
+  string name = 3;
+}
+
+message ExportResourceResponse {
+  MigrationBundle bundle = 1;
+}
+
+message AdoptResourceRequest {
+  // Exactly one of resource and bundle is required.
+  Resource resource = 1;
+  MigrationBundle bundle = 2;
+  // Overrides spec.context at the destination without rewriting the bundle.
+  string provider_context = 3;
+}
+
+message AdoptResourceResponse {
+  Resource resource = 1;
+  string message = 2;
+}
+
+message ForgetResourceRequest {
+  MigrationBundle bundle = 1;
+}
+
+message ForgetResourceResponse {
+  string message = 1;
 }
 
 message ListActionsRequest {

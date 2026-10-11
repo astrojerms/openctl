@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/openctl/openctl/internal/controller/manifests"
 )
 
 // Op type values. Kept as string constants so the wire format and the SQL
@@ -125,6 +127,10 @@ func (s *Store) Submit(ctx context.Context, op *Operation) (*Operation, error) {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	if err := manifests.CheckNotForgotten(ctx, tx, op.APIVersion, op.Kind, op.ResourceName); err != nil {
+		return nil, err
+	}
 
 	// Fail-fast concurrency check inside the transaction.
 	var inflightID sql.NullString

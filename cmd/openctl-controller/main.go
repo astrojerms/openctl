@@ -315,6 +315,7 @@ func runServe(args []string) error {
 	// gitOpsWebhook, when the push-triggered reconcile is configured, is built
 	// in the GitOps block below and mounted on the HTTP gateway further down.
 	var gitOpsWebhook *server.GitOpsWebhook
+	gitOpsEnabled := false
 
 	// Two-way GitOps: fsnotify watcher on the mirror dir. File edits
 	// become Apply ops tagged source="gitops". Opt-in (config
@@ -325,6 +326,7 @@ func runServe(args []string) error {
 		if cfg2, err := config.Load(); err == nil && cfg2 != nil &&
 			cfg2.Manifests != nil && cfg2.Manifests.GitOps != nil &&
 			cfg2.Manifests.GitOps.Enabled {
+			gitOpsEnabled = true
 			applyFn := func(ctx context.Context, r *protocol.Resource) error {
 				mJSON, err := json.Marshal(r)
 				if err != nil {
@@ -470,17 +472,18 @@ func runServe(args []string) error {
 	sessionStore := auth.NewSessionStore(db)
 
 	opts := server.Options{
-		Listen:     *listen,
-		CertFile:   mat.ServerCertPath,
-		KeyFile:    mat.ServerKeyPath,
-		Registry:   registry,
-		Operations: opStore,
-		Dispatcher: dispatcher,
-		Manifests:  manifestStore,
-		Sessions:   sessionStore,
-		DiskMirror: diskMirror,
-		Repo:       gitRepo,
-		Templates:  buildTemplateRegistry(),
+		Listen:        *listen,
+		CertFile:      mat.ServerCertPath,
+		KeyFile:       mat.ServerKeyPath,
+		Registry:      registry,
+		Operations:    opStore,
+		Dispatcher:    dispatcher,
+		Manifests:     manifestStore,
+		Sessions:      sessionStore,
+		DiskMirror:    diskMirror,
+		Repo:          gitRepo,
+		Templates:     buildTemplateRegistry(),
+		GitOpsEnabled: gitOpsEnabled,
 	}
 	if !*noAuth {
 		opts.Token = token

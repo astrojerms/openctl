@@ -63,6 +63,9 @@ type Options struct {
 	// Phase U1.4). When set, the auth interceptor accepts session tokens
 	// alongside the root bearer.
 	Sessions *auth.SessionStore
+	// GitOpsEnabled reflects running manifest watch/pull automation. Migration
+	// requires it disabled to avoid projection changes racing local handoff.
+	GitOpsEnabled bool
 	// DiskMirror is the on-disk projection of applied manifests (UI Phase
 	// U2.1). When set, the controller surfaces it via RepoService so the
 	// UI can show the directory + git status.
@@ -119,7 +122,10 @@ func New(opts Options) (*Server, error) {
 	if registry == nil {
 		registry = providers.NewRegistry()
 	}
-	apiv1.RegisterResourceServiceServer(g, newResourceHandler(registry, opts.Operations, opts.Dispatcher, opts.Manifests))
+	resourceHandler := newResourceHandler(registry, opts.Operations, opts.Dispatcher, opts.Manifests)
+	resourceHandler.mirror = opts.DiskMirror
+	resourceHandler.gitopsEnabled = opts.GitOpsEnabled
+	apiv1.RegisterResourceServiceServer(g, resourceHandler)
 	if opts.Operations != nil {
 		// Guard against a nil *Dispatcher becoming a non-nil interface (which
 		// would make CancelOperation attempt to cancel running ops on a nil

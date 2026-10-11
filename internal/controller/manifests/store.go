@@ -58,6 +58,25 @@ func (s *Store) SaveWithRefsHash(ctx context.Context, r *protocol.Resource, refs
 	if r == nil || r.APIVersion == "" || r.Kind == "" || r.Metadata.Name == "" {
 		return fmt.Errorf("save: apiVersion, kind, metadata.name all required")
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := CheckNotForgotten(ctx, tx, r.APIVersion, r.Kind, r.Metadata.Name); err != nil {
+		return err
+	}
+	if err := saveManifest(ctx, tx, r, refsHash, SourceFromContext(ctx)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+type manifestExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func saveManifest(ctx context.Context, q manifestExecer, r *protocol.Resource, refsHash, source string) error {
 	specJSON, err := json.Marshal(r.Spec)
 	if err != nil {
 		return fmt.Errorf("encode spec: %w", err)
@@ -66,17 +85,11 @@ func (s *Store) SaveWithRefsHash(ctx context.Context, r *protocol.Resource, refs
 	if err != nil {
 		return fmt.Errorf("encode metadata: %w", err)
 	}
-	// Provenance (K3): the dispatcher attaches the op's source to ctx via
-	// WithSource before calling the sink, so the row records who applied it
-	// ("cli"/"ui"/"gitops"/"auto-reconcile") as a first-class field. Empty
-	// when no source was attached — read back as "provenance unknown", which
-	// the Pruner treats like the old GC'd-op case (not protected).
-	source := SourceFromContext(ctx)
 	// SQLite treats "" as NULL-adjacent for this workflow — we store
 	// the empty string when no refs_hash is supplied, and read it back
 	// via COALESCE. This keeps the schema uniform without requiring
 	// callers to plumb sql.NullString values.
-	_, err = s.db.ExecContext(ctx,
+	_, err = q.ExecContext(ctx,
 		`INSERT INTO applied_manifests (api_version, kind, name, spec_json, metadata_json, applied_at, input_hash, refs_hash, source)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(api_version, kind, name) DO UPDATE SET
