@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+# Only main pushes and same-repository PRs may use the homelab runner.
+# Fork PRs remain GitHub-hosted, even after their workflow runs are approved.
+
 env:
   # Modules declare `go 1.25.0`; setup-go auto-downloads that toolchain
   # if it's newer than this baseline, but golangci-lint is compiled
@@ -16,15 +22,24 @@ env:
 jobs:
   build:
     name: Build
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON((github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && '["self-hosted","Linux","X64","openctl-linux"]' || '["ubuntu-latest"]') }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
 
       - name: Download dependencies
         run: make deps
@@ -34,10 +49,12 @@ jobs:
 
   test:
     name: Test
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON((github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && '["self-hosted","Linux","X64","openctl-linux"]' || '["ubuntu-latest"]') }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -59,10 +76,12 @@ jobs:
 
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON((github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && '["self-hosted","Linux","X64","openctl-linux"]' || '["ubuntu-latest"]') }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -92,10 +111,12 @@ jobs:
 
   vet:
     name: Vet & Staticcheck
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON((github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && '["self-hosted","Linux","X64","openctl-linux"]' || '["ubuntu-latest"]') }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -134,10 +155,12 @@ jobs:
 
   format:
     name: Format Check
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON((github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && '["self-hosted","Linux","X64","openctl-linux"]' || '["ubuntu-latest"]') }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -154,10 +177,12 @@ jobs:
 
   modernize:
     name: Modernize Check
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON((github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && '["self-hosted","Linux","X64","openctl-linux"]' || '["ubuntu-latest"]') }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v5
