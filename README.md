@@ -322,6 +322,93 @@ openctl ctl delete VirtualMachine web-01 --api-version proxmox.openctl.io/v1
 openctl ctl delete Cluster dev --api-version k3s.openctl.io/v1
 ```
 
+## Move VM Management Between Controllers
+
+`ctl export`, `ctl adopt`, and `ctl forget` move management of an existing
+standalone Proxmox `VirtualMachine` without a SQLite backup or VM recreation.
+They are administrator-only operations. Both controllers must run a version
+that supports these commands.
+
+Configure each controller's Proxmox endpoint and credentials independently.
+`source-client.yaml` and `destination-client.yaml` below are CLI configurations
+pointing at the respective controllers, not VM manifests. The destination
+provider context must reach the same VM; its context name can differ.
+
+Before starting, pause reconciliation on both controllers and stop other clients
+from applying, deleting, or running VM actions during the handoff. Disable
+manifest GitOps on both controllers and restart them: migration refuses while
+the startup-loaded GitOps watcher/pull loop is enabled. Migration also requires
+an idle controller, with no pending or running operations.
+
+Export only the VM being transferred:
+
+```bash
+openctl --config source-client.yaml ctl export VirtualMachine runner-01 \
+  --api-version proxmox.openctl.io/v1 -f runner-01.transfer.json
+```
+
+Export retains source ownership. The versioned JSON bundle contains desired
+intent, its digest, a source-controller identifier, and the live Proxmox node,
+VMID, and SMBIOS UUID. It does not copy controller credentials, sessions,
+operation history, or the database. Manifests can contain literal cloud-init
+secrets: export creates a new file with mode `0600`, refuses to overwrite an
+existing file, and never prints the bundle to stdout. Transfer it securely and
+keep the original unmodified for the source release.
+
+Adopt at the destination, optionally overriding the provider context:
+
+```bash
+openctl --config destination-client.yaml ctl adopt \
+  -f runner-01.transfer.json --provider-context proxmox-home
+openctl --config destination-client.yaml ctl get VirtualMachine runner-01 \
+  --api-version proxmox.openctl.io/v1
+```
+
+Adoption verifies the VM's physical identity and reads its current state before
+recording desired intent. It does not apply configuration, resize, start,
+delete, or rerun cloud-init. Existing drift remains visible; a subsequent
+explicit Apply or resumed reconciliation can converge that drift. A matching
+adoption retry is safe; conflicting destination intent is rejected.
+
+After verifying destination tracking, release only the source controller's
+ownership:
+
+```bash
+openctl --config source-client.yaml ctl forget -f runner-01.transfer.json
+```
+
+Forget validates the original source-controller identifier and full desired
+manifest digest, removes desired intent and its mirrored manifest, and leaves
+the VM and operation history intact. Changes made since export invalidate the
+bundle. Matching retries are safe. A durable release marker blocks stale
+Apply, Delete, runtime actions, and GitOps submissions, even after restart;
+only explicit adoption can reclaim the resource. There is no distributed
+transaction between controllers: keep both paused until this step succeeds.
+Update external GitOps repositories to contain only resources each controller
+should manage before restarting automation.
+
+Repeat for each runner being moved. Resources not selected for transfer, such
+as a dev VM remaining on the Mac controller, stay managed there.
+
+To register an existing VM that has a manifest but no source-controller
+record, use a single YAML or CUE manifest instead of a bundle:
+
+```bash
+openctl --config destination-client.yaml ctl adopt \
+  -f existing-runner.yaml --provider-context proxmox-home
+```
+
+Manifest adoption matches the existing VM by name and node, rejects ambiguous
+matches, and observes it without modifying it. It has no source-controller
+receipt and cannot be passed to `ctl forget`; export from the adopting
+controller first if that ownership must later be released.
+
+Migration currently supports only standalone `proxmox.openctl.io/v1`
+`VirtualMachine` resources. Composites, owned children, resources with inbound
+or outbound references, and resources requiring opaque provider state are
+rejected rather than incompletely transferred. Proxmox templates and VMs
+without a valid SMBIOS UUID cannot be adopted or exported.
+
 ## Example: Create A Ubuntu VM
 
 Save as `vm.yaml`:

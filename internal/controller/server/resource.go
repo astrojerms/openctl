@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -57,9 +58,14 @@ type resourceHandler struct {
 	registry   *providers.Registry
 	ops        *operations.Store
 	dispatcher *operations.Dispatcher
+	// Synchronous runtime actions must finish before migration can release
+	// ownership. Async operations are fenced by their SQLite admission checks.
+	managementMu sync.RWMutex
 	// manifests is optional: when set, Get/List populate the drift field by
 	// comparing observed state against the persisted desired manifest.
-	manifests *manifests.Store
+	manifests     *manifests.Store
+	mirror        *manifests.DiskMirror
+	gitopsEnabled bool
 }
 
 func newResourceHandler(reg *providers.Registry, ops *operations.Store, d *operations.Dispatcher, m *manifests.Store) *resourceHandler {
@@ -70,6 +76,8 @@ func (h *resourceHandler) Apply(ctx context.Context, req *apiv1.ApplyRequest) (*
 	if err := authorize(ctx, auth.RoleEditor); err != nil {
 		return nil, err
 	}
+	h.managementMu.RLock()
+	defer h.managementMu.RUnlock()
 	if req.GetResource() == nil {
 		return nil, status.Error(codes.InvalidArgument, "resource is required")
 	}
@@ -84,6 +92,9 @@ func (h *resourceHandler) Apply(ctx context.Context, req *apiv1.ApplyRequest) (*
 	}
 	if manifest.Metadata.Name == "" {
 		return nil, status.Error(codes.InvalidArgument, "metadata.name is required")
+	}
+	if err := h.checkNotForgotten(ctx, manifest.APIVersion, manifest.Kind, manifest.Metadata.Name); err != nil {
+		return nil, err
 	}
 
 	// Phase 5: surface the destructive flags to providers via annotations.
@@ -120,6 +131,10 @@ func (h *resourceHandler) Apply(ctx context.Context, req *apiv1.ApplyRequest) (*
 		Source:       sourceFromContext(ctx),
 	})
 	if err != nil {
+		var forgotten *manifests.ForgottenError
+		if errors.As(err, &forgotten) {
+			return nil, status.Error(codes.FailedPrecondition, forgotten.Error())
+		}
 		var conflict *operations.ConflictError
 		if errors.As(err, &conflict) {
 			return nil, status.Errorf(codes.AlreadyExists,
@@ -398,8 +413,13 @@ func (h *resourceHandler) InvokeAction(ctx context.Context, req *apiv1.InvokeAct
 	if err := authorize(ctx, auth.RoleEditor); err != nil {
 		return nil, err
 	}
+	h.managementMu.RLock()
+	defer h.managementMu.RUnlock()
 	if req.GetApiVersion() == "" || req.GetKind() == "" || req.GetResourceName() == "" || req.GetAction() == "" {
 		return nil, status.Error(codes.InvalidArgument, "api_version, kind, resource_name, and action are required")
+	}
+	if err := h.checkNotForgotten(ctx, req.GetApiVersion(), req.GetKind(), req.GetResourceName()); err != nil {
+		return nil, err
 	}
 	result, err := h.registry.DoAction(ctx, req.GetApiVersion(), req.GetKind(), req.GetResourceName(), req.GetAction(), req.GetParameters())
 	if err != nil {
@@ -838,8 +858,13 @@ func (h *resourceHandler) Delete(ctx context.Context, req *apiv1.DeleteRequest) 
 	if err := authorize(ctx, auth.RoleEditor); err != nil {
 		return nil, err
 	}
+	h.managementMu.RLock()
+	defer h.managementMu.RUnlock()
 	if _, err := h.registry.For(req.GetApiVersion()); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	if err := h.checkNotForgotten(ctx, req.GetApiVersion(), req.GetKind(), req.GetName()); err != nil {
+		return nil, err
 	}
 
 	// Block-on-references: refuse to delete a resource owned by another
@@ -873,6 +898,10 @@ func (h *resourceHandler) Delete(ctx context.Context, req *apiv1.DeleteRequest) 
 		Source:       sourceFromContext(ctx),
 	})
 	if err != nil {
+		var forgotten *manifests.ForgottenError
+		if errors.As(err, &forgotten) {
+			return nil, status.Error(codes.FailedPrecondition, forgotten.Error())
+		}
 		var conflict *operations.ConflictError
 		if errors.As(err, &conflict) {
 			return nil, status.Errorf(codes.AlreadyExists,

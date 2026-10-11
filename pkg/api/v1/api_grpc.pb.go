@@ -140,23 +140,21 @@ const (
 	ResourceService_ListActions_FullMethodName      = "/openctl.v1.ResourceService/ListActions"
 	ResourceService_InvokeAction_FullMethodName     = "/openctl.v1.ResourceService/InvokeAction"
 	ResourceService_GetChildrenGraph_FullMethodName = "/openctl.v1.ResourceService/GetChildrenGraph"
+	ResourceService_ExportResource_FullMethodName   = "/openctl.v1.ResourceService/ExportResource"
+	ResourceService_AdoptResource_FullMethodName    = "/openctl.v1.ResourceService/AdoptResource"
+	ResourceService_ForgetResource_FullMethodName   = "/openctl.v1.ResourceService/ForgetResource"
 )
 
 // ResourceServiceClient is the client API for ResourceService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// ResourceService is the controller's primary surface for managing resources
-// declaratively. From Phase 2 it operates synchronously per the
-// no-op-on-existing semantics; Phase 3 adds async dispatch via OperationService
-// for long-running applies (Cluster create, etc).
-//
-// Phase 2 supports atomic resources (VirtualMachine). Phase 4 adds composite
-// resources (Cluster) which spawn child operations.
+// ResourceService manages desired state and observed infrastructure. Apply
+// and Delete submit asynchronous operations; migration RPCs synchronously
+// transfer controller tracking without applying or deleting infrastructure.
 type ResourceServiceClient interface {
-	// Apply creates a resource. Phase 2 is no-op-on-existing: if a resource
-	// with the manifest's name already exists, the response carries its
-	// observed state without mutating it.
+	// Apply converges a resource, creating or updating infrastructure as needed.
+	// To adopt an existing VM without changing it, use AdoptResource instead.
 	Apply(ctx context.Context, in *ApplyRequest, opts ...grpc.CallOption) (*ApplyResponse, error)
 	// Get returns the observed state of a single resource.
 	Get(ctx context.Context, in *GetRequest, opts ...grpc.CallOption) (*GetResponse, error)
@@ -200,6 +198,12 @@ type ResourceServiceClient interface {
 	// applied manifest so the UI can render them dim (Phase U9). Returns an
 	// empty graph (root node only) for atomic resources.
 	GetChildrenGraph(ctx context.Context, in *GetChildrenGraphRequest, opts ...grpc.CallOption) (*GetChildrenGraphResponse, error)
+	// Export preserves ownership and packages desired intent with live identity.
+	ExportResource(ctx context.Context, in *ExportResourceRequest, opts ...grpc.CallOption) (*ExportResourceResponse, error)
+	// Adopt tracks an existing standalone VM without changing the provider.
+	AdoptResource(ctx context.Context, in *AdoptResourceRequest, opts ...grpc.CallOption) (*AdoptResourceResponse, error)
+	// Forget releases only controller tracking; the provider VM remains intact.
+	ForgetResource(ctx context.Context, in *ForgetResourceRequest, opts ...grpc.CallOption) (*ForgetResourceResponse, error)
 }
 
 type resourceServiceClient struct {
@@ -309,21 +313,46 @@ func (c *resourceServiceClient) GetChildrenGraph(ctx context.Context, in *GetChi
 	return out, nil
 }
 
+func (c *resourceServiceClient) ExportResource(ctx context.Context, in *ExportResourceRequest, opts ...grpc.CallOption) (*ExportResourceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExportResourceResponse)
+	err := c.cc.Invoke(ctx, ResourceService_ExportResource_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *resourceServiceClient) AdoptResource(ctx context.Context, in *AdoptResourceRequest, opts ...grpc.CallOption) (*AdoptResourceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdoptResourceResponse)
+	err := c.cc.Invoke(ctx, ResourceService_AdoptResource_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *resourceServiceClient) ForgetResource(ctx context.Context, in *ForgetResourceRequest, opts ...grpc.CallOption) (*ForgetResourceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ForgetResourceResponse)
+	err := c.cc.Invoke(ctx, ResourceService_ForgetResource_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ResourceServiceServer is the server API for ResourceService service.
 // All implementations must embed UnimplementedResourceServiceServer
 // for forward compatibility.
 //
-// ResourceService is the controller's primary surface for managing resources
-// declaratively. From Phase 2 it operates synchronously per the
-// no-op-on-existing semantics; Phase 3 adds async dispatch via OperationService
-// for long-running applies (Cluster create, etc).
-//
-// Phase 2 supports atomic resources (VirtualMachine). Phase 4 adds composite
-// resources (Cluster) which spawn child operations.
+// ResourceService manages desired state and observed infrastructure. Apply
+// and Delete submit asynchronous operations; migration RPCs synchronously
+// transfer controller tracking without applying or deleting infrastructure.
 type ResourceServiceServer interface {
-	// Apply creates a resource. Phase 2 is no-op-on-existing: if a resource
-	// with the manifest's name already exists, the response carries its
-	// observed state without mutating it.
+	// Apply converges a resource, creating or updating infrastructure as needed.
+	// To adopt an existing VM without changing it, use AdoptResource instead.
 	Apply(context.Context, *ApplyRequest) (*ApplyResponse, error)
 	// Get returns the observed state of a single resource.
 	Get(context.Context, *GetRequest) (*GetResponse, error)
@@ -367,6 +396,12 @@ type ResourceServiceServer interface {
 	// applied manifest so the UI can render them dim (Phase U9). Returns an
 	// empty graph (root node only) for atomic resources.
 	GetChildrenGraph(context.Context, *GetChildrenGraphRequest) (*GetChildrenGraphResponse, error)
+	// Export preserves ownership and packages desired intent with live identity.
+	ExportResource(context.Context, *ExportResourceRequest) (*ExportResourceResponse, error)
+	// Adopt tracks an existing standalone VM without changing the provider.
+	AdoptResource(context.Context, *AdoptResourceRequest) (*AdoptResourceResponse, error)
+	// Forget releases only controller tracking; the provider VM remains intact.
+	ForgetResource(context.Context, *ForgetResourceRequest) (*ForgetResourceResponse, error)
 	mustEmbedUnimplementedResourceServiceServer()
 }
 
@@ -403,6 +438,15 @@ func (UnimplementedResourceServiceServer) InvokeAction(context.Context, *InvokeA
 }
 func (UnimplementedResourceServiceServer) GetChildrenGraph(context.Context, *GetChildrenGraphRequest) (*GetChildrenGraphResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetChildrenGraph not implemented")
+}
+func (UnimplementedResourceServiceServer) ExportResource(context.Context, *ExportResourceRequest) (*ExportResourceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ExportResource not implemented")
+}
+func (UnimplementedResourceServiceServer) AdoptResource(context.Context, *AdoptResourceRequest) (*AdoptResourceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdoptResource not implemented")
+}
+func (UnimplementedResourceServiceServer) ForgetResource(context.Context, *ForgetResourceRequest) (*ForgetResourceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ForgetResource not implemented")
 }
 func (UnimplementedResourceServiceServer) mustEmbedUnimplementedResourceServiceServer() {}
 func (UnimplementedResourceServiceServer) testEmbeddedByValue()                         {}
@@ -580,6 +624,60 @@ func _ResourceService_GetChildrenGraph_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ResourceService_ExportResource_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExportResourceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ResourceServiceServer).ExportResource(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ResourceService_ExportResource_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ResourceServiceServer).ExportResource(ctx, req.(*ExportResourceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ResourceService_AdoptResource_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdoptResourceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ResourceServiceServer).AdoptResource(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ResourceService_AdoptResource_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ResourceServiceServer).AdoptResource(ctx, req.(*AdoptResourceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ResourceService_ForgetResource_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ForgetResourceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ResourceServiceServer).ForgetResource(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ResourceService_ForgetResource_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ResourceServiceServer).ForgetResource(ctx, req.(*ForgetResourceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ResourceService_ServiceDesc is the grpc.ServiceDesc for ResourceService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -618,6 +716,18 @@ var ResourceService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetChildrenGraph",
 			Handler:    _ResourceService_GetChildrenGraph_Handler,
+		},
+		{
+			MethodName: "ExportResource",
+			Handler:    _ResourceService_ExportResource_Handler,
+		},
+		{
+			MethodName: "AdoptResource",
+			Handler:    _ResourceService_AdoptResource_Handler,
+		},
+		{
+			MethodName: "ForgetResource",
+			Handler:    _ResourceService_ForgetResource_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
