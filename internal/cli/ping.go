@@ -83,6 +83,14 @@ func dialController() (*grpc.ClientConn, string, error) {
 		home, _ := os.UserHomeDir()
 		caFile = filepath.Join(home, ".openctl", "controller", "tls", "ca.crt")
 	}
+	tokenFile, err := config.ExpandPath(tokenFile)
+	if err != nil {
+		return nil, "", fmt.Errorf("resolve controller token path: %w", err)
+	}
+	caFile, err = config.ExpandPath(caFile)
+	if err != nil {
+		return nil, "", fmt.Errorf("resolve controller CA path: %w", err)
+	}
 
 	tokenData, err := os.ReadFile(tokenFile) // #nosec G304 -- path from config
 	if err != nil {
