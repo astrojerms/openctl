@@ -145,6 +145,10 @@ The main config file is:
 ~/.openctl/config.yaml
 ```
 
+Controller `tokenFile` and `caFile` accept absolute paths or `~/` paths.
+Home-relative paths resolve against the home directory of the user running
+the CLI, including when connecting to a remote controller.
+
 Create a Proxmox API token in Proxmox, then store the token secret outside the
 config file:
 
