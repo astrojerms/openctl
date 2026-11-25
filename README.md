@@ -16,6 +16,25 @@ The current happy path is controller-driven:
 Legacy exec-plugin commands such as `openctl proxmox get vms` still exist for
 direct provider access, but new workflows should use the controller path.
 
+## Agent Deployment Skill
+
+Load [`openctl-deploy`](.claude/skills/openctl-deploy/SKILL.md) when asking an
+agent to provision or update infrastructure. It guides controller/provider
+discovery, YAML/CUE declarations, authenticated schema validation and dry-run,
+dependency ordering, operation tracking, and live readiness checks. Destructive
+changes require explicit authorization.
+
+Claude Code can invoke `/openctl-deploy` in this checkout. For another project,
+copy the entire `.claude/skills/openctl-deploy/` directory into that project's
+`.claude/skills/` directory. Other agents can load `SKILL.md` explicitly or
+install the directory with their compatible skill loader. Keep its `references/`
+directory alongside it.
+
+The skill is self-contained: deployment needs an installed OpenCtl CLI and
+authorized access to the intended controller, not the OpenCtl source tree or
+the maintainer's homelab credentials. Its preflight reference uses Python 3's
+standard library and does not mutate infrastructure.
+
 ## What It Can Do
 
 - Create, update, resize, and delete Proxmox VMs.
