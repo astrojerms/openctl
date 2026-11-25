@@ -57,8 +57,13 @@ secrets/
 .cluster.yaml
 .cluster*.yaml
 
-# AI
-.claude
+# AI: publish only the portable deployment skill, not local agent state.
+.claude/
+!/.claude/
+/.claude/*
+!/.claude/skills/
+/.claude/skills/*
+!/.claude/skills/openctl-deploy/
 
 # local homelab verification config (not committed)
 homelab-verify.env
