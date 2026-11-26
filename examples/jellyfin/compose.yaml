@@ -1,0 +1,42 @@
+name: jellyfin
+
+services:
+  jellyfin:
+    image: ${JELLYFIN_IMAGE:?Set JELLYFIN_IMAGE to the official image digest in /opt/jellyfin/.env}
+    pull_policy: never
+    user: "1000:1000"
+    network_mode: host
+    restart: unless-stopped
+    runtime: nvidia
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - type: bind
+        source: /srv/jellyfin/config
+        target: /config
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /srv/jellyfin/cache
+        target: /cache
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/synology/video
+        target: /media
+        read_only: true
+        bind:
+          create_host_path: false
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
