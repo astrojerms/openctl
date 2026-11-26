@@ -800,6 +800,46 @@ metadata:
     openctl.io/autoReconcile: "true"
 ```
 
+## Containerized Jellyfin On Proxmox
+
+`examples/jellyfin/` provides a dedicated Ubuntu 24.04 VM template, NVIDIA GPU
+handoff script, Docker Compose service, guest installer, and local API onboarding.
+OpenCtl manages the VM; Compose/systemd manage the application inside it.
+
+- Configure the target Proxmox context and verified `snippetSSH` access first.
+  Enable VT-d in firmware and check IOMMU isolation. Create a named Proxmox PCI
+  mapping covering all functions of the GPU; API tokens cannot assign raw PCI
+  addresses. `prepare-gpu.sh DOMAIN:BUS:SLOT` runs **on Proxmox**, persists VFIO
+  binding, and hands over an idle card without rebooting. It disconnects the
+  host's physical GPU console; do not run it while that GPU or its USB ports
+  are in use.
+- Fill `vm.cue`'s abstract fields through a private CUE values file: context,
+  node, template VMID, storage, PCI mapping, bridge, network configuration, DNS,
+  and guest SSH public key. Keep local placement values and credentials out of git.
+
+  ```bash
+  openctl ctl apply -f examples/jellyfin/vm.cue --values /secure/jellyfin-values.cue
+  ```
+
+- Enable the VM's Proxmox start-at-boot option. Inside the guest, stage `install.sh`
+  beside `compose.yaml` and securely install `/etc/samba/synology.credentials`
+  as root-only `0600`. Run `sudo bash install.sh`, then reboot **the guest** to load
+  its NVIDIA driver. `NAS_SERVER` and `NAS_SHARE` default to `synology-space` and
+  `space`. No native Jellyfin package is installed.
+- Keep TCP 8096 blocked from the LAN during initial onboarding. Start
+  `jellyfin.service`, then run `onboard.py` locally inside the guest with private
+  JSON on stdin containing `admin` and `roku` objects with `username`/`password`
+  fields. It configures a non-admin Roku account, `/media` mixed-video library,
+  NVENC/NVDEC, CUDA HDR tone mapping, and LAN-only access. Unblock LAN access
+  after onboarding and connect the Roku Jellyfin app to the guest on port 8096.
+
+The SMB mount and container media bind are read-only. Docker waits for the real
+NAS mount before restoring containers; config/cache stay on local guest disk.
+The first install pins the official image digest in `/opt/jellyfin/.env`.
+Installer reruns preserve that pin but stop/disable Jellyfin until explicitly
+started again. Test actual transcoded playback, including HDR if used, rather
+than treating `nvidia-smi` alone as proof.
+
 ## Legacy Direct Plugin Commands
 
 These commands bypass the controller and talk directly to exec plugins. They
