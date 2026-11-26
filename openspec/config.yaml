@@ -1,0 +1,56 @@
+schema: spec-driven
+
+context: |
+  openctl — a homelab infrastructure controller and bounded homelab PaaS
+  (see docs/direction.md; ratified scope: infra + the workloads a homelab
+  runs on it, wired by $ref/$secret; NOT a general cloud PaaS).
+
+  Architecture: a persistent Go daemon (openctl-controller) owns a SQLite
+  state DB, compiles in-process providers, exposes gRPC + grpc-gateway REST,
+  and serves a Svelte web UI. Users author resources (uniform
+  protocol.Resource: apiVersion/kind/metadata/spec/status) via CLI
+  (openctl ctl apply) or UI; the dispatcher resolves $ref/$secret markers
+  pre-Apply and routes through providers. A persistent reconciler does 5-min
+  drift detection. Per-resource independence is the wedge — no global
+  plan/state.
+
+  Providers: compiled-in (proxmox VM, k3s Cluster), external pluginproto
+  plugins over stdio (plugins/cloudflare, plugins/k8s), and a Terraform host.
+  Deployment methods are providers/kinds (HelmRelease/Manifest/Kustomize/
+  Platform/Argo). CUE schemas in internal/schema/schemas + plugin-supplied.
+
+  Conventions: Go (gofmt + golangci-lint + staticcheck + modernize + go vet
+  all green in CI); tests colocated. Work ships branch → PR → squash-merge
+  (never local merge to main). ROADMAP.md is the tracked-work index; items
+  use [ ]/[~]/[x]. Secrets never in git (path/$secret markers only).
+
+# Project context (optional)
+# This is shown to AI when creating artifacts.
+# Add your tech stack, conventions, style guides, domain knowledge, etc.
+# Example:
+#   context: |
+#     Tech stack: TypeScript, React, Node.js
+#     We use conventional commits
+#     Domain: e-commerce platform
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
+
+# Per-operation guidance (optional)
+# Add advisory guidance for how apply and archive work should be conducted.
+# This is separate from artifact rules above.
+# Example:
+#   operations:
+#     apply:
+#       guidance:
+#         - Keep test summaries concise
+#     archive:
+#       guidance:
+#         - Summarize the archive outcome before finishing
