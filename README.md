@@ -1256,10 +1256,14 @@ Resource detail and the guided review distinguish these states; only `ready`
 is green. An absent public endpoint does not block a healthy private application.
 A configured endpoint is checked independently even when guest access fails.
 Required unknown/failed checks keep aggregate `status.ready` false and block
-guided progression/publication. This per-check `state` replaces the former
-`ready` boolean; update structured-output consumers and upgrade console/controller
-together. Aggregate `status.ready` remains a boolean. No check replaces a real
-playback test or authorizes a reboot, retry or public exposure.
+guided progression/publication. Console lists, details, child summaries and guided
+gates also reject contradictory evidence: `ready: true` cannot override a failed,
+unknown, malformed or obsolete reported check. A `ready`/`running` phase cannot
+substitute for boolean readiness. Optional `not_configured` checks remain neutral.
+This per-check `state` replaces the former `ready` boolean; update structured-output
+consumers and upgrade console/controller together. Aggregate `status.ready` remains
+a boolean. No check replaces a real playback test or authorizes a reboot, retry
+or public exposure.
 
 Changing the pinned image is an in-place application rollout. Target host,
 project/directory and NAS placement are immutable to prevent orphaning data.

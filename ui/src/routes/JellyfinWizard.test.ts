@@ -224,7 +224,7 @@ describe('visible blocked deployment diagnostics', () => {
 });
 
 describe('recovered application readiness evidence', () => {
-  it('keeps unknown and optional evidence neutral and blocks completion after a successful Apply with aggregate false', async () => {
+  it.each([false, true, 'true', undefined])('keeps failed/unknown checks blocking completion despite aggregate %j or a ready phase', async (ready) => {
     const resource: ControllerAPI.Resource = {
       apiVersion: 'apps.openctl.io/v1', kind: 'Jellyfin', metadata: { name: 'jellyfin' }, spec: {},
     };
@@ -239,7 +239,7 @@ describe('recovered application readiness evidence', () => {
       manifestJson: JSON.stringify(resource),
     });
     vi.mocked(resources.get).mockResolvedValue({ applied: resource, resource: { ...resource, status: {
-      ready: false, checks: {
+      phase: 'ready', ready, checks: {
         application: { state: 'ready', message: '<img src=x onerror=alert(1)>' },
         http: { state: 'not_ready', message: 'Attempt failed' },
         gpu: { state: 'unknown', message: 'Skipped without SSH' },

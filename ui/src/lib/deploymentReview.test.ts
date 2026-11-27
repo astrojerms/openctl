@@ -16,6 +16,14 @@ const resource: Resource = {
 const step: DeploymentStep = { title: 'Install Jellyfin', resource, createOnly: true };
 const consent: ReviewConsent = { dedicated: true, trustedKey: true, publicExposure: true, gates: {} };
 const absent = () => new ApiError(404, 'not found');
+const unprovenHealth: Resource['status'][] = [
+  { phase: 'ready' },
+  { phase: 'ready', ready: true, checks: { gpu: { state: 'not_ready' } } },
+  { phase: 'ready', ready: true, checks: { gpu: { state: 'unknown' } } },
+  { ready: true, checks: { gpu: { state: 'future' } } },
+  { ready: true, checks: { gpu: { ready: true } } },
+  { ready: true, checks: [] },
+];
 function memoryStorage() {
   const data = new Map<string, string>();
   return {
@@ -422,6 +430,39 @@ describe('full guided sequence recovery', () => {
     expect(h.engine.state.blocker?.code).toBe('baseline_changed');
     expect(h.engine.state.verified).toBe(false);
     expect(h.engine.state.preview).toBeNull();
+    expect(h.api.apply).toHaveBeenCalledTimes(2);
+    expect(h.api.requestId).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(unprovenHealth)('cannot advance past a successful application with unproven health: %j', async (status) => {
+    const steps = jellyfinDeployment({ ...inputs, createVM: false });
+    const h = harness(steps); h.engine.save();
+    await h.engine.review(); await h.engine.submit(consent);
+    const app = steps[0].resource;
+    h.accept('request-1', 'succeeded', app);
+    h.live.set(app.metadata.name, { applied: app, resource: { ...app, status } });
+    await expect(h.engine.next()).rejects.toThrow(/readiness evidence/);
+    expect(h.engine.state.saved.cursor).toBe(0);
+    expect(readSavedReview(h.storage, binding)?.cursor).toBe(0);
+    expect(h.api.apply).toHaveBeenCalledTimes(1);
+    h.live.set(app.metadata.name, { applied: app, resource: { ...app, status: {
+      ready: true, checks: { gpu: { state: 'ready' }, publicEndpoint: { state: 'not_configured' } },
+    } } });
+    await h.engine.next();
+    expect(h.engine.state.saved.cursor).toBe(1);
+    expect(h.engine.state.preview?.operation).toBe('create');
+    expect(h.api.apply).toHaveBeenCalledTimes(1);
+    expect(h.api.requestId).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(unprovenHealth)('blocks final publication admission when an accepted application has unproven health: %j', async (status) => {
+    const h = await publicReview();
+    h.live.set(h.app.metadata.name, { applied: h.app, resource: { ...h.app, status } });
+    await expect(h.engine.submit(consent)).rejects.toThrow();
+    expect(h.engine.state.blocker?.code).toBe('readiness_unproven');
+    expect(h.engine.state.preview).toBeNull();
+    expect(h.engine.state.verified).toBe(false);
+    expect(readSavedReview(h.storage, binding)?.steps[2].attempt).toBeUndefined();
     expect(h.api.apply).toHaveBeenCalledTimes(2);
     expect(h.api.requestId).toHaveBeenCalledTimes(2);
   });

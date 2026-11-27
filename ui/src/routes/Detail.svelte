@@ -140,7 +140,7 @@
           const r = await resources.get(ref.apiVersion, ref.kind, ref.name, { signal: childRequest.signal });
           if (!inspection.current(lease, true) || childRequest.signal.aborted) return;
           childStates = { ...childStates, [childKey(ref)]: {
-            badge: statusBadge(r.resource.status),
+            badge: statusBadge(r.resource),
             driftCount: r.resource.drift?.length ?? 0,
           } };
         } catch (err) {
@@ -218,12 +218,8 @@
     return `${Math.floor(seconds / 86400)}d ago`;
   }
 
-  $: state = data ? statusBadge(data.resource.status) : null;
+  $: displayState = data ? statusBadge(data.resource) : null;
   $: appChecks = apiVersion === 'apps.openctl.io/v1' ? applicationChecks(data?.resource.status) : [];
-  $: appReady = data?.resource.status?.ready;
-  $: displayState = apiVersion === 'apps.openctl.io/v1' && typeof appReady === 'boolean'
-    ? { label: String(data?.resource.status?.phase ?? (appReady ? 'ready' : 'not ready')), tone: appReady ? 'good' : state?.tone === 'bad' ? 'bad' : 'warn' }
-    : state;
   $: standaloneVM = apiVersion === 'proxmox.openctl.io/v1' && kind === 'VirtualMachine'
     && !!data?.applied && !data.resource.metadata.ownerRefs?.length && !data.resource.children?.length;
 

@@ -333,9 +333,12 @@ do not forward raw provider errors, response bodies, URLs or certificate fields.
   `ready`, `not_ready`, `unknown` or `not_configured`. Skipped dependent probes
   are unknown, not observed failures; absent optional public exposure is neutral,
   not a passed endpoint check. Required unknown/failed evidence keeps aggregate
-  `status.ready` false. Per-check state replaces the old per-check ready boolean;
-  upgrade structured-output consumers with the controller/console. Do not
-  publish, reboot or retry automatically to turn a check green.
+  `status.ready` false. Console badges and guided gates also reject contradictory
+  `ready: true` when reported checks are failed, unknown, malformed or obsolete;
+  a `ready`/`running` phase is not readiness authority. Per-check state replaces
+  the old per-check ready boolean; upgrade structured-output consumers with the
+  controller/console. Do not publish, reboot or retry automatically to turn a
+  check green.
 - A Jellyfin public endpoint must return onboarded JSON system information whose
   server ID matches the fresh local observation over verified guest SSH. HTTP
   200 from a login portal or another instance is not readiness; missing guest

@@ -209,8 +209,8 @@ export function createResourceListState(): ResourceListController {
 
 export function resourceRowStatus(row: ResourceListRow): StatusBadge {
   switch (row.observation) {
-    case 'fresh': return statusBadge(row.observed?.status);
-    case 'stale': return { label: `Stale · ${statusBadge(row.observed?.status).label}`, tone: 'unknown' };
+    case 'fresh': return statusBadge(row.observed);
+    case 'stale': return { label: `Stale · ${statusBadge(row.observed).label}`, tone: 'unknown' };
     case 'unavailable': return { label: 'Observation unavailable', tone: 'unknown' };
     case 'not-returned': return { label: 'Not returned by observation', tone: 'unknown' };
     case 'pending': return { label: 'Observation pending', tone: 'unknown' };

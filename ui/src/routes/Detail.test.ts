@@ -194,11 +194,11 @@ describe('saved-only detail inspection', () => {
     expect(apply).not.toHaveBeenCalled();
   });
 
-  it('renders mixed application evidence neutrally for skipped, absent optional, and unsupported checks', async () => {
+  it.each([false, true, undefined])('renders mixed application evidence without a green aggregate badge despite ready=%j', async (ready) => {
     const appProps = { ...props, apiVersion: 'apps.openctl.io/v1', kind: 'Jellyfin' };
     const resource = { ...saved.resource, apiVersion: appProps.apiVersion, kind: appProps.kind };
     vi.spyOn(inventoryApi, 'get').mockResolvedValue({ ...saved, resource });
-    vi.spyOn(resources, 'get').mockResolvedValue({ resource: { ...resource, status: { ready: false, checks: {
+    vi.spyOn(resources, 'get').mockResolvedValue({ resource: { ...resource, status: { phase: 'ready', ready, checks: {
       application: { state: 'ready', message: '<img src=x onerror=alert(1)>' },
       http: { state: 'not_ready', message: 'Attempted probe failed' },
       gpu: { state: 'unknown', message: 'Skipped without SSH' },
@@ -207,6 +207,8 @@ describe('saved-only detail inspection', () => {
     } } } });
     component = mount(Detail, { target, props: appProps });
     await settle();
+    expect(target.querySelector('header .header-right > .state')?.textContent).toBe('Not ready');
+    expect(target.querySelector('header .header-right > .state-good')).toBeNull();
     const rows = [...target.querySelectorAll('tr')];
     for (const [name, label, tone] of [
       ['application', 'Ready', 'good'], ['http', 'Not ready', 'warn'],
@@ -219,6 +221,33 @@ describe('saved-only detail inspection', () => {
     }
     expect(target.textContent).toContain('<img src=x onerror=alert(1)>');
     expect(target.querySelector('img')).toBeNull();
+  });
+
+  it.each([
+    { phase: 'ready' },
+    { phase: 'ready', ready: true, checks: { gpu: { state: 'unknown' } } },
+    { phase: 'ready', ready: true, checks: [] },
+  ])('shows application aggregate unknown rather than trusting a ready phase: %j', async (status) => {
+    const appProps = { ...props, apiVersion: 'apps.openctl.io/v1', kind: 'Jellyfin' };
+    const resource = { ...saved.resource, apiVersion: appProps.apiVersion, kind: appProps.kind };
+    vi.spyOn(inventoryApi, 'get').mockResolvedValue({ ...saved, resource });
+    vi.spyOn(resources, 'get').mockResolvedValue({ resource: { ...resource, status } });
+    component = mount(Detail, { target, props: appProps });
+    await settle();
+    expect(target.querySelector('header .header-right > .state')?.textContent).toBe('Unknown');
+    expect(target.querySelector('header .header-right > .state-good')).toBeNull();
+  });
+
+  it('does not count an application child as healthy from phase or contradictory readiness', async () => {
+    const child = { apiVersion: 'apps.openctl.io/v1', kind: 'Jellyfin', name: 'media' };
+    vi.spyOn(resources, 'get').mockImplementation(async (_av, _kind, name) => name === child.name
+      ? { resource: { apiVersion: child.apiVersion, kind: child.kind, metadata: { name }, status: {
+        phase: 'ready', ready: true, checks: { gpu: { state: 'unknown' } },
+      } } }
+      : { ...observed, resource: { ...observed.resource, children: [child] } });
+    component = mount(Detail, { target, props });
+    await vi.waitFor(() => expect(target.querySelector('[title^="Aggregated child status"]')?.textContent).toContain('1 unknown / loading'));
+    expect(target.querySelector('[title^="Aggregated child status"]')?.classList.contains('state-unknown')).toBe(true);
   });
 
   it('removes application checks and child readiness and ignores late child results when observation fails', async () => {

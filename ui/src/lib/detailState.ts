@@ -30,12 +30,34 @@ export function applicationCheckBadge(state: AppCheckState): StatusBadge {
   return CHECK_BADGES[state];
 }
 
+function checkState(state: unknown): AppCheckState {
+  return state === 'ready' || state === 'not_ready' || state === 'not_configured' ? state : 'unknown';
+}
+
+// Match ctl health: a reported failure wins, unknown evidence cannot be green,
+// and absent optional checks never substitute for explicit aggregate readiness.
+export function applicationReadiness(status: Record<string, unknown> | undefined): Exclude<AppCheckState, 'not_configured'> {
+  let state: Exclude<AppCheckState, 'not_configured'> = status?.ready === true ? 'ready' : status?.ready === false ? 'not_ready' : 'unknown';
+  if (!status || !Object.hasOwn(status, 'checks')) return state;
+  const checks = status.checks;
+  if (!checks || typeof checks !== 'object' || Array.isArray(checks)) return state === 'ready' ? 'unknown' : state;
+  for (const name in checks) {
+    if (!Object.hasOwn(checks, name)) continue;
+    const value = (checks as Record<string, unknown>)[name];
+    const check = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+    const evidence = checkState(check?.state);
+    if (evidence === 'not_ready') return 'not_ready';
+    if (evidence === 'unknown' && state === 'ready') state = 'unknown';
+  }
+  return state;
+}
+
 export function applicationChecks(status: Record<string, unknown> | undefined): AppCheck[] {
   const checks = status?.checks;
   if (!checks || typeof checks !== 'object' || Array.isArray(checks)) return [];
   return Object.entries(checks).map(([name, value]) => {
     const check = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
-    const state = check.state === 'ready' || check.state === 'not_ready' || check.state === 'not_configured' ? check.state : 'unknown';
+    const state = checkState(check.state);
     return { name, state, message: typeof check.message === 'string' ? check.message : '' };
   });
 }

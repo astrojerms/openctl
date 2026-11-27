@@ -139,6 +139,10 @@ Application checks distinguish **Ready**, **Not ready**, **Unknown** and
 **Not configured**. Guest access failure leaves skipped dependent checks unknown,
 not falsely failed; an absent optional public endpoint is neutral. Required
 unknown/failed checks still block readiness and guided progression.
+Console lists, details, child summaries and deployment gates require explicit
+boolean readiness with consistent checks, just like `ctl health`. Even
+`ready: true` cannot override failed, unknown or malformed evidence; a `ready`
+phase alone is not application readiness.
 For automation, `openctl ctl health Jellyfin NAME --api-version apps.openctl.io/v1 -o json`
 reports live health-only diagnostics and exits nonzero unless readiness
 is established. It reads only that resource, with no Apply, polling, retry or saved

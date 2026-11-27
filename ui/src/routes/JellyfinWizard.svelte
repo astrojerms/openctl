@@ -7,7 +7,7 @@
   import { createSavedReview, DeploymentReview, discardSavedReview, failedReviewOperation, loadReviewBinding, readSavedReview, REVIEW_KEY, reviewError, type ReviewBinding, type ReviewState, type SavedReview } from '../lib/deploymentReview';
   import { jellyfinDeployment, APP_API, VM_API, type DeploymentStep, type JellyfinInputs } from '../lib/jellyfin';
   import { routeHref } from '../lib/router';
-  import { applicationCheckBadge, applicationChecks } from '../lib/detailState';
+  import { applicationCheckBadge, applicationChecks, applicationReadiness } from '../lib/detailState';
 
   let input: JellyfinInputs = {
     name: 'jellyfin', vmName: '', createVM: false, context: '', node: '', templateVMID: 0,
@@ -141,7 +141,7 @@
     !(preview?.fieldErrors ?? []).some((field) => problem === field.message || problem === `${field.path}: ${field.message}`));
   $: monitorOnly = !!operation && ['pending', 'running'].includes(operation.status);
   $: uncertain = !!state?.saved.steps[index]?.attempt && !operation;
-  $: applicationReady = current?.resource.apiVersion !== APP_API || observed?.status?.ready === true;
+  $: applicationReady = current?.resource.apiVersion !== APP_API || applicationReadiness(observed?.status) === 'ready';
   $: checks = applicationChecks(observed?.status);
   $: applicationName = steps.find((step) => step.resource.kind === 'Jellyfin')?.resource.metadata.name ?? input.name;
 

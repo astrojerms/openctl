@@ -2,7 +2,7 @@ import { ApiError, operations, ping, resources, schemas, session, UnauthorizedEr
 import { APP_API, VM_API, type DeploymentStep } from './jellyfin';
 import { withoutRequestConsent } from './retry';
 import { watchOperations, type OperationEvent } from './watch';
-import { applicationChecks } from './detailState';
+import { applicationChecks, applicationReadiness } from './detailState';
 import type { AppCheck } from './detailState';
 import type { ResourceRef } from './api';
 
@@ -330,7 +330,7 @@ export class DeploymentReview {
       try { this.assertBaseline(result, expected); } catch {
         this.blockDependency(resource, 'baseline_changed', 'A prerequisite baseline is missing, changed or owned elsewhere. Inspect it before proceeding; this review will not overwrite or recreate it.');
       }
-      if (resource.apiVersion === APP_API && !sameTarget(resource, this.step.resource) && result!.resource.status?.ready !== true) {
+      if (resource.apiVersion === APP_API && !sameTarget(resource, this.step.resource) && applicationReadiness(result!.resource.status) !== 'ready') {
         this.blockDependency(resource, 'readiness_unproven', 'The previously accepted application has not established current readiness. Inspect its checks and repair it before proceeding or publishing.', result!.resource);
       }
     }
@@ -484,7 +484,7 @@ export class DeploymentReview {
   async next(): Promise<void> {
     await this.resume();
     if (!this.state.verified || this.state.operation?.status !== 'succeeded'
-      || (this.step.resource.apiVersion === APP_API && this.state.observed?.status?.ready !== true)) throw new Error('Fresh successful operation and readiness evidence are required before proceeding.');
+      || (this.step.resource.apiVersion === APP_API && applicationReadiness(this.state.observed?.status) !== 'ready')) throw new Error('Fresh successful operation and readiness evidence are required before proceeding.');
     if (this.state.saved.cursor >= this.state.saved.steps.length - 1) return;
     this.store({ ...this.state.saved, cursor: this.state.saved.cursor + 1 });
     this.state.operation = null;

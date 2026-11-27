@@ -437,6 +437,26 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
   provider audit retained one successful application Apply, no route/DNS operation
   and no replacement request. No live homelab mutation or hardware acceptance.
 
+**Consistent console application readiness (2026-11-27):**
+
+- [x] Lists, resource detail, composed-child summaries and guided deployment gates
+  share one strict application-readiness rule matching `ctl health`. Explicit
+  boolean readiness is required; failed checks are decisive, unknown/malformed
+  evidence cannot be green, and optional unconfigured checks remain neutral.
+  Lifecycle phase labels and positive aggregates cannot override contrary evidence.
+- [x] Current-step advancement, completion and final publication rechecks use
+  that rule without new provider reads, scans, retries or mutations. Repair and
+  independent resource lifecycle controls remain available.
+- Verification: 191 focused health, list, detail and guided-recovery cases,
+  frontend typecheck and production build passed. The actual console ran against
+  a real SQLite/auth/admission/dispatcher controller with isolated vendor
+  simulators. Failed/unknown GPU evidence defeated `phase: ready` plus `ready: true`
+  in list/detail badges and deployment gates. Current work could not advance;
+  later publication was blocked at final submission. Repair restored a fresh
+  preview with all three consents unchecked and the original accepted request
+  unchanged. SQLite/provider audit showed one application Apply, no route/DNS
+  operation and no duplicate mutation. No live homelab or hardware acceptance.
+
 The next product acceptance gate is the complete operator journey on real
 hardware, including recovery, media playback and any approved public endpoint.
 See [direction](docs/direction.md). Provider breadth is downstream of that gate.

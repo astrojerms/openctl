@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ResourceRef } from './api';
-import { applicationCheckBadge, applicationChecks, childHealth, type ChildState } from './detailState';
+import { applicationCheckBadge, applicationChecks, applicationReadiness, childHealth, type ChildState } from './detailState';
 
 const refs: ResourceRef[] = [
   { apiVersion: 'proxmox.openctl.io/v1', kind: 'VirtualMachine', name: 'one' },
@@ -55,5 +55,37 @@ describe('applicationChecks', () => {
     expect(applicationChecks({ checks: { vm: { state: 'ready', message: {} } } })[0].message).toBe('');
     for (const checks of [undefined, null, [], true, 'ready']) expect(applicationChecks({ checks })).toEqual([]);
     expect(applicationChecks(undefined)).toEqual([]);
+  });
+});
+
+describe('applicationReadiness', () => {
+  it.each([
+    [undefined, 'unknown'],
+    [{ phase: 'Ready' }, 'unknown'],
+    [{ ready: 'true' }, 'unknown'],
+    [{ ready: true }, 'ready'],
+    [{ ready: true, checks: {} }, 'ready'],
+    [{ ready: true, checks: { gpu: { state: 'ready' }, publicEndpoint: { state: 'not_configured' } } }, 'ready'],
+    [{ ready: false, checks: { http: { state: 'ready' } } }, 'not_ready'],
+    [{ checks: { http: { state: 'ready' } } }, 'unknown'],
+    [{ checks: { http: { state: 'not_ready' } } }, 'not_ready'],
+  ] as const)('requires explicit aggregate readiness for %j', (status, expected) => {
+    expect(applicationReadiness(status)).toBe(expected);
+  });
+
+  it.each([null, [], true, 'ready'])('does not let a malformed check container override a positive aggregate: %j', (checks) => {
+    expect(applicationReadiness({ ready: true, checks })).toBe('unknown');
+  });
+
+  it.each([undefined, null, [], true, {}, { ready: true }, { state: 'future' }, { state: 'Ready' }, { state: 'unknown' }])('does not let malformed, skipped or obsolete evidence override a positive aggregate: %j', (gpu) => {
+    expect(applicationReadiness({ ready: true, checks: { gpu } })).toBe('unknown');
+  });
+
+  it.each([
+    { gpu: { state: 'unknown' }, http: { state: 'not_ready' } },
+    { http: { state: 'not_ready' }, gpu: { state: 'unknown' } },
+  ])('keeps observed failure decisive regardless of check ordering: %j', (checks) => {
+    expect(applicationReadiness({ ready: true, checks })).toBe('not_ready');
+    expect(applicationReadiness({ ready: false, checks })).toBe('not_ready');
   });
 });
