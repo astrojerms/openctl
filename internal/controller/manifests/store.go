@@ -194,6 +194,121 @@ func (s *Store) LoadWithTime(ctx context.Context, apiVersion, kind, name string)
 	return r, ts, nil
 }
 
+// SavedMetadata describes persisted desired intent, not observed provider state.
+// It deliberately has no spec, status or provider-derived relationships.
+type SavedMetadata struct {
+	APIVersion string
+	Kind       string
+	Metadata   protocol.ResourceMetadata
+	AppliedAt  time.Time
+	Source     string
+}
+
+// SavedRecord is one consistent read of desired intent and its provenance.
+type SavedRecord struct {
+	Resource  *protocol.Resource
+	AppliedAt time.Time
+	Source    string
+}
+
+// ListSavedMetadata lists a selected kind by name without reading spec_json.
+// Corrupt metadata is an error rather than an apparently empty inventory.
+func (s *Store) ListSavedMetadata(ctx context.Context, apiVersion, kind string) ([]SavedMetadata, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT name, COALESCE(metadata_json, ''), COALESCE(applied_at, ''), COALESCE(source, '')
+		 FROM applied_manifests WHERE api_version = ? AND kind = ? ORDER BY name`,
+		apiVersion, kind)
+	if err != nil {
+		return nil, fmt.Errorf("list saved metadata: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := make([]SavedMetadata, 0)
+	for rows.Next() {
+		var name, metadataJSON, appliedAt, source string
+		if err := rows.Scan(&name, &metadataJSON, &appliedAt, &source); err != nil {
+			return nil, fmt.Errorf("scan saved metadata: %w", err)
+		}
+		metadata, err := decodeSavedMetadata(metadataJSON, name)
+		if err != nil {
+			return nil, fmt.Errorf("saved %s %s %q: %w", apiVersion, kind, name, err)
+		}
+		ts, err := decodeSavedAppliedAt(appliedAt)
+		if err != nil {
+			return nil, fmt.Errorf("saved %s %s %q: %w", apiVersion, kind, name, err)
+		}
+		out = append(out, SavedMetadata{
+			APIVersion: apiVersion,
+			Kind:       kind,
+			Metadata:   metadata,
+			AppliedAt:  ts,
+			Source:     source,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list saved metadata: %w", err)
+	}
+	return out, nil
+}
+
+// LoadSavedRecord reads raw desired intent and provenance in the same SELECT.
+// A missing record returns (nil, nil). No references or secrets are resolved.
+// Legacy Load/LoadWithTime retain their historical tolerant decoding behavior.
+func (s *Store) LoadSavedRecord(ctx context.Context, apiVersion, kind, name string) (*SavedRecord, error) {
+	var specJSON sql.NullString
+	var metadataJSON, appliedAt, source string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT spec_json, COALESCE(metadata_json, ''), COALESCE(applied_at, ''), COALESCE(source, '')
+		 FROM applied_manifests WHERE api_version = ? AND kind = ? AND name = ?`,
+		apiVersion, kind, name).Scan(&specJSON, &metadataJSON, &appliedAt, &source)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load saved record: %w", err)
+	}
+	metadata, err := decodeSavedMetadata(metadataJSON, name)
+	if err != nil {
+		return nil, fmt.Errorf("saved %s %s %q: %w", apiVersion, kind, name, err)
+	}
+	ts, err := decodeSavedAppliedAt(appliedAt)
+	if err != nil {
+		return nil, fmt.Errorf("saved %s %s %q: %w", apiVersion, kind, name, err)
+	}
+	resource := &protocol.Resource{APIVersion: apiVersion, Kind: kind, Metadata: metadata}
+	if specJSON.Valid && specJSON.String != "" && specJSON.String != "null" {
+		if err := json.Unmarshal([]byte(specJSON.String), &resource.Spec); err != nil {
+			return nil, fmt.Errorf("saved %s %s %q: decode spec: %w", apiVersion, kind, name, err)
+		}
+	}
+	return &SavedRecord{Resource: resource, AppliedAt: ts, Source: source}, nil
+}
+
+func decodeSavedMetadata(raw, name string) (protocol.ResourceMetadata, error) {
+	var metadata protocol.ResourceMetadata
+	if raw != "" && raw != "null" {
+		if err := json.Unmarshal([]byte(raw), &metadata); err != nil {
+			return metadata, fmt.Errorf("decode metadata: %w", err)
+		}
+	}
+	if metadata.Name == "" {
+		metadata.Name = name // Older records may not include metadata.name.
+	} else if metadata.Name != name {
+		return metadata, fmt.Errorf("metadata name %q disagrees with row name %q", metadata.Name, name)
+	}
+	return metadata, nil
+}
+
+func decodeSavedAppliedAt(raw string) (time.Time, error) {
+	if raw == "" {
+		return time.Time{}, nil
+	}
+	ts, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("decode applied_at: %w", err)
+	}
+	return ts, nil
+}
+
 // Ref is a (apiVersion, kind, name) tuple plus provenance. Returned by ListAll
 // for callers that need to enumerate the set of applied manifests without
 // loading every spec — e.g. startup reconciliation against the disk mirror, or

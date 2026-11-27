@@ -15,23 +15,27 @@ func printControllerStructured(out io.Writer, response proto.Message) (bool, err
 	if outputFormat != "json" && outputFormat != "yaml" {
 		return false, nil
 	}
+	return true, printControllerMessage(out, response, outputFormat)
+}
+
+func printControllerMessage(out io.Writer, response proto.Message, format string) error {
 	data, err := (protojson.MarshalOptions{Indent: "  "}).Marshal(response)
 	if err != nil {
-		return true, err
+		return err
 	}
-	if outputFormat == "yaml" {
+	if format == "yaml" {
 		var value any
 		if err := json.Unmarshal(data, &value); err != nil {
-			return true, err
+			return err
 		}
 		data, err = yaml.Marshal(value)
 		if err != nil {
-			return true, err
+			return err
 		}
 	}
 	if _, err := out.Write(data); err != nil {
-		return true, err
+		return err
 	}
 	_, err = io.WriteString(out, "\n")
-	return true, err
+	return err
 }

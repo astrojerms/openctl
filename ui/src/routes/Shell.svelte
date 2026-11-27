@@ -188,11 +188,15 @@
       <Settings />
     {:else if $route.name === 'list'}
       {@const entry = byKey.get(`${$route.apiVersion}/${$route.kind}`)}
-      <ResourceList
-        apiVersion={$route.apiVersion}
-        kind={$route.kind}
-        provider={entry?.provider ?? ''}
-      />
+      {#key `${me.sessionId}/${$route.apiVersion}/${$route.kind}`}
+        <ResourceList
+          apiVersion={$route.apiVersion}
+          kind={$route.kind}
+          provider={entry?.provider ?? ''}
+          observedOnly={entry?.observedOnly ?? false}
+          schemaAvailable={entry?.schemaAvailable ?? false}
+        />
+      {/key}
     {:else if $route.name === 'detail'}
       <Detail
         apiVersion={$route.apiVersion}

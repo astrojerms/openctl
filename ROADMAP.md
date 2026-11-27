@@ -119,6 +119,25 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
   historical inspection, HTTP outage/cold reload/recovery and zero provider
   Get/List calls. No live homelab mutation or readiness claim.
 
+**2026-11-27 — inspect saved intent through provider outages**
+
+- [x] Viewer-accessible saved inventory reads use SQLite only: metadata-only
+  lists and raw desired declarations with provenance and unresolved markers.
+  Existing live Get/List semantics remain strict; unregistered providers do not
+  erase saved resources.
+- [x] Console lists retain saved rows through failed, omitted and deleted live
+  observations. Detail keeps desired YAML/downloads and read-only history while
+  disabling mutations and clearing stale readiness, topology and action forms.
+  Route changes, logout and revoked authorization reject late inspection data.
+- [x] `ctl get --saved` exposes the same separation: metadata inventory without
+  a name, replayable desired JSON/YAML with a name; no inferred live authority.
+- Verification: focused storage/inventory/gateway/CLI Go checks, 221 frontend
+  tests, clean Svelte diagnostics and successful production build. Actual viewer
+  CLI and admin browser proofs exercised unavailable/missing/unregistered
+  providers, healthy recovery then renewed outage, exact desired YAML download
+  and disabled stale mutation controls. Three desired records remained intact,
+  with zero operations or provider mutations. No live homelab changes.
+
 The next product acceptance gate is the complete operator journey on real
 hardware, including recovery, media playback and any approved public endpoint.
 See [direction](docs/direction.md). Provider breadth is downstream of that gate.

@@ -116,6 +116,9 @@ of application health; a passed fake-provider test is not hardware validation.
   inventory available to the CLI.
 - A provider-independent control-plane overview and saved-inventory navigation;
   cosmetic counts never trigger whole-lab provider/SSH scans or imply readiness.
+- Saved per-kind inventory and desired detail remain inspectable during provider
+  outages, missing observations and unregistered schemas; unavailable/stale
+  observation disables mutation rather than fabricating healthy resources.
 - First-class standalone application lifecycle, including updates, logs,
   explicit runtime actions, health, and data-preserving removal.
 - One integrated Jellyfin journey, including storage, GPU, optional domain,

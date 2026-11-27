@@ -1,184 +1,127 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { resources, schemas, UnauthorizedError, type Resource } from '../lib/api';
-  import { watchResources } from '../lib/watch';
-  import { statusBadge } from '../lib/format';
+  import { schemas, UnauthorizedError } from '../lib/api';
+  import {
+    createResourceListState, resourceRowDrift, resourceRowStatus,
+    type ResourceListRow,
+  } from '../lib/resourceListState';
   import { routeHref } from '../lib/router';
   import { canEditDesired } from '../lib/authority';
 
   export let apiVersion: string;
   export let kind: string;
   export let provider: string;
+  export let observedOnly = false;
+  export let schemaAvailable = false;
 
-  let rows: Resource[] = [];
-  let loading = true;
-  let error = '';
+  const list = createResourceListState();
+  $: list.select(apiVersion, kind, observedOnly);
+  $: rows = $list.rows;
 
-  // Raw CUE schema viewer (U10.7) — lazy-fetched via SchemaService.GetSchema
-  // the first time the user expands it, then cached per kind.
   let showSchema = false;
   let cueSource = '';
   let schemaLoading = false;
   let schemaError = '';
-  let schemaFor = '';
+  let schemaKey = '';
+  let schemaController = new AbortController();
+
+  $: resetSchema(apiVersion, kind, schemaAvailable);
+
+  function resetSchema(av: string, k: string, available: boolean) {
+    const key = `${av}/${k}/${available}`;
+    if (key === schemaKey) return;
+    schemaKey = key;
+    schemaController.abort();
+    schemaController = new AbortController();
+    showSchema = false;
+    cueSource = '';
+    schemaLoading = false;
+    schemaError = '';
+  }
 
   async function toggleSchema() {
+    if (!schemaAvailable) return;
     showSchema = !showSchema;
-    if (!showSchema) return;
-    const key = `${apiVersion}/${kind}`;
-    if (schemaFor === key && cueSource) return; // cached
+    if (!showSchema || cueSource || schemaLoading) return;
+    const current = schemaController;
     schemaLoading = true;
     schemaError = '';
     try {
-      const resp = await schemas.get(apiVersion, kind);
-      cueSource = resp.cueSource ?? '';
-      schemaFor = key;
+      const response = await schemas.get(apiVersion, kind, { signal: current.signal });
+      if (schemaController !== current || current.signal.aborted) return;
+      cueSource = response.cueSource ?? '';
       if (!cueSource) schemaError = 'No schema available for this kind.';
-    } catch (err) {
-      if (err instanceof UnauthorizedError) return;
-      schemaError = err instanceof Error ? err.message : String(err);
-    } finally {
-      schemaLoading = false;
-    }
-  }
-
-  // Collapse the schema panel when switching kinds so it doesn't show a stale one.
-  let lastSchemaKey = '';
-  $: {
-    const k = `${apiVersion}/${kind}`;
-    if (k !== lastSchemaKey) {
-      lastSchemaKey = k;
-      showSchema = false;
-    }
-  }
-
-  let activeController: AbortController | null = null;
-  let watching = '';
-
-  $: void switchTo(apiVersion, kind);
-
-  async function switchTo(av: string, k: string) {
-    const target = `${av}/${k}`;
-    if (target === watching) return;
-    watching = target;
-    activeController?.abort();
-    activeController = new AbortController();
-    loading = true;
-    error = '';
-    rows = [];
-
-    // Initial List then live Watch. List populates immediately even for
-    // empty kinds (so loading clears); Watch then merges in deltas. The
-    // initial Watch snapshot (one ADDED per existing resource) is
-    // idempotent against the List rows because mergeRow upserts by name.
-    try {
-      const resp = await resources.list(av, k);
-      rows = (resp.resources ?? []).slice().sort((a, b) =>
-        a.metadata.name.localeCompare(b.metadata.name),
-      );
-      loading = false;
-    } catch (err) {
-      if (err instanceof UnauthorizedError) return;
-      error = err instanceof Error ? err.message : String(err);
-      loading = false;
-    }
-    void run(av, k, activeController.signal);
-  }
-
-  async function run(av: string, k: string, signal: AbortSignal) {
-    let backoffMs = 1000;
-    while (!signal.aborted) {
-      try {
-        await watchResources(av, k, undefined, applyEvent, { signal });
-        backoffMs = 1000;
-      } catch (err) {
-        if (signal.aborted) return;
-        if (err instanceof UnauthorizedError) return;
-        if (err instanceof DOMException && err.name === 'AbortError') return;
-        error = err instanceof Error ? err.message : String(err);
-        backoffMs = Math.min(backoffMs * 2, 15_000);
+    } catch (error) {
+      if (schemaController !== current || current.signal.aborted) return;
+      if (error instanceof UnauthorizedError) {
+        current.abort();
+        cueSource = '';
+        showSchema = false;
+        schemaLoading = false;
+        list.stop();
+        return;
       }
-      await new Promise((r) => setTimeout(r, backoffMs));
+      schemaError = error instanceof Error ? error.message : String(error);
+    } finally {
+      if (schemaController === current && !current.signal.aborted) schemaLoading = false;
     }
-  }
-
-  function applyEvent(e: { type: string; resource: Resource }) {
-    // Clear any stream-level error once events flow again.
-    error = '';
-    const incoming = e.resource;
-    rows = mergeRow(rows, e.type, incoming);
-  }
-
-  function mergeRow(
-    list: Resource[],
-    type: string,
-    incoming: Resource,
-  ): Resource[] {
-    const idx = list.findIndex((r) => r.metadata.name === incoming.metadata.name);
-    if (type === 'DELETED') {
-      if (idx < 0) return list;
-      const next = list.slice();
-      next.splice(idx, 1);
-      return next;
-    }
-    if (idx >= 0) {
-      const next = list.slice();
-      next[idx] = incoming;
-      return next;
-    }
-    return [...list, incoming].sort((a, b) =>
-      a.metadata.name.localeCompare(b.metadata.name),
-    );
   }
 
   onDestroy(() => {
-    activeController?.abort();
+    schemaController.abort();
+    list.stop();
   });
 
-  // U8.16: list controls — free-text filter + column sort. Applied
-  // client-side over the live `rows` snapshot, so the Watch stream
-  // still populates and the view stays consistent.
   let filter = '';
   type SortKey = 'name' | 'state' | 'drift';
   type SortDir = 'asc' | 'desc';
   let sortKey: SortKey = 'name';
   let sortDir: SortDir = 'asc';
 
-  function toggleSort(k: SortKey) {
-    if (sortKey === k) {
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) {
       sortDir = sortDir === 'asc' ? 'desc' : 'asc';
     } else {
-      sortKey = k;
+      sortKey = key;
       sortDir = 'asc';
     }
   }
 
-  function sortIndicator(k: SortKey): string {
-    if (sortKey !== k) return '';
+  function sortIndicator(key: SortKey): string {
+    if (sortKey !== key) return '';
     return sortDir === 'asc' ? ' ▲' : ' ▼';
   }
 
-  // Reactive filtered+sorted view. Rebuilds on any of {rows, filter,
-  // sortKey, sortDir} changing — cheap for the homelab-scale lists
-  // this UI is aimed at.
+  function matchesFilter(row: ResourceListRow, query: string): boolean {
+    const metadata = row.saved?.metadata ?? row.observed?.metadata;
+    return [
+      row.name, row.saved ? 'saved desired intent' : 'observed only',
+      row.saved?.source ?? '', resourceRowStatus(row).label,
+      ...Object.entries(metadata?.labels ?? {}).flat(),
+    ].some((value) => value.toLowerCase().includes(query));
+  }
+
   $: visibleRows = (() => {
-    const q = filter.trim().toLowerCase();
-    const matches = q === ''
-      ? rows.slice()
-      : rows.filter((r) => r.metadata.name.toLowerCase().includes(q));
-    const dir = sortDir === 'asc' ? 1 : -1;
+    const query = filter.trim().toLowerCase();
+    const matches = query ? rows.filter((row) => matchesFilter(row, query)) : rows.slice();
+    const direction = sortDir === 'asc' ? 1 : -1;
     matches.sort((a, b) => {
+      let comparison = 0;
       switch (sortKey) {
         case 'name':
-          return a.metadata.name.localeCompare(b.metadata.name) * dir;
-        case 'state': {
-          const sa = statusBadge(a.status).label;
-          const sb2 = statusBadge(b.status).label;
-          return sa.localeCompare(sb2) * dir;
+          comparison = a.name.localeCompare(b.name);
+          break;
+        case 'state':
+          comparison = resourceRowStatus(a).label.localeCompare(resourceRowStatus(b).label);
+          break;
+        case 'drift': {
+          const left = resourceRowDrift(a);
+          const right = resourceRowDrift(b);
+          comparison = left === null ? right === null ? 0 : 1 : right === null ? -1 : left - right;
+          break;
         }
-        case 'drift':
-          return ((a.drift?.length ?? 0) - (b.drift?.length ?? 0)) * dir;
       }
+      return comparison * direction || a.name.localeCompare(b.name);
     });
     return matches;
   })();
@@ -188,14 +131,16 @@
   <header>
     <div>
       <h2>{kind}</h2>
-      <p class="path">{provider} · {apiVersion}</p>
+      <p class="path">{provider || 'Provider unavailable'} · {apiVersion}</p>
     </div>
     <span class="badge-count">{rows.length}</span>
-    <button class="schema-btn" class:active={showSchema} on:click={toggleSchema}
-      title="View the CUE schema for this kind">
-      {showSchema ? 'Hide schema' : 'Schema'}
-    </button>
-    {#if $canEditDesired}
+    {#if schemaAvailable}
+      <button class="schema-btn" class:active={showSchema} on:click={toggleSchema}
+        title="View the CUE schema for this kind">
+        {showSchema ? 'Hide schema' : 'Schema'}
+      </button>
+    {/if}
+    {#if $canEditDesired && schemaAvailable && !observedOnly}
       <a class="new-btn" href={routeHref({ name: 'create', apiVersion, kind })}>+ New {kind}</a>
     {/if}
   </header>
@@ -212,13 +157,29 @@
     </div>
   {/if}
 
-  {#if loading}
-    <p class="muted">Loading…</p>
-  {:else if error}
-    <p class="err">{error}</p>
-  {:else if rows.length === 0}
-    <p class="muted">No resources of this kind yet — click <strong>+ New {kind}</strong> above,
-      or apply one via CLI: <code>openctl ctl apply -f manifest.yaml</code></p>
+  {#if observedOnly}
+    <p class="muted small">Discovery observations only; this kind does not represent saved desired resources.</p>
+  {:else if !schemaAvailable}
+    <p class="muted small">The schema is unavailable. Saved desired intent remains inspectable; schema and provider capabilities are not assumed.</p>
+  {/if}
+  {#if $list.savedError}
+    <p class="err small" role="alert">Saved metadata unavailable: {$list.savedError}
+      {$list.savedKnown ? 'Showing the last saved metadata snapshot.' : 'Saved inventory is unknown.'}</p>
+  {/if}
+  {#if $list.observationError}
+    <p class="err small" role="alert">Live observation unavailable: {$list.observationError} Retained observations are stale.</p>
+  {/if}
+
+  {#if rows.length === 0}
+    {#if $list.savedLoading || $list.liveLoading}
+      <p class="muted">Loading…</p>
+    {:else if observedOnly}
+      <p class="muted">No observations returned.</p>
+    {:else if !$list.savedKnown}
+      <p class="muted">Saved inventory is unknown.</p>
+    {:else}
+      <p class="muted">No saved desired resources or live observations returned.</p>
+    {/if}
   {:else}
     <div class="list-controls">
       <input
@@ -243,6 +204,7 @@
               Name{sortIndicator('name')}
             </button>
           </th>
+          <th>Inventory</th>
           <th>
             <button type="button" class="sort-th" on:click={() => toggleSort('state')}>
               State{sortIndicator('state')}
@@ -256,24 +218,29 @@
         </tr>
       </thead>
       <tbody>
-        {#each visibleRows as r (r.metadata.name)}
-          {@const sb = statusBadge(r.status)}
-          {@const driftN = r.drift?.length ?? 0}
+        {#each visibleRows as row (row.name)}
+          {@const badge = resourceRowStatus(row)}
+          {@const driftCount = resourceRowDrift(row)}
           <tr>
             <td>
-              <a href={routeHref({ name: 'detail', apiVersion, kind, resourceName: r.metadata.name })}>
-                {r.metadata.name}
+              <a href={routeHref({ name: 'detail', apiVersion, kind, resourceName: row.name })}>
+                {row.name}
               </a>
             </td>
-            <td>
-              <span class="state state-{sb.tone}">{sb.label}</span>
+            <td class="small" title={row.saved ? [row.saved.source, row.saved.appliedAt].filter(Boolean).join(' · ') : ''}>
+              {row.saved ? 'Saved desired intent' : 'Observed only'}
             </td>
             <td>
-              {#if driftN === 0}
+              <span class="state state-{badge.tone}">{badge.label}</span>
+            </td>
+            <td>
+              {#if driftCount === null}
+                <span class="drift muted">{row.observation === 'stale' ? 'stale / unknown' : 'unknown'}</span>
+              {:else if driftCount === 0}
                 <span class="drift drift-clean">in sync</span>
               {:else}
-                <span class="drift drift-warn" title={r.drift?.map((d) => d.path).join(', ')}>
-                  {driftN} {driftN === 1 ? 'field' : 'fields'}
+                <span class="drift drift-warn" title={row.observed?.drift?.map((drift) => drift.path).join(', ')}>
+                  {driftCount} {driftCount === 1 ? 'field' : 'fields'}
                 </span>
               {/if}
             </td>
@@ -403,11 +370,6 @@
   }
   .err {
     color: #f57171;
-  }
-  code {
-    background: rgba(127, 127, 127, 0.15);
-    padding: 0 0.3em;
-    border-radius: 3px;
   }
   table {
     width: 100%;

@@ -101,6 +101,19 @@ admin operations, never automatic fallbacks. Older CLI versions may offer only
 legacy read-only provider inventory; its local configuration can differ from
 the controller. Never use legacy Apply/Delete paths for controller deployments.
 
+If observation is unavailable or the provider is unregistered, inspect persisted
+intent separately:
+
+```bash
+openctl --config "$CONFIG" ctl get "$KIND" --api-version "$API_VERSION" --saved
+openctl --config "$CONFIG" ctl get "$KIND" "$NAME" --api-version "$API_VERSION" --saved -o yaml
+```
+
+Saved lists contain metadata/provenance only; named JSON/YAML preserves unresolved
+secret/reference markers. Protect output like a manifest. This is not proof of
+existence, ownership, readiness or permission to recreate; do not treat a saved
+read as a successful live inspection or resolve its markers locally.
+
 For a VM, establish the endpoint/context, actual node, template or image,
 storage, bridge/VLAN, available capacity, CPU, memory in MiB, disk sizes,
 guest access, power state, and DHCP or reserved static IP/gateway/DNS. Check

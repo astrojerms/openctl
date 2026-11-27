@@ -176,10 +176,10 @@ export const schemas = {
   list: (opts?: RequestOptions) => api.get<ListSchemasResponse>('/v1/schemas', opts),
   validate: (resource: Resource | Partial<Resource>) =>
     api.post<ValidateResponse>('/v1/schemas:validate', { resource }),
-  getForm: (apiVersion: string, kind: string) =>
-    api.post<GetFormSchemaResponse>('/v1/schemas:getForm', { apiVersion, kind }),
-  get: (apiVersion: string, kind: string) =>
-    api.post<GetSchemaResponse>('/v1/schemas:get', { apiVersion, kind }),
+  getForm: (apiVersion: string, kind: string, opts?: RequestOptions) =>
+    api.post<GetFormSchemaResponse>('/v1/schemas:getForm', { apiVersion, kind }, opts),
+  get: (apiVersion: string, kind: string, opts?: RequestOptions) =>
+    api.post<GetSchemaResponse>('/v1/schemas:get', { apiVersion, kind }, opts),
 };
 
 // --- Resources -----------------------------------------------------------
@@ -224,6 +224,33 @@ export interface Resource {
 export interface ListResourcesResponse {
   resources?: Resource[];
 }
+
+// Saved desired intent is independent of provider observations. Metadata-only
+// lists must never be promoted into Resource.status or mutation authority.
+export interface SavedResourceMetadata {
+  apiVersion: string;
+  kind: string;
+  metadata: ResourceMetadata;
+  appliedAt?: string;
+  source?: string;
+}
+
+export interface ListSavedResourcesResponse {
+  resources?: SavedResourceMetadata[];
+}
+
+export interface GetSavedResourceResponse {
+  resource: Resource;
+  appliedAt?: string;
+  source?: string;
+}
+
+export const inventoryApi = {
+  list: (apiVersion: string, kind: string, opts?: RequestOptions) =>
+    api.post<ListSavedResourcesResponse>('/v1/inventory:list', { apiVersion, kind }, opts),
+  get: (apiVersion: string, kind: string, name: string, opts?: RequestOptions) =>
+    api.post<GetSavedResourceResponse>('/v1/inventory:get', { apiVersion, kind, name }, opts),
+};
 
 export interface DryRunChildAction {
   verb: string;       // "create" | "destroy" | "respec" | "no-op"
@@ -441,10 +468,10 @@ export const ownership = {
     api.post<{ resource: Resource; message?: string }>('/v1/resources:adopt', { resource, providerContext }),
   adoptBundle: (bundle: MigrationBundle, providerContext: string) =>
     api.post<{ resource: Resource; message?: string }>('/v1/resources:adopt', { bundle, providerContext }),
-  export: (apiVersion: string, kind: string, name: string) =>
-    api.post<{ bundle: MigrationBundle }>('/v1/resources:export', { apiVersion, kind, name }),
-  forget: (bundle: MigrationBundle) =>
-    api.post<{ message?: string }>('/v1/resources:forget', { bundle }),
+  export: (apiVersion: string, kind: string, name: string, opts?: RequestOptions) =>
+    api.post<{ bundle: MigrationBundle }>('/v1/resources:export', { apiVersion, kind, name }, opts),
+  forget: (bundle: MigrationBundle, opts?: RequestOptions) =>
+    api.post<{ message?: string }>('/v1/resources:forget', { bundle }, opts),
 };
 
 // Controller-behavior tunables (reconciler + operation retention). All are
@@ -479,33 +506,34 @@ export const templates = {
 };
 
 export const resources = {
-  list: (apiVersion: string, kind: string) =>
-    api.post<ListResourcesResponse>('/v1/resources:list', { apiVersion, kind }),
-  get: (apiVersion: string, kind: string, name: string) =>
-    api.post<GetResourceResponse>('/v1/resources:get', { apiVersion, kind, name }),
-  childrenGraph: (apiVersion: string, kind: string, name: string) =>
-    api.post<ChildrenGraphResponse>('/v1/resources:childrenGraph', { apiVersion, kind, name }),
+  list: (apiVersion: string, kind: string, opts?: RequestOptions) =>
+    api.post<ListResourcesResponse>('/v1/resources:list', { apiVersion, kind }, opts),
+  get: (apiVersion: string, kind: string, name: string, opts?: RequestOptions) =>
+    api.post<GetResourceResponse>('/v1/resources:get', { apiVersion, kind, name }, opts),
+  childrenGraph: (apiVersion: string, kind: string, name: string, opts?: RequestOptions) =>
+    api.post<ChildrenGraphResponse>('/v1/resources:childrenGraph', { apiVersion, kind, name }, opts),
   dryRunApply: (resource: Resource | Partial<Resource>) =>
     api.post<DryRunApplyResponse>('/v1/resources:dryRunApply', { resource }),
-  apply: (req: ApplyRequest) =>
-    api.post<ApplyResponse>('/v1/resources:apply', req),
-  listActions: (apiVersion: string, kind: string) =>
-    api.post<ListActionsResponse>('/v1/resources:listActions', { apiVersion, kind }),
+  apply: (req: ApplyRequest, opts?: RequestOptions) =>
+    api.post<ApplyResponse>('/v1/resources:apply', req, opts),
+  listActions: (apiVersion: string, kind: string, opts?: RequestOptions) =>
+    api.post<ListActionsResponse>('/v1/resources:listActions', { apiVersion, kind }, opts),
   invokeAction: (
     apiVersion: string,
     kind: string,
     resourceName: string,
     action: string,
     parameters?: Record<string, string>,
+    opts?: RequestOptions,
   ) =>
     api.post<InvokeActionResponse>('/v1/resources:invokeAction', {
       apiVersion, kind, resourceName, action,
       ...(parameters && Object.keys(parameters).length > 0 ? { parameters } : {}),
-    }),
-  delete: (apiVersion: string, kind: string, name: string) =>
+    }, opts),
+  delete: (apiVersion: string, kind: string, name: string, opts?: RequestOptions) =>
     api.post<DeleteResourceResponse>('/v1/resources:delete', {
       apiVersion, kind, name,
-    }),
+    }, opts),
 };
 
 // --- Operations ----------------------------------------------------------
@@ -554,8 +582,8 @@ export const operations = {
     api.get<Operation>(`/v1/operations/${encodeURIComponent(id)}${includeChildren ? '?include_children=true' : ''}`, opts),
   byRequest: (requestId: string, includeChildren = false) =>
     api.post<Operation>('/v1/operations:byRequest', { requestId, includeChildren }),
-  list: (req: ListOperationsRequest = {}) =>
-    api.post<ListOperationsResponse>('/v1/operations:list', req),
+  list: (req: ListOperationsRequest = {}, opts?: RequestOptions) =>
+    api.post<ListOperationsResponse>('/v1/operations:list', req, opts),
   cancel: (id: string) =>
     api.post<CancelOperationResponse>(`/v1/operations/${encodeURIComponent(id)}:cancel`, {}),
 };
@@ -631,8 +659,8 @@ export const repo = {
   status: () => api.get<RepoStatus>('/v1/repo/status'),
   push: () => api.post<RepoActionResponse>('/v1/repo:push'),
   pull: () => api.post<RepoActionResponse>('/v1/repo:pull'),
-  history: (r: ResourceRef) =>
-    api.post<ResourceHistory>('/v1/repo:history', r),
-  atCommit: (r: ResourceRef, sha: string) =>
-    api.post<ResourceAtCommit>('/v1/repo:atCommit', { ...r, sha }),
+  history: (r: ResourceRef, opts?: RequestOptions) =>
+    api.post<ResourceHistory>('/v1/repo:history', r, opts),
+  atCommit: (r: ResourceRef, sha: string, opts?: RequestOptions) =>
+    api.post<ResourceAtCommit>('/v1/repo:atCommit', { ...r, sha }, opts),
 };

@@ -1,18 +1,17 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { resources, ownership, UnauthorizedError, type GetResourceResponse, type Resource, type ResourceRef, type ActionSpec, type MigrationBundle } from '../lib/api';
-  import { canMutate } from '../lib/auth';
+  import { resources, ownership, operations, UnauthorizedError, type Operation, type Resource, type ResourceRef, type ActionSpec, type MigrationBundle } from '../lib/api';
+  import { auth, canMutate } from '../lib/auth';
   import { canEditDesired, canManageOwnership, desiredMutationHint } from '../lib/authority';
   import { withoutRequestConsent } from '../lib/retry';
   import { applicationChecks, childHealth, type ChildState } from '../lib/detailState';
-
+  import { createDetailInspection, detailManifestYAML, type DetailLease } from '../lib/detailInspection';
   // Shown on disabled mutation controls for a read-only (viewer) session.
   const readOnlyTitle = 'Read-only session — requires editor or admin role';
   import { watchResources } from '../lib/watch';
   import { statusBadge } from '../lib/format';
   import { routeHref, navigate } from '../lib/router';
   import { ops as opsStore } from '../lib/ops';
-  import { resourceToYAML } from '../lib/yaml';
   import HistoryDiff from '../components/HistoryDiff.svelte';
   import DagView from '../components/DagView.svelte';
 
@@ -20,115 +19,156 @@
   export let kind: string;
   export let resourceName: string;
 
-  let data: GetResourceResponse | null = null;
-  let loading = true;
-  let error = '';
-  // U9.3: bumped on every successful (re)load so the topology graph re-fetches
-  // node status alongside the Watch-driven Get. Reset per resource switch.
+  const inspection = createDetailInspection(() => {
+    childController?.abort();
+    childStates = {};
+    operationHistory = null;
+    historyError = '';
+    actionSpecs = [];
+    actionMsg = '';
+    actionErr = '';
+    reconcileMsg = '';
+    reconcileErr = '';
+    migrationMessage = '';
+    migrationError = '';
+    deleteErr = '';
+    copyMsg = '';
+    exportedBundle = null;
+    cancelParamForm();
+    auth.set({ kind: 'signed-out' });
+  });
+  $: data = $inspection.data;
+  $: saved = $inspection.saved;
+  $: loading = $inspection.loading;
+  $: error = $inspection.error;
+  $: fresh = $inspection.observation === 'fresh' && !!data;
+  $: inspectionSignal = data ? inspection.capture()?.signal : undefined;
   let graphVersion = 0;
-
-  let controller: AbortController | null = null;
   let watching = '';
-
-  // U6: per-child status pills. Keyed by `<apiVersion>/<kind>/<name>`;
-  // value is `null` while fetching, an object once resolved. We only
-  // populate this for composite resources (parent has children). Each
-  // entry is one extra Get RPC at mount — fine for the homelab fanout
-  // (a Cluster has ≤ ~10 children in practice).
+  let childController: AbortController | null = null;
   let childStates: Record<string, ChildState | null> = {};
 
   function childKey(ref: ResourceRef): string {
     return `${ref.apiVersion}/${ref.kind}/${ref.name}`;
   }
 
-  // Reactive re-fetch + re-subscribe on route change.
-  $: void switchTo(apiVersion, kind, resourceName);
+  $: switchTo(apiVersion, kind, resourceName);
 
-  async function switchTo(av: string, k: string, n: string) {
+  function switchTo(av: string, k: string, n: string) {
     const target = `${av}/${k}/${n}`;
     if (target === watching) return;
     watching = target;
-    controller?.abort();
-    controller = new AbortController();
-    data = null;
-    loading = true;
-    error = '';
+    childController?.abort();
     childStates = {};
+    graphVersion = 0;
     exportedBundle = null;
     secretAcknowledged = false;
     migrationMessage = '';
     migrationError = '';
+    migrating = false;
+    reconciling = false;
+    reconcileMsg = '';
+    reconcileErr = '';
+    actionSpecs = [];
+    actionInflight = '';
+    actionMsg = '';
+    actionErr = '';
+    deleting = false;
+    deleteErr = '';
+    copyMsg = '';
+    operationHistory = null;
+    historyLoading = false;
+    historyError = '';
+    lastSeenOpId = '';
+    cancelParamForm();
     released = false;
-    await load(av, k, n);
-    void subscribe(av, k, n, controller.signal);
-  }
-
-  async function load(av: string, k: string, n: string) {
-    try {
-      data = await resources.get(av, k, n);
-      error = '';
-      graphVersion += 1;
-      // Fan out one Get per child to populate per-row badges.
-      void loadChildStates(data.resource);
-    } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
-    } finally {
-      loading = false;
+    inspection.open({ apiVersion: av, kind: k, name: n });
+    const lease = inspection.capture();
+    if (lease) {
+      void subscribe(av, k, n, lease);
     }
   }
 
-  async function loadChildStates(parent: Resource) {
+  $: if (data) {
+    graphVersion += 1;
+    const lease = inspection.capture();
+    if (lease) {
+      void loadChildStates(data.resource, lease);
+      void loadActions(lease.target.apiVersion, lease.target.kind, lease);
+    }
+  } else {
+    childController?.abort();
+    childStates = {};
+    cancelParamForm();
+    exportedBundle = null;
+    secretAcknowledged = false;
+  }
+
+  async function loadChildStates(parent: Resource, lease: DetailLease) {
+    childController?.abort();
+    const childRequest = new AbortController();
+    childController = childRequest;
+    const abort = () => childRequest.abort();
+    lease.signal.addEventListener('abort', abort, { once: true });
     const refs = parent.children ?? [];
-    if (refs.length === 0) return;
-    // Seed all keys as "loading" up-front so the row count is stable.
     const seed: Record<string, ChildState | null> = {};
     for (const ref of refs) seed[childKey(ref)] = null;
     childStates = seed;
-
-    await Promise.all(refs.map(async (ref) => {
-      try {
-        const r = await resources.get(ref.apiVersion, ref.kind, ref.name);
-        childStates[childKey(ref)] = {
-          badge: statusBadge(r.resource.status),
-          driftCount: r.resource.drift?.length ?? 0,
-        };
-      } catch (err) {
-        childStates[childKey(ref)] = {
-          badge: { label: '—', tone: 'unknown' },
-          driftCount: 0,
-          error: err instanceof Error ? err.message : String(err),
-        };
-      }
-      // Trigger Svelte reactivity on object-key mutation.
-      childStates = { ...childStates };
-    }));
-  }
-
-  async function subscribe(av: string, k: string, n: string, signal: AbortSignal) {
-    // Single-resource Watch — any event triggers a re-Get so the applied
-    // manifest + drift come along, not just the observed state Watch
-    // carries. Cheap: one extra RPC per change to this one resource.
-    let backoffMs = 1000;
-    while (!signal.aborted) {
-      try {
-        await watchResources(av, k, n, () => {
-          void load(av, k, n);
-        }, { signal });
-        backoffMs = 1000;
-      } catch (err) {
-        if (signal.aborted) return;
-        if (err instanceof UnauthorizedError) return;
-        if (err instanceof DOMException && err.name === 'AbortError') return;
-        // Stale-cache fallback: surface the error but keep showing
-        // whatever we last fetched successfully.
-        error = err instanceof Error ? err.message : String(err);
-        backoffMs = Math.min(backoffMs * 2, 15_000);
-      }
-      await new Promise((r) => setTimeout(r, backoffMs));
+    try {
+      await Promise.all(refs.map(async (ref) => {
+        try {
+          const r = await resources.get(ref.apiVersion, ref.kind, ref.name, { signal: childRequest.signal });
+          if (!inspection.current(lease, true) || childRequest.signal.aborted) return;
+          childStates = { ...childStates, [childKey(ref)]: {
+            badge: statusBadge(r.resource.status),
+            driftCount: r.resource.drift?.length ?? 0,
+          } };
+        } catch (err) {
+          if (!inspection.current(lease) || childRequest.signal.aborted) return;
+          if (err instanceof UnauthorizedError) { inspection.unauthorized(); return; }
+          if (!inspection.current(lease, true)) return;
+          childStates = { ...childStates, [childKey(ref)]: {
+            badge: { label: '—', tone: 'unknown' },
+            driftCount: 0,
+            error: err instanceof Error ? err.message : String(err),
+          } };
+        }
+      }));
+    } finally {
+      lease.signal.removeEventListener('abort', abort);
     }
   }
 
-  onDestroy(() => controller?.abort());
+  async function subscribe(av: string, k: string, n: string, lease: DetailLease) {
+    let backoffMs = 1000;
+    while (inspection.current(lease)) {
+      try {
+        await watchResources(av, k, n, () => {
+          if (inspection.current(lease)) void inspection.refresh();
+        }, { signal: lease.signal });
+        if (!inspection.current(lease)) return;
+        inspection.invalidate(new Error('Resource watch disconnected'));
+        backoffMs = 1000;
+      } catch (err) {
+        if (!inspection.current(lease)) return;
+        inspection.invalidate(err);
+        if (!inspection.current(lease)) return;
+        backoffMs = Math.min(backoffMs * 2, 15_000);
+      }
+      const delay = Promise.withResolvers<void>();
+      const timer = setTimeout(delay.resolve, backoffMs);
+      const abort = () => { clearTimeout(timer); delay.resolve(); };
+      lease.signal.addEventListener('abort', abort, { once: true });
+      await delay.promise;
+      lease.signal.removeEventListener('abort', abort);
+      if (inspection.current(lease)) void inspection.refresh();
+    }
+  }
+
+  onDestroy(() => {
+    childController?.abort();
+    inspection.stop();
+  });
 
   // Pretty-print JSON for the desired/observed panes. The proto wire
   // format is JSON-on-the-fence anyway (grpc-gateway), and the editor
@@ -171,15 +211,16 @@
   let released = false;
 
   async function exportBundle() {
-    if (!$canManageOwnership || !standaloneVM || !secretAcknowledged || migrating) return;
+    if (!inspection.canAct() || !$canManageOwnership || !standaloneVM || !secretAcknowledged || migrating || activeOp) return;
+    const lease = inspection.capture();
+    if (!lease) return;
     migrating = true;
     migrationError = '';
     migrationMessage = '';
     exportedBundle = null;
     try {
-      const target = watching;
-      const response = await ownership.export(apiVersion, kind, resourceName);
-      if (watching !== target) return;
+      const response = await ownership.export(apiVersion, kind, resourceName, { signal: lease.signal });
+      if (!inspection.current(lease, true)) return;
       const url = URL.createObjectURL(new Blob([JSON.stringify(response.bundle, null, 2)], { type: 'application/json' }));
       const link = document.createElement('a');
       link.href = url;
@@ -191,30 +232,41 @@
       exportedBundle = response.bundle;
       migrationMessage = 'Bundle download requested. Verify it is safely saved before releasing tracking. Export did not change ownership or prove destination adoption.';
     } catch (err) {
-      migrationError = err instanceof Error ? err.message : String(err);
-    } finally { migrating = false; }
+      if (!inspection.current(lease)) return;
+      if (err instanceof UnauthorizedError) { inspection.unauthorized(); return; }
+      if (inspection.current(lease, true)) migrationError = err instanceof Error ? err.message : String(err);
+    } finally {
+      if (inspection.current(lease)) migrating = false;
+    }
   }
 
   async function forgetVM() {
-    if (!$canManageOwnership || !exportedBundle || !secretAcknowledged || migrating || activeOp) return;
+    if (!inspection.canAct() || !$canManageOwnership || !standaloneVM || !exportedBundle || !secretAcknowledged || migrating || activeOp) return;
+    const lease = inspection.capture();
+    if (!lease) return;
     const typed = prompt(`Release controller tracking for ${resourceName}?\n\nThis is NOT Delete. The VM stays intact and its power state is unchanged. This controller stops managing it; destination adoption has not been proven. Keep the exported bundle safely saved.\n\nType the resource name to confirm:`);
     if (typed === null) return;
     if (typed !== resourceName) {
       migrationError = 'Name did not match; release cancelled.';
       return;
     }
+    if (!inspection.current(lease, true) || !$canManageOwnership || !exportedBundle) return;
     migrating = true;
     migrationError = '';
     try {
-      const target = watching;
-      const response = await ownership.forget(exportedBundle);
-      if (watching !== target) return;
-      controller?.abort();
+      const response = await ownership.forget(exportedBundle, { signal: lease.signal });
+      if (!inspection.current(lease, true)) return;
+      inspection.stop();
+      childController?.abort();
       released = true;
       migrationMessage = response.message || 'Controller tracking released. The provider VM remains intact.';
     } catch (err) {
-      migrationError = err instanceof Error ? err.message : String(err);
-    } finally { migrating = false; }
+      if (!inspection.current(lease)) return;
+      if (err instanceof UnauthorizedError) { inspection.unauthorized(); return; }
+      if (inspection.current(lease, true)) migrationError = err instanceof Error ? err.message : String(err);
+    } finally {
+      if (inspection.current(lease)) migrating = false;
+    }
   }
 
   // Manual reconcile: re-submit the stored manifest through the normal
@@ -226,7 +278,9 @@
   let reconcileErr = '';
 
   async function doReconcile() {
-    if (reconciling || !data?.applied || !$canEditDesired) return;
+    if (!inspection.canAct() || reconciling || !data?.applied || !$canEditDesired) return;
+    const lease = inspection.capture();
+    if (!lease) return;
     reconciling = true;
     reconcileMsg = '';
     reconcileErr = '';
@@ -238,15 +292,17 @@
           metadata: { ...data.applied.metadata, name: data.applied.metadata?.name ?? resourceName },
           spec: data.applied.spec as Record<string, unknown> | undefined,
         }),
-      });
+      }, { signal: lease.signal });
+      if (!inspection.current(lease, true)) return;
       reconcileMsg = resp.operationId
         ? `Reconcile submitted (operation ${resp.operationId})`
         : 'Reconcile submitted';
     } catch (err) {
-      if (err instanceof UnauthorizedError) return;
-      reconcileErr = err instanceof Error ? err.message : String(err);
+      if (!inspection.current(lease)) return;
+      if (err instanceof UnauthorizedError) { inspection.unauthorized(); return; }
+      if (inspection.current(lease, true)) reconcileErr = err instanceof Error ? err.message : String(err);
     } finally {
-      reconciling = false;
+      if (inspection.current(lease)) reconciling = false;
     }
   }
 
@@ -265,27 +321,29 @@
   let paramValues: Record<string, string> = {};
   let paramError = '';
 
-  async function loadActions(av: string, k: string) {
+  async function loadActions(av: string, k: string, lease: DetailLease) {
     try {
-      const resp = await resources.listActions(av, k);
+      const resp = await resources.listActions(av, k, { signal: lease.signal });
+      if (!inspection.current(lease, true)) return;
       // Prefer the richer specs; fall back to bare names for older servers.
       actionSpecs = resp.actionSpecs ?? (resp.actions ?? []).map((name) => ({ name }));
     } catch (err) {
-      if (err instanceof UnauthorizedError) return;
-      // Actions are best-effort — a failure just hides the bar, no toast.
-      // eslint-disable-next-line no-console
-      console.warn('listActions failed', err);
-      actionSpecs = [];
+      if (!inspection.current(lease)) return;
+      if (err instanceof UnauthorizedError) { inspection.unauthorized(); return; }
+      if (inspection.current(lease, true)) actionSpecs = [];
     }
   }
 
   async function doAction(action: string, parameters?: Record<string, string>) {
-    if (actionInflight) return;
+    if (!inspection.canAct() || !$canMutate || actionInflight) return;
+    const lease = inspection.capture();
+    if (!lease) return;
     actionInflight = action;
     actionMsg = '';
     actionErr = '';
     try {
-      const resp = await resources.invokeAction(apiVersion, kind, resourceName, action, parameters);
+      const resp = await resources.invokeAction(apiVersion, kind, resourceName, action, parameters, { signal: lease.signal });
+      if (!inspection.current(lease, true)) return;
       // Dispatch on result shape: URL → open in new tab, download →
       // stream a file, otherwise show the message inline.
       if (resp.downloadContent && resp.downloadFilename) {
@@ -307,24 +365,17 @@
           ? `${action} → ${resp.message}`
           : `${action} submitted`;
       }
-      // Refetch after a brief pause so status updates from the provider
-      // are reflected. Watch will catch up too, but the immediate refetch
-      // gives faster feedback for click→result. Skip for pure link/
-      // download actions — they don't change resource state.
-      if (!resp.url && !resp.downloadContent) {
-        setTimeout(() => void load(apiVersion, kind, resourceName), 800);
-      }
+      // The refresh is tied to this route; no delayed callback can refresh a
+      // different resource after navigation.
+      if (!resp.url && !resp.downloadContent) void inspection.refresh();
     } catch (err) {
-      if (err instanceof UnauthorizedError) return;
-      actionErr = err instanceof Error ? err.message : String(err);
+      if (!inspection.current(lease)) return;
+      if (err instanceof UnauthorizedError) { inspection.unauthorized(); return; }
+      if (inspection.current(lease, true)) actionErr = err instanceof Error ? err.message : String(err);
     } finally {
-      actionInflight = '';
+      if (inspection.current(lease)) actionInflight = '';
     }
   }
-
-  // Load actions when the kind changes. Independent of the resource
-  // fetch so a slow provider doesn't hold up rendering.
-  $: void loadActions(apiVersion, kind);
 
   // Human labels for known actions. Falls back to the raw action name
   // so unknown actions still render (with a plain label).
@@ -349,6 +400,7 @@
   }
 
   function openParamForm(spec: ActionSpec) {
+    if (!inspection.canAct() || !$canMutate || actionInflight) return;
     paramAction = spec;
     paramError = '';
     const seed: Record<string, string> = {};
@@ -363,7 +415,7 @@
   }
 
   async function submitParamForm() {
-    if (!paramAction) return;
+    if (!inspection.canAct() || !$canMutate || actionInflight || !paramAction) return;
     // Validate required params client-side before invoking.
     for (const p of paramAction.parameters ?? []) {
       if (p.required && !(paramValues[p.name] ?? '').trim()) {
@@ -378,6 +430,7 @@
   }
 
   async function onActionClick(spec: ActionSpec) {
+    if (!inspection.canAct() || !$canMutate || actionInflight) return;
     // Parameterized actions open an input form; others fire immediately
     // (with a confirm for destructive ones).
     if (spec.parameters && spec.parameters.length > 0) {
@@ -398,25 +451,30 @@
   let deleting = false;
   let deleteErr = '';
   async function doDelete() {
-    if (deleting || !$canEditDesired) return;
+    if (!inspection.canAct() || deleting || !$canEditDesired) return;
+    const lease = inspection.capture();
+    if (!lease) return;
     const typed = prompt(`Delete ${kind} ${resourceName}?\n\nType the name to confirm:`);
     if (typed === null) return;
     if (typed !== resourceName) {
       deleteErr = 'Name did not match; delete cancelled.';
       return;
     }
+    if (!inspection.current(lease, true) || !$canEditDesired) return;
     deleting = true;
     deleteErr = '';
     try {
-      await resources.delete(apiVersion, kind, resourceName);
+      await resources.delete(apiVersion, kind, resourceName, { signal: lease.signal });
+      if (!inspection.current(lease, true)) return;
       // Immediately navigate back — the delete is submitted and the
       // resource will disappear from the list on the next Watch tick.
       navigate({ name: 'list', apiVersion, kind });
     } catch (err) {
-      if (err instanceof UnauthorizedError) return;
-      deleteErr = err instanceof Error ? err.message : String(err);
+      if (!inspection.current(lease)) return;
+      if (err instanceof UnauthorizedError) { inspection.unauthorized(); return; }
+      if (inspection.current(lease, true)) deleteErr = err instanceof Error ? err.message : String(err);
     } finally {
-      deleting = false;
+      if (inspection.current(lease)) deleting = false;
     }
   }
 
@@ -440,38 +498,51 @@
       lastSeenOpId = id;
     } else if (lastSeenOpId) {
       // Just cleared — refetch to see the result.
-      void load(apiVersion, kind, resourceName);
+      void inspection.refresh();
       lastSeenOpId = '';
     }
   }
 
-  // U8.19: YAML actions. Copy / download the applied manifest (falls
-  // back to the observed resource shape when no applied manifest is
-  // on file — usually observed-only kinds like ProxmoxNode).
-  let copyMsg = '';
-  function manifestYAML(): string {
-    if (!data) return '';
-    const source = data.applied ?? data.resource;
-    return resourceToYAML({
-      apiVersion: source.apiVersion,
-      kind: source.kind,
-      metadata: source.metadata,
-      spec: source.spec,
-    });
+  let operationHistory: Operation[] | null = null;
+  let historyLoading = false;
+  let historyError = '';
+  async function inspectHistory() {
+    const lease = inspection.capture();
+    if (!lease || historyLoading) return;
+    historyLoading = true;
+    historyError = '';
+    try {
+      const result = await operations.list({
+        apiVersion: lease.target.apiVersion, kind: lease.target.kind,
+        resourceName: lease.target.name, limit: 100,
+      }, { signal: lease.signal });
+      if (inspection.current(lease)) operationHistory = result.operations ?? [];
+    } catch (err) {
+      if (!inspection.current(lease)) return;
+      if (err instanceof UnauthorizedError) { inspection.unauthorized(); return; }
+      historyError = err instanceof Error ? err.message : String(err);
+    } finally {
+      if (inspection.current(lease)) historyLoading = false;
+    }
   }
+
+  // Read-only exports prefer raw persisted intent, including unresolved markers.
+  let copyMsg = '';
   async function copyYAML() {
-    const y = manifestYAML();
-    if (!y) return;
+    const lease = inspection.capture();
+    const y = detailManifestYAML(saved, data);
+    if (!lease || !y) return;
     try {
       await navigator.clipboard.writeText(y);
+      if (!inspection.current(lease)) return;
       copyMsg = 'Copied.';
-      setTimeout(() => (copyMsg = ''), 1500);
     } catch (err) {
+      if (!inspection.current(lease)) return;
       copyMsg = `Copy failed: ${err instanceof Error ? err.message : String(err)}`;
     }
   }
   function downloadYAML() {
-    const y = manifestYAML();
+    const y = detailManifestYAML(saved, data);
     if (!y) return;
     const blob = new Blob([y], { type: 'application/x-yaml' });
     const url = URL.createObjectURL(blob);
@@ -485,7 +556,7 @@
   }
 
   // Current desired manifest YAML — the right-hand side of the History diff.
-  $: appliedYamlStr = data ? manifestYAML() : '';
+  $: appliedYamlStr = detailManifestYAML(saved, data);
 
   $: childTotal = data?.resource.children?.length ?? 0;
   $: childSummary = childHealth(data?.resource.children ?? [], childStates);
@@ -505,6 +576,8 @@
       {#if !released}
       {#if displayState}
         <span class="state state-{displayState.tone}">{displayState.label}</span>
+      {:else}
+        <span class="state state-unknown">{loading ? 'Observing / unknown' : 'Observation unknown'}</span>
       {/if}
       {#if childTotal > 0}
         <span class="state state-{childSummary.tone}" title="Aggregated child status; unknown or loading children are not healthy">
@@ -519,8 +592,8 @@
           type="button"
           class="action-btn"
           class:destructive={actionIsDestructive(a.name)}
-          disabled={!!actionInflight || !$canMutate}
-          title={$canMutate ? (a.description || `Invoke '${a.name}' on ${resourceName}`) : readOnlyTitle}
+          disabled={!fresh || !!actionInflight || !$canMutate}
+          title={!fresh ? 'Requires fresh provider observation' : $canMutate ? (a.description || `Invoke '${a.name}' on ${resourceName}`) : readOnlyTitle}
           on:click={() => onActionClick(a)}
         >
           {actionInflight === a.name ? '…' : actionLabel(a.name)}
@@ -530,8 +603,8 @@
       <button
         type="button"
         class="reconcile-btn"
-        disabled={reconciling || !data?.applied || !$canEditDesired}
-        title={!$canEditDesired
+        disabled={!fresh || reconciling || !data?.applied || !$canEditDesired}
+        title={!fresh ? 'Requires fresh provider observation' : !$canEditDesired
           ? $desiredMutationHint
           : data?.applied
             ? 'Re-apply the stored manifest to push desired state over observed'
@@ -541,12 +614,16 @@
         {reconciling ? 'Reconciling…' : 'Reconcile'}
       </button>
       {#if $canEditDesired}
-        <a class="edit-btn" href={routeHref({ name: 'edit', apiVersion, kind, resourceName })}>Edit</a>
+        {#if fresh}
+          <a class="edit-btn" href={routeHref({ name: 'edit', apiVersion, kind, resourceName })} on:click={(event) => { if (!inspection.canAct() || !$canEditDesired) event.preventDefault(); }}>Edit</a>
+        {:else}
+          <button type="button" class="edit-btn" disabled title="Requires fresh provider observation">Edit</button>
+        {/if}
         <button
           type="button"
           class="delete-btn"
-          disabled={deleting}
-          title="Delete this resource"
+          disabled={!fresh || deleting}
+          title={fresh ? 'Delete this resource' : 'Requires fresh provider observation'}
           on:click={doDelete}
         >{deleting ? 'Deleting…' : 'Delete'}</button>
       {/if}
@@ -575,7 +652,7 @@
   {#if reconcileErr}
     <p class="err small">{reconcileErr}</p>
   {/if}
-  {#if paramAction}
+  {#if paramAction && fresh}
     <form class="param-form" on:submit|preventDefault={submitParamForm}>
       <div class="param-form-head">{actionLabel(paramAction.name)} {resourceName}</div>
       {#if paramAction.description}
@@ -602,7 +679,7 @@
       {/each}
       {#if paramError}<p class="err small">{paramError}</p>{/if}
       <div class="param-form-actions">
-        <button type="submit" class="action-btn" disabled={!!actionInflight}>
+        <button type="submit" class="action-btn" disabled={!fresh || !$canMutate || !!actionInflight}>
           {actionInflight === paramAction.name ? '…' : `Run ${actionLabel(paramAction.name)}`}
         </button>
         <button type="button" class="param-cancel" on:click={cancelParamForm}>Cancel</button>
@@ -616,6 +693,58 @@
     <p class="err small">{actionErr}</p>
   {/if}
 
+  {#if !released && $inspection.observation !== 'unauthorized'}
+    <article class="card">
+      <div class="card-head">
+        <h3>Provider observation</h3>
+        <button type="button" class="mini-btn" disabled={loading} on:click={() => inspection.refresh()}>Retry observation</button>
+      </div>
+      {#if loading}
+        <p class="muted" role="status">Observing provider… Readiness, drift and ownership are unknown until Get succeeds.</p>
+      {:else if error}
+        <p class="err" role="alert">{error}</p>
+        <p class="muted small">Readiness, drift and ownership are unknown. Mutations are disabled; saved intent is not a replacement instruction.</p>
+      {:else}
+        <p class="muted small">Live Get succeeded. Saved intent remains separate from this provider observation.</p>
+      {/if}
+    </article>
+
+    {#if saved}
+      <article class="card">
+        <div class="card-head">
+          <h3>Saved desired intent</h3>
+          <div class="card-actions">
+            <button type="button" class="mini-btn" on:click={copyYAML}>Copy YAML</button>
+            <button type="button" class="mini-btn" on:click={downloadYAML}>Download YAML</button>
+            {#if copyMsg}<span class="muted small">{copyMsg}</span>{/if}
+          </div>
+        </div>
+        <p class="muted small">Read-only persisted declaration, not observed readiness or proof of ownership. Unresolved markers are preserved; inspection does not resolve secrets or write state.</p>
+        <p class="muted small">Source: <span class="path">{saved.source || 'Not recorded'}</span> · Applied at: <span class="path">{saved.appliedAt || 'Not recorded'}</span>{#if saved.appliedAt} ({timeAgo(saved.appliedAt)}){/if}</p>
+        <pre>{pretty({ apiVersion: saved.resource.apiVersion, kind: saved.resource.kind, metadata: saved.resource.metadata, spec: saved.resource.spec })}</pre>
+      </article>
+    {:else if $inspection.savedLoading}
+      <p class="muted" role="status">Loading saved declaration independently of provider observation…</p>
+    {:else if $inspection.savedError}
+      <p class="muted small">{$inspection.savedError}</p>
+    {/if}
+
+    <article class="card">
+      <div class="card-head">
+        <h3>Operation history</h3>
+        <button type="button" class="mini-btn" disabled={historyLoading} on:click={inspectHistory}>{historyLoading ? 'Loading…' : 'Inspect operation history'}</button>
+      </div>
+      <p class="muted small">Historical operations are read-only evidence, not current provider readiness or authority to retry.</p>
+      {#if historyError}<p class="err" role="alert">{historyError}</p>{/if}
+      {#if operationHistory}
+        {#if operationHistory.length === 0}<p class="muted">No recorded operations for this resource.</p>{/if}
+        {#each operationHistory as op}
+          <p class="small"><code>{op.id}</code> · {op.type} · {op.status} · {op.submittedAt || 'Time not recorded'}{#if op.error} · {op.error}{/if}</p>
+        {/each}
+      {/if}
+    </article>
+  {/if}
+
   {#if released}
     <article class="card">
       <h3>Tracking released — VM kept</h3>
@@ -623,11 +752,7 @@
       <p>Release is not Delete. The VM remains at the provider; destination adoption has not been proven.</p>
       <a href={routeHref({ name: 'discover' })}>Discover or import the bundle at a destination controller</a>
     </article>
-  {:else if loading}
-    <p class="muted">Loading…</p>
-  {:else if error}
-    <p class="err">{error}</p>
-  {:else if data}
+  {:else if fresh && data}
     {@const drift = data.resource.drift ?? []}
     {@const lastApplied = data.appliedAt}
 
@@ -699,6 +824,7 @@
     {/if}
 
     <div class="grid">
+      {#if !saved}
       <article class="card">
         <div class="card-head">
           <h3>Desired manifest</h3>
@@ -723,6 +849,7 @@
           <p class="muted">No manifest on file.</p>
         {/if}
       </article>
+      {/if}
 
       <article class="card">
         <h3>Observed state</h3>
@@ -754,7 +881,9 @@
       </article>
     {/if}
 
-    <DagView {apiVersion} {kind} {resourceName} version={graphVersion} />
+    {#key watching}
+      <DagView {apiVersion} {kind} {resourceName} version={graphVersion} signal={inspectionSignal} onUnauthorized={inspection.unauthorized} />
+    {/key}
 
     {#if children.length > 0}
       <article class="card">
@@ -790,7 +919,9 @@
       </article>
     {/if}
 
-    <HistoryDiff {apiVersion} {kind} {resourceName} appliedYaml={appliedYamlStr} />
+    {#key watching}
+      <HistoryDiff {apiVersion} {kind} {resourceName} appliedYaml={appliedYamlStr} signal={inspectionSignal} onUnauthorized={inspection.unauthorized} />
+    {/key}
   {/if}
 </section>
 

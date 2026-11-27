@@ -178,6 +178,32 @@ provider observation, secret resolution or payload decoding.
   stale, with no fallback to provider scans or invented zero totals
 - **AND** logout/stop cancels polling and rejects late results from that session
 
+### Requirement: Saved intent remains inspectable without provider observation
+
+Viewer-accessible inventory reads SHALL load saved desired state independently
+of providers. Lists SHALL read metadata without selecting spec bodies; named
+reads SHALL preserve raw spec markers and provenance without returning status,
+drift, children or provider-derived ownership. Existing live Get/List semantics
+SHALL remain unchanged.
+
+#### Scenario: A saved resource is unreachable, missing or unregistered
+
+- **WHEN** live observation fails or omits a saved resource
+- **THEN** its saved list row, desired declaration and provenance remain available
+- **AND** missing, unavailable and stale observations are explicitly distinguished;
+  no successful Apply or stored record establishes current health or ownership
+- **AND** mutation controls and handlers require a fresh live observation;
+  no fallback automatically recreates, reconciles, forgets or deletes resources
+- **AND** named CLI saved JSON/YAML is a replayable desired declaration, not a
+  fabricated live resource or an envelope containing provenance
+
+#### Scenario: Inspection changes route or authorization expires
+
+- **WHEN** the inspected identity/session ends
+- **THEN** pending saved, observed, history and graph reads are canceled or ignored
+- **AND** late results cannot replace a newer inspection or restore private data
+- **AND** saved-store failures remain errors, never an empty lab or false NotFound
+
 ### Requirement: Per-resource previews distinguish all desired intent
 
 Read-only controller previews SHALL distinguish create, update and no-op and

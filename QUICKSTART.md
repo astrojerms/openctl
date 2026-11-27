@@ -114,6 +114,10 @@ The console overview and `openctl ctl overview` show saved inventory and root
 request activity without querying every provider. Counts are not live health;
 open a resource for actual observation. Snapshot failures are shown as unavailable
 or explicitly stale, not an empty lab.
+Saved resources remain inspectable in their lists and detail pages when a
+provider fails or reports them missing. Use `ctl get KIND NAME --api-version API
+--saved -o yaml` for unresolved desired intent; secret/reference markers remain
+intact. Stored intent is not live health or permission to mutate/recreate.
 
 For a standalone application, open **Deploy Jellyfin**: select/provision a
 dedicated Ubuntu 24.04 NVIDIA VM, supply NAS and secret references, review each

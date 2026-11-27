@@ -382,6 +382,22 @@ openctl ctl get VirtualMachine web-01 --api-version proxmox.openctl.io/v1
 openctl ctl get Cluster dev --api-version k3s.openctl.io/v1
 ```
 
+Inspect saved intent even when its provider is unreachable or no longer registered:
+
+```bash
+openctl ctl get VirtualMachine --api-version proxmox.openctl.io/v1 --saved
+openctl ctl get VirtualMachine web-01 --api-version proxmox.openctl.io/v1 --saved -o yaml
+```
+
+Without a name, `--saved` lists metadata and last-Apply provenance only. Named
+JSON/YAML output is the unresolved desired declaration: secret/reference markers
+remain intact, with no observed status or ownership claims. Protect these outputs
+like manifests. Plain `ctl get` still requires a successful live observation.
+The console likewise retains saved rows and desired YAML through provider
+outages or missing resources, explicitly separates unknown/stale observation,
+and disables mutation while observation is unavailable. Saved intent does not
+prove existence, health, ownership or permission to recreate infrastructure.
+
 Preview one resource against the live controller before applying:
 
 ```bash

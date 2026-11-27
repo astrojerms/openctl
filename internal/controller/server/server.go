@@ -129,6 +129,7 @@ func New(opts Options) (*Server, error) {
 		idempotentApply: opts.Operations != nil && opts.Dispatcher != nil,
 	})
 	apiv1.RegisterOverviewServiceServer(g, newOverviewHandler(opts.Overview))
+	apiv1.RegisterInventoryServiceServer(g, newInventoryHandler(opts.Manifests))
 
 	registry := opts.Registry
 	if registry == nil {

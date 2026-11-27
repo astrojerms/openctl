@@ -103,6 +103,7 @@ Destructive convergence (Phase 5):
 
 func newCtlGetCommand() *cobra.Command {
 	var apiVersion string
+	var saved bool
 	cmd := &cobra.Command{
 		Use:   "get <kind> [name]",
 		Short: "Get one or all resources of a kind from the controller",
@@ -112,6 +113,13 @@ func newCtlGetCommand() *cobra.Command {
 			if apiVersion == "" {
 				return fmt.Errorf("--api-version is required (e.g. proxmox.openctl.io/v1)")
 			}
+			if saved {
+				name := ""
+				if len(args) == 2 {
+					name = args[1]
+				}
+				return ctlSaved(cmd, apiVersion, kind, name)
+			}
 			if len(args) == 2 {
 				return ctlGet(cmd.Context(), apiVersion, kind, args[1])
 			}
@@ -119,6 +127,7 @@ func newCtlGetCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&apiVersion, "api-version", "", "resource apiVersion (e.g. proxmox.openctl.io/v1)")
+	cmd.Flags().BoolVar(&saved, "saved", false, "read saved desired intent/inventory without contacting providers (not live status or mutation authority)")
 	return cmd
 }
 
