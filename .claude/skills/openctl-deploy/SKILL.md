@@ -295,6 +295,17 @@ watch/pull automation with restart, and verified standalone Proxmox VM identity;
 it is not an implicit fallback for a failed deployment. Consult the installed
 commands' help and current migration documentation before a requested handoff.
 
+Plain YAML/CUE adoption requires `--expected-identity` (API: `expected_identity`)
+with the exact full opaque fingerprint explicitly reviewed from controller
+discovery, including node/VMID/UUID evidence. Never auto-fetch the latest
+fingerprint just to make adoption pass: a replacement needs fresh inspection
+and consent. Missing/blank fingerprints fail closed before provider reads;
+identity disagreement records no tracking. Bundles use their recorded identity;
+an explicit override must agree exactly. Console connection retests invalidate
+only that context's inventory/review, and session/authority changes clear private
+bundles and consent. Canceling a request cannot undo accepted tracking; after an
+uncertain response, inspect saved intent and fresh discovery before retrying.
+
 Delete also prints a durable request ID before submission and supports the same
 read-only `ctl op get --request-id "$REQUEST_ID"` recovery. Keep the original key
 on uncertainty; never mint a new one automatically. Apply/Delete share the key

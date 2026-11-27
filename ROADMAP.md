@@ -228,6 +228,36 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
   were not followed, and SQLite retained zero operations/desired manifests.
   No live homelab changes or physical readiness claim.
 
+**Fingerprint-bound adoption and fresh discovery consent (2026-11-27):**
+
+- [x] Plain-manifest adoption requires an explicitly reviewed discovery
+  fingerprint (`expected_identity`, CLI `--expected-identity`). Empty/blank
+  preconditions fail before provider reads; live replacement or placement
+  mismatch fails before tracking, binding or projection writes. Bundle identity
+  remains authoritative; contradictory overrides are rejected.
+- [x] Console adoption submits exactly the reviewed fingerprint and desired
+  manifest. Retesting a context invalidates its own inventory/count/review and
+  consent, not unrelated contexts. Rejected adoption requires new discovery.
+  Ownership handlers check current authority and current inventory synchronously,
+  including tracked-identity confirmation.
+- [x] Session/principal/role or ownership-authority changes clear private reviews
+  and migration bundles. Teardown aborts waiting; old results cannot restore
+  inventory, expose a late private file, sign out a new principal, or navigate
+  after an obsolete acknowledgement. Bundle destination changes reset consent;
+  explicit local clearing is available. Canceling cannot undo accepted tracking.
+- Verification: focused Go admission/CLI regressions passed, including real
+  Proxmox TLS decoding, SQLite/projection/binding non-mutation on rejection and
+  explicit refreshed adoption. Mounted discovery regressions and corrected
+  bundle-case checks passed; Svelte diagnostics and production builds passed.
+  Actual CLI/browser proof rejected a same-name/node/VMID replacement with a new
+  UUID and zero saved tracking, then adopted only after rediscovery/new consent.
+  A real private export, destination dropdown/consent reset, local bundle clear
+  and sign-out teardown were exercised in Chromium (happy-dom lacks option
+  `:checked` support). Exactly one manifest/binding/projection was retained;
+  no Apply/Delete operations or provider writes, and no live homelab changes.
+- Upgrade: older unguarded plain-adoption clients must be updated; no automatic
+  latest-fingerprint lookup or identity fallback is provided.
+
 The next product acceptance gate is the complete operator journey on real
 hardware, including recovery, media playback and any approved public endpoint.
 See [direction](docs/direction.md). Provider breadth is downstream of that gate.

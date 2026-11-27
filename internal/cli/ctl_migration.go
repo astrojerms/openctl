@@ -57,10 +57,11 @@ func newCtlExportCommand() *cobra.Command {
 }
 
 func newCtlAdoptCommand() *cobra.Command {
-	var file, providerContext string
+	var file, providerContext, expectedIdentity string
 	cmd := &cobra.Command{
 		Use:   "adopt -f <bundle.json|manifest.yaml|manifest.cue>",
 		Short: "Adopt an existing VM without changing it",
+		Long:  "Adopt an existing VM without changing it. For a plain YAML/CUE manifest, obtain the exact opaque fingerprint from read-only ctl discover --provider-context NAME -o json, review placement and desired intent, then pass it explicitly with --expected-identity. Migration bundles use their recorded identity.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if file == "" {
@@ -70,6 +71,14 @@ func newCtlAdoptCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if req.Bundle == nil {
+				if strings.TrimSpace(expectedIdentity) == "" {
+					return fmt.Errorf("--expected-identity is required for plain manifests; obtain the exact opaque fingerprint from read-only ctl discover --provider-context NAME -o json, review placement and desired intent, then pass it explicitly")
+				}
+			} else if cmd.Flags().Changed("expected-identity") && expectedIdentity != req.Bundle.Identity {
+				return fmt.Errorf("--expected-identity must exactly match the migration bundle identity")
+			}
+			req.ExpectedIdentity = expectedIdentity
 			req.ProviderContext = providerContext
 			conn, token, err := dialController()
 			if err != nil {
@@ -86,6 +95,7 @@ func newCtlAdoptCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&file, "file", "f", "", "migration bundle or single YAML/CUE manifest")
 	cmd.Flags().StringVar(&providerContext, "provider-context", "", "destination provider context (original bundle remains unchanged)")
+	cmd.Flags().StringVar(&expectedIdentity, "expected-identity", "", "exact reviewed discovery fingerprint (required for plain manifests)")
 	return cmd
 }
 

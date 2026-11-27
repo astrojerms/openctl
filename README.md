@@ -646,17 +646,39 @@ Repeat for each runner being moved. Resources not selected for transfer, such
 as a dev VM remaining on the Mac controller, stay managed there.
 
 To register an existing VM that has a manifest but no source-controller
-record, use a single YAML or CUE manifest instead of a bundle:
+record, first discover and review its placement and full opaque `identity`
+fingerprint, then use a single YAML or CUE manifest instead of a bundle:
 
 ```bash
+openctl --config destination-client.yaml ctl discover \
+  --provider-context proxmox-home -o json
+# Review the selected VM and set REVIEWED_IDENTITY to its exact identity.
 openctl --config destination-client.yaml ctl adopt \
-  -f existing-runner.yaml --provider-context proxmox-home
+  -f existing-runner.yaml --provider-context proxmox-home \
+  --expected-identity "$REVIEWED_IDENTITY"
 ```
 
-Manifest adoption matches the existing VM by name and node, rejects ambiguous
-matches, and observes it without modifying it. It has no source-controller
-receipt and cannot be passed to `ctl forget`; export from the adopting
-controller first if that ownership must later be released.
+Manifest adoption requires the reviewed fingerprint, matches the existing VM by
+name and node, rejects ambiguous matches, and observes it without modifying it.
+A same-name replacement, changed node/VMID/UUID, empty fingerprint or whitespace
+only value is rejected before tracking is written. Rediscover and explicitly
+review a replacement before adopting it; never fetch a fresh fingerprint inline
+as an automatic fallback. The REST/gRPC field is `expectedIdentity` /
+`expected_identity`. Upgrade clients together: old unguarded manifest-adoption
+requests fail closed. Bundles already carry their required identity; an optional
+explicit override must agree exactly with the bundle.
+
+The console sends the fingerprint shown in the reviewed inventory. Retesting a
+context invalidates its old inventory and consent; unrelated contexts keep their
+reviews. Session/role or manifest-authority changes clear reviews and private
+bundles. **Clear bundle** discards a local bundle without uploading it. Leaving
+the page stops waiting but cannot undo tracking already accepted by the
+controller; after an uncertain response, inspect saved intent and fresh
+discovery before any retry.
+
+Manifest adoption has no source-controller receipt and cannot be passed to
+`ctl forget`; export from the adopting controller first if that ownership must
+later be released.
 
 Migration currently supports only standalone `proxmox.openctl.io/v1`
 `VirtualMachine` resources. Composites, owned children, resources with inbound

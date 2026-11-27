@@ -239,6 +239,10 @@ message AdoptResourceRequest {
   MigrationBundle bundle = 2;
   // Overrides spec.context at the destination without rewriting the bundle.
   string provider_context = 3;
+  // Required for plain-manifest adoption: the exact opaque identity returned
+  // by discovery and reviewed by the operator. Admission rejects replacements.
+  // Bundles already bind their identity; an explicit value must agree with it.
+  string expected_identity = 4;
 }
 
 message AdoptResourceResponse {

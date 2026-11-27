@@ -472,21 +472,21 @@ export interface TestDiscoveryConnectionResponse {
 }
 
 export const discovery = {
-  contexts: (apiVersion = 'proxmox.openctl.io/v1') =>
-    api.get<{ contexts?: DiscoveryContext[] }>('/v1/discovery/contexts?api_version=' + encodeURIComponent(apiVersion)),
-  inventory: (context: string, apiVersion = 'proxmox.openctl.io/v1') =>
-    api.post<{ resources?: DiscoveredResource[] }>('/v1/discovery/resources', { apiVersion, context }),
-  test: (context: string, apiVersion = 'proxmox.openctl.io/v1') =>
-    api.post<TestDiscoveryConnectionResponse>('/v1/discovery:testConnection', { apiVersion, context }),
+  contexts: (apiVersion = 'proxmox.openctl.io/v1', opts?: RequestOptions) =>
+    api.get<{ contexts?: DiscoveryContext[] }>('/v1/discovery/contexts?api_version=' + encodeURIComponent(apiVersion), opts),
+  inventory: (context: string, apiVersion = 'proxmox.openctl.io/v1', opts?: RequestOptions) =>
+    api.post<{ resources?: DiscoveredResource[] }>('/v1/discovery/resources', { apiVersion, context }, opts),
+  test: (context: string, apiVersion = 'proxmox.openctl.io/v1', opts?: RequestOptions) =>
+    api.post<TestDiscoveryConnectionResponse>('/v1/discovery:testConnection', { apiVersion, context }, opts),
 };
 
 export const ownership = {
-  confirmIdentity: (apiVersion: string, kind: string, name: string, identity: string, providerContext: string) =>
-    api.post<{ resource: Resource; message?: string }>('/v1/resources:confirmIdentity', { apiVersion, kind, name, identity, providerContext }),
-  adopt: (resource: Resource, providerContext: string) =>
-    api.post<{ resource: Resource; message?: string }>('/v1/resources:adopt', { resource, providerContext }),
-  adoptBundle: (bundle: MigrationBundle, providerContext: string) =>
-    api.post<{ resource: Resource; message?: string }>('/v1/resources:adopt', { bundle, providerContext }),
+  confirmIdentity: (apiVersion: string, kind: string, name: string, identity: string, providerContext: string, opts?: RequestOptions) =>
+    api.post<{ resource: Resource; message?: string }>('/v1/resources:confirmIdentity', { apiVersion, kind, name, identity, providerContext }, opts),
+  adopt: (resource: Resource, providerContext: string, expectedIdentity: string, opts?: RequestOptions) =>
+    api.post<{ resource: Resource; message?: string }>('/v1/resources:adopt', { resource, providerContext, expectedIdentity }, opts),
+  adoptBundle: (bundle: MigrationBundle, providerContext: string, opts?: RequestOptions) =>
+    api.post<{ resource: Resource; message?: string }>('/v1/resources:adopt', { bundle, providerContext, expectedIdentity: bundle.identity }, opts),
   export: (apiVersion: string, kind: string, name: string, opts?: RequestOptions) =>
     api.post<{ bundle: MigrationBundle }>('/v1/resources:export', { apiVersion, kind, name }, opts),
   forget: (bundle: MigrationBundle, opts?: RequestOptions) =>

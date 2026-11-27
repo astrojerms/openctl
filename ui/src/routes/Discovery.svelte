@@ -1,6 +1,8 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { discovery, ownership, type DiscoveryContext, type DiscoveredResource, type MigrationBundle } from '../lib/api';
+  import { onDestroy, onMount } from 'svelte';
+  import { derived, get } from 'svelte/store';
+  import { discovery, ownership, UnauthorizedError, type DiscoveryContext, type DiscoveredResource, type MigrationBundle } from '../lib/api';
+  import { auth, type AuthState } from '../lib/auth';
   import { canManageOwnership } from '../lib/authority';
   import { navigate, routeHref } from '../lib/router';
   import { observedDesired, parseMigrationBundle } from '../lib/discovery';
@@ -19,71 +21,148 @@
   let bundleFilename = '';
   let bundleContext = '';
   let bundleConfirmed = false;
+  let importing = false;
   let adoptionError = '';
   let adopting = false;
   let identityMessage = '';
+  let active = true;
+  let mounted = false;
+  let generation = 0;
+  let importRevision = 0;
+  let requests = new AbortController();
 
   $: desired = reviewed ? observedDesired(reviewed.resource) : null;
   $: bundlePreview = bundle ? { ...bundle.resource, spec: { ...bundle.resource.spec, context: bundleContext } } : null;
   $: bundleVM = inventory.find((item) => item.context === bundleContext && item.identity === bundle?.identity);
 
   function message(err: unknown): string { return err instanceof Error ? err.message : String(err); }
+  function current(revision: number) { return active && revision === generation; }
+  function canManage() { return active && get(auth).kind === 'signed-in' && get(canManageOwnership); }
+  function actorKey(state: AuthState) {
+    return state.kind === 'signed-in' ? JSON.stringify([state.me.sessionId, state.me.principalId, state.me.userId, state.me.role]) : state.kind;
+  }
+  function observed(item: DiscoveredResource) { return inventory.includes(item) && states[item.context]?.connected === true; }
+  function clearReview() { reviewed = null; confirmed = false; }
+  function clearBundle() {
+    importRevision++;
+    importing = false;
+    bundle = null;
+    bundleFilename = '';
+    bundleConfirmed = false;
+  }
+  function invalidateContext(context: string) {
+    inventory = inventory.filter((item) => item.context !== context);
+    if (states[context]) states = { ...states, [context]: { ...states[context], count: undefined } };
+    if (reviewed?.context === context) clearReview();
+    if (bundleContext === context) bundleConfirmed = false;
+  }
+  function resetPage() {
+    generation++;
+    requests.abort();
+    if (active) requests = new AbortController();
+    clearReview();
+    clearBundle();
+    contexts = [];
+    states = {};
+    inventory = [];
+    bundleContext = '';
+    busy = false;
+    adopting = false;
+    loading = false;
+    error = '';
+    adoptionError = '';
+    identityMessage = '';
+  }
+  function handled(err: unknown, revision: number) {
+    if (!current(revision)) return true;
+    if (!(err instanceof UnauthorizedError)) return false;
+    auth.set({ kind: 'signed-out' });
+    return true;
+  }
+
+  let actor = actorKey(get(auth));
+  let ownershipAllowed = get(canManageOwnership);
+  const unsubscribe = derived([auth, canManageOwnership], ([session, allowed]) => ({ session, allowed })).subscribe(({ session, allowed }) => {
+    const nextActor = actorKey(session);
+    const changed = actor !== nextActor || ownershipAllowed !== allowed;
+    actor = nextActor;
+    ownershipAllowed = allowed;
+    if (!changed) return;
+    if (mounted && session.kind === 'signed-in') void loadContexts();
+    else resetPage();
+  });
+  onMount(() => { mounted = true; void loadContexts(); });
+  onDestroy(() => {
+    active = false;
+    unsubscribe();
+    resetPage();
+  });
 
   async function loadContexts() {
+    if (!active) return;
+    resetPage();
+    const revision = generation;
     loading = true;
-    error = '';
     try {
-      const response = await discovery.contexts();
+      const response = await discovery.contexts(undefined, { signal: requests.signal });
+      if (!current(revision)) return;
       contexts = response.contexts ?? [];
       bundleContext = contexts.find((context) => context.defaultContext)?.name ?? contexts[0]?.name ?? '';
     } catch (err) {
-      error = message(err);
-    } finally { loading = false; }
+      if (!handled(err, revision)) error = message(err);
+    } finally { if (current(revision)) loading = false; }
   }
-  onMount(loadContexts);
 
-  async function test(context: string): Promise<boolean> {
+  async function test(context: string, revision: number): Promise<boolean> {
+    if (!current(revision)) return false;
     try {
-      const response = await discovery.test(context);
+      const response = await discovery.test(context, undefined, { signal: requests.signal });
+      if (!current(revision)) return false;
       const connected = response.connected === true;
       states = { ...states, [context]: { connected, message: response.message || (connected ? 'Connected' : 'Connection failed'), failureCode: connected ? undefined : response.failureCode } };
       return connected;
     } catch (err) {
-      states = { ...states, [context]: { connected: false, message: 'Connection test failed', error: message(err) } };
+      if (!handled(err, revision)) states = { ...states, [context]: { connected: false, message: 'Connection test failed', error: message(err) } };
       return false;
     }
   }
 
   async function testOne(context: string) {
-    if (busy || adopting) return;
+    if (!active || loading || busy || adopting || !contexts.some((item) => item.name === context)) return;
+    const revision = generation;
+    invalidateContext(context);
+    states = { ...states, [context]: { connected: false, message: 'Testing…' } };
     busy = true;
-    try { await test(context); } finally { busy = false; }
+    try { await test(context, revision); } finally { if (current(revision)) busy = false; }
   }
 
   async function discoverAll() {
-    if (busy || adopting) return;
+    if (!active || loading || busy || adopting) return;
+    const revision = generation;
     busy = true;
     inventory = [];
-    reviewed = null;
-    confirmed = false;
+    states = {};
+    clearReview();
     bundleConfirmed = false;
     adoptionError = '';
     try {
       await Promise.all(contexts.map(async (context) => {
-        if (!await test(context.name)) return;
+        if (!await test(context.name, revision) || !current(revision)) return;
         try {
-          const response = await discovery.inventory(context.name);
+          const response = await discovery.inventory(context.name, undefined, { signal: requests.signal });
+          if (!current(revision)) return;
           const found = response.resources ?? [];
           inventory = [...inventory, ...found].sort((a, b) => a.context.localeCompare(b.context) || a.node.localeCompare(b.node) || Number(a.vmid) - Number(b.vmid));
           states = { ...states, [context.name]: { ...states[context.name], count: found.length } };
         } catch (err) {
-          states = { ...states, [context.name]: { ...states[context.name], error: message(err) } };
+          if (!handled(err, revision)) states = { ...states, [context.name]: { ...states[context.name], error: message(err) } };
         }
       }));
-    } finally { busy = false; }
+    } finally { if (current(revision)) busy = false; }
   }
 
   function review(item: DiscoveredResource) {
+    if (!active || loading || busy || adopting || !observed(item)) return;
     reviewed = item;
     confirmed = false;
     adoptionError = '';
@@ -91,53 +170,77 @@
   }
 
   async function importBundle(event: Event) {
-    bundle = null;
-    bundleFilename = '';
-    bundleConfirmed = false;
-    adoptionError = '';
     const input = event.currentTarget as HTMLInputElement;
     const file = input.files?.[0];
+    input.value = '';
+    if (!canManage() || loading || adopting || busy) return;
+    clearBundle();
+    adoptionError = '';
     if (!file) return;
+    const revision = generation;
+    const fileRevision = importRevision;
+    importing = true;
     try {
-      bundle = parseMigrationBundle(await file.text());
+      const text = await file.text();
+      if (!current(revision) || fileRevision !== importRevision || !canManage()) return;
+      bundle = parseMigrationBundle(text);
       bundleFilename = file.name;
-    } catch (err) { adoptionError = `Bundle validation failed: ${message(err)}`; }
-    finally { input.value = ''; }
+    } catch (err) {
+      if (current(revision) && fileRevision === importRevision && canManage()) adoptionError = `Bundle validation failed: ${message(err)}`;
+    } finally {
+      if (current(revision) && fileRevision === importRevision) importing = false;
+    }
   }
 
   async function adopt(fromBundle = false) {
-    if (!$canManageOwnership || adopting || busy) return;
-    if (fromBundle
-      ? !bundle || !bundleConfirmed || !states[bundleContext]?.connected || !bundleVM?.adoptable || bundleVM.managed || bundleVM.identityConfirmationRequired
-      : !reviewed?.adoptable || reviewed.managed || reviewed.identityConfirmationRequired || !desired || !confirmed) return;
+    if (!canManage() || loading || adopting || busy) return;
+    const item = fromBundle ? inventory.find((entry) => entry.context === bundleContext && entry.identity === bundle?.identity) : reviewed;
+    if (!item || !observed(item) || !item.identity || !item.adoptable || item.managed || item.identityConfirmationRequired) return;
+    if (fromBundle ? !bundle || !bundleConfirmed : !confirmed) return;
+    const selectedBundle = bundle;
+    const revision = generation;
     adopting = true;
     adoptionError = '';
     try {
       const response = fromBundle
-        ? await ownership.adoptBundle(bundle!, bundleContext)
-        : await ownership.adopt(desired!, reviewed!.context);
+        ? await ownership.adoptBundle(selectedBundle!, item.context, { signal: requests.signal })
+        : await ownership.adopt(observedDesired(item.resource), item.context, item.identity, { signal: requests.signal });
+      if (!current(revision) || !canManage()) return;
+      clearReview();
+      clearBundle();
+      invalidateContext(item.context);
       navigate({ name: 'detail', apiVersion: response.resource.apiVersion, kind: response.resource.kind, resourceName: response.resource.metadata.name });
-    } catch (err) { adoptionError = message(err); }
-    finally { adopting = false; }
+    } catch (err) {
+      if (!handled(err, revision)) {
+        invalidateContext(item.context);
+        clearReview();
+        bundleConfirmed = false;
+        adoptionError = message(err);
+      }
+    } finally { if (current(revision)) adopting = false; }
   }
 
   async function confirmTrackedIdentity() {
-    if (!$canManageOwnership || adopting || busy || !confirmed || !reviewed?.identityConfirmationRequired || !reviewed.identity) return;
+    if (!canManage() || loading || adopting || busy || !confirmed || !reviewed?.identityConfirmationRequired || !reviewed.identity || !observed(reviewed)) return;
     const item = reviewed;
+    const revision = generation;
     adopting = true;
     adoptionError = '';
     identityMessage = '';
-    let identityConfirmed = false;
+    let confirmation = '';
     try {
       const response = await ownership.confirmIdentity(
         item.resource.apiVersion, item.resource.kind, item.resource.metadata.name,
-        item.identity, item.context,
+        item.identity, item.context, { signal: requests.signal },
       );
-      identityMessage = response.message || 'Tracked VM identity confirmed. Desired intent and ownership were not changed.';
-      identityConfirmed = true;
-    } catch (err) { adoptionError = message(err); }
-    finally { adopting = false; }
-    if (identityConfirmed) await discoverAll();
+      if (current(revision) && canManage()) confirmation = response.message || 'Tracked VM identity confirmed. Desired intent and ownership were not changed.';
+    } catch (err) {
+      if (!handled(err, revision)) adoptionError = message(err);
+    } finally { if (current(revision)) adopting = false; }
+    if (confirmation && current(revision) && canManage()) {
+      await discoverAll();
+      if (current(revision)) identityMessage = confirmation;
+    }
   }
 </script>
 
@@ -151,6 +254,7 @@
   </header>
   <p class="notice">Discovery and connection tests are read-only. Adoption records desired intent and ownership; it does not Apply or change the VM. Adoption requires an admin, an idle controller, and manifest GitOps watch/pull disabled. The server verifies these safeguards and live identity.</p>
   <p class="muted">Changed provider credentials or certificate trust? Restart the controller first; hot reload is intentionally disabled for safety.</p>
+  <p class="muted">Adoption binds the exact VM fingerprint you reviewed. Testing a context invalidates its earlier inventory and consent; discover again before changing tracking. Session or authority changes clear private reviews and bundles. Stopping a request does not roll back tracking already accepted by the controller.</p>
   {#if loading}
     <p class="muted">Loading configured contexts…</p>
   {:else if error}
@@ -224,8 +328,8 @@
           <p class="muted">This manifest reflects observed configuration, not unobservable original intent. Review it before taking responsibility for future reconciliation.</p>
           <pre>{resourceToYAML(desired)}</pre>
           {#if $canManageOwnership}
-            <label class="confirmation"><input type="checkbox" bind:checked={confirmed} disabled={adopting} /> I reviewed this desired intent and want this controller to track the existing VM.</label>
-            <button class="primary" disabled={adopting || busy || !confirmed || !reviewed.adoptable || reviewed.managed} on:click={() => adopt()}>{adopting ? 'Adopting…' : 'Adopt existing VM'}</button>
+            <label class="confirmation"><input type="checkbox" bind:checked={confirmed} disabled={adopting} /> I reviewed this desired intent, context, node, VMID and live fingerprint, and want this controller to track this exact VM.</label>
+            <button class="primary" disabled={adopting || busy || !confirmed || !reviewed.identity || !states[reviewed.context]?.connected || !reviewed.adoptable || reviewed.managed} on:click={() => adopt()}>{adopting ? 'Adopting…' : 'Adopt existing VM'}</button>
           {:else}<p class="muted">Adoption requires admin access and controller-owned intent with GitOps disabled. Discovery remains read-only.</p>{/if}
         {/if}
       </article>
@@ -235,7 +339,9 @@
   <article class="card">
     <h3>Import migration bundle</h3>
     <p class="notice">Bundles may contain literal cloud-init credentials or other secrets. Select a trusted JSON bundle locally; it is sent to the controller only when you adopt. Export and source release do not prove destination adoption.</p>
-    <label>Bundle file <input type="file" accept=".json,application/json" on:change={importBundle} disabled={adopting || busy} /></label>
+    <label>Bundle file <input type="file" accept=".json,application/json" on:change={importBundle} disabled={adopting || busy || !$canManageOwnership} /></label>
+    {#if importing}<p role="status">Reading bundle locally…</p>{/if}
+    {#if bundle || importing}<button disabled={adopting || busy} on:click={clearBundle}>Clear bundle</button>{/if}
     {#if bundle && bundlePreview}
       <p>Loaded {bundleFilename} · source controller <code>{bundle.controllerId}</code></p>
       <p>VM identity: <code>{bundle.identity}</code></p>

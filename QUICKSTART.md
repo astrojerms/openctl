@@ -101,6 +101,15 @@ context/node/VMID/UUID evidence and the observed manifest, then adopt an existin
 standalone VM. This records intent without changing the VM. Admin access, an
 idle controller and disabled GitOps are required.
 
+The console submits the exact fingerprint shown in that review; a replacement
+requires new discovery and consent. Testing a context invalidates that context's
+old inventory/review. Session or authority changes clear private reviews and
+bundles; leaving the page does not roll back already-accepted tracking.
+For CLI adoption of a plain YAML/CUE manifest, pass the full reviewed discovery
+`identity` with `--expected-identity`; a UUID alone is not the fingerprint.
+Migration bundles already carry their identity. See
+[adoption and handoff](README.md#move-vm-management-between-controllers).
+
 ```sh
 openctl ctl discover --contexts
 openctl ctl discover --provider-context homelab

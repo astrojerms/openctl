@@ -1006,8 +1006,12 @@ type AdoptResourceRequest struct {
 	Bundle   *MigrationBundle `protobuf:"bytes,2,opt,name=bundle,proto3" json:"bundle,omitempty"`
 	// Overrides spec.context at the destination without rewriting the bundle.
 	ProviderContext string `protobuf:"bytes,3,opt,name=provider_context,json=providerContext,proto3" json:"provider_context,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Required for plain-manifest adoption: the exact opaque identity returned
+	// by discovery and reviewed by the operator. Admission rejects replacements.
+	// Bundles already bind their identity; an explicit value must agree with it.
+	ExpectedIdentity string `protobuf:"bytes,4,opt,name=expected_identity,json=expectedIdentity,proto3" json:"expected_identity,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *AdoptResourceRequest) Reset() {
@@ -1057,6 +1061,13 @@ func (x *AdoptResourceRequest) GetBundle() *MigrationBundle {
 func (x *AdoptResourceRequest) GetProviderContext() string {
 	if x != nil {
 		return x.ProviderContext
+	}
+	return ""
+}
+
+func (x *AdoptResourceRequest) GetExpectedIdentity() string {
+	if x != nil {
+		return x.ExpectedIdentity
 	}
 	return ""
 }
@@ -6771,11 +6782,12 @@ const file_api_proto_rawDesc = "" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x12\n" +
 	"\x04name\x18\x03 \x01(\tR\x04name\"M\n" +
 	"\x16ExportResourceResponse\x123\n" +
-	"\x06bundle\x18\x01 \x01(\v2\x1b.openctl.v1.MigrationBundleR\x06bundle\"\xa8\x01\n" +
+	"\x06bundle\x18\x01 \x01(\v2\x1b.openctl.v1.MigrationBundleR\x06bundle\"\xd5\x01\n" +
 	"\x14AdoptResourceRequest\x120\n" +
 	"\bresource\x18\x01 \x01(\v2\x14.openctl.v1.ResourceR\bresource\x123\n" +
 	"\x06bundle\x18\x02 \x01(\v2\x1b.openctl.v1.MigrationBundleR\x06bundle\x12)\n" +
-	"\x10provider_context\x18\x03 \x01(\tR\x0fproviderContext\"c\n" +
+	"\x10provider_context\x18\x03 \x01(\tR\x0fproviderContext\x12+\n" +
+	"\x11expected_identity\x18\x04 \x01(\tR\x10expectedIdentity\"c\n" +
 	"\x15AdoptResourceResponse\x120\n" +
 	"\bresource\x18\x01 \x01(\v2\x14.openctl.v1.ResourceR\bresource\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\"L\n" +

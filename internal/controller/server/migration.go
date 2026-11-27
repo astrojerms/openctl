@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -69,11 +70,19 @@ func (h *resourceHandler) AdoptResource(ctx context.Context, req *apiv1.AdoptRes
 		return nil, status.Error(codes.InvalidArgument, "exactly one resource or bundle is required")
 	}
 	wire := req.GetResource()
+	expectedIdentity := req.GetExpectedIdentity()
 	if req.GetBundle() != nil {
 		if err := validateMigrationBundle(req.GetBundle()); err != nil {
 			return nil, err
 		}
+		if expectedIdentity != "" && expectedIdentity != req.GetBundle().GetIdentity() {
+			return nil, status.Error(codes.InvalidArgument, "expected_identity must match the migration bundle identity")
+		}
+		expectedIdentity = req.GetBundle().GetIdentity()
 		wire = req.GetBundle().GetResource()
+	}
+	if strings.TrimSpace(expectedIdentity) == "" {
+		return nil, status.Error(codes.InvalidArgument, "expected_identity is required; discover the VM and review its identity before adoption")
 	}
 	// Clone the wire form before any destination override; source forget must
 	// continue to use the original manifest and its digest.
@@ -92,8 +101,8 @@ func (h *resourceHandler) AdoptResource(ctx context.Context, req *apiv1.AdoptRes
 	if err != nil {
 		return nil, migrationIdentityError(err)
 	}
-	if identity == "" || (req.GetBundle() != nil && identity != req.GetBundle().GetIdentity()) {
-		return nil, status.Error(codes.FailedPrecondition, "existing VM identity does not match migration bundle")
+	if identity == "" || identity != expectedIdentity {
+		return nil, status.Error(codes.FailedPrecondition, "existing VM identity no longer matches the reviewed identity; rediscover the VM and review its identity before adoption")
 	}
 	// Identity and observation must both succeed before recording intent.
 	// A read outage must not be replaced with fabricated observed state.
