@@ -110,6 +110,11 @@ Existing tracked VMs from name-only controller versions require explicit
 identity confirmation before mutation. Discovery exposes this recovery action;
 it preserves desired intent and composite ownership.
 
+The console overview and `openctl ctl overview` show saved inventory and root
+request activity without querying every provider. Counts are not live health;
+open a resource for actual observation. Snapshot failures are shown as unavailable
+or explicitly stale, not an empty lab.
+
 For a standalone application, open **Deploy Jellyfin**: select/provision a
 dedicated Ubuntu 24.04 NVIDIA VM, supply NAS and secret references, review each
 resource, and inspect independent health. Prepared reviews survive reload in the

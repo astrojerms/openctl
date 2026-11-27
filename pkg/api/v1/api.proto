@@ -950,6 +950,8 @@ message SchemaInfo {
   bool advanced = 5;
   string owner_kind = 6;
   string advanced_note = 7;
+  // Discovery-only provider inventory; never counted as saved desired resources.
+  bool observed_only = 8;
 }
 
 message GetSchemaRequest {
@@ -1099,4 +1101,38 @@ message GetResourceAtCommitRequest {
 message GetResourceAtCommitResponse {
   string yaml = 1;  // the manifest YAML at that commit ("" if it didn't exist)
   bool existed = 2; // false when the file was absent at that commit
+}
+
+// Overview reads persisted control-plane metadata only. It never observes
+// providers, expands secrets or infers infrastructure readiness.
+service OverviewService {
+  rpc GetOverview(GetOverviewRequest) returns (GetOverviewResponse) {
+    option (google.api.http) = { get: "/v1/overview" };
+  }
+}
+
+message GetOverviewRequest {
+  // Per-list cap for active/review operations. 0 defaults to 10; maximum 100.
+  uint32 operation_limit = 1;
+}
+
+message ManagedKindCount {
+  string api_version = 1;
+  string kind = 2;
+  uint32 resources = 3;
+}
+
+message GetOverviewResponse {
+  string as_of = 1; // RFC3339 snapshot time; not a provider health observation.
+  uint32 managed_resources = 2; // Saved desired records, including owned children.
+  repeated ManagedKindCount kinds = 3;
+  // Top-level Apply/Delete requests only; child steps never double-count.
+  uint32 pending_operations = 4;
+  uint32 running_operations = 5;
+  // Resources whose latest retained root request failed/interrupted/was canceled.
+  // This describes operation history, not current resource health.
+  uint32 review_resources = 6;
+  // Bounded metadata-only rows. No manifests, results, errors or secret values.
+  repeated Operation active_operations = 7;
+  repeated Operation review_operations = 8;
 }

@@ -2379,3 +2379,111 @@ var RepoService_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "api.proto",
 }
+
+const (
+	OverviewService_GetOverview_FullMethodName = "/openctl.v1.OverviewService/GetOverview"
+)
+
+// OverviewServiceClient is the client API for OverviewService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// Overview reads persisted control-plane metadata only. It never observes
+// providers, expands secrets or infers infrastructure readiness.
+type OverviewServiceClient interface {
+	GetOverview(ctx context.Context, in *GetOverviewRequest, opts ...grpc.CallOption) (*GetOverviewResponse, error)
+}
+
+type overviewServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewOverviewServiceClient(cc grpc.ClientConnInterface) OverviewServiceClient {
+	return &overviewServiceClient{cc}
+}
+
+func (c *overviewServiceClient) GetOverview(ctx context.Context, in *GetOverviewRequest, opts ...grpc.CallOption) (*GetOverviewResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetOverviewResponse)
+	err := c.cc.Invoke(ctx, OverviewService_GetOverview_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// OverviewServiceServer is the server API for OverviewService service.
+// All implementations must embed UnimplementedOverviewServiceServer
+// for forward compatibility.
+//
+// Overview reads persisted control-plane metadata only. It never observes
+// providers, expands secrets or infers infrastructure readiness.
+type OverviewServiceServer interface {
+	GetOverview(context.Context, *GetOverviewRequest) (*GetOverviewResponse, error)
+	mustEmbedUnimplementedOverviewServiceServer()
+}
+
+// UnimplementedOverviewServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedOverviewServiceServer struct{}
+
+func (UnimplementedOverviewServiceServer) GetOverview(context.Context, *GetOverviewRequest) (*GetOverviewResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetOverview not implemented")
+}
+func (UnimplementedOverviewServiceServer) mustEmbedUnimplementedOverviewServiceServer() {}
+func (UnimplementedOverviewServiceServer) testEmbeddedByValue()                         {}
+
+// UnsafeOverviewServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to OverviewServiceServer will
+// result in compilation errors.
+type UnsafeOverviewServiceServer interface {
+	mustEmbedUnimplementedOverviewServiceServer()
+}
+
+func RegisterOverviewServiceServer(s grpc.ServiceRegistrar, srv OverviewServiceServer) {
+	// If the following call panics, it indicates UnimplementedOverviewServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&OverviewService_ServiceDesc, srv)
+}
+
+func _OverviewService_GetOverview_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetOverviewRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OverviewServiceServer).GetOverview(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OverviewService_GetOverview_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OverviewServiceServer).GetOverview(ctx, req.(*GetOverviewRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// OverviewService_ServiceDesc is the grpc.ServiceDesc for OverviewService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var OverviewService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "openctl.v1.OverviewService",
+	HandlerType: (*OverviewServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetOverview",
+			Handler:    _OverviewService_GetOverview_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "api.proto",
+}

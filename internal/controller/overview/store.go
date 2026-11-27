@@ -9,7 +9,7 @@ import (
 
 const (
 	DefaultOperationLimit = 10
-	MaxOperationLimit = 100
+	MaxOperationLimit     = 100
 )
 
 // Store shares the controller database without resolving providers or secrets.
@@ -25,37 +25,37 @@ func New(db *sql.DB) *Store {
 // kinds whose providers are no longer registered. Discovery alone adds no rows.
 type KindCount struct {
 	APIVersion string
-	Kind string
-	Resources uint32
+	Kind       string
+	Resources  uint32
 }
 
 // OperationMetadata deliberately cannot carry manifests, results, labels or
 // errors. Those fields can contain credentials even when they are not JSON.
 type OperationMetadata struct {
-	ID string
-	Type string
-	APIVersion string
-	Kind string
+	ID           string
+	Type         string
+	APIVersion   string
+	Kind         string
 	ResourceName string
-	Status string
-	SubmittedAt string
-	StartedAt string
-	CompletedAt string
-	Source string
+	Status       string
+	SubmittedAt  string
+	StartedAt    string
+	CompletedAt  string
+	Source       string
 }
 
 // Snapshot describes retained control-plane records, not infrastructure health.
 // ReviewResources counts resources whose latest retained root admission ended
 // unsuccessfully; a newer successful or active admission supersedes it.
 type Snapshot struct {
-	AsOf string
-	ManagedResources uint32
-	Kinds []KindCount
+	AsOf              string
+	ManagedResources  uint32
+	Kinds             []KindCount
 	PendingOperations uint32
 	RunningOperations uint32
-	ReviewResources uint32
-	ActiveOperations []OperationMetadata
-	ReviewOperations []OperationMetadata
+	ReviewResources   uint32
+	ActiveOperations  []OperationMetadata
+	ReviewOperations  []OperationMetadata
 }
 
 const rootPredicate = `(parent_id IS NULL OR parent_id = '') AND type IN ('apply', 'delete')`
@@ -95,17 +95,18 @@ func (s *Store) Snapshot(ctx context.Context, operationLimit uint32) (*Snapshot,
 	if err != nil {
 		return nil, fmt.Errorf("read overview kinds: %w", err)
 	}
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(CASE WHEN status = 'pending' THEN 1 END), COUNT(CASE WHEN status = 'running' THEN 1 END) FROM operations WHERE ` + rootPredicate).Scan(&out.PendingOperations, &out.RunningOperations); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(CASE WHEN status = 'pending' THEN 1 END), COUNT(CASE WHEN status = 'running' THEN 1 END) FROM operations WHERE `+rootPredicate).Scan(&out.PendingOperations, &out.RunningOperations); err != nil {
 		return nil, fmt.Errorf("read overview active totals: %w", err)
 	}
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM operations WHERE ` + reviewPredicate).Scan(&out.ReviewResources); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM operations WHERE `+reviewPredicate).Scan(&out.ReviewResources); err != nil {
 		return nil, fmt.Errorf("read overview review total: %w", err)
 	}
-	out.ActiveOperations, err = readOperations(ctx, tx, rootPredicate + ` AND status IN ('pending', 'running')`, operationLimit)
+	activeLimit := uint32(min(uint64(operationLimit), uint64(out.PendingOperations)+uint64(out.RunningOperations)))
+	out.ActiveOperations, err = readOperations(ctx, tx, rootPredicate+` AND status IN ('pending', 'running')`, activeLimit)
 	if err != nil {
 		return nil, fmt.Errorf("read overview active operations: %w", err)
 	}
-	out.ReviewOperations, err = readOperations(ctx, tx, reviewPredicate, operationLimit)
+	out.ReviewOperations, err = readOperations(ctx, tx, reviewPredicate, min(operationLimit, out.ReviewResources))
 	if err != nil {
 		return nil, fmt.Errorf("read overview review operations: %w", err)
 	}
@@ -129,12 +130,15 @@ func readKinds(rows *sql.Rows) ([]KindCount, error) {
 }
 
 func readOperations(ctx context.Context, tx *sql.Tx, predicate string, limit uint32) ([]OperationMetadata, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT ` + metadataColumns + ` FROM operations WHERE ` + predicate + ` ORDER BY rowid DESC LIMIT ?`, limit)
+	if limit == 0 {
+		return nil, nil
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT `+metadataColumns+` FROM operations WHERE `+predicate+` ORDER BY rowid DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []OperationMetadata
+	out := make([]OperationMetadata, 0, limit)
 	for rows.Next() {
 		var op OperationMetadata
 		if err := rows.Scan(&op.ID, &op.Type, &op.APIVersion, &op.Kind, &op.ResourceName, &op.Status, &op.SubmittedAt, &op.StartedAt, &op.CompletedAt, &op.Source); err != nil {

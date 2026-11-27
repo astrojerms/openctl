@@ -43,20 +43,20 @@ func (h *overviewHandler) GetOverview(ctx context.Context, req *apiv1.GetOvervie
 		return nil, status.Errorf(codes.Internal, "read persisted overview: %v", err)
 	}
 	out := &apiv1.GetOverviewResponse{
-		AsOf: snapshot.AsOf,
-		ManagedResources: snapshot.ManagedResources,
+		AsOf:              snapshot.AsOf,
+		ManagedResources:  snapshot.ManagedResources,
 		PendingOperations: snapshot.PendingOperations,
 		RunningOperations: snapshot.RunningOperations,
-		ReviewResources: snapshot.ReviewResources,
-		Kinds: make([]*apiv1.ManagedKindCount, 0, len(snapshot.Kinds)),
-		ActiveOperations: overviewOperations(snapshot.ActiveOperations),
-		ReviewOperations: overviewOperations(snapshot.ReviewOperations),
+		ReviewResources:   snapshot.ReviewResources,
+		Kinds:             make([]*apiv1.ManagedKindCount, 0, len(snapshot.Kinds)),
+		ActiveOperations:  overviewOperations(snapshot.ActiveOperations),
+		ReviewOperations:  overviewOperations(snapshot.ReviewOperations),
 	}
 	for _, kind := range snapshot.Kinds {
 		out.Kinds = append(out.Kinds, &apiv1.ManagedKindCount{
 			ApiVersion: kind.APIVersion,
-			Kind: kind.Kind,
-			Resources: kind.Resources,
+			Kind:       kind.Kind,
+			Resources:  kind.Resources,
 		})
 	}
 	return out, nil
@@ -68,16 +68,16 @@ func overviewOperations(ops []overview.OperationMetadata) []*apiv1.Operation {
 		// Do not use opToProto: that history/detail conversion can decode
 		// results and exposes free-form errors and labels.
 		out = append(out, &apiv1.Operation{
-			Id: op.ID,
-			Type: op.Type,
-			ApiVersion: op.APIVersion,
-			Kind: op.Kind,
+			Id:           op.ID,
+			Type:         op.Type,
+			ApiVersion:   op.APIVersion,
+			Kind:         op.Kind,
 			ResourceName: op.ResourceName,
-			Status: op.Status,
-			SubmittedAt: op.SubmittedAt,
-			StartedAt: op.StartedAt,
-			CompletedAt: op.CompletedAt,
-			Source: op.Source,
+			Status:       op.Status,
+			SubmittedAt:  op.SubmittedAt,
+			StartedAt:    op.StartedAt,
+			CompletedAt:  op.CompletedAt,
+			Source:       op.Source,
 		})
 	}
 	return out

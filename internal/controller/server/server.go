@@ -17,6 +17,7 @@ import (
 	"github.com/openctl/openctl/internal/controller/auth"
 	"github.com/openctl/openctl/internal/controller/manifests"
 	"github.com/openctl/openctl/internal/controller/operations"
+	"github.com/openctl/openctl/internal/controller/overview"
 	"github.com/openctl/openctl/internal/controller/providers"
 	"github.com/openctl/openctl/internal/templates"
 	apiv1 "github.com/openctl/openctl/pkg/api/v1"
@@ -57,6 +58,8 @@ type Options struct {
 	Registry   *providers.Registry
 	Operations *operations.Store
 	Dispatcher *operations.Dispatcher
+	// Overview supplies provider-independent persisted inventory and root work.
+	Overview *overview.Store
 	// Manifests powers Phase 5 drift detection. Get/List compare observed
 	// state against the stored desired manifest. May be nil — drift just
 	// won't be populated.
@@ -125,6 +128,7 @@ func New(opts Options) (*Server, error) {
 		controllerID:    opts.ControllerID,
 		idempotentApply: opts.Operations != nil && opts.Dispatcher != nil,
 	})
+	apiv1.RegisterOverviewServiceServer(g, newOverviewHandler(opts.Overview))
 
 	registry := opts.Registry
 	if registry == nil {

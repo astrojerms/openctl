@@ -33,6 +33,7 @@ and the exec-plugin paths are removed.`,
 	cmd.AddCommand(newCtlApplyCommand())
 	cmd.AddCommand(newCtlPreviewCommand())
 	cmd.AddCommand(newCtlActionCommand())
+	cmd.AddCommand(newCtlOverviewCommand())
 	cmd.AddCommand(newCtlGetCommand())
 	cmd.AddCommand(newCtlDeleteCommand())
 	cmd.AddCommand(newCtlOpCommand())

@@ -27,11 +27,15 @@
                 {kind.kind}
                 {#if advancedKind(kind.apiVersion, kind.kind)}
                   <span class="adv" title={`Advanced: usually created via a ${advancedKind(kind.apiVersion, kind.kind)?.owner}`}>adv</span>
+                {:else if kind.observedOnly}
+                  <span class="adv" title="Discovery-only observations; not saved managed inventory">observed</span>
                 {/if}
               </span>
-              <span class="count" title={kind.count === null ? 'count unavailable' : ''}>
-                {kind.count === null ? '—' : kind.count}
-              </span>
+              {#if !kind.observedOnly}
+                <span class="count" title={kind.count === null ? 'Saved managed count unavailable' : 'Saved managed resources, not live health'}>
+                  {kind.count === null ? '—' : kind.count}
+                </span>
+              {/if}
             </a>
           </li>
         {/each}

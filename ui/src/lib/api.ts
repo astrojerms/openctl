@@ -30,6 +30,7 @@ export interface RequestOptions {
   // post-login calls rely on the HttpOnly session cookie set by the
   // gateway, so they leave bearer unset.
   bearer?: string;
+  signal?: AbortSignal;
 }
 
 async function request<T>(
@@ -53,6 +54,7 @@ async function request<T>(
     credentials: 'same-origin',
     headers,
     body: payload,
+    signal: opts?.signal,
   });
 
   if (resp.status === 401) {
@@ -131,8 +133,8 @@ export const ping = {
   // PingService.Ping is GET /v1/ping?message=...; the message echo is
   // returned in the response body. No client-side payload needed beyond
   // the query string.
-  ping: (message = 'hello from ui') =>
-    api.get<PingResponse>('/v1/ping?message=' + encodeURIComponent(message)),
+  ping: (message = 'hello from ui', opts?: RequestOptions) =>
+    api.get<PingResponse>('/v1/ping?message=' + encodeURIComponent(message), opts),
 };
 
 // --- Schemas -------------------------------------------------------------
@@ -148,6 +150,8 @@ export interface SchemaInfo {
   advanced?: boolean;
   ownerKind?: string;
   advancedNote?: string;
+  // Discovery observations are not saved desired resources.
+  observedOnly?: boolean;
 }
 
 export interface ListSchemasResponse {
@@ -169,7 +173,7 @@ export interface GetSchemaResponse {
 }
 
 export const schemas = {
-  list: () => api.get<ListSchemasResponse>('/v1/schemas'),
+  list: (opts?: RequestOptions) => api.get<ListSchemasResponse>('/v1/schemas', opts),
   validate: (resource: Resource | Partial<Resource>) =>
     api.post<ValidateResponse>('/v1/schemas:validate', { resource }),
   getForm: (apiVersion: string, kind: string) =>
@@ -546,14 +550,38 @@ export interface CancelOperationResponse {
 }
 
 export const operations = {
-  get: (id: string, includeChildren = false) =>
-    api.get<Operation>(`/v1/operations/${encodeURIComponent(id)}${includeChildren ? '?include_children=true' : ''}`),
+  get: (id: string, includeChildren = false, opts?: RequestOptions) =>
+    api.get<Operation>(`/v1/operations/${encodeURIComponent(id)}${includeChildren ? '?include_children=true' : ''}`, opts),
   byRequest: (requestId: string, includeChildren = false) =>
     api.post<Operation>('/v1/operations:byRequest', { requestId, includeChildren }),
   list: (req: ListOperationsRequest = {}) =>
     api.post<ListOperationsResponse>('/v1/operations:list', req),
   cancel: (id: string) =>
     api.post<CancelOperationResponse>(`/v1/operations/${encodeURIComponent(id)}:cancel`, {}),
+};
+
+// --- Persisted control-plane overview (never probes providers) -------------
+
+export interface ManagedKindCount {
+  apiVersion: string;
+  kind: string;
+  resources: number;
+}
+
+export interface OverviewResponse {
+  asOf: string;
+  managedResources: number;
+  kinds: ManagedKindCount[];
+  pendingOperations: number;
+  runningOperations: number;
+  reviewResources: number;
+  activeOperations: Operation[];
+  reviewOperations: Operation[];
+}
+
+export const overviewApi = {
+  get: (operationLimit = 10, opts?: RequestOptions) =>
+    api.get<OverviewResponse>(`/v1/overview?operation_limit=${operationLimit}`, opts),
 };
 
 // --- Repo (manifest dir / git) -------------------------------------------

@@ -351,6 +351,23 @@ Ping the controller:
 openctl ping
 ```
 
+Inspect persisted control-plane inventory and root work without contacting providers:
+
+```bash
+openctl ctl overview
+openctl ctl overview --limit 5 -o json
+```
+
+The snapshot counts saved desired records, including owned children and providers
+that are no longer registered. Discovery-only observations are not managed records.
+Pending/running totals count root Apply/Delete requests, never child steps.
+Review lists show the latest retained unsuccessful admission per resource; a newer
+request supersedes an older failure. These are not resource health checks.
+`--limit` caps each operation list (default 10, maximum 100), not its exact total.
+Inspect an operation by ID before deciding what to retry; use resource Get/runtime
+inspection for live readiness. This requires a matching controller with overview
+support; there is no fallback to scanning the lab.
+
 List controller resources:
 
 ```bash
@@ -908,6 +925,8 @@ https://127.0.0.1:9445/ui/
 
 Useful areas:
 
+- Overview: saved inventory, exact root-work totals and bounded request review,
+  with explicit operation inspection even beyond the live event cache.
 - Resources: browse Proxmox VMs, Proxmox nodes, and k3s clusters.
 - Detail: inspect desired state, observed state, drift, history, and topology.
 - Templates: create common resources from parameterized starters.
@@ -916,6 +935,13 @@ Useful areas:
 - Providers: add, edit, or delete provider credentials.
 - Settings: edit controller behavior such as reconciler interval and retained
   operations.
+
+Home and sidebar counts share one persisted snapshot; cosmetic badges never poll
+every provider kind or SSH into application guests. Badges count saved desired
+records, not live instances. Discovery-only kinds have no managed-count badge, and
+saved kinds remain visible when their schema/provider is absent. Snapshot failures
+leave counts unknown; Home labels any retained values stale. Neither a count nor
+a successful historical operation proves current health.
 
 Retry restores the failed Apply's submitted intent even when a first deployment
 has no managed resource yet. Secret markers and desired metadata are preserved;

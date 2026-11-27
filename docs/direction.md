@@ -114,6 +114,8 @@ of application health; a passed fake-provider test is not hardware validation.
 
 - Connect/test/discover/adopt in the console, with the same controller-side
   inventory available to the CLI.
+- A provider-independent control-plane overview and saved-inventory navigation;
+  cosmetic counts never trigger whole-lab provider/SSH scans or imply readiness.
 - First-class standalone application lifecycle, including updates, logs,
   explicit runtime actions, health, and data-preserving removal.
 - One integrated Jellyfin journey, including storage, GPU, optional domain,

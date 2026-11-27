@@ -11,6 +11,7 @@
   } from '../lib/catalogue';
   import { routeHref } from '../lib/router';
   import { startOpsWatcher, stopOpsWatcher } from '../lib/ops';
+  import { overview, startOverview, stopOverview } from '../lib/overview';
   import GitStatus from '../components/GitStatus.svelte';
   import Nav from '../components/Nav.svelte';
   import OpsDrawer from '../components/OpsDrawer.svelte';
@@ -43,15 +44,24 @@
   // running — sidesteps "is my UI change even deployed?" without
   // digging into the Home tab.
   let pong: PingResponse | null = null;
+  let buildError = '';
+  const buildController = new AbortController();
 
   onMount(() => {
+    startOverview();
     void refreshCatalogue();
     void refreshAuthority();
     startOpsWatcher();
-    void ping.ping().then((p) => (pong = p)).catch(() => { /* ignore */ });
+    void ping.ping('hello from ui', { signal: buildController.signal }).then((p) => {
+      if (!buildController.signal.aborted) pong = p;
+    }).catch((err) => {
+      if (!buildController.signal.aborted) buildError = err instanceof Error ? err.message : String(err);
+    });
   });
 
   onDestroy(() => {
+    buildController.abort();
+    stopOverview();
     stopOpsWatcher();
     stopCatalogue();
     resetAuthority();
@@ -59,6 +69,7 @@
 
   async function doLogout() {
     busy = true;
+    stopOverview();
     try {
       await logout();
     } finally {
@@ -149,6 +160,9 @@
     {#if $catalogueError}
       <p class="err">{$catalogueError}</p>
     {/if}
+    {#if $overview.error}
+      <p class="err">Managed counts unavailable.</p>
+    {/if}
     <Nav catalogue={$catalogue} activeKindKey={activeKindKey} />
   </aside>
 
@@ -159,7 +173,7 @@
       <p class="authority-banner" role="alert">Cannot verify running manifest authority: {$manifestAuthority.error} <button on:click={refreshAuthority}>Refresh authority</button></p>
     {/if}
     {#if $route.name === 'home'}
-      <HomePane />
+      <HomePane {pong} {buildError} viewer={me.role === 'viewer'} />
     {:else if $route.name === 'templates'}
       <Templates />
     {:else if $route.name === 'template'}

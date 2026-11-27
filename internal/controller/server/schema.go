@@ -34,7 +34,7 @@ func (h *schemaHandler) ListSchemas(_ context.Context, _ *apiv1.ListSchemasReque
 	adv := h.registry.AdvancedKinds()
 	out := make([]*apiv1.SchemaInfo, 0, len(infos))
 	for _, i := range infos {
-		out = append(out, infoToProto(i, adv))
+		out = append(out, infoToProto(i, adv, h.registry))
 	}
 	return &apiv1.ListSchemasResponse{Schemas: out}, nil
 }
@@ -52,7 +52,7 @@ func (h *schemaHandler) GetSchema(_ context.Context, req *apiv1.GetSchemaRequest
 			return nil, status.Errorf(codes.Internal, "read schema: %v", err)
 		}
 		return &apiv1.GetSchemaResponse{
-			Info:      infoToProto(i, h.registry.AdvancedKinds()),
+			Info:      infoToProto(i, h.registry.AdvancedKinds(), h.registry),
 			CueSource: string(src),
 		}, nil
 	}
@@ -93,15 +93,17 @@ func (h *schemaHandler) GetFormSchema(_ context.Context, req *apiv1.GetFormSchem
 	return &apiv1.GetFormSchemaResponse{Json: string(out)}, nil
 }
 
-// infoToProto maps a schema.Info to the wire type, stamping the composite-child
-// "advanced" hint when the provider registry declares this kind as one (keyed
-// by "<provider>/<kind>"). adv may be nil/empty — then no kind is flagged.
-func infoToProto(i schema.Info, adv map[string]providers.AdvancedKind) *apiv1.SchemaInfo {
+// infoToProto stamps registry-derived capabilities without provider observation.
+// Both the registry and its advanced-kind map may be nil.
+func infoToProto(i schema.Info, adv map[string]providers.AdvancedKind, registry *providers.Registry) *apiv1.SchemaInfo {
 	out := &apiv1.SchemaInfo{
 		ApiVersion: i.APIVersion,
 		Kind:       i.Kind,
 		Provider:   i.Provider,
 		FileName:   i.FileName,
+	}
+	if registry != nil {
+		out.ObservedOnly = registry.IsObservedOnly(i.APIVersion, i.Kind)
 	}
 	if a, ok := adv[i.Provider+"/"+i.Kind]; ok {
 		out.Advanced = true

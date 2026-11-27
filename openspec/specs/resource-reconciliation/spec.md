@@ -147,6 +147,37 @@ first-class field. On each successful delete it SHALL remove that row.
 - **THEN** the raw manifest (markers intact) is upserted keyed by
   `(apiVersion, kind, name)` and its `source` column records who applied it
 
+### Requirement: Overview is persisted metadata, not lab observation
+
+The system SHALL expose a viewer-accessible, internally consistent read-only
+snapshot of saved desired inventory and retained root request activity without
+provider observation, secret resolution or payload decoding.
+
+#### Scenario: A provider or schema is unavailable
+
+- **WHEN** the operator opens overview or navigation
+- **THEN** persisted resources, including owned children and unregistered kinds,
+  remain countable without provider Get/List or guest SSH requests
+- **AND** discovery-only observations are not presented as saved managed records;
+  neither counts nor successful request history establish current readiness
+
+#### Scenario: History exceeds the displayed request cap
+
+- **WHEN** active or review lists are bounded
+- **THEN** exact root Apply/Delete totals remain independent of the cap and child
+  steps never double-count
+- **AND** review uses each resource's latest retained admission rather than
+  timestamp ordering; a newer successful or active request supersedes failure
+- **AND** explicit inspection can load a retained operation outside the live
+  event window without retrying it or changing desired intent
+
+#### Scenario: Overview transport fails or the session ends
+
+- **WHEN** a snapshot cannot be refreshed
+- **THEN** missing counts remain unknown and any retained snapshot is explicitly
+  stale, with no fallback to provider scans or invented zero totals
+- **AND** logout/stop cancels polling and rejects late results from that session
+
 ### Requirement: Per-resource previews distinguish all desired intent
 
 Read-only controller previews SHALL distinguish create, update and no-op and

@@ -23,6 +23,7 @@ import (
 	"github.com/openctl/openctl/internal/controller/instance"
 	"github.com/openctl/openctl/internal/controller/manifests"
 	"github.com/openctl/openctl/internal/controller/operations"
+	"github.com/openctl/openctl/internal/controller/overview"
 	"github.com/openctl/openctl/internal/controller/provideridentity"
 	"github.com/openctl/openctl/internal/controller/providers"
 	"github.com/openctl/openctl/internal/controller/providers/apps"
@@ -480,6 +481,7 @@ func runServe(args []string) error {
 		ControllerID:  controllerID,
 		Operations:    opStore,
 		Dispatcher:    dispatcher,
+		Overview:      overview.New(db),
 		Manifests:     manifestStore,
 		Sessions:      sessionStore,
 		DiskMirror:    diskMirror,

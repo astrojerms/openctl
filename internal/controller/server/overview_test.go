@@ -84,7 +84,10 @@ func TestOverviewOperationCapAndExactTotals(t *testing.T) {
 		seedOverviewHandlerOperation(t, db, fmt.Sprintf("active-%03d", i), "pending")
 		seedOverviewHandlerOperation(t, db, fmt.Sprintf("review-%03d", i), "canceled")
 	}
-	for _, tc := range []struct{ limit uint32; want int }{
+	for _, tc := range []struct {
+		limit uint32
+		want  int
+	}{
 		{0, 10}, {1, 1}, {100, 100},
 	} {
 		got, err := h.GetOverview(overviewViewerContext(), &apiv1.GetOverviewRequest{OperationLimit: tc.limit})

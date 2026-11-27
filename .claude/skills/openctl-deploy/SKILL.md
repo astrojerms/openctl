@@ -53,6 +53,7 @@ Select the intended CLI configuration explicitly for the rest of the task:
 ```bash
 openctl --config "$CONFIG" ping
 openctl --config "$CONFIG" whoami
+openctl --config "$CONFIG" ctl overview -o json
 openctl --config "$CONFIG" ctl op list --status running
 openctl --config "$CONFIG" ctl op list --status pending
 ```
@@ -62,6 +63,12 @@ controller URL, token/CA paths, and the controller host's provider configuration
 without printing secrets. Editor/admin authorization is needed to apply;
 viewer access suffices for discovery. Verify the controller's identity and
 management boundary, not merely that *some* controller answers.
+
+Overview is a read-only SQLite metadata snapshot, not a provider scan. Saved
+resource counts include owned children but exclude discovery-only inventory.
+Root-work totals are exact even when displayed lists are capped; latest retained
+failed/interrupted/canceled requests need inspection, not automatic retry.
+Missing/stale snapshots are not zeros or evidence of a healthy/empty lab.
 
 The CLI's `--config` selects a controller client configuration. Provider
 credentials, SSH identities, secret files, and kubeconfig paths used during

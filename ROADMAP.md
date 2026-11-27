@@ -100,6 +100,25 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
   controller. Actual browser form edits showed metadata-only review with no
   Apply/Delete or persisted intent changes. No live homelab mutation.
 
+**2026-11-27 — provider-independent control-plane overview**
+
+- [x] One read-only SQLite snapshot exposes saved inventory, exact root-request
+  totals and bounded active/latest-unsuccessful lists without decoding payloads
+  or observing providers. Latest admission supersedes historical failures even
+  when timestamps skew; child steps never double-count.
+- [x] Console overview and sidebar share cancellable metadata polling instead of
+  per-kind provider/SSH scans. Unregistered saved kinds remain visible;
+  observation-only kinds have no misleading managed badge. Failures show unknown
+  counts or explicitly stale snapshots, not an empty/healthy lab.
+- [x] `ctl overview` uses the same viewer-accessible API. Focused inspection loads
+  retained operations outside the live window; global activity uses exact root
+  totals, not a truncated child-heavy cache.
+- Verification: focused overview/CLI/schema/gateway Go checks, 185 frontend tests,
+  clean Svelte diagnostics and successful UI build. Actual empty-daemon and
+  authenticated viewer CLI/browser proofs cover explicit zeros, capped lists,
+  historical inspection, HTTP outage/cold reload/recovery and zero provider
+  Get/List calls. No live homelab mutation or readiness claim.
+
 The next product acceptance gate is the complete operator journey on real
 hardware, including recovery, media playback and any approved public endpoint.
 See [direction](docs/direction.md). Provider breadth is downstream of that gate.

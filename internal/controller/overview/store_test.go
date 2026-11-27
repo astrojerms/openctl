@@ -26,14 +26,14 @@ func openOverviewDB(t *testing.T) *sql.DB {
 }
 
 type overviewTestOperation struct {
-	id string
-	parent any
-	typ string
+	id         string
+	parent     any
+	typ        string
 	apiVersion string
-	kind string
-	name string
-	status string
-	submitted string
+	kind       string
+	name       string
+	status     string
+	submitted  string
 }
 
 func insertOverviewOperation(t *testing.T, db *sql.DB, op overviewTestOperation) {
@@ -124,7 +124,10 @@ func TestSnapshotCountsAreIndependentOfCapsAndChildren(t *testing.T) {
 			insertOverviewOperation(t, db, overviewTestOperation{id: fmt.Sprintf("step-%s-%02d", status, i), typ: "step", status: status})
 		}
 	}
-	for _, tc := range []struct{ limit uint32; active, review int }{
+	for _, tc := range []struct {
+		limit          uint32
+		active, review int
+	}{
 		{1, 1, 1}, {0, 10, 10}, {100, 30, 15},
 	} {
 		got, err := New(db).Snapshot(context.Background(), tc.limit)
