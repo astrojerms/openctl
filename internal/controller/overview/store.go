@@ -79,7 +79,7 @@ func (s *Store) Snapshot(ctx context.Context, operationLimit uint32) (*Snapshot,
 	if err != nil {
 		return nil, fmt.Errorf("begin overview snapshot: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }() // Read-only cleanup; Commit errors are handled below.
 
 	out := &Snapshot{}
 	// This first table read pins the snapshot. Its clock value identifies the
@@ -102,11 +102,11 @@ func (s *Store) Snapshot(ctx context.Context, operationLimit uint32) (*Snapshot,
 		return nil, fmt.Errorf("read overview review total: %w", err)
 	}
 	activeLimit := uint32(min(uint64(operationLimit), uint64(out.PendingOperations)+uint64(out.RunningOperations)))
-	out.ActiveOperations, err = readOperations(ctx, tx, rootPredicate+` AND status IN ('pending', 'running')`, activeLimit)
+	out.ActiveOperations, err = readOperations(ctx, tx, false, activeLimit)
 	if err != nil {
 		return nil, fmt.Errorf("read overview active operations: %w", err)
 	}
-	out.ReviewOperations, err = readOperations(ctx, tx, reviewPredicate, min(operationLimit, out.ReviewResources))
+	out.ReviewOperations, err = readOperations(ctx, tx, true, min(operationLimit, out.ReviewResources))
 	if err != nil {
 		return nil, fmt.Errorf("read overview review operations: %w", err)
 	}
@@ -129,11 +129,15 @@ func readKinds(rows *sql.Rows) ([]KindCount, error) {
 	return out, rows.Err()
 }
 
-func readOperations(ctx context.Context, tx *sql.Tx, predicate string, limit uint32) ([]OperationMetadata, error) {
+func readOperations(ctx context.Context, tx *sql.Tx, review bool, limit uint32) ([]OperationMetadata, error) {
 	if limit == 0 {
 		return nil, nil
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT `+metadataColumns+` FROM operations WHERE `+predicate+` ORDER BY rowid DESC LIMIT ?`, limit)
+	query := `SELECT ` + metadataColumns + ` FROM operations WHERE ` + rootPredicate + ` AND status IN ('pending', 'running') ORDER BY rowid DESC LIMIT ?`
+	if review {
+		query = `SELECT ` + metadataColumns + ` FROM operations WHERE ` + reviewPredicate + ` ORDER BY rowid DESC LIMIT ?`
+	}
+	rows, err := tx.QueryContext(ctx, query, limit)
 	if err != nil {
 		return nil, err
 	}

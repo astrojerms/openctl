@@ -11,13 +11,14 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/openctl/openctl/internal/config"
-	controllertls "github.com/openctl/openctl/internal/controller/tls"
-	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
+
+	"github.com/openctl/openctl/internal/config"
+	controllertls "github.com/openctl/openctl/internal/controller/tls"
+	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 )
 
 type requestRecoveryRPC struct {

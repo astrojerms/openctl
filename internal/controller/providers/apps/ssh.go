@@ -109,7 +109,8 @@ func (sshRunner) Run(ctx context.Context, t Target, command string, input []byte
 		return "", ctx.Err()
 	}
 	if err != nil {
-		if exit, ok := err.(*ssh.ExitError); ok {
+		var exit *ssh.ExitError
+		if errors.As(err, &exit) {
 			return "", fmt.Errorf("apps: remote command exited with status %d; check guest prerequisites for this lifecycle stage (raw output withheld to protect credentials)", exit.ExitStatus())
 		}
 		return "", fmt.Errorf("apps: remote command failed; check guest prerequisites for this lifecycle stage")

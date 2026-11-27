@@ -2087,6 +2087,11 @@ phase plan when ready to commit.
 
 ## Recently completed (housekeeping)
 
+- fix: **control-plane integration cleanup** — recovery reports temporary-directory
+  cleanup failures and preserves wrapped restore errors; SSH observation recognizes
+  wrapped exit errors. Overview reads use fixed SQL predicates and avoid copying
+  operation records. Import grouping and Go analysis findings are resolved.
+
 When phases or followups land, move them up out of "pending" into their
 detail doc's marked-complete section, then leave a one-line entry here
 with the commit hash for at-a-glance history. Trim to the last 10.

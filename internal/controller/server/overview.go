@@ -64,7 +64,8 @@ func (h *overviewHandler) GetOverview(ctx context.Context, req *apiv1.GetOvervie
 
 func overviewOperations(ops []overview.OperationMetadata) []*apiv1.Operation {
 	out := make([]*apiv1.Operation, 0, len(ops))
-	for _, op := range ops {
+	for i := range ops {
+		op := &ops[i]
 		// Do not use opToProto: that history/detail conversion can decode
 		// results and exposes free-form errors and labels.
 		out = append(out, &apiv1.Operation{

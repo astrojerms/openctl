@@ -5,8 +5,9 @@ import (
 	"context"
 	"testing"
 
-	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 	"google.golang.org/grpc"
+
+	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 )
 
 type missingOverviewTimeRPC struct {

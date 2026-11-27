@@ -659,7 +659,7 @@ func buildGitRepo(ctx context.Context, mirror *manifests.DiskMirror, cfg *config
 			return nil, err
 		}
 		if _, err := os.Stat(filepath.Join(mirror.Root(), ".git")); os.IsNotExist(err) {
-			if out, err := exec.CommandContext(ctx, "git", "clone", "--", cfg.Manifests.GitOps.Remote, mirror.Root()).CombinedOutput(); err != nil {
+			if out, err := exec.CommandContext(ctx, "git", "clone", "--", cfg.Manifests.GitOps.Remote, mirror.Root()).CombinedOutput(); err != nil { // #nosec G204 -- Trusted admin config passed as argv after "--"; no shell interpolation.
 				return nil, fmt.Errorf("clone source repository: %w: %s", err, out)
 			}
 		} else if err != nil {

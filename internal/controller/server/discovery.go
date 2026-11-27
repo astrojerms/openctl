@@ -3,12 +3,13 @@ package server
 import (
 	"context"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/openctl/openctl/internal/controller/auth"
 	"github.com/openctl/openctl/internal/controller/operations"
 	"github.com/openctl/openctl/internal/controller/providers"
 	apiv1 "github.com/openctl/openctl/pkg/api/v1"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 func (h *resourceHandler) discoverer(apiVersion string) (providers.Discoverer, error) {

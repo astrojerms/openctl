@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -27,13 +28,13 @@ func Load(path string) (*protocol.Resource, error) {
 func Parse(data []byte) (*protocol.Resource, error) {
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	resource, err := nextManifest(decoder)
-	if err == io.EOF {
+	if errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("manifest missing required field: apiVersion")
 	}
 	if err != nil {
 		return nil, err
 	}
-	if _, err := nextManifest(decoder); err != io.EOF {
+	if _, err := nextManifest(decoder); !errors.Is(err, io.EOF) {
 		if err != nil {
 			return nil, err
 		}
@@ -58,7 +59,7 @@ func ParseMultiple(data []byte) ([]*protocol.Resource, error) {
 	resources := make([]*protocol.Resource, 0)
 	for {
 		resource, err := nextManifest(decoder)
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return resources, nil
 		}
 		if err != nil {
@@ -72,7 +73,7 @@ func nextManifest(decoder *yaml.Decoder) (*protocol.Resource, error) {
 	for {
 		var document yaml.Node
 		if err := decoder.Decode(&document); err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				return nil, err
 			}
 			return nil, fmt.Errorf("failed to parse manifest: %w", err)

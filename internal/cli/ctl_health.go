@@ -9,11 +9,12 @@ import (
 	"text/tabwriter"
 	"time"
 
-	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
+
+	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 )
 
 func newCtlHealthCommand() *cobra.Command {

@@ -79,25 +79,25 @@ type TLSOptions struct {
 func New(endpoint, tokenID, tokenSecret string, options TLSOptions) (*Client, error) {
 	u, err := url.Parse(endpoint)
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.Opaque != "" {
-		return nil, errors.New("Proxmox endpoint must be an absolute HTTPS URL")
+		return nil, errors.New("proxmox endpoint must be an absolute HTTPS URL")
 	}
 	if u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(endpoint, "#") {
-		return nil, errors.New("Proxmox endpoint must not contain credentials, a query, or a fragment")
+		return nil, errors.New("proxmox endpoint must not contain credentials, a query, or a fragment")
 	}
 	if strings.HasSuffix(u.Host, ":") {
-		return nil, errors.New("Proxmox endpoint has an invalid port")
+		return nil, errors.New("proxmox endpoint has an invalid port")
 	}
 	if port := u.Port(); port != "" {
 		n, err := strconv.Atoi(port)
 		if err != nil || n < 1 || n > 65535 {
-			return nil, errors.New("Proxmox endpoint has an invalid port")
+			return nil, errors.New("proxmox endpoint has an invalid port")
 		}
 	}
 	if strings.HasPrefix(u.Host, "[") && net.ParseIP(u.Hostname()) == nil {
-		return nil, errors.New("Proxmox endpoint has an invalid IP address")
+		return nil, errors.New("proxmox endpoint has an invalid IP address")
 	}
 	if options.CAFile != "" && options.InsecureSkipVerify {
-		return nil, errors.New("Proxmox CA file and insecure certificate verification are mutually exclusive")
+		return nil, errors.New("proxmox CA file and insecure certificate verification are mutually exclusive")
 	}
 	tlsConfig := &tls.Config{
 		MinVersion:         tls.VersionTLS12,
@@ -115,16 +115,16 @@ func New(endpoint, tokenID, tokenSecret string, options TLSOptions) (*Client, er
 		count := 0
 		for rest := bytes.TrimSpace(bundle); len(rest) > 0; {
 			if !bytes.HasPrefix(rest, []byte("-----BEGIN CERTIFICATE-----")) {
-				return nil, errors.New("Proxmox CA bundle contains invalid certificate PEM")
+				return nil, errors.New("proxmox CA bundle contains invalid certificate PEM")
 			}
 			block, remaining := pem.Decode(rest)
 			if block == nil || block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
-				return nil, errors.New("Proxmox CA bundle contains invalid certificate PEM")
+				return nil, errors.New("proxmox CA bundle contains invalid certificate PEM")
 			}
 			// Decode may otherwise skip a malformed block before a valid one.
 			consumed := rest[:len(rest)-len(remaining)]
 			if bytes.Count(consumed, []byte("-----BEGIN ")) != 1 {
-				return nil, errors.New("Proxmox CA bundle contains invalid certificate PEM")
+				return nil, errors.New("proxmox CA bundle contains invalid certificate PEM")
 			}
 			cert, err := x509.ParseCertificate(block.Bytes)
 			if err != nil {
@@ -135,7 +135,7 @@ func New(endpoint, tokenID, tokenSecret string, options TLSOptions) (*Client, er
 			rest = bytes.TrimSpace(remaining)
 		}
 		if count == 0 {
-			return nil, errors.New("Proxmox CA bundle contains no certificates")
+			return nil, errors.New("proxmox CA bundle contains no certificates")
 		}
 		tlsConfig.RootCAs = roots
 	}

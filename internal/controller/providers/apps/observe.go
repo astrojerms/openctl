@@ -27,7 +27,7 @@ func parseContainers(output string) ([]containerState, bool) {
 			return nil, false
 		}
 	} else {
-		for _, line := range strings.Split(output, "\n") {
+		for line := range strings.SplitSeq(output, "\n") {
 			var c containerState
 			if json.Unmarshal([]byte(line), &c) != nil {
 				return nil, false
@@ -65,12 +65,12 @@ func (p *Provider) observe(ctx context.Context, kind, name string, l locator) *p
 	} else {
 		r.Status["url"] = l.Probe.URL
 	}
-	_, err := p.run(ctx, l, "observe verified guest SSH", "true", nil)
-	reachable := err == nil
-	if reachable {
-		set("vm", "ready", "Verified SSH guest is reachable")
-	} else {
+	reachable := false
+	if _, err := p.run(ctx, l, "observe verified guest SSH", "true", nil); err != nil {
 		set("vm", "not_ready", "Guest SSH unavailable or host key unverified")
+	} else {
+		reachable = true
+		set("vm", "ready", "Verified SSH guest is reachable")
 	}
 	allReady := reachable
 	if reachable {

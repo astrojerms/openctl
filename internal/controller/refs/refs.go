@@ -128,8 +128,8 @@ func isPathIdentifier(key string) bool {
 	}
 	for i := range len(key) {
 		c := key[i]
-		if c != '_' && !(c >= 'a' && c <= 'z') && !(c >= 'A' && c <= 'Z') &&
-			!(i > 0 && c >= '0' && c <= '9') {
+		if c != '_' && (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') &&
+			(i == 0 || c < '0' || c > '9') {
 			return false
 		}
 	}

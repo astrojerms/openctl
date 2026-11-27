@@ -4,9 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc/metadata"
+
+	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 )
 
 func newCtlConfirmIdentityCommand() *cobra.Command {

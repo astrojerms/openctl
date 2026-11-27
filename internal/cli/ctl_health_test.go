@@ -10,12 +10,13 @@ import (
 	"sync/atomic"
 	"testing"
 
-	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 	"gopkg.in/yaml.v3"
+
+	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 )
 
 type healthRPC struct {

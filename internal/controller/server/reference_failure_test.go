@@ -11,6 +11,10 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
+
 	"github.com/openctl/openctl/internal/controller/auth"
 	"github.com/openctl/openctl/internal/controller/manifests"
 	"github.com/openctl/openctl/internal/controller/providers"
@@ -19,9 +23,6 @@ import (
 	"github.com/openctl/openctl/internal/controller/storage"
 	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 	"github.com/openctl/openctl/pkg/protocol"
-	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func previewReference(t *testing.T, reg *providers.Registry, store *manifests.Store, field string) *apiv1.DryRunApplyResponse {

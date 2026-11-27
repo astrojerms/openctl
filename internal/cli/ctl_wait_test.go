@@ -8,10 +8,11 @@ import (
 	"testing"
 	"time"
 
-	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
+
+	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 )
 
 type canceledOperationServer struct {

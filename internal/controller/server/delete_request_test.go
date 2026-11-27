@@ -15,18 +15,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openctl/openctl/internal/controller/auth"
-	"github.com/openctl/openctl/internal/controller/manifests"
-	"github.com/openctl/openctl/internal/controller/operations"
-	"github.com/openctl/openctl/internal/controller/providers"
-	pmprovider "github.com/openctl/openctl/internal/controller/providers/proxmox"
-	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
+
+	"github.com/openctl/openctl/internal/controller/auth"
+	"github.com/openctl/openctl/internal/controller/manifests"
+	"github.com/openctl/openctl/internal/controller/operations"
+	"github.com/openctl/openctl/internal/controller/providers"
+	pmprovider "github.com/openctl/openctl/internal/controller/providers/proxmox"
+	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 )
 
 func keyedDelete(key string) *apiv1.DeleteRequest {
@@ -330,13 +331,13 @@ func TestDeleteRequestValidationAndLegacySync(t *testing.T) {
 		}
 	}
 	for _, missing := range []string{"store", "dispatcher"} {
-		copy := newResourceHandler(h.registry, h.ops, h.dispatcher, h.manifests)
+		handler := newResourceHandler(h.registry, h.ops, h.dispatcher, h.manifests)
 		if missing == "store" {
-			copy.ops = nil
+			handler.ops = nil
 		} else {
-			copy.dispatcher = nil
+			handler.dispatcher = nil
 		}
-		if _, err := copy.Delete(ctx, keyedDelete("durable-required")); status.Code(err) != codes.FailedPrecondition {
+		if _, err := handler.Delete(ctx, keyedDelete("durable-required")); status.Code(err) != codes.FailedPrecondition {
 			t.Fatalf("keyed Delete entered sync fallback without %s: %v", missing, err)
 		}
 	}

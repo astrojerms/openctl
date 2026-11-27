@@ -12,6 +12,12 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
+
 	"github.com/openctl/openctl/internal/controller/auth"
 	"github.com/openctl/openctl/internal/controller/manifests"
 	"github.com/openctl/openctl/internal/controller/operations"
@@ -20,11 +26,6 @@ import (
 	"github.com/openctl/openctl/internal/controller/storage"
 	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 	"github.com/openctl/openctl/pkg/protocol"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func requestHandlers(t *testing.T, provider providers.Provider, retain int) (*resourceHandler, *operationHandler, *sql.DB) {
@@ -316,13 +317,13 @@ func TestApplyRequestValidationAndLegacySync(t *testing.T) {
 		t.Fatal("validation failure reserved a request key")
 	}
 	for _, missing := range []string{"store", "dispatcher"} {
-		copy := newResourceHandler(h.registry, h.ops, h.dispatcher, h.manifests)
+		handler := newResourceHandler(h.registry, h.ops, h.dispatcher, h.manifests)
 		if missing == "store" {
-			copy.ops = nil
+			handler.ops = nil
 		} else {
-			copy.dispatcher = nil
+			handler.dispatcher = nil
 		}
-		if _, err := copy.Apply(context.Background(), keyedApply(t, "durable-required")); status.Code(err) != codes.FailedPrecondition {
+		if _, err := handler.Apply(context.Background(), keyedApply(t, "durable-required")); status.Code(err) != codes.FailedPrecondition {
 			t.Fatalf("keyed Apply entered unsafe sync fallback without %s: %v", missing, err)
 		}
 	}

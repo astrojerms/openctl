@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/openctl/openctl/internal/controller/auth"
 	"github.com/openctl/openctl/internal/controller/manifests"
 	"github.com/openctl/openctl/internal/controller/provideridentity"
@@ -15,8 +18,6 @@ import (
 	"github.com/openctl/openctl/internal/controller/storage"
 	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 	"github.com/openctl/openctl/pkg/protocol"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 type canonicalOwnerProvider struct {
@@ -45,7 +46,7 @@ func TestIdentityConfirmationUsesCanonicalPlacementWithoutAdoptionOrProviderWrit
 			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != http.MethodGet {
 					writes++
-					http.Error(w, "mutation forbidden", 405)
+					http.Error(w, "mutation forbidden", http.StatusMethodNotAllowed)
 					return
 				}
 				w.Header().Set("Content-Type", "application/json")

@@ -6,10 +6,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/openctl/openctl/internal/controller/auth"
-	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/openctl/openctl/internal/controller/auth"
+	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 )
 
 func TestConfigurationMutationsDoNotLetNonAdminsRewriteCredentials(t *testing.T) {

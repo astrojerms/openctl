@@ -109,13 +109,11 @@ func TestSubmitRequestConcurrentSameBodyAcrossStores(t *testing.T) {
 			selected = other
 			candidate.Source = manifests.SourceUI
 		}
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			<-start
 			op, admitted, err := selected.SubmitRequest(ctx, candidate, binding)
 			results <- result{op, admitted, err}
-		}()
+		})
 	}
 	close(start)
 	workers.Wait()

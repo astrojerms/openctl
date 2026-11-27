@@ -8,12 +8,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openctl/openctl/internal/config"
-	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/openctl/openctl/internal/config"
+	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 )
 
 func seedProviderTrust(t *testing.T) *config.Context {

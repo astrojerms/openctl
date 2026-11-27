@@ -22,9 +22,10 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/openctl/openctl/internal/controller/instance"
 	"github.com/openctl/openctl/internal/controller/storage"
-	"golang.org/x/sys/unix"
 )
 
 const (
@@ -153,7 +154,7 @@ func Backup(ctx context.Context, opts Options) (_ Result, retErr error) {
 	if err != nil {
 		return Result{}, err
 	}
-	defer os.RemoveAll(work)
+	defer func() { retErr = errors.Join(retErr, os.RemoveAll(work)) }()
 	if within(root, work) || within(state, work) {
 		return Result{}, fmt.Errorf("temporary directory must be outside source roots")
 	}
@@ -328,15 +329,15 @@ func copyRegular(source, dest string, limit int64, digest io.Writer) (int64, err
 	return n, errors.Join(copyErr, closeErr)
 }
 
-func snapshot(ctx context.Context, state, dest, work string) error {
+func snapshot(ctx context.Context, state, dest, work string) (retErr error) {
 	dir, err := os.MkdirTemp(work, "sqlite-")
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(dir)
+	defer func() { retErr = errors.Join(retErr, os.RemoveAll(dir)) }()
 	for _, name := range []string{"state.db", "state.db-wal", "state.db-shm"} {
 		_, err := copyRegular(filepath.Join(state, name), filepath.Join(dir, name), maxFileBytes, nil)
-		if err != nil && !(name != "state.db" && errors.Is(err, fs.ErrNotExist)) {
+		if err != nil && (name == "state.db" || !errors.Is(err, fs.ErrNotExist)) {
 			return err
 		}
 	}
@@ -418,7 +419,7 @@ func newDestination(name string) error {
 
 // Restore validates and stages the entire archive before exclusive publication.
 // It neither edits archived configuration nor starts controller automation.
-func Restore(ctx context.Context, opts Options) (Result, error) {
+func Restore(ctx context.Context, opts Options) (_ Result, retErr error) {
 	input, err := absolute(opts.Archive)
 	if err != nil {
 		return Result{}, err
@@ -454,7 +455,7 @@ func Restore(ctx context.Context, opts Options) (Result, error) {
 	if err := dec.Decode(&m); err != nil {
 		return Result{}, err
 	}
-	if err := dec.Decode(new(any)); err != io.EOF {
+	if err := dec.Decode(new(any)); !errors.Is(err, io.EOF) {
 		return Result{}, fmt.Errorf("trailing backup metadata")
 	}
 	if err := validateMetadata(m); err != nil {
@@ -480,7 +481,7 @@ func Restore(ctx context.Context, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	defer os.RemoveAll(stageRoot)
+	defer func() { retErr = errors.Join(retErr, os.RemoveAll(stageRoot)) }()
 	stageState := ""
 	if inside {
 		rel, _ := filepath.Rel(root, state)
@@ -493,7 +494,7 @@ func Restore(ctx context.Context, opts Options) (Result, error) {
 		if err != nil {
 			return Result{}, err
 		}
-		defer os.RemoveAll(stageState)
+		defer func() { retErr = errors.Join(retErr, os.RemoveAll(stageState)) }()
 	}
 	for _, e := range m.Entries {
 		h, err := tr.Next()
@@ -545,8 +546,11 @@ func Restore(ctx context.Context, opts Options) (Result, error) {
 		}
 	}
 	beforeTrailer := bounded.N
-	if _, err := tr.Next(); err != io.EOF {
-		return Result{}, fmt.Errorf("unexpected trailing archive entry or corruption: %v", err)
+	if _, err := tr.Next(); !errors.Is(err, io.EOF) {
+		if err != nil {
+			return Result{}, fmt.Errorf("unexpected trailing archive entry or corruption: %w", err)
+		}
+		return Result{}, errors.New("unexpected trailing archive entry")
 	}
 	lastSize := m.Entries[len(m.Entries)-1].Size
 	if beforeTrailer-bounded.N != (512-lastSize%512)%512+1024 {
@@ -596,7 +600,7 @@ func Restore(ctx context.Context, opts Options) (Result, error) {
 	if err := publish(stageRoot, root); err != nil {
 		if !inside {
 			if rollbackErr := publish(state, stageState); rollbackErr != nil {
-				return Result{}, fmt.Errorf("root publication failed: %w; PARTIAL RESTORE: state remains at %s; rollback failed: %v; do not start controller", err, state, rollbackErr)
+				return Result{}, fmt.Errorf("root publication failed: %w; PARTIAL RESTORE: state remains at %s; rollback failed: %w; do not start controller", err, state, rollbackErr)
 			}
 			_ = syncDir(filepath.Dir(state))
 		}

@@ -2,10 +2,11 @@ package provideridentity
 
 import (
 	"context"
-	"github.com/openctl/openctl/internal/controller/operations"
-	"github.com/openctl/openctl/internal/controller/storage"
 	"path/filepath"
 	"testing"
+
+	"github.com/openctl/openctl/internal/controller/operations"
+	"github.com/openctl/openctl/internal/controller/storage"
 )
 
 func TestBindingSurvivesRestartAndCannotBeReplaced(t *testing.T) {

@@ -12,11 +12,12 @@ import (
 	"testing"
 	"time"
 
-	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+
+	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 )
 
 type actionRPC struct {

@@ -5,9 +5,10 @@ import (
 	"context"
 	"testing"
 
-	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/structpb"
+
+	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 )
 
 type savedExportRPC struct {

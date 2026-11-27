@@ -7,9 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 	"google.golang.org/grpc"
 	"gopkg.in/yaml.v3"
+
+	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 )
 
 type discoveryConnectionRPC struct {

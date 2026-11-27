@@ -194,7 +194,7 @@ func validMediaPath(value string) bool {
 	if path.IsAbs(value) || path.Clean(value) != value || strings.Contains(value, "\\") || strings.IndexFunc(value, func(r rune) bool { return r < 32 || r == 127 }) >= 0 {
 		return false
 	}
-	for _, part := range strings.Split(value, "/") {
+	for part := range strings.SplitSeq(value, "/") {
 		if part == "." || part == ".." {
 			return false
 		}

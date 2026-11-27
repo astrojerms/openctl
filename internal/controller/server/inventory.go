@@ -40,7 +40,8 @@ func (h *inventoryHandler) ListSavedResources(ctx context.Context, req *apiv1.Li
 		return nil, inventoryReadError(ctx, err)
 	}
 	out := &apiv1.ListSavedResourcesResponse{Resources: make([]*apiv1.SavedResourceMetadata, 0, len(records))}
-	for _, record := range records {
+	for i := range records {
+		record := &records[i]
 		out.Resources = append(out.Resources, &apiv1.SavedResourceMetadata{
 			ApiVersion: record.APIVersion,
 			Kind:       record.Kind,
