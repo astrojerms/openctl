@@ -578,6 +578,28 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
   durable operation, and the single seeded fixture intent count was unchanged.
   No live guest networking, SSH or playback acceptance.
 
+### Guided VM address prerequisite recovery (2026-11-27)
+
+- [x] Jellyfin application reviews and final submissions inspect only their
+  referenced VM `status.ip` dependency and require current address evidence,
+  sharing the same conservative interpretation as VM details. Already-verified
+  prerequisite observations are reused rather than reread.
+- [x] Address blockers identify and link to the selected VM, preserve safe
+  diagnostics transiently, and recheck with a fresh preview and renewed consent.
+  No request identity or Apply is admitted while blocked; accepted VM work is
+  never retried. Read-only recovery of accepted applications remains available,
+  and literal host declarations do not trigger unrelated VM reads.
+- Verification: 94 review-engine and 52 detail tests passed; 27 wizard cases
+  passed initially and the corrected pending-state assertion passed its targeted
+  rerun. Frontend typecheck reported zero errors/warnings; production build passed.
+  The actual console used an isolated SQLite/TLS controller, active dispatcher,
+  native application/Proxmox providers and simulated verified-TLS guest-agent
+  responses. It prepared an existing-guest review, inspected the linked VM,
+  resumed unchanged intent, rechecked repaired address evidence through native
+  application preview with consent reset, and blocked final admission after
+  address loss. All Proxmox requests were GET; zero operations/provider state,
+  with one unchanged seeded VM tracking record. No live guest or SSH mutation.
+
 The next product acceptance gate is the complete operator journey on real
 hardware, including recovery, media playback and any approved public endpoint.
 See [direction](docs/direction.md). Provider breadth is downstream of that gate.

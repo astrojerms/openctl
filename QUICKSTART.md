@@ -153,6 +153,11 @@ Fresh named CLI/API reads expose the same `status.ipObservation`; List does not
 probe agents. Address observation is not SSH/service readiness, and stale or
 missing evidence remains unknown.
 
+The Jellyfin wizard checks its referenced VM before application review and again
+before Apply. Address blockers link directly to VM inspection; recheck after
+repair, refresh the preview and renew consent. Blocked checks never admit another
+request or retry VM creation. Accepted-request recovery remains read-only.
+
 The wizard's staged ZIP contains one numbered YAML file per resource stage;
 the current stage can also be downloaded alone. Preview/apply files individually
 in order, not as a bulk directory: public deployments have initial and final

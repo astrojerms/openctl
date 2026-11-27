@@ -5,6 +5,7 @@ import { watchOperations, type OperationEvent } from './watch';
 import { applicationChecks, applicationReadiness } from './detailState';
 import type { AppCheck } from './detailState';
 import type { ResourceRef } from './api';
+import { guestAddressObservation } from './guestAddress';
 
 export const REVIEW_KEY = 'openctl.jellyfinReview';
 export const MAX_REVIEW_BYTES = 128 * 1024;
@@ -25,7 +26,7 @@ export interface SavedReview {
 }
 export interface ReviewBlocker {
   target: ResourceRef;
-  code: 'operation_unverified' | 'observation_unavailable' | 'baseline_changed' | 'readiness_unproven';
+  code: 'operation_unverified' | 'observation_unavailable' | 'baseline_changed' | 'readiness_unproven' | 'address_unavailable';
   message: string;
   detail: string;
   checks: AppCheck[];
@@ -290,21 +291,47 @@ export class DeploymentReview {
       throw new Error('The managed baseline is absent, changed, or owned elsewhere. Inspect the resource and recover through its editor; this guided review will not overwrite it.');
     }
   }
-  private blockDependency(resource: Resource, code: ReviewBlocker['code'], message: string, observed?: Resource): never {
+  private blockDependency(resource: Resource, code: ReviewBlocker['code'], message: string, observed?: Resource, detail?: string): never {
     this.planBaseline = null;
     this.state.verified = false;
     this.state.preview = null;
     this.state.blocker = {
       target: { apiVersion: resource.apiVersion, kind: resource.kind, name: resource.metadata.name },
       code, message,
-      detail: typeof observed?.status?.message === 'string' ? observed.status.message : '',
+      detail: detail ?? (typeof observed?.status?.message === 'string' ? observed.status.message : ''),
       checks: applicationChecks(observed?.status),
     };
     this.emit();
     throw new Error(message);
   }
-  private async verifyPrevious(): Promise<void> {
+  private async verifyGuestAddress(observed: Map<string, Resource>): Promise<void> {
+    const resource = this.step.resource;
+    if (resource.apiVersion !== APP_API || resource.kind !== 'Jellyfin') return;
+    const target = resource.spec?.target;
+    if (!object(target) || !object(target.host) || !object(target.host.$ref)) return;
+    const ref = target.host.$ref;
+    if (ref.apiVersion !== VM_API || ref.kind !== 'VirtualMachine' || ref.field !== 'status.ip' || !text(ref.name)) return;
+    const guest: Resource = { apiVersion: VM_API, kind: 'VirtualMachine', metadata: { name: ref.name }, spec: {} };
+    let observation = observed.get(`${VM_API}/VirtualMachine/${ref.name}`) ?? null;
+    if (!observation) {
+      try {
+        observation = (await this.baseline(guest))?.resource ?? null;
+      } catch (error) {
+        if (error instanceof UnauthorizedError) throw error;
+        this.blockDependency(guest, 'observation_unavailable', 'The referenced VM cannot be observed or its identity could not be verified. Inspect it and restore read access before reviewing application setup.');
+      }
+    }
+    if (!observation) this.blockDependency(guest, 'observation_unavailable', 'The referenced VM is unavailable. Inspect it before reviewing application setup; this review will not recreate or adopt it.');
+    const address = guestAddressObservation(observation.status);
+    if (address.state !== 'available') {
+      this.blockDependency(guest, 'address_unavailable',
+        'The referenced VM has no current unambiguous guest address evidence. Inspect its networking and guest agent before reviewing application setup.',
+        undefined, address.message ? `[${address.code}] ${address.message}` : 'Address observation is unknown. Inspect the VM for fresh evidence; an address alone does not prove SSH access or service readiness.');
+    }
+  }
+  private async verifyPrevious(): Promise<Map<string, Resource>> {
     const latest = new Map<string, Resource>();
+    const observed = new Map<string, Resource>();
     for (let i = 0; i < this.state.saved.cursor; i += 1) {
       const resource = this.state.saved.steps[i].resource;
       let op: Operation | null;
@@ -333,7 +360,9 @@ export class DeploymentReview {
       if (resource.apiVersion === APP_API && !sameTarget(resource, this.step.resource) && applicationReadiness(result!.resource.status) !== 'ready') {
         this.blockDependency(resource, 'readiness_unproven', 'The previously accepted application has not established current readiness. Inspect its checks and repair it before proceeding or publishing.', result!.resource);
       }
+      observed.set(`${resource.apiVersion}/${resource.kind}/${resource.metadata.name}`, result!.resource);
     }
+    return observed;
   }
   private async loadCurrent(): Promise<void> {
     // Lookup may persist its newly recovered operation ID and replace state.
@@ -376,10 +405,11 @@ export class DeploymentReview {
     this.invalidate();
     await this.checkBinding();
     await this.loadCurrent();
-    await this.verifyPrevious();
+    const previous = await this.verifyPrevious();
     if (this.state.operation && !failedReviewOperation(this.state.operation)) {
       this.state.verified = true; this.emit(); return;
     }
+    await this.verifyGuestAddress(previous);
     const validation = await this.api.validate(this.step.resource);
     if (validation.errors?.length) {
       this.blockPreview({ summary: 'Schema validation failed', validationErrors: validation.errors }, 'The declaration failed schema validation. Inspect the diagnostics and downloadable manifest before reviewing again.');
@@ -408,7 +438,8 @@ export class DeploymentReview {
     const known = await this.lookup(this.state.saved.cursor);
     this.state.operation = known;
     if (known && !failedReviewOperation(known)) { this.invalidate(); this.emit(); return; }
-    await this.verifyPrevious();
+    const previous = await this.verifyPrevious();
+    await this.verifyGuestAddress(previous);
     const baseline = await this.reviewBaseline();
     const fresh = await this.api.preview(this.step.resource);
     if (!fresh.operation || fresh.validationErrors?.length || fresh.fieldErrors?.length) {

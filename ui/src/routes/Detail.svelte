@@ -7,6 +7,7 @@
   import { canEditDesired, canManageOwnership, desiredMutationHint } from '../lib/authority';
   import { applicationCheckBadge, applicationChecks, childHealth } from '../lib/detailState';
   import type { ChildState } from '../lib/detailState';
+  import { guestAddressObservation } from '../lib/guestAddress';
   import { createDetailInspection, detailManifestYAML } from '../lib/detailInspection';
   import type { DetailLease } from '../lib/detailInspection';
   import { createDeleteAttempt } from '../lib/deletionAttempt';
@@ -223,27 +224,6 @@
 
   $: displayState = data ? statusBadge(data.resource) : null;
   $: appChecks = apiVersion === 'apps.openctl.io/v1' ? applicationChecks(data?.resource.status) : [];
-  const guestAddressFailures = new Set([
-    'vm_not_running', 'vm_nic_unavailable', 'guest_agent_unavailable',
-    'guest_agent_invalid_response', 'guest_ip_unavailable', 'guest_ip_ambiguous',
-  ]);
-
-  function guestAddressObservation(status: Resource['status']) {
-    const diagnostic = status?.ipObservation;
-    const unknown = { state: 'unknown', code: '', message: '', ip: '' };
-    if (!diagnostic || typeof diagnostic !== 'object' || Array.isArray(diagnostic)) return unknown;
-    const { state, code, message } = diagnostic as Record<string, unknown>;
-    const safeCode = typeof code === 'string' && /^[a-z][a-z0-9_]{0,79}$/.test(code) ? code : '';
-    if (!safeCode || typeof message !== 'string' || !message.trim()) return unknown;
-    if (state === 'available' && safeCode === 'guest_ip_available'
-      && status?.state === 'running' && typeof status.ip === 'string' && status.ip.trim()) {
-      return { state, code: safeCode, message, ip: status.ip.trim() };
-    }
-    if (state === 'unavailable' && guestAddressFailures.has(safeCode)) {
-      return { state, code: safeCode, message, ip: '' };
-    }
-    return { ...unknown, code: safeCode };
-  }
 
   $: guestAddress = fresh && $auth.kind === 'signed-in'
     ? guestAddressObservation(data?.resource.status) : null;

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError, ping, session, UnauthorizedError, type ApplyRequest, type GetResourceResponse, type Operation, type Resource } from './api';
-import { APP_API, jellyfinDeployment, type DeploymentStep, type JellyfinInputs } from './jellyfin';
+import { APP_API, VM_API, jellyfinDeployment, type DeploymentStep, type JellyfinInputs } from './jellyfin';
 import { createSavedReview, DeploymentReview, discardSavedReview, loadReviewBinding, MAX_REVIEW_BYTES, readSavedReview, REVIEW_KEY, reviewError, type ReviewAPI, type ReviewConsent } from './deploymentReview';
 
 const binding = { controllerId: 'controller-a', userId: 'operator-a' };
@@ -24,6 +24,11 @@ const unprovenHealth: Resource['status'][] = [
   { ready: true, checks: { gpu: { ready: true } } },
   { ready: true, checks: [] },
 ];
+const guestStatus = {
+  state: 'running', ip: '192.0.2.8',
+  ipObservation: { state: 'available', code: 'guest_ip_available', message: 'Unique guest address observed; reachability unverified.' },
+};
+const guest: Resource = { apiVersion: VM_API, kind: 'VirtualMachine', metadata: { name: 'gpu' }, spec: {} };
 function memoryStorage() {
   const data = new Map<string, string>();
   return {
@@ -36,6 +41,9 @@ function harness(steps: DeploymentStep[] = [step]) {
   const storage = memoryStorage();
   const ops = new Map<string, Operation>();
   const live = new Map<string, GetResourceResponse>();
+  if (!steps.some((step) => step.resource.apiVersion === VM_API && step.resource.kind === 'VirtualMachine')) {
+    live.set('gpu', { applied: guest, resource: { ...guest, status: guestStatus } });
+  }
   let sequence = 0;
   const api = {
     binding: vi.fn(async () => binding),
@@ -73,7 +81,7 @@ function harness(steps: DeploymentStep[] = [step]) {
   const accept = (key = 'request-1', status = 'succeeded', intent = resource) => {
     const op = ops.get(key)!;
     ops.set(key, { ...op, status });
-    live.set(intent.metadata.name, { applied: intent, resource: { ...intent, status: { ready: true } } });
+    live.set(intent.metadata.name, { applied: intent, resource: { ...intent, status: intent.apiVersion === VM_API ? guestStatus : { ready: true } } });
   };
   return { storage, engine, api, ops, live, restore, accept };
 }
@@ -304,7 +312,9 @@ describe('authoritative root and readiness validation', () => {
 
   it.each([new ApiError(503, 'provider unavailable'), new UnauthorizedError('expired'), new TypeError('offline')])(
     'does not interpret baseline failure as resource absence: %s', async (error) => {
-      const h = harness(); h.engine.save(); h.api.getResource.mockRejectedValue(error);
+      const h = harness(); h.engine.save();
+      const read = h.api.getResource.getMockImplementation()!;
+      h.api.getResource.mockImplementation((av, kind, name) => name === resource.metadata.name ? Promise.reject(error) : read(av, kind, name));
       await expect(h.engine.review()).rejects.toBe(error);
       expect(h.engine.state.preview).toBeNull();
       expect(h.api.preview).not.toHaveBeenCalled();
@@ -685,5 +695,94 @@ describe('blocked preview diagnostics', () => {
     expect(readSavedReview(h.storage, binding)!.steps[0].attempt).toEqual(original);
     expect(h.api.apply).toHaveBeenCalledTimes(1);
     expect(h.api.requestId).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('referenced guest address preflight', () => {
+  const ambiguous = { state: 'running', ipObservation: {
+    state: 'unavailable', code: 'guest_ip_ambiguous', message: 'Choose the intended application target explicitly.',
+  } };
+
+  it.each([
+    ambiguous,
+    { state: 'running', ip: '192.0.2.8' },
+    { ...guestStatus, state: 'stopped' },
+  ])('blocks new application work without trustworthy address evidence: %j', async (status) => {
+    const h = harness(); h.engine.save();
+    h.live.set('gpu', { applied: guest, resource: { ...guest, status } });
+    await expect(h.engine.review()).rejects.toThrow(/guest address evidence/);
+    expect(h.engine.state.blocker).toMatchObject({
+      target: { apiVersion: VM_API, kind: 'VirtualMachine', name: 'gpu' },
+      code: 'address_unavailable', checks: [],
+    });
+    expect(h.engine.state.preview).toBeNull();
+    expect(h.api.preview).not.toHaveBeenCalled();
+    expect(h.api.apply).not.toHaveBeenCalled();
+    expect(h.api.requestId).not.toHaveBeenCalled();
+    expect(h.restore().state.blocker).toBeNull();
+    expect(JSON.stringify(readSavedReview(h.storage, binding))).not.toContain('Choose the intended');
+  });
+
+  it('rechecks the selected guest before admission and clears old preview authority on failure', async () => {
+    const h = harness(); h.engine.save(); await h.engine.review();
+    h.live.set('gpu', { applied: guest, resource: { ...guest, status: ambiguous } });
+    await expect(h.engine.submit(consent)).rejects.toThrow(/guest address evidence/);
+    expect(h.engine.state.blocker?.detail).toContain('guest_ip_ambiguous');
+    expect(h.engine.state.preview).toBeNull();
+    expect(h.api.apply).not.toHaveBeenCalled();
+    expect(h.api.requestId).not.toHaveBeenCalled();
+    expect(readSavedReview(h.storage, binding)?.steps[0].attempt).toBeUndefined();
+    h.live.set('gpu', { applied: guest, resource: { ...guest, status: guestStatus } });
+    await h.engine.review();
+    expect(h.engine.state.blocker).toBeNull();
+    await expect(h.engine.submit({ ...consent, trustedKey: false })).rejects.toThrow(/verified SSH host key/);
+    expect(h.api.apply).not.toHaveBeenCalled();
+  });
+
+  it('reuses a freshly verified accepted VM and never resubmits it while repairing address discovery', async () => {
+    const h = harness([{ title: 'Provision guest', resource: guest, createOnly: true }, step]);
+    h.engine.save(); await h.engine.review(); await h.engine.submit(consent); h.accept('request-1', 'succeeded', guest);
+    h.live.set('gpu', { applied: guest, resource: { ...guest, status: ambiguous } });
+    await expect(h.engine.next()).rejects.toThrow(/guest address evidence/);
+    expect(h.engine.state.saved.cursor).toBe(1);
+    expect(h.engine.state.blocker?.target.name).toBe('gpu');
+    h.api.getResource.mockClear();
+    await expect(h.engine.review()).rejects.toThrow(/guest address evidence/);
+    expect(h.api.getResource.mock.calls.filter(([, kind]) => kind === 'VirtualMachine')).toHaveLength(1);
+    const accepted = readSavedReview(h.storage, binding)!.steps[0].attempt;
+    h.live.set('gpu', { applied: guest, resource: { ...guest, status: guestStatus } });
+    await h.engine.review();
+    expect(h.api.apply).toHaveBeenCalledTimes(1);
+    expect(readSavedReview(h.storage, binding)!.steps[0].attempt).toEqual(accepted);
+    await h.engine.submit(consent);
+    expect(h.api.apply).toHaveBeenCalledTimes(2);
+    expect(h.api.apply.mock.calls[1][0].resource.kind).toBe('Jellyfin');
+  });
+
+  it('still recovers accepted application work read-only when guest address discovery later fails', async () => {
+    const h = harness(); h.engine.save(); await h.engine.review(); await h.engine.submit(consent); h.accept();
+    h.live.set('gpu', { applied: guest, resource: { ...guest, status: ambiguous } });
+    const resumed = h.restore(); await resumed.resume();
+    expect(resumed.state.operation?.status).toBe('succeeded');
+    expect(resumed.state.observed?.status?.ready).toBe(true);
+    expect(h.api.apply).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['unavailable', 'wrong-identity'])('attributes %s safely to the referenced VM', async (failure) => {
+    const h = harness(); h.engine.save();
+    if (failure === 'unavailable') h.api.getResource.mockRejectedValue(new ApiError(503, 'PRIVATE-TRANSPORT https://token@private.invalid'));
+    else h.live.set('gpu', { resource: { ...guest, metadata: { name: 'PRIVATE-WRONG-GUEST' } } });
+    await expect(h.engine.review()).rejects.toThrow(/referenced VM/);
+    expect(h.engine.state.blocker).toMatchObject({ target: { name: 'gpu' }, code: 'observation_unavailable', detail: '', checks: [] });
+    expect(JSON.stringify(h.engine.state.blocker)).not.toContain('PRIVATE-');
+    expect(h.api.apply).not.toHaveBeenCalled();
+  });
+
+  it('does not read an unrelated VM for an explicitly declared literal application host', async () => {
+    const declared = { ...resource, spec: { ...resource.spec, target: { host: '192.0.2.20' } } };
+    const h = harness([{ ...step, resource: declared }]); h.live.delete('gpu'); h.engine.save();
+    await h.engine.review();
+    expect(h.engine.state.preview?.operation).toBe('create');
+    expect(h.api.getResource.mock.calls.some(([, kind]) => kind === 'VirtualMachine')).toBe(false);
   });
 });

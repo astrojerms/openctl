@@ -1221,6 +1221,16 @@ The console clears stale evidence during observation failures and treats missing
 malformed or unfamiliar evidence as unknown. An observed address is not proof of
 controller reachability, SSH trust or application readiness.
 
+When a guided Jellyfin target references a VM's `status.ip`, new application
+review and final submission require fresh, unambiguous address evidence from
+that VM. Already-verified VM observations are reused within the prerequisite
+check; unrelated inventory is not requested. Address failures identify the VM,
+show its safe diagnostic and offer **Inspect blocking resource** /
+**Recheck prerequisites**. Repair requires a fresh preview and renewed consent.
+No new request ID is created while blocked; existing VM work is not resubmitted.
+Read-only recovery of already accepted application work remains available even
+if address discovery later fails. Address evidence never replaces SSH trust.
+
 Blocked guided previews retain schema, field and dependency diagnostics inline,
 including a failure discovered by the final preview immediately before Apply.
 Field paths take precedence over duplicate plain-text messages; unrelated

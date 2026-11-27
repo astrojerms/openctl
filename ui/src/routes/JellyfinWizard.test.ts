@@ -456,3 +456,81 @@ describe('dedicated VM sizing', () => {
     expect(resources.apply).not.toHaveBeenCalled();
   });
 });
+
+describe('referenced VM address blockers', () => {
+  const vm: ControllerAPI.Resource = { apiVersion: 'proxmox.openctl.io/v1', kind: 'VirtualMachine', metadata: { name: 'offline-gpu' }, spec: {} };
+  const app: ControllerAPI.Resource = { apiVersion: 'apps.openctl.io/v1', kind: 'Jellyfin', metadata: { name: 'media' }, spec: {
+    target: { host: { $ref: { apiVersion: vm.apiVersion, kind: vm.kind, name: vm.metadata.name, field: 'status.ip' } } },
+  } };
+  const available = { state: 'running', ip: '192.0.2.8', ipObservation: {
+    state: 'available', code: 'guest_ip_available', message: 'Unique guest address; reachability unverified.',
+  } };
+  const ambiguous = { state: 'running', ipObservation: {
+    state: 'unavailable', code: 'guest_ip_ambiguous', message: 'Inspect networking; choose the intended application host.',
+  } };
+  function savedApplication() {
+    window.sessionStorage.setItem(REVIEW_KEY, JSON.stringify({
+      version: 1, binding: { controllerId: 'controller', userId: 'operator' }, cursor: 0,
+      steps: [{ title: 'Install and configure Jellyfin', resource: app, createOnly: true }],
+    }));
+  }
+  function guestReads(status: () => Record<string, unknown>) {
+    vi.mocked(resources.get).mockImplementation(async (av, kind, name) => {
+      if (av === vm.apiVersion && kind === vm.kind && name === vm.metadata.name) {
+        return { applied: vm, resource: { ...vm, status: status() } };
+      }
+      throw new ApiError(404, 'not found');
+    });
+  }
+  async function reviewSavedApplication() {
+    savedApplication(); await open();
+    button('Resume saved review').click(); await settle();
+    button('Refresh preview').click(); await waitForReview();
+  }
+
+  it('offers selected-VM inspection and safe address guidance before application preview or admission', async () => {
+    guestReads(() => ambiguous); await reviewSavedApplication();
+    const blocker = host.querySelector('[aria-label="Blocking deployment resource"]')!;
+    expect(blocker.textContent).toContain('VirtualMachine/offline-gpu');
+    expect(blocker.textContent).toContain('guest_ip_ambiguous');
+    expect(blocker.textContent).toContain(ambiguous.ipObservation.message);
+    expect(blocker.querySelector('a')?.getAttribute('href')).toBe('#/k/proxmox.openctl.io/v1/VirtualMachine/offline-gpu');
+    expect(button('Apply reviewed step').disabled).toBe(true);
+    expect(resources.dryRunApply).not.toHaveBeenCalled();
+    expect(resources.apply).not.toHaveBeenCalled();
+    expect(JSON.parse(window.sessionStorage.getItem(REVIEW_KEY)!).steps[0].attempt).toBeUndefined();
+    expect(window.sessionStorage.getItem(REVIEW_KEY)).not.toContain('Inspect networking');
+  });
+
+  it('rechecks repaired evidence with fresh consent, and blocks again if the guest loses its address before Apply', async () => {
+    let status: Record<string, unknown> = ambiguous;
+    guestReads(() => status); await reviewSavedApplication();
+    status = available;
+    button('Recheck prerequisites').click(); await waitForReview();
+    expect(host.querySelector('[aria-label="Blocking deployment resource"]')).toBeNull();
+    expect(button('Apply reviewed step').disabled).toBe(true);
+    expect((control('I confirm this dedicated guest') as HTMLInputElement).checked).toBe(false);
+    expect((control('I verified this guest') as HTMLInputElement).checked).toBe(false);
+    check('I confirm this dedicated guest'); check('I verified this guest'); await tick();
+    expect(button('Apply reviewed step').disabled).toBe(false);
+    status = ambiguous;
+    button('Apply reviewed step').click(); await waitForReview();
+    expect(host.querySelector('[aria-label="Blocking deployment resource"]')?.textContent).toContain('guest_ip_ambiguous');
+    expect(button('Apply reviewed step').disabled).toBe(true);
+    expect(resources.apply).not.toHaveBeenCalled();
+    expect(JSON.parse(window.sessionStorage.getItem(REVIEW_KEY)!).steps[0].attempt).toBeUndefined();
+  });
+
+  it('clears an old blocker while rechecking and never substitutes cached readiness', async () => {
+    guestReads(() => ambiguous); await reviewSavedApplication();
+    const pending = Promise.withResolvers<ControllerAPI.GetResourceResponse>();
+    vi.mocked(resources.get).mockReturnValueOnce(pending.promise);
+    button('Recheck prerequisites').click(); await settle();
+    expect(host.querySelector('[aria-label="Blocking deployment resource"]')).toBeNull();
+    expect(host.querySelector<HTMLButtonElement>('button.primary')?.disabled).toBe(true);
+    pending.resolve({ applied: vm, resource: { ...vm, status: { state: 'running', ip: '192.0.2.8' } } });
+    await waitForReview();
+    expect(host.querySelector('[aria-label="Blocking deployment resource"]')?.textContent).toContain('Address observation is unknown');
+    expect(resources.apply).not.toHaveBeenCalled();
+  });
+});

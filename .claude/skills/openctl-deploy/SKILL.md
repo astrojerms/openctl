@@ -289,6 +289,14 @@ not evidence of health. Use **Inspect blocking resource**, repair explicitly,
 then **Recheck prerequisites** and renew consent. Rechecking never resubmits
 accepted work. Treat provider-supplied health messages as sensitive.
 
+For a Jellyfin `spec.target.host` reference to VM `status.ip`, the wizard requires
+fresh available address evidence before new application review and admission.
+Its `address_unavailable` blocker identifies the VM and shows safe address
+diagnostics; missing/legacy evidence is unknown, not an SSH target fallback.
+Inspect that VM, repair explicitly, then recheck and renew consent. Rechecking
+does not retry accepted VM work, and read-only accepted-application recovery
+does not depend on address discovery remaining available.
+
 For unresolved references, inspect `fieldErrors[].path`, `code` and the declared
 target/output. Missing resources/outputs differ from TLS, authentication,
 permission, network and provider-service failures. Follow the safe repair hint;
