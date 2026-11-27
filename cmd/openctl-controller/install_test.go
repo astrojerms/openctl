@@ -184,6 +184,10 @@ func TestCopyFileAtomicAndExecutable(t *testing.T) {
 	if err := os.WriteFile(src, []byte("hello"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// An interrupted install may leave a staging file with restrictive permissions.
+	if err := os.WriteFile(dst+".new", []byte("interrupted"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := copyFile(src, dst, 0o755); err != nil {
 		t.Fatal(err)
 	}

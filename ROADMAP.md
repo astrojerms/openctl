@@ -2091,6 +2091,10 @@ phase plan when ready to commit.
   cleanup failures and preserves wrapped restore errors; SSH observation recognizes
   wrapped exit errors. Overview reads use fixed SQL predicates and avoid copying
   operation records. Import grouping and Go analysis findings are resolved.
+- fix: **deadline and installation correctness** — operation waits distinguish
+  local wait expiry from parent-context deadlines even when gRPC observes expiry
+  before the context timer fires. Atomic binary installation applies the requested
+  permissions despite restrictive umasks or leftover staging files.
 
 When phases or followups land, move them up out of "pending" into their
 detail doc's marked-complete section, then leave a one-line entry here

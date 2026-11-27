@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"net"
 	"strings"
 	"sync/atomic"
@@ -52,20 +53,36 @@ func TestWaitForOpReturnsCancellationWithoutPollingUntilTimeout(t *testing.T) {
 }
 
 func TestWaitForOpDeadlineBoundsAnInFlightStatusRequest(t *testing.T) {
-	listener := bufconn.Listen(1024 * 1024)
-	server := grpc.NewServer()
-	apiv1.RegisterOperationServiceServer(server, &canceledOperationServer{block: true})
-	t.Cleanup(server.Stop)
-	go func() { _ = server.Serve(listener) }()
-	conn, err := grpc.NewClient("passthrough:///operations", grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = conn.Close() })
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-	defer cancel()
-	err = waitForOp(ctx, conn, "blocked", 20*time.Millisecond)
-	if err == nil || !strings.Contains(err.Error(), "did not finish within 20ms") {
-		t.Fatalf("wait deadline did not bound the status RPC: %v", err)
+	for _, tc := range []struct {
+		name          string
+		parentTimeout time.Duration
+		waitTimeout   time.Duration
+		parentExpires bool
+	}{
+		{"wait deadline", time.Second, 20 * time.Millisecond, false},
+		{"parent deadline", 20 * time.Millisecond, time.Second, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			listener := bufconn.Listen(1024 * 1024)
+			server := grpc.NewServer()
+			apiv1.RegisterOperationServiceServer(server, &canceledOperationServer{block: true})
+			t.Cleanup(server.Stop)
+			go func() { _ = server.Serve(listener) }()
+			conn, err := grpc.NewClient("passthrough:///operations", grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = conn.Close() })
+			ctx, cancel := context.WithTimeout(t.Context(), tc.parentTimeout)
+			defer cancel()
+			err = waitForOp(ctx, conn, "blocked", tc.waitTimeout)
+			if tc.parentExpires {
+				if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "operation may still be running") {
+					t.Fatalf("parent deadline lost its cancellation diagnostic: %v", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), "did not finish within 20ms") {
+				t.Fatalf("wait deadline did not bound the status RPC: %v", err)
+			}
+		})
 	}
 }

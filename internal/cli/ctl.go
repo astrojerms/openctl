@@ -392,7 +392,13 @@ func waitForOp(ctx context.Context, conn *grpc.ClientConn, opID string, timeout 
 	client := apiv1.NewOperationServiceClient(conn)
 	lastStatus := "unknown"
 	waitError := func() error {
-		if err := ctx.Err(); err != nil {
+		err := ctx.Err()
+		if err == nil {
+			if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+				err = context.DeadlineExceeded
+			}
+		}
+		if err != nil {
 			return fmt.Errorf("stopped waiting for operation %s; the operation may still be running: %w", opID, err)
 		}
 		return fmt.Errorf("operation %s did not finish within %s (still %s — poll with `openctl ctl op get %s`)",
@@ -401,7 +407,9 @@ func waitForOp(ctx context.Context, conn *grpc.ClientConn, opID string, timeout 
 	for {
 		op, err := client.GetOperation(waitCtx, &apiv1.GetOperationRequest{Id: opID})
 		if err != nil {
-			if waitCtx.Err() != nil {
+			// gRPC can observe the deadline before the context timer closes Done.
+			deadline, _ := waitCtx.Deadline()
+			if waitCtx.Err() != nil || !time.Now().Before(deadline) {
 				return waitError()
 			}
 			return fmt.Errorf("get op %s: %w", opID, err)
