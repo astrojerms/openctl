@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -142,59 +143,50 @@ type Reconciler struct {
 	Interval string `yaml:"interval,omitempty"`
 }
 
-// Manifests configures the controller's on-disk manifest mirror — the
-// directory the controller writes desired state to after each successful
-// apply, so users can see (and optionally git-track) what's deployed.
-//
-// Git fields are read in UI Phase U2.2; v1 of the disk mirror (U2.1) only
-// needs Dir. GitOps enables two-way sync (file edits → Apply).
+// Manifests selects SQLite audit-mirror or upstream-repository authority.
 type Manifests struct {
 	// Dir is the root directory for the materialized manifests. Defaults to
 	// ~/.openctl/manifests when empty. Tilde is expanded via ExpandPath.
-	Dir string `yaml:"dir"`
+	Dir  string `yaml:"dir"`
+	Mode string `yaml:"mode,omitempty"`
 	// Git configures optional git tracking of the manifest dir. nil = git
 	// integration off.
 	Git *ManifestsGit `yaml:"git,omitempty"`
-	// GitOps toggles two-way sync: when true, file edits in Dir are
-	// watched via fsnotify and applied back through the controller
-	// (Apply of the manifest, source="gitops"). Default off — one-way
-	// mirror is the default, and opt-in prevents surprise behavior.
+	// GitOps configures upstream-authored input in gitops mode.
 	GitOps *ManifestsGitOps `yaml:"gitops,omitempty"`
 }
 
 // ManifestsGitOps configures the fsnotify-driven file→apply loop.
 type ManifestsGitOps struct {
-	// Enabled turns on the watcher. Off unless explicitly true.
-	Enabled bool `yaml:"enabled"`
+	Remote string `yaml:"remote"`
+	// Enabled is a legacy switch. Mode now enables the watcher; false is
+	// rejected rather than silently overriding the selected authority.
+	Enabled *bool `yaml:"enabled,omitempty"`
 	// DeleteOnRemove submits a Delete when a manifest file is removed
 	// from the mirror. Default false — most users prefer to move
 	// files around without triggering resource deletion.
 	DeleteOnRemove bool `yaml:"deleteOnRemove"`
-	// Pull enables git-as-source: periodically pull the configured remote
-	// (manifests.git.remote) into the mirror dir and reconcile the result,
-	// so committing to the remote brings the infra up. nil = off (the
-	// default; git stays a one-way mirror). Requires a remote and the
-	// watcher (Enabled) to be on.
+	// Pull enables periodic synchronization when present. Remote is the
+	// upstream repository in this block, never the mirror's push remote.
 	Pull *ManifestsGitOpsPull `yaml:"pull,omitempty"`
 }
 
 // ManifestsGitOpsPull configures the git-as-source pull loop.
 type ManifestsGitOpsPull struct {
-	// Enabled turns on periodic remote pulling. Off unless explicitly true.
-	Enabled bool `yaml:"enabled"`
-	// Interval is the pull cadence (e.g. "1m", "30s"). Parsed as a
-	// time.Duration; defaults to 1m when empty or invalid.
+	// Enabled is retained for migration; false requires removing Pull.
+	Enabled *bool `yaml:"enabled,omitempty"`
+	// Interval defaults to 1m; invalid or nonpositive values are rejected.
 	Interval string `yaml:"interval"`
 	// Prune enables repo-wide pruning: after a pull, resources whose manifest
 	// file was removed from the repo are deleted, making the repo the desired
 	// SET (not just an additive source). Default OFF — this deletes real
 	// infrastructure. Heavily guarded: never touches composite children or
-	// resources whose latest apply was cli/ui-sourced. Requires Enabled.
+	// resources whose latest apply was cli/ui-sourced.
 	Prune bool `yaml:"prune"`
 	// Webhook enables a push-triggered reconcile: an HTTP endpoint on the
 	// controller's HTTP gateway that a GitHub (or compatible) push webhook
 	// calls to trigger an immediate pull+reconcile instead of waiting for the
-	// next interval. nil = off. Requires Enabled + a git remote.
+	// next interval. nil = off. Requires the pull block and a remote.
 	Webhook *ManifestsGitOpsWebhook `yaml:"webhook,omitempty"`
 }
 
@@ -295,10 +287,13 @@ type TerraformResourceMap struct {
 
 // Context represents a provider context (like a cluster or endpoint)
 type Context struct {
-	Endpoint    string                     `yaml:"endpoint"`
-	Node        string                     `yaml:"node"`
-	Credentials string                     `yaml:"credentials"`
-	SnippetSSH  *protocol.SnippetSSHConfig `yaml:"snippetSSH,omitempty"`
+	Endpoint    string `yaml:"endpoint"`
+	Node        string `yaml:"node"`
+	Credentials string `yaml:"credentials"`
+	// Native Proxmox verifies HTTPS by default. CAFile is controller-local.
+	CAFile             string                     `yaml:"caFile,omitempty"`
+	InsecureSkipVerify bool                       `yaml:"insecureSkipVerify,omitempty"`
+	SnippetSSH         *protocol.SnippetSSHConfig `yaml:"snippetSSH,omitempty"`
 }
 
 // Credential represents credentials for a provider
@@ -342,8 +337,56 @@ func LoadFromFile(path string) (*Config, error) {
 	if cfg.Providers == nil {
 		cfg.Providers = make(map[string]*Provider)
 	}
+	if err := cfg.validateManifestsMode(); err != nil {
+		return nil, err
+	}
 
 	return &cfg, nil
+}
+
+// ManifestMode returns the single authority selected for desired manifests.
+func (c *Config) ManifestMode() string {
+	if c == nil || c.Manifests == nil || c.Manifests.Mode == "" {
+		return "mirror"
+	}
+	return c.Manifests.Mode
+}
+
+func (c *Config) validateManifestsMode() error {
+	m := c.Manifests
+	if m == nil {
+		return nil
+	}
+	switch c.ManifestMode() {
+	case "mirror":
+		if m.GitOps != nil {
+			return fmt.Errorf("manifests.gitops requires manifests.mode: gitops; set mode: gitops and remove manifests.git, or remove manifests.gitops to retain the SQLite audit mirror")
+		}
+	case "gitops":
+		if m.Git != nil {
+			return fmt.Errorf("gitops mode does not auto-commit or push desired specs; remove manifests.git and set manifests.gitops.remote")
+		}
+		if m.GitOps == nil || strings.TrimSpace(m.GitOps.Remote) == "" {
+			return fmt.Errorf("manifests.mode: gitops requires manifests.gitops.remote (the upstream source repository)")
+		}
+		if m.GitOps.Enabled != nil && !*m.GitOps.Enabled {
+			return fmt.Errorf("manifests.mode: gitops enables the watcher; remove manifests.gitops.enabled: false or select mode: mirror and remove manifests.gitops")
+		}
+		if p := m.GitOps.Pull; p != nil {
+			if p.Enabled != nil && !*p.Enabled {
+				return fmt.Errorf("manifests.gitops.pull is enabled by its presence; remove the pull block to disable pulling, or remove enabled: false")
+			}
+			if p.Interval != "" {
+				d, err := time.ParseDuration(p.Interval)
+				if err != nil || d <= 0 {
+					return fmt.Errorf("manifests.gitops.pull.interval must be a positive duration (for example 1m)")
+				}
+			}
+		}
+	default:
+		return fmt.Errorf("invalid manifests.mode %q: choose mirror (SQLite authority) or gitops (upstream repository authority)", m.Mode)
+	}
+	return nil
 }
 
 // GetProviderConfig returns the configuration for a specific provider
@@ -369,9 +412,17 @@ func (c *Config) GetProviderConfig(providerName, contextName string) (*protocol.
 	}
 
 	cfg := &protocol.ProviderConfig{
-		Endpoint: ctx.Endpoint,
-		Node:     ctx.Node,
-		Defaults: provider.Defaults,
+		Endpoint:           ctx.Endpoint,
+		Node:               ctx.Node,
+		Defaults:           provider.Defaults,
+		InsecureSkipVerify: ctx.InsecureSkipVerify,
+	}
+	if ctx.CAFile != "" {
+		caFile, err := ExpandPath(ctx.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("resolve provider CA file: %w", err)
+		}
+		cfg.CAFile = caFile
 	}
 
 	if ctx.SnippetSSH != nil {

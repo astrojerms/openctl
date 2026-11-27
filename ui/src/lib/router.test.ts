@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { routeHref } from './router';
+import { get } from 'svelte/store';
+import { route, routeHref } from './router';
 
 describe('routeHref', () => {
   it('encodes home as the root hash', () => {
@@ -47,5 +48,24 @@ describe('routeHref', () => {
   it('routes settings and providers to their flat hashes', () => {
     expect(routeHref({ name: 'providers' })).toBe('#/providers');
     expect(routeHref({ name: 'settings' })).toBe('#/settings');
+  });
+
+  it('routes discovery and Jellyfin deployment', () => {
+    expect(routeHref({ name: 'discover' })).toBe('#/discover');
+    expect(routeHref({ name: 'jellyfin' })).toBe('#/apps/jellyfin');
+  });
+
+  it('parses discovery and Jellyfin hashes back to their route names', () => {
+    const previous = location.hash;
+    try {
+      for (const target of [{ name: 'discover' }, { name: 'jellyfin' }] as const) {
+        location.hash = routeHref(target);
+        window.dispatchEvent(new Event('hashchange'));
+        expect(get(route)).toEqual(target);
+      }
+    } finally {
+      location.hash = previous;
+      window.dispatchEvent(new Event('hashchange'));
+    }
   });
 });

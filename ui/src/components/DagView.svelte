@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { resources, type GraphNode, type GraphEdge } from '../lib/api';
+  import { onDestroy } from 'svelte';
+  import { resources, UnauthorizedError, type GraphNode, type GraphEdge } from '../lib/api';
   import { operationStatusBadge } from '../lib/format';
   import { ops as opsStore } from '../lib/ops';
   import { focusOpsDrawer } from '../lib/opsDrawer';
@@ -11,31 +12,52 @@
   // Bump to force a re-fetch (Phase U9.3: Detail increments this on every
   // Watch-driven reload so node status pills stay live).
   export let version = 0;
+  export let signal: AbortSignal | undefined = undefined;
+  export let onUnauthorized: (() => void) | undefined = undefined;
 
   let nodes: GraphNode[] = [];
   let edges: GraphEdge[] = [];
   let loading = true;
   let error = '';
   let loadedKey = '';
+  let loadedSignal: AbortSignal | undefined;
+  let requestController: AbortController | null = null;
 
   // Re-fetch on identity change or an explicit version bump.
-  $: void maybeLoad(apiVersion, kind, resourceName, version);
+  $: void maybeLoad(apiVersion, kind, resourceName, version, signal);
 
-  async function maybeLoad(av: string, k: string, n: string, v: number) {
+  async function maybeLoad(av: string, k: string, n: string, v: number, routeSignal: AbortSignal | undefined) {
     const key = `${av}/${k}/${n}#${v}`;
-    if (key === loadedKey) return;
+    if (key === loadedKey && routeSignal === loadedSignal) return;
     loadedKey = key;
+    loadedSignal = routeSignal;
+    requestController?.abort();
+    const current = new AbortController();
+    requestController = current;
+    const requestSignal = routeSignal ? AbortSignal.any([routeSignal, current.signal]) : current.signal;
+    nodes = [];
+    edges = [];
+    error = '';
+    loading = true;
     try {
-      const resp = await resources.childrenGraph(av, k, n);
+      if (requestSignal.aborted) return;
+      const resp = await resources.childrenGraph(av, k, n, { signal: requestSignal });
+      if (requestController !== current || requestSignal.aborted) return;
       nodes = resp.nodes ?? [];
       edges = resp.edges ?? [];
-      error = '';
     } catch (err) {
+      if (requestController !== current || requestSignal.aborted) return;
+      if (err instanceof UnauthorizedError) onUnauthorized?.();
       error = err instanceof Error ? err.message : String(err);
     } finally {
-      loading = false;
+      if (requestController === current) loading = false;
     }
   }
+
+  onDestroy(() => {
+    requestController?.abort();
+    requestController = null;
+  });
 
   // --- Layout ------------------------------------------------------------
   // Hand-rolled longest-path layered layout. The graphs U9 targets are tiny

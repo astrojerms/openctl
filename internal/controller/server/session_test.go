@@ -156,3 +156,28 @@ func newSessionStoreForTest(t *testing.T) *auth.SessionStore {
 	t.Cleanup(func() { _ = db.Close() })
 	return auth.NewSessionStore(db)
 }
+
+func TestCanonicalRootPrincipalSurvivesSessionCredentialChanges(t *testing.T) {
+	h := newSessionHandler(newSessionStoreForTest(t))
+	for _, ctx := range []context.Context{context.Background(), auth.ContextWithPrincipal(context.Background(), auth.RootPrincipal())} {
+		before, err := h.WhoAmI(ctx, &apiv1.WhoAmIRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		login, err := h.Login(ctx, &apiv1.LoginRequest{DisplayName: "same-operator"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sessionCtx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+login.GetToken()))
+		after, err := h.WhoAmI(sessionCtx, &apiv1.WhoAmIRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if before.GetPrincipalId() != auth.DefaultUserID || after.GetPrincipalId() != before.GetPrincipalId() {
+			t.Fatal("credential change invalidated the same operator's recovery binding")
+		}
+		if before.GetUserId() != "" || after.GetSessionId() == "" {
+			t.Fatal("canonical identity changed the root-vs-session authentication signal")
+		}
+	}
+}

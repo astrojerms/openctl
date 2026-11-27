@@ -54,7 +54,7 @@ func TestApplyVM_ExistingResizesInPlace(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	h := New(&protocol.ProviderConfig{Endpoint: srv.URL, TokenID: "t", TokenSecret: "s", Node: "pve1"})
+	h := mustNewHandler(t, &protocol.ProviderConfig{Endpoint: srv.URL, CAFile: fixtureCA(t, srv), TokenID: "t", TokenSecret: "s", Node: "pve1"})
 	resp, err := h.Handle(context.Background(), &protocol.Request{
 		Version:      protocol.ProtocolVersion,
 		Action:       protocol.ActionApply,

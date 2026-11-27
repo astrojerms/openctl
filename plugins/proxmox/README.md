@@ -33,11 +33,25 @@ providers:
         endpoint: https://pve.home.local:8006
         node: pve1
         credentials: homelab-creds
+        # Optional private CA bundle on the controller/plugin host:
+        # caFile: /etc/openctl/proxmox-ca.pem
     credentials:
       homelab-creds:
         tokenId: root@pam!openctl
         tokenSecretFile: ~/.openctl/secrets/proxmox.token
 ```
+
+The native client requires HTTPS and verifies certificates and hostnames by
+default; older versions silently skipped verification. For private/self-signed
+labs, obtain the CA PEM bundle through a trusted out-of-band channel and set
+`caFile` on each context. It augments system roots, not hostname validation.
+Trust files must be readable on the controller/plugin host. Restart after
+changing credentials or trust.
+
+Explicit `insecureSkipVerify: true` disables certificate and hostname checks for
+HTTPS only and risks API-token interception. It cannot be combined with `caFile`.
+Invalid/missing CA files fail startup, HTTP is rejected, redirects are not
+followed, and no insecure fallback is attempted.
 
 ### Creating an API Token
 

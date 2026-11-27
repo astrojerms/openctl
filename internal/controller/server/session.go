@@ -38,9 +38,7 @@ func (h *sessionHandler) Login(ctx context.Context, req *apiv1.LoginRequest) (*a
 	// default so single-user setups keep working.
 	userID, role := auth.DefaultUserID, auth.RoleAdmin
 	if p, ok := auth.PrincipalFromContext(ctx); ok {
-		if !p.Root {
-			userID = p.UserID
-		}
+		userID = p.ActorID()
 		role = p.Role
 	}
 	sess, err := h.sessions.Create(ctx, userID, req.GetDisplayName(), role, ttl)
@@ -73,9 +71,10 @@ func (h *sessionHandler) WhoAmI(ctx context.Context, _ *apiv1.WhoAmIRequest) (*a
 	if h.sessions != nil && tok != "" {
 		if sess, _ := h.sessions.Lookup(ctx, tok); sess != nil {
 			return &apiv1.WhoAmIResponse{
-				UserId:    sess.UserID,
-				SessionId: sess.ID,
-				Role:      string(sess.Principal().Role),
+				UserId:      sess.UserID,
+				SessionId:   sess.ID,
+				Role:        string(sess.Principal().Role),
+				PrincipalId: sess.UserID,
 			}, nil
 		}
 	}
@@ -83,14 +82,14 @@ func (h *sessionHandler) WhoAmI(ctx context.Context, _ *apiv1.WhoAmIRequest) (*a
 	// or the root credential). user_id stays empty for root to preserve the
 	// "root, not a session" signal; role is always surfaced.
 	if p, ok := auth.PrincipalFromContext(ctx); ok {
-		resp := &apiv1.WhoAmIResponse{Role: string(p.Role)}
+		resp := &apiv1.WhoAmIResponse{Role: string(p.Role), PrincipalId: p.ActorID()}
 		if !p.Root {
 			resp.UserId = p.UserID
 		}
 		return resp, nil
 	}
 	// No principal (e.g. --no-auth): full access, report admin.
-	return &apiv1.WhoAmIResponse{Role: string(auth.RoleAdmin)}, nil
+	return &apiv1.WhoAmIResponse{Role: string(auth.RoleAdmin), PrincipalId: auth.DefaultUserID}, nil
 }
 
 // bearerFromCtx pulls the raw token out of the incoming Authorization

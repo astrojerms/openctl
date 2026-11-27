@@ -52,11 +52,13 @@ func Open(ctx context.Context, path string) (*sql.DB, error) {
 	return db, nil
 }
 
-func migrate(ctx context.Context, db *sql.DB) error {
-	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_meta (
+const schemaMetaSQL = `CREATE TABLE IF NOT EXISTS schema_meta (
 		version INTEGER NOT NULL PRIMARY KEY,
 		applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-	)`); err != nil {
+	)`
+
+func migrate(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, schemaMetaSQL); err != nil {
 		return fmt.Errorf("create schema_meta: %w", err)
 	}
 

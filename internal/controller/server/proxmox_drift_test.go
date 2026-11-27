@@ -62,7 +62,11 @@ func TestProxmoxDriftUsesLiveConfiguration(t *testing.T) {
 	defer pve.Close()
 
 	reg := providers.NewRegistry()
-	reg.Register(pmprovider.New(&pmprovider.Config{Endpoint: pve.URL, TokenID: "test", TokenSecret: "test"}))
+	provider, err := pmprovider.New(&pmprovider.Config{Endpoint: pve.URL, CAFile: proxmoxFixtureCA(t, pve), TokenID: "test", TokenSecret: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg.Register(provider)
 	addr, mat, store := startTestServerWithManifests(t, reg)
 	conn := dialTestServer(t, addr, mat.CACertPath)
 	defer func() { _ = conn.Close() }()

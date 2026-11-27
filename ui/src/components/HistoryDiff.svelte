@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { repo, type CommitInfo } from '../lib/api';
+  import { onDestroy } from 'svelte';
+  import { repo, UnauthorizedError, type CommitInfo } from '../lib/api';
   import MonacoDiffEditor from './MonacoDiffEditor.svelte';
 
   // The resource whose committed manifest history we diff, plus the current
@@ -8,52 +9,81 @@
   export let kind: string;
   export let resourceName: string;
   export let appliedYaml = '';
+  export let signal: AbortSignal | undefined = undefined;
+  export let onUnauthorized: (() => void) | undefined = undefined;
 
   let commits: CommitInfo[] = [];
   let selectedSha = '';
   let commitYaml = '';
   let loading = false;
   let error = '';
-  let unavailable = false; // git tracking off in the controller
+  let historyController: AbortController | null = null;
+  let commitController: AbortController | null = null;
 
-  async function loadHistory(av: string, k: string, n: string): Promise<void> {
+  async function loadHistory(av: string, k: string, n: string, routeSignal: AbortSignal | undefined): Promise<void> {
+    historyController?.abort();
+    commitController?.abort();
+    commitController = null;
+    const current = new AbortController();
+    historyController = current;
+    const requestSignal = routeSignal ? AbortSignal.any([routeSignal, current.signal]) : current.signal;
     commits = [];
     selectedSha = '';
     commitYaml = '';
     error = '';
-    unavailable = false;
-    if (!av || !k || !n) return;
     loading = true;
     try {
-      const resp = await repo.history({ apiVersion: av, kind: k, name: n });
+      if (!av || !k || !n || requestSignal.aborted) return;
+      const resp = await repo.history({ apiVersion: av, kind: k, name: n }, { signal: requestSignal });
+      if (historyController !== current || requestSignal.aborted) return;
       commits = resp.commits ?? [];
-    } catch {
-      // FailedPrecondition (git disabled) or any error → show the unavailable
-      // note rather than a scary error; history is a nice-to-have panel.
-      unavailable = true;
+    } catch (err) {
+      if (historyController !== current || requestSignal.aborted) return;
+      if (err instanceof UnauthorizedError) {
+        commits = [];
+        commitYaml = '';
+        onUnauthorized?.();
+      }
+      error = err instanceof Error ? err.message : String(err);
     } finally {
-      loading = false;
+      if (historyController === current) loading = false;
     }
   }
 
-  async function loadCommit(sha: string): Promise<void> {
+  async function loadCommit(av: string, k: string, n: string, sha: string, routeSignal: AbortSignal | undefined): Promise<void> {
+    commitController?.abort();
+    const current = new AbortController();
+    commitController = current;
+    const requestSignal = routeSignal ? AbortSignal.any([routeSignal, current.signal]) : current.signal;
     commitYaml = '';
+    if (!sha || requestSignal.aborted) return;
     error = '';
-    if (!sha) return;
     try {
-      const resp = await repo.atCommit({ apiVersion, kind, name: resourceName }, sha);
+      const resp = await repo.atCommit({ apiVersion: av, kind: k, name: n }, sha, { signal: requestSignal });
+      if (commitController !== current || requestSignal.aborted) return;
       commitYaml = resp.existed
         ? (resp.yaml ?? '')
         : '# (this resource did not exist at the selected commit)\n';
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+    } catch (err) {
+      if (commitController !== current || requestSignal.aborted) return;
+      if (err instanceof UnauthorizedError) {
+        commits = [];
+        commitYaml = '';
+        onUnauthorized?.();
+      }
+      error = err instanceof Error ? err.message : String(err);
     }
   }
 
-  // Reload history when the resource identity changes.
-  $: void loadHistory(apiVersion, kind, resourceName);
-  // Fetch the selected commit's manifest.
-  $: void loadCommit(selectedSha);
+  $: void loadHistory(apiVersion, kind, resourceName, signal);
+  $: void loadCommit(apiVersion, kind, resourceName, selectedSha, signal);
+
+  onDestroy(() => {
+    historyController?.abort();
+    commitController?.abort();
+    historyController = null;
+    commitController = null;
+  });
 
   function commitLabel(c: CommitInfo): string {
     const short = (c.sha ?? '').slice(0, 8);
@@ -65,13 +95,10 @@
 
 <article class="card">
   <h3>History</h3>
-  {#if unavailable}
-    <p class="muted small">
-      Git history is unavailable. Enable <code>manifests.git</code> in the
-      controller config to track and diff manifest revisions.
-    </p>
-  {:else if loading}
+  {#if loading}
     <p class="muted small">Loading history…</p>
+  {:else if error && commits.length === 0}
+    <p class="error small" role="alert">{error}</p>
   {:else if commits.length === 0}
     <p class="muted small">No committed history for this resource yet.</p>
   {:else}
@@ -84,9 +111,7 @@
         {/each}
       </select>
     </label>
-    {#if error}
-      <p class="error small">{error}</p>
-    {/if}
+    {#if error}<p class="error small" role="alert">{error}</p>{/if}
     {#if selectedSha && commitYaml}
       <p class="muted small">Left: selected commit · Right: current desired manifest</p>
       <div class="diff-wrap">

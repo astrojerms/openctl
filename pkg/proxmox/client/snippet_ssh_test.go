@@ -29,7 +29,10 @@ func TestUploadSnippetRejectsUnsafeInputs(t *testing.T) {
 		{"filename newline", "node", "root", "local", "vm\n.yaml"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c := New("https://unused.invalid", "", "")
+			c, err := New("https://unused.invalid", "", "", TLSOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
 			c.SetSnippetSSH(map[string]string{"pve": tc.host}, tc.user, "")
 			if err := c.UploadSnippet(context.Background(), "pve", tc.storage, tc.filename, "secret"); err == nil {
 				t.Fatal("unsafe input accepted")
@@ -39,7 +42,10 @@ func TestUploadSnippetRejectsUnsafeInputs(t *testing.T) {
 }
 
 func TestUploadSnippetRequiresExplicitNode(t *testing.T) {
-	c := New("https://pve1:8006", "", "")
+	c, err := New("https://pve1:8006", "", "", TLSOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	hosts := map[string]string{"pve1": "node1"}
 	c.SetSnippetSSH(hosts, "", "")
 	hosts["pve2"] = "node2"

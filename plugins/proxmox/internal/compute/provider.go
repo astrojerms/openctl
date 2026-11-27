@@ -20,11 +20,18 @@ type ProxmoxProvider struct {
 }
 
 // NewProvider creates a new Proxmox compute provider
-func NewProvider(config *protocol.ProviderConfig) *ProxmoxProvider {
-	return &ProxmoxProvider{
-		client: client.New(config.Endpoint, config.TokenID, config.TokenSecret),
-		config: config,
+func NewProvider(config *protocol.ProviderConfig) (*ProxmoxProvider, error) {
+	if config == nil {
+		return nil, fmt.Errorf("proxmox provider configuration is required")
 	}
+	c, err := client.New(config.Endpoint, config.TokenID, config.TokenSecret, client.TLSOptions{
+		CAFile:             config.CAFile,
+		InsecureSkipVerify: config.InsecureSkipVerify,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("initialize proxmox compute provider: %w", err)
+	}
+	return &ProxmoxProvider{client: c, config: config}, nil
 }
 
 // CreateInstance creates a new compute instance
@@ -409,8 +416,11 @@ func (p *ProxmoxProvider) GetSSHAccess(ctx context.Context, id string) (*compute
 		return nil, err
 	}
 
-	// Get IP from QEMU agent
-	ip, err := p.client.GetVMIPAddress(ctx, vm.Node, vm.VMID)
+	config, err := p.client.GetVMConfig(ctx, vm.Node, vm.VMID)
+	if err != nil {
+		return nil, fmt.Errorf("read VM config for SSH access: %w", err)
+	}
+	ip, err := p.client.GetVMIPAddress(ctx, vm.Node, vm.VMID, config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get VM IP: %w", err)
 	}

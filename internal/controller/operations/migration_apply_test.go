@@ -3,8 +3,10 @@ package operations
 import (
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"sync/atomic"
@@ -65,7 +67,15 @@ func TestExplicitApplyConvergesAfterReadOnlyAdoption(t *testing.T) {
 		t.Fatal("adoption changed live hardware")
 	}
 	reg := providers.NewRegistry()
-	reg.Register(pmprovider.New(&pmprovider.Config{Endpoint: pve.URL, TokenID: "fixture", TokenSecret: "fixture"}))
+	caFile := filepath.Join(t.TempDir(), "proxmox-ca.pem")
+	if err := os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: pve.Certificate().Raw}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	provider, err := pmprovider.New(&pmprovider.Config{Endpoint: pve.URL, CAFile: caFile, TokenID: "fixture", TokenSecret: "fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg.Register(provider)
 	ops := New(db, 0)
 	dispatcher := NewDispatcher(ops, reg, intent, 0)
 	manifest, err := json.Marshal(vm)

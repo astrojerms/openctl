@@ -24,6 +24,8 @@ export type Route =
   | { name: 'templates' }
   | { name: 'template'; template: string }
   | { name: 'providers' }
+  | { name: 'discover' }
+  | { name: 'jellyfin' }
   | { name: 'settings' }
   | { name: 'list'; apiVersion: string; kind: string }
   | { name: 'create'; apiVersion: string; kind: string }
@@ -38,6 +40,8 @@ function parse(hash: string): Route {
   if (parts[0] === 't' && parts.length === 1) return { name: 'templates' };
   if (parts[0] === 't' && parts.length === 2) return { name: 'template', template: parts[1] };
   if (parts[0] === 'providers' && parts.length === 1) return { name: 'providers' };
+  if (parts[0] === 'discover' && parts.length === 1) return { name: 'discover' };
+  if (parts[0] === 'apps' && parts[1] === 'jellyfin' && parts.length === 2) return { name: 'jellyfin' };
   if (parts[0] === 'settings' && parts.length === 1) return { name: 'settings' };
   // ['k', '<encoded-apiVersion-half-1>', '<encoded-apiVersion-half-2>', '<kind>', '<name>?', 'edit'?]
   if (parts[0] === 'k' && parts.length >= 4) {
@@ -61,6 +65,8 @@ export function routeHref(route: Route): string {
   if (route.name === 'templates') return '#/t';
   if (route.name === 'template') return '#/t/' + encodeURIComponent(route.template);
   if (route.name === 'providers') return '#/providers';
+  if (route.name === 'discover') return '#/discover';
+  if (route.name === 'jellyfin') return '#/apps/jellyfin';
   if (route.name === 'settings') return '#/settings';
   const [g, v] = route.apiVersion.split('/');
   const base = `#/k/${encodeURIComponent(g)}/${encodeURIComponent(v)}/${encodeURIComponent(route.kind)}`;

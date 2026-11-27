@@ -1,6 +1,7 @@
 package resources
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -11,11 +12,6 @@ import (
 
 // VMToResource converts a Proxmox VM to a protocol Resource
 func VMToResource(vm *client.VM, config *client.VMConfig) *protocol.Resource {
-	return VMToResourceWithIP(vm, config, "")
-}
-
-// VMToResourceWithIP converts a Proxmox VM to a protocol Resource with an optional IP address
-func VMToResourceWithIP(vm *client.VM, config *client.VMConfig, ip string) *protocol.Resource {
 	spec := map[string]any{
 		"node": vm.Node,
 	}
@@ -39,10 +35,6 @@ func VMToResourceWithIP(vm *client.VM, config *client.VMConfig, ip string) *prot
 		"memUsed": vm.Mem,
 	}
 
-	if ip != "" {
-		status["ip"] = ip
-	}
-
 	return &protocol.Resource{
 		APIVersion: "proxmox.openctl.io/v1",
 		Kind:       "VirtualMachine",
@@ -52,6 +44,36 @@ func VMToResourceWithIP(vm *client.VM, config *client.VMConfig, ip string) *prot
 		Spec:   spec,
 		Status: status,
 	}
+}
+
+// VMToResourceWithIP adds fresh guest-address evidence, not reachability or
+// service readiness, to the basic VM conversion.
+func VMToResourceWithIP(vm *client.VM, config *client.VMConfig, ip string, observationErr error) *protocol.Resource {
+	resource := VMToResource(vm, config)
+	state := "unavailable"
+	code := "guest_ip_unavailable"
+	message := "Check guest networking and the controller's guest-agent read for a usable IPv4 address on a configured VM NIC."
+	if vm.Status != "running" {
+		code = "vm_not_running"
+		message = "The VM is not running; inspect its power state before checking guest-agent network information."
+	} else if observationErr != nil {
+		var failure *client.GuestIPError
+		if errors.As(observationErr, &failure) {
+			code = failure.Code()
+			message = failure.Error()
+		}
+	} else if ip != "" {
+		state = "available"
+		code = "guest_ip_available"
+		message = "A unique usable IPv4 address was observed on a configured VM NIC; verify controller reachability and service readiness separately."
+		resource.Status["ip"] = ip
+	}
+	resource.Status["ipObservation"] = map[string]any{
+		"state":   state,
+		"code":    code,
+		"message": message,
+	}
+	return resource
 }
 
 // TemplateToResource converts a Proxmox Template to a protocol Resource

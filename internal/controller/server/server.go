@@ -17,6 +17,7 @@ import (
 	"github.com/openctl/openctl/internal/controller/auth"
 	"github.com/openctl/openctl/internal/controller/manifests"
 	"github.com/openctl/openctl/internal/controller/operations"
+	"github.com/openctl/openctl/internal/controller/overview"
 	"github.com/openctl/openctl/internal/controller/providers"
 	"github.com/openctl/openctl/internal/templates"
 	apiv1 "github.com/openctl/openctl/pkg/api/v1"
@@ -49,12 +50,16 @@ type Options struct {
 	CertFile string
 	KeyFile  string
 	Token    string
+	// ControllerID is the stable persisted identity used to bind browser reviews.
+	ControllerID string
 	// Users are named non-root principals authenticated by their own tokens
 	// (loaded from the controller's users.yaml). Empty = root-only.
 	Users      []auth.User
 	Registry   *providers.Registry
 	Operations *operations.Store
 	Dispatcher *operations.Dispatcher
+	// Overview supplies provider-independent persisted inventory and root work.
+	Overview *overview.Store
 	// Manifests powers Phase 5 drift detection. Get/List compare observed
 	// state against the stored desired manifest. May be nil — drift just
 	// won't be populated.
@@ -66,6 +71,7 @@ type Options struct {
 	// GitOpsEnabled reflects running manifest watch/pull automation. Migration
 	// requires it disabled to avoid projection changes racing local handoff.
 	GitOpsEnabled bool
+	ManifestMode  string
 	// DiskMirror is the on-disk projection of applied manifests (UI Phase
 	// U2.1). When set, the controller surfaces it via RepoService so the
 	// UI can show the directory + git status.
@@ -74,6 +80,8 @@ type Options struct {
 	// When set, RepoService.Push/Pull/GetStatus are fully functional; when
 	// nil, GetStatus still returns the dir but Push/Pull error.
 	Repo *manifests.Repo
+	// RepoReconcile applies/prunes the source tree after a manual pull.
+	RepoReconcile func(context.Context) error
 	// Templates is the parameterized-starter registry surfaced via
 	// TemplateService. May be nil — the service just returns empty
 	// lists in that case.
@@ -116,7 +124,12 @@ func New(opts Options) (*Server, error) {
 	}
 
 	g := grpc.NewServer(srvOpts...)
-	apiv1.RegisterPingServiceServer(g, &pingHandler{})
+	apiv1.RegisterPingServiceServer(g, &pingHandler{
+		controllerID:      opts.ControllerID,
+		durableOperations: opts.Operations != nil && opts.Dispatcher != nil,
+	})
+	apiv1.RegisterOverviewServiceServer(g, newOverviewHandler(opts.Overview))
+	apiv1.RegisterInventoryServiceServer(g, newInventoryHandler(opts.Manifests))
 
 	registry := opts.Registry
 	if registry == nil {
@@ -125,6 +138,10 @@ func New(opts Options) (*Server, error) {
 	resourceHandler := newResourceHandler(registry, opts.Operations, opts.Dispatcher, opts.Manifests)
 	resourceHandler.mirror = opts.DiskMirror
 	resourceHandler.gitopsEnabled = opts.GitOpsEnabled
+	resourceHandler.manifestMode = opts.ManifestMode
+	if opts.Dispatcher != nil {
+		opts.Dispatcher.SetDeleteGuard(resourceHandler.CheckDelete)
+	}
 	apiv1.RegisterResourceServiceServer(g, resourceHandler)
 	if opts.Operations != nil {
 		// Guard against a nil *Dispatcher becoming a non-nil interface (which
@@ -141,14 +158,21 @@ func New(opts Options) (*Server, error) {
 		apiv1.RegisterSessionServiceServer(g, newSessionHandler(opts.Sessions))
 	}
 	if opts.DiskMirror != nil {
-		apiv1.RegisterRepoServiceServer(g, newRepoHandler(opts.DiskMirror, opts.Repo))
+		repoHandler := newRepoHandler(opts.DiskMirror, opts.Repo)
+		repoHandler.mode = opts.ManifestMode
+		repoHandler.reconcile = opts.RepoReconcile
+		apiv1.RegisterRepoServiceServer(g, repoHandler)
 	}
 	tmpls := opts.Templates
 	if tmpls == nil {
 		tmpls = templates.NewRegistry()
 	}
 	apiv1.RegisterTemplateServiceServer(g, newTemplateHandler(tmpls))
-	apiv1.RegisterConfigServiceServer(g, newConfigHandler())
+	configHandler := newConfigHandler()
+	if opts.ManifestMode != "" {
+		configHandler.manifestMode = opts.ManifestMode
+	}
+	apiv1.RegisterConfigServiceServer(g, configHandler)
 
 	reflection.Register(g)
 
@@ -203,13 +227,18 @@ func (s *Server) StopWithTimeout(d time.Duration) {
 // TLS, auth, and the gRPC pipeline end-to-end.
 type pingHandler struct {
 	apiv1.UnimplementedPingServiceServer
+	controllerID      string
+	durableOperations bool
 }
 
 func (h *pingHandler) Ping(_ context.Context, req *apiv1.PingRequest) (*apiv1.PingResponse, error) {
 	return &apiv1.PingResponse{
-		Echo:          req.GetMessage(),
-		ServerVersion: ServerVersion,
-		GitCommit:     GitCommit,
-		BuildTime:     BuildTime,
+		Echo:                     req.GetMessage(),
+		ServerVersion:            ServerVersion,
+		GitCommit:                GitCommit,
+		BuildTime:                BuildTime,
+		ControllerId:             h.controllerID,
+		SupportsIdempotentApply:  h.durableOperations,
+		SupportsIdempotentDelete: h.durableOperations,
 	}, nil
 }

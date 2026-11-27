@@ -9,7 +9,8 @@ of truth.
 - **Target architecture:** [docs/target-architecture.html](docs/target-architecture.html)
   — speculative Phase 7–10 (verifying-trace cache, K3sNode, typed task
   IR, DAG scheduler). Sketch, not committed plan.
-- **UI rollout:** [UI.md](UI.md) — Phases U1–U7. Not started.
+- **UI rollout:** [UI.md](UI.md) — shipped resource editing and inspection;
+  current homelab workflow delivery is recorded below.
 - **Strategic direction:** [docs/direction.md](docs/direction.md) — the
   wedge, audience, scope decisions, and priority tiers the next epics
   serve. [docs/plugin-architecture.md](docs/plugin-architecture.md) is
@@ -22,28 +23,608 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
-- No active roadmap branch. `main` is clean. The dispatcher refactor
-  shipped and was homelab-validated with the `validate-3`
-  single-control-plane k3s apply path. **k3s multi-endpoint placement**
-  (#64/#65) and the **composite-apply dependency DAG** (#66) shipped on
-  top; cross-op dependency scheduling is the next natural lift (see
-  Followups).
+**2026-11-27 — homelab control-plane delivery**
 
-The whole `no route to host` / connection-resilience thread is now
-closed: watch-release-on-outage (#14), macOS code signing (#15),
-HTTP/2 gateway (#16), and Proxmox context threading + not-found
-hardening (#17) all shipped. **Retire `applyExisting`** is now complete
-too — the imperative convergence executors are deleted and the
-Plan/dispatcher path is the sole existing-cluster converge path,
-validated on homelab (3-CP embedded-etcd HA create + full control-plane
-respec). The **UI DAG view** (Phase U9) and the **UI for controller
-config** (Settings page + GetControllerConfig/UpdateControllerConfig
-RPCs) have both shipped. With the feature build-out essentially
-complete, direction now shifts to **breadth + reach**: the external
-plugin protocol → Terraform/OpenTofu host → run-anywhere Linux daemon
-(Tier 1 in [docs/direction.md](docs/direction.md)). Multi-user auth
-(OIDC slice) and CUE-WASM validation are parked behind that. (Mobile
-layout has since shipped.)
+- [x] Console first-create previews, exact reviewed submissions, metadata and
+  structured secret/reference preservation.
+- [x] Live-observation cache checks, visible persistence failures, and opted-in
+  missing-resource remediation.
+- [x] Immutable Proxmox VM identity binding, managed/owned/dependent deletion
+  guards, transactional in-flight reference fencing, and fail-closed inventory.
+- [x] Controller-side discovery and connection tests, console/CLI adoption,
+  export/release, and explicit legacy tracked-identity confirmation.
+- [x] Exclusive `mirror`/`gitops` desired-state authority (K2).
+- [x] Standalone `apps.ComposeApplication` and `apps.Jellyfin` lifecycle:
+  strict SSH, controller-specific ownership, data-preserving removal, pinned
+  Jellyfin rollout, protected onboarding, and independent readiness checks.
+- [x] Guided Jellyfin VM/application/storage/GPU/optional-domain manifests.
+- Verification: affected Go packages and frontend tests/check/build; actual
+  console discovery/adoption and first-create previews against an isolated
+  controller/Proxmox simulator. No live homelab deployment or GPU playback
+  verification was performed. A passing simulator is not hardware acceptance.
+
+**2026-11-27 — operator recovery and authority hardening**
+
+- [x] Offline sensitive backup/restore, WAL snapshots, identity/provider-state
+  preservation, bounded/checksummed extraction, exclusive publication, and
+  daemon/recovery state locking.
+- [x] Failed first-Apply retry without a managed baseline; preserve secret
+  markers and ownership guards, clear inherited destructive consent, and keep
+  metadata on reconciliation.
+- [x] Release fresh application placement only for proven pre-command SSH
+  failures; stage/full-validate Compose and service env files before publication.
+- [x] Admin-only credential/global-policy writes, editor/admin repository
+  mutations, loopback-only unauthenticated listeners, and bounded/cancel-aware
+  CLI waits.
+- [x] Console mutation gates follow running manifest authority, including when
+  the optional mirror repository is disabled.
+- Verification: affected Go packages, Darwin recovery compilation, 111 frontend
+  tests, warning-free Svelte check and successful UI build; actual console retry and
+  live GitOps mutation gating; offline CLI restore booted with preserved TLS,
+  identity and history. Real Compose 5.8 configuration passes validated staged
+  env files and literal-dollar paths; no container rollout or live lab mutation.
+
+**2026-11-27 — durable submissions and resumable deployment review**
+
+- [x] Atomic Apply request ledger, canonical actor identity, read-only CLI/API
+  recovery and retained bindings after operation-history pruning; conflicting
+  reuse never submits another operation.
+- [x] Controller/principal-bound Jellyfin reviews survive reload without
+  resubmission, restored consent or cached readiness. Lost acknowledgements are
+  observed; explicit terminal retries get fresh review and a new request ID.
+- [x] Offline recovery accepts exact known historical SQLite schemas without
+  modifying the source; normal startup upgrades the restored database.
+- [x] Single-resource parsing rejects extra YAML documents; stream parsing uses
+  YAML document boundaries rather than textual separator splitting.
+- Verification: focused affected Go checks, 167 frontend tests, clean Svelte
+  diagnostics and successful UI build. Authenticated isolated console/CLI proofs
+  cover dropped acknowledgements, reload, explicit retry, pruned request bindings
+  and controller restart; a schema-14 archive boots at schema 15 with its actual
+  persisted identity. No live guest deployment, playback or public exposure.
+
+**2026-11-27 — native operator preflight and runtime inspection**
+
+- [x] `ctl preview` uses live controller validation and reports explicit intent,
+  metadata changes, live drift, child actions and unapproved gates; invalid
+  previews retain machine-readable diagnostics and exit nonzero.
+- [x] `ctl action list/run` exposes typed runtime actions and protected downloads,
+  with explicit provider selection, secret-safe parameter files, no implicit
+  payload printing, no overwrite-before-invoke and no automatic retry.
+- [x] Metadata-only edits/clears are updates in controller, CLI and console
+  previews; desired YAML omits observed ownership references while edit guards
+  remain intact. Failed export cleanup cannot remove another writer's file.
+- Verification: focused CLI/controller Go checks, frontend suite and targeted
+  ownership regressions, clean Svelte diagnostics and successful UI build.
+  Actual binaries exercised YAML/CUE preflight, validation failure, action
+  discovery and private/raw download safety against an authenticated isolated
+  controller. Actual browser form edits showed metadata-only review with no
+  Apply/Delete or persisted intent changes. No live homelab mutation.
+
+**2026-11-27 — provider-independent control-plane overview**
+
+- [x] One read-only SQLite snapshot exposes saved inventory, exact root-request
+  totals and bounded active/latest-unsuccessful lists without decoding payloads
+  or observing providers. Latest admission supersedes historical failures even
+  when timestamps skew; child steps never double-count.
+- [x] Console overview and sidebar share cancellable metadata polling instead of
+  per-kind provider/SSH scans. Unregistered saved kinds remain visible;
+  observation-only kinds have no misleading managed badge. Failures show unknown
+  counts or explicitly stale snapshots, not an empty/healthy lab.
+- [x] `ctl overview` uses the same viewer-accessible API. Focused inspection loads
+  retained operations outside the live window; global activity uses exact root
+  totals, not a truncated child-heavy cache.
+- Verification: focused overview/CLI/schema/gateway Go checks, 185 frontend tests,
+  clean Svelte diagnostics and successful UI build. Actual empty-daemon and
+  authenticated viewer CLI/browser proofs cover explicit zeros, capped lists,
+  historical inspection, HTTP outage/cold reload/recovery and zero provider
+  Get/List calls. No live homelab mutation or readiness claim.
+
+**2026-11-27 — inspect saved intent through provider outages**
+
+- [x] Viewer-accessible saved inventory reads use SQLite only: metadata-only
+  lists and raw desired declarations with provenance and unresolved markers.
+  Existing live Get/List semantics remain strict; unregistered providers do not
+  erase saved resources.
+- [x] Console lists retain saved rows through failed, omitted and deleted live
+  observations. Detail keeps desired YAML/downloads and read-only history while
+  disabling mutations and clearing stale readiness, topology and action forms.
+  Route changes, logout and revoked authorization reject late inspection data.
+- [x] `ctl get --saved` exposes the same separation: metadata inventory without
+  a name, replayable desired JSON/YAML with a name; no inferred live authority.
+- Verification: focused storage/inventory/gateway/CLI Go checks, 221 frontend
+  tests, clean Svelte diagnostics and successful production build. Actual viewer
+  CLI and admin browser proofs exercised unavailable/missing/unregistered
+  providers, healthy recovery then renewed outage, exact desired YAML download
+  and disabled stale mutation controls. Three desired records remained intact,
+  with zero operations or provider mutations. No live homelab changes.
+
+**2026-11-27 — durable deletion and explicit recovery**
+
+- [x] Delete shares Apply's atomic request ledger with an action-separated target
+  fingerprint and canonical actor. Exact replay returns its original operation
+  before mutable admission checks, including after deletion, replacement,
+  controller restart or provider removal. Pruned bindings remain reserved.
+- [x] CLI Delete generates/accepts request IDs, requires advertised support,
+  checks acknowledgements and exposes read-only lost-response recovery. It never
+  silently falls back to unkeyed deletion or automatically chooses another key.
+- [x] Console delete-attempt metadata survives tab reload, bound to controller,
+  principal and target. Recovery works without saved/live state; failures stay
+  visible. Explicit new attempts reverify terminal outcomes and fresh observation,
+  require new typed consent and persist a new identity before mutation.
+- [x] Detail refreshes coalesced saved intent independently of observation, so
+  successful deletion removes the old declaration instead of exporting stale YAML.
+- Verification: focused operations/server/CLI Go checks, frontend regressions
+  (including corrected isolated storage-failure cases), clean Svelte diagnostics
+  and production build. Actual authenticated CLI/browser proofs covered tracked
+  replacement replay, restart, viewer lookup, a genuinely dropped Delete response,
+  reload without resubmission, terminal recovery, canceled/newly confirmed retry
+  and principal isolation. All provider work was isolated fixture state; no live
+  homelab infrastructure changed.
+
+**2026-11-27 — recoverable Apply across the console**
+
+- [x] Resource create/update and template starters use bound durable Apply
+  attempts, capability/acknowledgement checks and explicit read-only recovery.
+  Browser storage contains identity metadata only, never draft manifests,
+  parameters, credentials, destructive flags or consent.
+- [x] Reload preserves the submitted target independently of current defaults.
+  Acknowledgement no longer updates the baseline or triggers delayed navigation;
+  confirmed terminal outcomes permit an explicitly refreshed review and new key.
+- [x] Manual Reconcile opens the same editor preview/review path instead of an
+  unkeyed Apply. First-create retries without a baseline remain create-only.
+  Route/session/schema/preview leases reject stale asynchronous work.
+- Verification: frontend regression coverage and focused corrected-case checks,
+  clean Svelte diagnostics and production build. Actual authenticated browser
+  proof exercised reviewed reconciliation with zero submission, exact form
+  updates preserving metadata/inline credentials, editor/template acknowledgements
+  genuinely lost after admission, reload/recovery without resubmission, fresh-key
+  review, blank restored parameters, operation inspection and principal isolation.
+  Exactly three explicit keyed fixture operations ran; no live homelab changes
+  or physical application-readiness claim.
+
+**Verified native Proxmox transport (2026-11-27):**
+
+- [x] Native Proxmox verifies HTTPS certificates and hostnames by default, with
+  per-context controller/plugin-host `caFile` bundles augmenting system roots.
+  Explicit `insecureSkipVerify` is HTTPS-only, mutually exclusive with a CA
+  bundle, and never a fallback. HTTP, unsafe endpoints, malformed/missing CA
+  bundles and API redirects fail closed; constructor failures stop startup.
+- [x] Providers exposes saved certificate policy, private-CA configuration and
+  explicit insecure risk. Omitted API trust fields preserve existing settings;
+  explicit clearing is supported. Trust edits preserve file-backed credentials
+  and sibling contexts, remain admin-only and require restart.
+- [x] `ctl discover --test` exits nonzero on a disconnected result while retaining
+  table/JSON/YAML output; connection diagnostics mention certificate trust
+  without exposing upstream credential-bearing errors.
+- Verification: focused native-client, handler, provider, configuration, server,
+  registry, migration-adoption and CLI checks passed; the standalone plugin
+  compiled. Eight mounted Providers tests, clean Svelte diagnostics and the
+  production UI build passed. Actual console/CLI proof against an isolated
+  native Proxmox simulator rejected untrusted TLS before authenticated HTTP,
+  saved a private CA while preserving file-backed credentials, remained blocked
+  before restart, then authenticated read-only discovery after restart. Only
+  provider GETs occurred; no live homelab changes or hardware-readiness claim.
+- Upgrade: self-signed installations that depended on the former silent bypass
+  must configure trusted CA material or explicitly accept insecure HTTPS.
+
+**Actionable read-only connection diagnostics (2026-11-27):**
+
+- [x] Connection tests expose safe `failureCode` categories and specific next
+  steps for certificate trust/names/validity, TLS negotiation, authentication,
+  read permissions, DNS/reachability/timeouts, redirects, API routing, limits and
+  provider availability. Classification uses typed causes and HTTP status, never
+  upstream error-text matching or forwarding response bodies/certificate data.
+- [x] Console failures remain local to each context and display the safe code
+  beside the next step. Healthy contexts discover independently; failed contexts
+  are not rendered as empty inventory. Successful explicit retests clear old
+  failure codes. CLI table/JSON/YAML preserve categories with nonzero failure
+  exits; success omits the failure code.
+- Verification: native-client checks, 19 wrapped-cause/redaction cases, eight
+  real native TLS/HTTP outcomes, six CLI output/exit cases and three mounted
+  console tests passed. Svelte diagnostics and the production build passed.
+  Actual CLI/browser proof against six isolated native contexts distinguished
+  five failures from healthy discovery without leaking provider bodies/tokens.
+  Only GETs occurred, untrusted TLS received no authenticated HTTP, redirects
+  were not followed, and SQLite retained zero operations/desired manifests.
+  No live homelab changes or physical readiness claim.
+
+**Fingerprint-bound adoption and fresh discovery consent (2026-11-27):**
+
+- [x] Plain-manifest adoption requires an explicitly reviewed discovery
+  fingerprint (`expected_identity`, CLI `--expected-identity`). Empty/blank
+  preconditions fail before provider reads; live replacement or placement
+  mismatch fails before tracking, binding or projection writes. Bundle identity
+  remains authoritative; contradictory overrides are rejected.
+- [x] Console adoption submits exactly the reviewed fingerprint and desired
+  manifest. Retesting a context invalidates its own inventory/count/review and
+  consent, not unrelated contexts. Rejected adoption requires new discovery.
+  Ownership handlers check current authority and current inventory synchronously,
+  including tracked-identity confirmation.
+- [x] Session/principal/role or ownership-authority changes clear private reviews
+  and migration bundles. Teardown aborts waiting; old results cannot restore
+  inventory, expose a late private file, sign out a new principal, or navigate
+  after an obsolete acknowledgement. Bundle destination changes reset consent;
+  explicit local clearing is available. Canceling cannot undo accepted tracking.
+- Verification: focused Go admission/CLI regressions passed, including real
+  Proxmox TLS decoding, SQLite/projection/binding non-mutation on rejection and
+  explicit refreshed adoption. Mounted discovery regressions and corrected
+  bundle-case checks passed; Svelte diagnostics and production builds passed.
+  Actual CLI/browser proof rejected a same-name/node/VMID replacement with a new
+  UUID and zero saved tracking, then adopted only after rediscovery/new consent.
+  A real private export, destination dropdown/consent reset, local bundle clear
+  and sign-out teardown were exercised in Chromium (happy-dom lacks option
+  `:checked` support). Exactly one manifest/binding/projection was retained;
+  no Apply/Delete operations or provider writes, and no live homelab changes.
+- Upgrade: older unguarded plain-adoption clients must be updated; no automatic
+  latest-fingerprint lookup or identity fallback is provided.
+
+**Saved-inventory Jellyfin guest selection (2026-11-27):**
+
+- [x] The guided existing-guest selector reads saved VM metadata, not live
+  whole-lab VM listings. Provider contexts for new provisioning load
+  independently; one metadata/context failure does not erase the other path.
+  Saved choices explicitly convey no live/GPU/SSH/application readiness.
+- [x] Missing snapshots are unavailable, not empty inventory. Explicit saved
+  refresh clears prior guest selection and consent. Preparation requires a
+  successful saved snapshot and selected name, or an active new-VM context.
+  Pending metadata requests are aborted/ignored on teardown and authorization
+  loss ends the session; no provider-scan fallback or automatic Apply exists.
+- Verification: nine mounted wizard regressions passed, with clean Svelte
+  diagnostics and a production build. Actual authenticated browser proof used
+  real SQLite, native Proxmox, application provider and dispatcher wiring with
+  one unavailable context. Wizard open/refresh made zero provider requests;
+  healthy guest preview resolved only its bound VM, while selecting the
+  unavailable guest blocked preview/Apply and kept declarations downloadable.
+  Refresh cleared choice/consent. Only provider GETs occurred, with no submitted
+  operations, application locators, SSH execution or live homelab changes.
+  No GPU, media playback or physical application-readiness claim.
+
+**Visible blocked guided-preview diagnostics (2026-11-27):**
+
+- [x] Guided reviews preserve schema and controller preview failures as transient
+  inspection data, including failures from the final pre-submission check.
+  Field-only errors and missing/unsafe operations block Apply even when another
+  response field suggests `create`; no new request identity is allocated.
+- [x] The console labels blocked previews, displays field paths and remaining
+  dependency/global errors without duplicate messages, and hides consent prompts
+  until a valid fresh review exists. Repair replaces obsolete diagnostics and
+  requires renewed consent. Accepted work/uncertain request identities remain
+  unchanged; diagnostics are never saved as recovery or readiness evidence.
+- Verification: focused review-engine regressions and all 13 mounted wizard
+  cases passed; Svelte diagnostics and the production build passed. Actual
+  Chromium proof used real native Proxmox, app provider, SQLite and dispatcher
+  wiring to expose an initial guest-read failure, repair/refresh it, and then
+  reject a newly unavailable guest during the final Apply precheck. Detailed
+  diagnostics remained visible, no request was admitted, and reload offered
+  declaration recovery without restoring diagnostic/consent authority. Provider
+  requests were GET-only; zero operations/application locators, no SSH execution
+  or live homelab changes. No physical application-readiness claim.
+
+**Safe, path-attributed reference failures (2026-11-27):**
+
+- [x] Reference failures retain typed causes internally while public messages
+  expose only the declared target/output, destination path and static guidance.
+  Missing targets (including nil provider results), unavailable outputs and
+  malformed markers fail safely; nested array and escaped-key paths are retained.
+  Successful traversal does not compute diagnostic paths.
+- [x] Preview field diagnostics include optional, extensible failure codes.
+  Typed TLS/authentication/permission/network/HTTP causes share connection-test
+  categories; unknown private failures fail closed. Guided, template and editor
+  surfaces show codes/paths without enabling invalid Apply.
+- Verification: resolver and focused native-server checks passed, along with
+  63 mounted console cases, Svelte diagnostics and the production build.
+  Chromium verified readable blocked-review diagnostics against a real native
+  Proxmox/app-provider/SQLite/dispatcher fixture whose HTTPS response echoed its
+  generated API token and a credential-bearing URL. Viewer CLI preview exited
+  nonzero without admitting work; an explicitly submitted isolated create-only
+  operation failed during reference resolution and exposed no upstream private
+  details in CLI output, SQLite errors or viewer history. Preview/browser
+  diagnostics and browser storage were likewise clean. All provider requests
+  were GET-only; no application locator/desired state, SSH execution or live
+  homelab changes. No physical application-readiness claim.
+
+**Honest independent application readiness (2026-11-27):**
+
+- [x] Per-check evidence now has one canonical `state`: `ready`, `not_ready`,
+  `unknown` or `not_configured`. Guest-unavailable dependent probes and
+  malformed/incomplete container observations are unknown; valid empty container
+  inventory is not ready. Absent optional public exposure is neutral, while a
+  configured public probe remains independent of guest access and gates readiness.
+- [x] Resource details and guided reviews share strict state parsing and badge
+  labels. Only observed success is green; unsupported/malformed/obsolete evidence
+  is unknown. Aggregate `status.ready` remains boolean and required failed/unknown
+  evidence still blocks guided completion/publication. The old per-check boolean
+  is removed; structured-output consumers must migrate with the controller/UI.
+- Verification: application-provider package checks and 28 focused mounted/helper
+  console cases passed; Svelte reported zero errors/warnings and the production
+  build passed. Actual built-console Chromium and viewer CLI inspection used
+  native app-provider, SQLite, TLS/gRPC and verified local SSH transport with
+  simulated probe responses. Guest authentication failure, GPU failure, invalid
+  container output, empty containers and a healthy private app retained distinct
+  evidence and aggregate states. No operation was admitted; fixture intent and
+  locator counts were unchanged. The SSH simulator executed no guest shell
+  commands. No live homelab mutation, real GPU/media or playback acceptance.
+
+**Provider-labeled runtime action review (2026-11-27):**
+
+- [x] Native application, Proxmox and k3s action descriptors provide truthful
+  display labels and effect descriptions. Stable action IDs and execution stay
+  unchanged; API/CLI listings expose optional labels without using them as IDs.
+  Application restart/stop no longer inherit k3s/VM-power-off wording.
+- [x] Every console runtime action, including parameterless and download actions,
+  opens one explicit target/action/parameter review before invocation. Cancel
+  sends nothing; required values, duplicate submission, stale observations,
+  route changes and session changes fail closed. Late prior-session results
+  cannot open private links or expire a replacement session. Reviews are transient
+  interaction safety, not durable request identities or a new authorization boundary.
+- Verification: focused provider/identity/k3s/CLI checks and mounted detail/
+  deletion regressions passed, including required boolean/default handling.
+  Svelte reported zero errors/warnings and the production build passed. Actual
+  built-console Chromium and native viewer CLI discovery distinguished Jellyfin,
+  VM-force-stop and k3s labels. Restart/download review and cancellation admitted
+  no invocation; observation refresh revoked consent. Explicit Run produced
+  exactly one runtime RPC and one native application restart request through
+  verified local SSH. The SSH simulator executed no shell commands; desired and
+  locator row fingerprints stayed unchanged, with zero durable operations.
+  No live homelab mutation, guest restart or hardware/playback acceptance.
+
+**Same-instance public Jellyfin readiness (2026-11-27):**
+
+- [x] Public Jellyfin readiness requires bounded JSON system information,
+  completed onboarding and the same server identity freshly observed through
+  verified guest SSH. HTTP 200 login portals, wrong instances, malformed/oversized
+  responses and unfinished onboarding are not ready. Valid public information
+  without a guest-side identity is unknown and still blocks aggregate readiness.
+- [x] Public probes send no credentials/cookies, reject redirects and preserve
+  HTTPS verification. IDs and response bodies never enter public diagnostics or
+  persisted intent/placement; private applications avoid the additional identity
+  work. Generic Compose public HTTP checks retain their existing contract.
+- Verification: application-provider package checks passed, including semantic
+  matching, bounded parsing, TLS/cancellation, redaction, independent public
+  probing and unchanged locator state. Actual viewer CLI and built-console
+  Chromium exercised HTTP 200 portal, wrong-instance, unavailable-guest,
+  unfinished-onboarding and matching-instance cases with native provider,
+  TLS/gRPC, verified SSH and public HTTPS loopback fixtures. The native read-only
+  curl/Python JSON probe ran against fixture endpoints; other guest/GPU/media
+  checks were simulated. No public credentials, durable operations or changed
+  desired/locator fingerprints. No live homelab, tunnel/DNS, GPU or playback
+  acceptance; matching public identity is not access-policy proof.
+
+**Explicit per-resource CLI health checks (2026-11-27):**
+
+- [x] `ctl health KIND NAME --api-version API` performs one live named Get with
+  viewer access and a bounded timeout. It never polls, retries, applies, invokes
+  actions or substitutes saved intent. Zero exit requires explicit boolean
+  readiness with no failed/unknown evidence; phase/running labels, malformed or
+  obsolete checks cannot invent readiness. Optional unconfigured checks are neutral.
+- [x] Table/JSON/YAML preserve repair diagnostics on non-ready exits. Structured
+  output projects identity and normalized health only, omitting specs, annotations,
+  applied intent and unrelated status. Read/protocol/output errors fail closed;
+  raw upstream read errors are not forwarded. Provider health messages still
+  require sensitive-output handling.
+- Verification: focused CLI regressions passed for aggregate/check disagreement,
+  unknown evidence, projection privacy, structured diagnostics, identity mismatch,
+  private read failures, cancellation, output failure and explicit target/deadline.
+  The actual binary discovered the command and exercised healthy, HTTP-failed,
+  malformed-container, stopped-container and SSH-unavailable scenarios against
+  a native app-provider/SQLite/TLS controller as a viewer, over verified local SSH
+  with simulated guest responses. Healthy exit was zero; each unhealthy exit
+  retained diagnostics and was nonzero. Existing Get inspection still succeeded
+  for an unready app. Intent/locator fingerprints were unchanged; zero durable
+  operations and no guest command execution or live homelab mutation. No hardware,
+  GPU, media or playback acceptance.
+
+**Actionable guided prerequisite blockers (2026-11-27):**
+
+- [x] Later deployment steps identify the exact prerequisite and distinguish
+  unverified operations, unavailable observations, changed baselines and unproven
+  application readiness. Matching application baselines expose normalized live
+  checks, not specs or unrelated status. Private read failures are not repeated.
+- [x] Direct resource inspection and explicit prerequisite recheck support repair
+  without resubmitting accepted work. Diagnostics are transient; rechecks clear
+  stale evidence and consent before obtaining a fresh preview. Publication remains
+  blocked until readiness, unchanged intent and fresh authorization are established.
+- [x] Guided baseline comparisons normalize protobuf-empty metadata collections,
+  fixing recovery of real controller responses without ignoring nonempty label,
+  annotation or ownership changes.
+- Verification: focused engine/mounted-wizard regressions, frontend typecheck and
+  production build passed. The actual console used the real SQLite controller,
+  durable admission, dispatcher, refs, secrets and auth with isolated simulated
+  providers. Its original successful application request survived reload and
+  inspection; a post-preview GPU failure blocked the final publication submission.
+  Unavailable reads exposed no private upstream text or invented checks. Repair
+  restored a fresh preview with all three consent controls unchecked. SQLite and
+  provider audit retained one successful application Apply, no route/DNS operation
+  and no replacement request. No live homelab mutation or hardware acceptance.
+
+**Consistent console application readiness (2026-11-27):**
+
+- [x] Lists, resource detail, composed-child summaries and guided deployment gates
+  share one strict application-readiness rule matching `ctl health`. Explicit
+  boolean readiness is required; failed checks are decisive, unknown/malformed
+  evidence cannot be green, and optional unconfigured checks remain neutral.
+  Lifecycle phase labels and positive aggregates cannot override contrary evidence.
+- [x] Current-step advancement, completion and final publication rechecks use
+  that rule without new provider reads, scans, retries or mutations. Repair and
+  independent resource lifecycle controls remain available.
+- Verification: 191 focused health, list, detail and guided-recovery cases,
+  frontend typecheck and production build passed. The actual console ran against
+  a real SQLite/auth/admission/dispatcher controller with isolated vendor
+  simulators. Failed/unknown GPU evidence defeated `phase: ready` plus `ready: true`
+  in list/detail badges and deployment gates. Current work could not advance;
+  later publication was blocked at final submission. Repair restored a fresh
+  preview with all three consents unchecked and the original accepted request
+  unchanged. SQLite/provider audit showed one application Apply, no route/DNS
+  operation and no duplicate mutation. No live homelab or hardware acceptance.
+
+**Runtime-verified Jellyfin media readiness (2026-11-27):**
+
+- [x] Media health retains guest CIFS/share/read-only/access checks and now reads
+  actual container mounts rather than trusting Compose intent. `/media` must be
+  a read-only bind of the selected NAS directory, without nested overrides.
+  UID-1000 read/traverse tests target the same inspected full container ID, not
+  a newly resolved service. No media write, remount or restart is performed.
+- [x] Wrong sources, writable/absent bindings, overrides and denied access block
+  readiness; unavailable, incomplete or ambiguous runtime metadata remains unknown.
+  Health output omits raw metadata, container IDs and private probe errors.
+- Verification: regressions first reproduced false-ready writable/wrong-source
+  bindings. The native application-provider package passed, covering binding,
+  subdirectory, permission, identity, malformed evidence and persistence/privacy
+  cases. The actual CLI used viewer access to a native-provider SQLite/TLS
+  controller over verified local SSH with simulated guest responses. Healthy and
+  repaired media exited zero; writable, wrong-source, missing read-only metadata
+  and inaccessible container media retained diagnostics and exited nonzero.
+  Unhealthy resources remained inspectable. Intent/locator fingerprints were
+  unchanged, zero durable operations were admitted, and audit confirmed probes
+  stayed bound to inspected IDs. No guest command execution, live homelab
+  mutation, real NAS/Docker/GPU validation or playback acceptance.
+
+**Portable per-stage deployment exports (2026-11-27):**
+
+- [x] Guided and saved reviews export standard ZIPs with ordered single-resource
+  YAML files instead of one CLI-incompatible YAML stream. Current stages are also
+  downloadable individually, including during blocked review. Initial/final
+  application versions have distinct stage filenames rather than overwriting
+  one another. Archive paths are flat and independent of resource names.
+- [x] Canonical desired serialization preserves metadata, Unicode and unresolved
+  reference/secret markers, excluding ownership, observed evidence, request
+  identities and inherited request consent. Exports neither resume nor submit;
+  staged sequencing and private/non-watched extraction are explicit.
+- Verification: 24 focused export/wizard cases, frontend typecheck and production
+  build passed. Actual browser ZIP/YAML downloads worked during blocked recovery
+  preflight and from a saved review before Resume. Independent ZIP/CRC checks
+  verified ordered, distinct application versions, Unicode and markers. The
+  actual CLI successfully previewed the downloaded YAML against an isolated
+  SQLite/TLS controller with simulated provider reads. Saved review stayed
+  unchanged; zero operations/provider mutations and no live homelab changes.
+
+**Independent context discovery in the console (2026-11-27):**
+
+- [x] Each Proxmox connection has a viewer-accessible **Discover VMs** action,
+  using a fresh connection test and the existing context-scoped inventory API.
+  Unrelated endpoints are untouched; all-context discovery remains explicit.
+- [x] Refresh invalidates only the selected snapshot and consent before I/O,
+  preserving independent inventory/reviews. Failed reads cannot invent an empty
+  lab; only successful reads report zero VMs. Foreign-context responses are
+  rejected, and stale-principal results cannot restore private evidence.
+- Verification: 26 discovery/ownership regressions, frontend typecheck and
+  production build passed. The actual console used viewer access to a real
+  SQLite/TLS controller and native multi-context Proxmox provider with three
+  simulated HTTPS endpoints, verified CAs/hostnames and fixture API tokens.
+  Selecting one contacted only that endpoint. Native config-read failure cleared
+  stale selected rows without losing another context's inventory/review;
+  successful empty discovery reported zero and later recovery restored rows.
+  An explicitly tested unavailable sibling received no inventory read. All
+  Proxmox requests were GET; zero durable operations or saved tracking records.
+  No live homelab mutation or hardware acceptance.
+
+### Configurable guided VM sizing (2026-11-27)
+
+- [x] New Jellyfin VMs expose CPU cores, memory in MiB and OS disk in GiB,
+  retaining 4 / 4096 / 32 defaults. Invalid whole-number sizes stop preparation
+  before preview or request admission. Existing guests are not resized.
+- [x] Custom sizes survive the create-only VM declaration, saved review, explicit
+  recovery and individual/staged manifest downloads. GPU/UEFI and guest setup
+  remain intact. Capacity and template-disk requirements are explicit;
+  preview is not a reservation or physical-capacity guarantee.
+- Verification: 138 builder, review, export and wizard tests passed, with zero
+  frontend typecheck errors/warnings and a successful production build.
+  The actual console prepared a 6-core / 12288-MiB / 80-GiB VM against an isolated
+  native controller/provider with a simulated verified-TLS Proxmox endpoint.
+  Both HTTP preview requests retained those exact values. Reload retained the
+  saved declaration, reset consent and disabled Apply. The downloaded ZIP's VM
+  matched the individual YAML, which native CLI preview accepted for creation.
+  All Proxmox requests were GET; zero durable operations or saved tracking
+  records. No live provisioning, resizing or hardware/capacity acceptance.
+
+### Reliable guest address selection (2026-11-27)
+
+- [x] Guest-agent IPv4 selection matches authoritative Proxmox NIC MACs,
+  excluding unrelated Docker/virtual interfaces and unusable addresses.
+  Multiple distinct matching IPv4 addresses fail closed instead of depending
+  on interface order; missing evidence leaves `status.ip` absent.
+- [x] Native and legacy observation reuse the already-read VM configuration.
+  Address waiting and plugin SSH access use the same selection contract.
+  Multi-address application hosts require an explicit declaration and fresh
+  reachability/SSH-trust verification; no automatic network repair occurs.
+- Verification: reproduced the native provider returning Docker's `172.17.0.1`
+  before the fix. Affected client, handler and native provider packages passed,
+  including 18 selection cases and native/legacy consumer regressions; the
+  separate plugin compute package compiled. Actual authenticated CLI Get against
+  an isolated native TLS controller/provider selected `10.0.0.8` despite Docker
+  being reported first, omitted IP under ambiguity, and recovered on a fresh read.
+  All 12 Proxmox requests were GET; zero durable operations or saved tracking
+  records. Simulated guest-agent responses only; no live guest/SSH acceptance.
+
+### Actionable VM address diagnostics (2026-11-27)
+
+- [x] Fresh native/legacy named VM reads expose `status.ipObservation` with
+  available/unavailable state, stable reason code and static safe repair guidance.
+  Stopped VMs, unavailable NIC evidence, agent read/decode failures, no usable IP
+  and ambiguity are distinguishable without exposing upstream bodies or causes.
+  Missing addresses remain absent; List adds no agent probes or observation claims.
+- [x] VM details render address blockers and explicit reachability/SSH/service
+  caveats. Missing, malformed, unfamiliar and stale evidence stays unknown.
+  Observation failure, navigation and sign-out invalidate old address authority;
+  recovery requires a fresh Get, never automatic network repair.
+- Verification: affected Go client/resources/handler/native provider packages
+  passed; the separate plugin compute package compiled. All 52 detail tests,
+  warning-free frontend typecheck and production build passed. The actual
+  authenticated console and CLI used an isolated SQLite/TLS controller/native
+  provider and simulated verified-TLS Proxmox guest-agent responses. Ambiguity
+  and a poisoned agent failure produced distinct safe guidance; provider outage
+  cleared stale evidence and a fresh unique-address read restored only address
+  evidence. All Proxmox requests were GET; no Apply/Delete/runtime request or
+  durable operation, and the single seeded fixture intent count was unchanged.
+  No live guest networking, SSH or playback acceptance.
+
+### Guided VM address prerequisite recovery (2026-11-27)
+
+- [x] Jellyfin application reviews and final submissions inspect only their
+  referenced VM `status.ip` dependency and require current address evidence,
+  sharing the same conservative interpretation as VM details. Already-verified
+  prerequisite observations are reused rather than reread.
+- [x] Address blockers identify and link to the selected VM, preserve safe
+  diagnostics transiently, and recheck with a fresh preview and renewed consent.
+  No request identity or Apply is admitted while blocked; accepted VM work is
+  never retried. Read-only recovery of accepted applications remains available,
+  and literal host declarations do not trigger unrelated VM reads.
+- Verification: 94 review-engine and 52 detail tests passed; 27 wizard cases
+  passed initially and the corrected pending-state assertion passed its targeted
+  rerun. Frontend typecheck reported zero errors/warnings; production build passed.
+  The actual console used an isolated SQLite/TLS controller, active dispatcher,
+  native application/Proxmox providers and simulated verified-TLS guest-agent
+  responses. It prepared an existing-guest review, inspected the linked VM,
+  resumed unchanged intent, rechecked repaired address evidence through native
+  application preview with consent reset, and blocked final admission after
+  address loss. All Proxmox requests were GET; zero operations/provider state,
+  with one unchanged seeded VM tracking record. No live guest or SSH mutation.
+
+### Structured reference inspection (2026-11-27)
+
+- [x] Known reference preview failures carry an optional complete declared
+  resource triple and requested output, without provider observations or causes.
+  Malformed, incomplete, untyped and unknown failure kinds remain fail-closed;
+  old diagnostics and clients retain their existing path/code/message behavior.
+- [x] Editor, template and guided preview diagnostics share inspection links,
+  preserving field highlighting, deduplication and blocked Apply. Inspection
+  opens in a separate no-opener tab to retain unsaved drafts. CLI tables and JSON
+  expose the same declared target/output; invalid previews still exit nonzero.
+- Verification: targeted Go server/reference and CLI preview checks passed;
+  generated API bindings compiled. All 105 focused frontend tests, clean
+  typecheck and production build passed, followed by a targeted draft-preserving
+  link check/build. Actual native CLI table/JSON previews, disk-loaded CUE
+  template and Monaco editor used an isolated SQLite/TLS controller and native
+  application/Proxmox providers with simulated verified-TLS Proxmox responses.
+  Missing output identified the exact VM; its link inspected that VM, parameter
+  repair cleared old diagnostics, and new-tab inspection retained a nondefault
+  unsaved draft with no opener access. All Proxmox requests were GET; zero
+  operations/provider state and one unchanged seeded VM tracking count.
+  No live infrastructure or SSH mutation.
+
+The next product acceptance gate is the complete operator journey on real
+hardware, including recovery, media playback and any approved public endpoint.
+See [direction](docs/direction.md). Provider breadth is downstream of that gate.
 
 **Proxmox VM observation correction (2026-10-08):** Get/List now decode numeric
 configuration strings and observe native managed settings instead of partial
@@ -282,7 +863,7 @@ these are the corners where drift would start if it starts anywhere.
       helper). Switch the operative create onto the Plan path (the long-intended
       unification) so there's one source of VM shape. **Known unpaid debt.**
 
-- [~] **K2 — One GitOps source-of-truth model.** git-as-source (B1–B3) was
+- [x] **K2 — One GitOps source-of-truth model.** git-as-source (B1–B3) was
       layered on top of git-as-sink (disk mirror + push), leaving overlapping
       machinery — disk mirror, push, pull, watcher, prune, drift reconciler,
       webhook — with subtle interactions (startup reconcile *re-materializes*
@@ -299,11 +880,11 @@ these are the corners where drift would start if it starts anywhere.
         mirror|gitops` config + contradictory-combo rejection, back-compat
         (default `mirror`), a per-component code-reconciliation checklist, and a
         test plan. The two known conflicts are resolved by the invariants.
-      - [ ] **Code reconciliation.** Implement the doc's checklist (add
-        `Manifests.Mode` + validation; branch the main.go wiring; gate
-        startup-revive + auto-commit to mirror mode; construct pull/prune/webhook
-        only in gitops mode). Best paired with real homelab validation of both
-        modes. Uses K3's `source=git` (shipped).
+      - [x] **Code reconciliation.** Explicit validated mode, upstream remote,
+        startup-mode branching, no gitops output commits/revival, mirror-only
+        push and gitops-only pull, and repo-authority mutation guards. Real-git
+        regression tests exercise pull/prune/restart without reviving files or
+        creating commits that block fast-forward pulls.
 
 - [x] **K3 — Make provenance explicit.** `applied_manifests` now carries a
       first-class `source` column (migration 0011). The dispatcher already
@@ -1505,6 +2086,15 @@ phase plan when ready to commit.
 ---
 
 ## Recently completed (housekeeping)
+
+- fix: **control-plane integration cleanup** — recovery reports temporary-directory
+  cleanup failures and preserves wrapped restore errors; SSH observation recognizes
+  wrapped exit errors. Overview reads use fixed SQL predicates and avoid copying
+  operation records. Import grouping and Go analysis findings are resolved.
+- fix: **deadline and installation correctness** — operation waits distinguish
+  local wait expiry from parent-context deadlines even when gRPC observes expiry
+  before the context timer fires. Atomic binary installation applies the requested
+  permissions despite restrictive umasks or leftover staging files.
 
 When phases or followups land, move them up out of "pending" into their
 detail doc's marked-complete section, then leave a one-line entry here

@@ -310,6 +310,11 @@ func copyFile(src, dst string, mode os.FileMode) error {
 		_ = os.Remove(tmp)
 		return err
 	}
+	if err := out.Chmod(mode); err != nil {
+		_ = out.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
 	if err := out.Close(); err != nil {
 		_ = os.Remove(tmp)
 		return err

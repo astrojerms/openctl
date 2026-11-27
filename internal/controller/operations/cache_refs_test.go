@@ -122,7 +122,7 @@ func TestRefsHashCacheHitWhenTargetUnchanged(t *testing.T) {
 		name:     "consumer",
 		kinds:    []string{"Consumer"},
 		applyOut: &protocol.Resource{APIVersion: "consumer.openctl.io/v1", Kind: "Consumer", Metadata: protocol.ResourceMetadata{Name: "c"}, Status: map[string]any{"applied": true}},
-		getOut:   &protocol.Resource{APIVersion: "consumer.openctl.io/v1", Kind: "Consumer", Metadata: protocol.ResourceMetadata{Name: "c"}, Status: map[string]any{"applied": true}},
+		getOut:   &protocol.Resource{APIVersion: "consumer.openctl.io/v1", Kind: "Consumer", Metadata: protocol.ResourceMetadata{Name: "c"}, Spec: map[string]any{"ipRef": "10.0.0.1"}, Status: map[string]any{"applied": true}},
 	}
 	target := newRefTargetProvider("target", "Target", "10.0.0.1")
 	store, d := newDispatcherWithTwoProviders(t, consumer, target)

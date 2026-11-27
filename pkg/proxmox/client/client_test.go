@@ -17,7 +17,10 @@ func mockServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 }
 
 func TestNew(t *testing.T) {
-	c := New("https://pve.example.com:8006", "root@pam!token", "secret")
+	c, err := New("https://pve.example.com:8006", "root@pam!token", "secret", TLSOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if c.endpoint != "https://pve.example.com:8006" {
 		t.Errorf("expected endpoint without trailing slash, got %s", c.endpoint)
@@ -31,7 +34,10 @@ func TestNew(t *testing.T) {
 }
 
 func TestNew_TrimsTrailingSlash(t *testing.T) {
-	c := New("https://pve.example.com:8006/", "token", "secret")
+	c, err := New("https://pve.example.com:8006/", "token", "secret", TLSOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if c.endpoint != "https://pve.example.com:8006" {
 		t.Errorf("expected trailing slash to be trimmed, got %s", c.endpoint)
@@ -68,8 +74,7 @@ func TestListVMs(t *testing.T) {
 	})
 	defer server.Close()
 
-	c := New(server.URL, "test", "test")
-	c.httpClient = server.Client()
+	c := trustedTestClient(t, server, "test", "test")
 
 	vms, err := c.ListVMs(context.Background())
 	if err != nil {
@@ -116,8 +121,7 @@ func TestGetVM(t *testing.T) {
 	})
 	defer server.Close()
 
-	c := New(server.URL, "test", "test")
-	c.httpClient = server.Client()
+	c := trustedTestClient(t, server, "test", "test")
 
 	vm, err := c.GetVM(context.Background(), "test-vm")
 	if err != nil {
@@ -147,8 +151,7 @@ func TestGetVM_NotFound(t *testing.T) {
 	})
 	defer server.Close()
 
-	c := New(server.URL, "test", "test")
-	c.httpClient = server.Client()
+	c := trustedTestClient(t, server, "test", "test")
 
 	_, err := c.GetVM(context.Background(), "nonexistent")
 	if err == nil {
@@ -174,8 +177,7 @@ func TestGetVM_NotFoundSentinel(t *testing.T) {
 	})
 	defer server.Close()
 
-	c := New(server.URL, "test", "test")
-	c.httpClient = server.Client()
+	c := trustedTestClient(t, server, "test", "test")
 
 	_, err := c.GetVM(context.Background(), "nonexistent")
 	if err == nil {
@@ -197,8 +199,7 @@ func TestGetVM_TransientErrorNotSentinel(t *testing.T) {
 	})
 	defer server.Close()
 
-	c := New(server.URL, "test", "test")
-	c.httpClient = server.Client()
+	c := trustedTestClient(t, server, "test", "test")
 
 	_, err := c.GetVM(context.Background(), "test-vm")
 	if err == nil {
@@ -218,8 +219,7 @@ func TestContextCancellation(t *testing.T) {
 	})
 	defer server.Close()
 
-	c := New(server.URL, "test", "test")
-	c.httpClient = server.Client()
+	c := trustedTestClient(t, server, "test", "test")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // already canceled before the call
@@ -248,8 +248,7 @@ func TestGetVMConfig(t *testing.T) {
 	})
 	defer server.Close()
 
-	c := New(server.URL, "test", "test")
-	c.httpClient = server.Client()
+	c := trustedTestClient(t, server, "test", "test")
 
 	config, err := c.GetVMConfig(context.Background(), "pve1", 100)
 	if err != nil {
@@ -283,8 +282,7 @@ func TestGetVMConfigNumericCompatibility(t *testing.T) {
 				_, _ = w.Write([]byte(`{"data":{` + numbers + `,"name":"dev-system","scsi1":"local-lvm:vm-101-disk-1,size=300G","net2":"virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0","ipconfig2":"ip=dhcp","hostpci3":"0000:01:00.0","agent":"1"}}`))
 			})
 			defer server.Close()
-			c := New(server.URL, "test", "test")
-			c.httpClient = server.Client()
+			c := trustedTestClient(t, server, "test", "test")
 			config, err := c.GetVMConfig(context.Background(), "pve1", 101)
 			if err != nil {
 				t.Fatalf("GetVMConfig: %v", err)
@@ -330,8 +328,7 @@ func TestGetVMConfigRejectsInvalidNumbers(t *testing.T) {
 					_, _ = w.Write([]byte(`{"data":{"` + field + `":` + value + `}}`))
 				})
 				defer server.Close()
-				c := New(server.URL, "test", "test")
-				c.httpClient = server.Client()
+				c := trustedTestClient(t, server, "test", "test")
 				config, err := c.GetVMConfig(context.Background(), "pve1", 101)
 				if err == nil || config != nil {
 					t.Fatalf("expected decoding failure, got config=%+v, err=%v", config, err)
@@ -351,8 +348,7 @@ func TestGetVMConfigRejectsMissingData(t *testing.T) {
 				_, _ = w.Write([]byte(response))
 			})
 			defer server.Close()
-			c := New(server.URL, "test", "test")
-			c.httpClient = server.Client()
+			c := trustedTestClient(t, server, "test", "test")
 			if config, err := c.GetVMConfig(context.Background(), "pve1", 101); err == nil || config != nil {
 				t.Fatalf("expected failure, got config=%+v, err=%v", config, err)
 			}
@@ -379,8 +375,7 @@ func TestListTemplates(t *testing.T) {
 	})
 	defer server.Close()
 
-	c := New(server.URL, "test", "test")
-	c.httpClient = server.Client()
+	c := trustedTestClient(t, server, "test", "test")
 
 	templates, err := c.ListTemplates(context.Background())
 	if err != nil {
@@ -416,8 +411,7 @@ func TestGetTemplate(t *testing.T) {
 	})
 	defer server.Close()
 
-	c := New(server.URL, "test", "test")
-	c.httpClient = server.Client()
+	c := trustedTestClient(t, server, "test", "test")
 
 	tmpl, err := c.GetTemplate(context.Background(), "ubuntu-22.04")
 	if err != nil {
@@ -447,8 +441,7 @@ func TestGetTemplate_NotFound(t *testing.T) {
 	})
 	defer server.Close()
 
-	c := New(server.URL, "test", "test")
-	c.httpClient = server.Client()
+	c := trustedTestClient(t, server, "test", "test")
 
 	_, err := c.GetTemplate(context.Background(), "nonexistent")
 	if err == nil {
@@ -473,8 +466,7 @@ func TestCloneVM(t *testing.T) {
 	})
 	defer server.Close()
 
-	c := New(server.URL, "test", "test")
-	c.httpClient = server.Client()
+	c := trustedTestClient(t, server, "test", "test")
 
 	vmid, upid, err := c.CloneVM(context.Background(), "pve1", 9000, "new-vm", nil)
 	if err != nil {
@@ -505,8 +497,7 @@ func TestConfigureVM(t *testing.T) {
 	})
 	defer server.Close()
 
-	c := New(server.URL, "test", "test")
-	c.httpClient = server.Client()
+	c := trustedTestClient(t, server, "test", "test")
 
 	params := map[string]any{
 		"cores":  4,
@@ -535,8 +526,7 @@ func TestStartVM(t *testing.T) {
 	})
 	defer server.Close()
 
-	c := New(server.URL, "test", "test")
-	c.httpClient = server.Client()
+	c := trustedTestClient(t, server, "test", "test")
 
 	upid, err := c.StartVM(context.Background(), "pve1", 100)
 	if err != nil {
@@ -558,8 +548,7 @@ func TestStopVM(t *testing.T) {
 	})
 	defer server.Close()
 
-	c := New(server.URL, "test", "test")
-	c.httpClient = server.Client()
+	c := trustedTestClient(t, server, "test", "test")
 
 	upid, err := c.StopVM(context.Background(), "pve1", 100)
 	if err != nil {
@@ -581,8 +570,7 @@ func TestDeleteVM(t *testing.T) {
 	})
 	defer server.Close()
 
-	c := New(server.URL, "test", "test")
-	c.httpClient = server.Client()
+	c := trustedTestClient(t, server, "test", "test")
 
 	err := c.DeleteVM(context.Background(), "pve1", 100)
 	if err != nil {
@@ -612,8 +600,7 @@ func TestDeleteVM_WaitsForDestroyTask(t *testing.T) {
 	})
 	defer server.Close()
 
-	c := New(server.URL, "test", "test")
-	c.httpClient = server.Client()
+	c := trustedTestClient(t, server, "test", "test")
 
 	if err := c.DeleteVM(context.Background(), "pve1", 100); err != nil {
 		t.Fatalf("DeleteVM failed: %v", err)
@@ -639,8 +626,7 @@ func TestResizeVMDisk(t *testing.T) {
 	})
 	defer server.Close()
 
-	c := New(server.URL, "test", "test")
-	c.httpClient = server.Client()
+	c := trustedTestClient(t, server, "test", "test")
 
 	err := c.ResizeVMDisk(context.Background(), "pve1", 100, "scsi0", "50G")
 	if err != nil {
@@ -718,8 +704,7 @@ func TestSetDiskOptions(t *testing.T) {
 	})
 	defer server.Close()
 
-	c := New(server.URL, "test", "test")
-	c.httpClient = server.Client()
+	c := trustedTestClient(t, server, "test", "test")
 
 	err := c.SetDiskOptions(context.Background(), "pve1", 100, "scsi0", map[string]string{"ssd": "1", "discard": "on"})
 	if err != nil {
@@ -739,8 +724,7 @@ func TestSetDiskOptions_NoOp(t *testing.T) {
 		called = true
 	})
 	defer server.Close()
-	c := New(server.URL, "test", "test")
-	c.httpClient = server.Client()
+	c := trustedTestClient(t, server, "test", "test")
 	if err := c.SetDiskOptions(context.Background(), "pve1", 100, "scsi0", nil); err != nil {
 		t.Fatalf("SetDiskOptions nil opts: %v", err)
 	}
@@ -763,8 +747,7 @@ func TestGetStorageInfo(t *testing.T) {
 	})
 	defer server.Close()
 
-	c := New(server.URL, "test", "test")
-	c.httpClient = server.Client()
+	c := trustedTestClient(t, server, "test", "test")
 
 	info, err := c.GetStorageInfo(context.Background(), "local-lvm")
 	if err != nil {
@@ -789,15 +772,15 @@ func TestAPIError(t *testing.T) {
 	})
 	defer server.Close()
 
-	c := New(server.URL, "bad-token", "bad-secret")
-	c.httpClient = server.Client()
+	c := trustedTestClient(t, server, "bad-token", "bad-secret")
 
 	_, err := c.ListVMs(context.Background())
 	if err == nil {
 		t.Fatal("expected error for unauthorized request")
 	}
-	if !strings.Contains(err.Error(), "401") {
-		t.Errorf("expected 401 error, got: %v", err)
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.HTTPStatusCode() != http.StatusUnauthorized {
+		t.Fatalf("unauthorized response lost its typed HTTP status: %v", err)
 	}
 }
 
@@ -811,8 +794,7 @@ func TestAuthorizationHeader(t *testing.T) {
 	})
 	defer server.Close()
 
-	c := New(server.URL, "root@pam!mytoken", "supersecret")
-	c.httpClient = server.Client()
+	c := trustedTestClient(t, server, "root@pam!mytoken", "supersecret")
 
 	c.ListVMs(context.Background())
 
@@ -832,8 +814,7 @@ func TestConvertToTemplate(t *testing.T) {
 	})
 	defer server.Close()
 
-	c := New(server.URL, "test", "test")
-	c.httpClient = server.Client()
+	c := trustedTestClient(t, server, "test", "test")
 
 	err := c.ConvertToTemplate(context.Background(), "pve1", 100)
 	if err != nil {
@@ -861,8 +842,7 @@ func TestAddCloudInitDrive(t *testing.T) {
 	})
 	defer server.Close()
 
-	c := New(server.URL, "test", "test")
-	c.httpClient = server.Client()
+	c := trustedTestClient(t, server, "test", "test")
 
 	err := c.AddCloudInitDrive(context.Background(), "pve1", 100, "local-lvm")
 	if err != nil {

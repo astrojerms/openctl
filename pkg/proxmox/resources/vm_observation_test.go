@@ -14,7 +14,7 @@ func observedConfig(t *testing.T, raw string) map[string]any {
 	if err := json.Unmarshal([]byte(raw), &config); err != nil {
 		t.Fatal(err)
 	}
-	return VMToResourceWithIP(&client.VM{Name: "dev-system", Node: "pve", CPUs: 99, MaxMem: 1}, &config, "192.0.2.1").Spec
+	return VMToResource(&client.VM{Name: "dev-system", Node: "pve", CPUs: 99, MaxMem: 1}, &config).Spec
 }
 
 func TestNativeVMConfigurationComparesWithoutCreationDrift(t *testing.T) {

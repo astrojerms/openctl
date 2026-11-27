@@ -24,14 +24,17 @@ export interface ManifestLike {
 }
 
 // resourceToYAML serialises a Resource (or partial manifest) into the
-// canonical YAML shape, omitting fields the editor shouldn't edit
-// (status is observed-only; drift is a derived computation).
+// canonical desired YAML shape. Status, drift and controller-owned ownership
+// references are observation, not editable intent.
 export function resourceToYAML(r: Resource | ManifestLike): string {
   const out: ManifestLike = {
     apiVersion: r.apiVersion,
     kind: r.kind,
   };
-  if (r.metadata) out.metadata = r.metadata as Record<string, unknown>;
+  if (r.metadata) {
+    out.metadata = { ...r.metadata };
+    delete out.metadata.ownerRefs;
+  }
   if (r.spec !== undefined) out.spec = r.spec;
   return YAML.stringify(out, STRINGIFY_OPTS);
 }

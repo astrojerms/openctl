@@ -4,12 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -19,6 +21,7 @@ import (
 	"github.com/openctl/openctl/internal/controller/auth"
 	"github.com/openctl/openctl/internal/controller/manifests"
 	"github.com/openctl/openctl/internal/controller/operations"
+	"github.com/openctl/openctl/internal/controller/provideridentity"
 	"github.com/openctl/openctl/internal/controller/providers"
 	pmprovider "github.com/openctl/openctl/internal/controller/providers/proxmox"
 	"github.com/openctl/openctl/internal/controller/storage"
@@ -49,6 +52,15 @@ func migrationFixture(t *testing.T, reg *providers.Registry) (*resourceHandler, 
 	h := newResourceHandler(reg, nil, nil, store)
 	h.mirror = manifests.NewDiskMirror(store, t.TempDir())
 	return h, db, operations.New(db, 50)
+}
+
+func proxmoxFixtureCA(t *testing.T, srv *httptest.Server) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "proxmox-ca.pem")
+	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 // Real Proxmox decoding and real SQLite are used here: forwarding-only mocks
@@ -82,9 +94,13 @@ func TestMigrationExportAdoptForgetPreservesLiveVM(t *testing.T) {
 	defer pve.Close()
 	registry := func(contextName string) *providers.Registry {
 		reg := providers.NewRegistry()
-		reg.Register(pmprovider.NewMulti(map[string]*pmprovider.Config{
-			contextName: {Endpoint: pve.URL, TokenID: "test", TokenSecret: "test"},
-		}, contextName))
+		provider, err := pmprovider.NewMulti(map[string]*pmprovider.Config{
+			contextName: {Endpoint: pve.URL, CAFile: proxmoxFixtureCA(t, pve), TokenID: "test", TokenSecret: "test"},
+		}, contextName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reg.Register(provider)
 		return reg
 	}
 	source, _, _ := migrationFixture(t, registry("source"))
@@ -128,6 +144,7 @@ func TestMigrationExportAdoptForgetPreservesLiveVM(t *testing.T) {
 	if !proto.Equal(bundle, original) {
 		t.Fatal("destination context override mutated the original source bundle")
 	}
+	request.ExpectedIdentity = bundle.GetIdentity()
 	if _, err := destination.AdoptResource(ctx, request); err != nil {
 		t.Fatalf("identical adoption retry: %v", err)
 	}
@@ -141,7 +158,7 @@ func TestMigrationExportAdoptForgetPreservesLiveVM(t *testing.T) {
 	}
 	conflicting := proto.Clone(bundle.GetResource()).(*apiv1.Resource)
 	conflicting.Metadata.Annotations["example.io/note"] = "different destination intent"
-	if _, err := destination.AdoptResource(ctx, &apiv1.AdoptResourceRequest{Resource: conflicting, ProviderContext: "destination"}); status.Code(err) != codes.FailedPrecondition {
+	if _, err := destination.AdoptResource(ctx, &apiv1.AdoptResourceRequest{Resource: conflicting, ProviderContext: "destination", ExpectedIdentity: bundle.GetIdentity()}); status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("different existing intent was replaced: %v", err)
 	}
 	foreign := proto.Clone(bundle).(*apiv1.MigrationBundle)
@@ -184,7 +201,7 @@ func TestMigrationExportAdoptForgetPreservesLiveVM(t *testing.T) {
 		t.Fatalf("forgotten runtime action allowed: %v", err)
 	}
 	// Explicit ordinary-manifest adoption reclaims management without Apply.
-	if _, err := source.AdoptResource(ctx, &apiv1.AdoptResourceRequest{Resource: wire}); err != nil {
+	if _, err := source.AdoptResource(ctx, &apiv1.AdoptResourceRequest{Resource: wire, ExpectedIdentity: bundle.GetIdentity()}); err != nil {
 		t.Fatalf("explicit manifest adoption: %v", err)
 	}
 	if released, err := source.manifests.IsForgotten(ctx, desired.APIVersion, desired.Kind, desired.Metadata.Name); err != nil || released {
@@ -192,6 +209,133 @@ func TestMigrationExportAdoptForgetPreservesLiveVM(t *testing.T) {
 	}
 	if mutations != 0 {
 		t.Fatalf("provider mutations = %d", mutations)
+	}
+}
+
+func TestMigrationPlainAdoptionBindsReviewedIdentity(t *testing.T) {
+	ctx := context.Background()
+	var uuid atomic.Value
+	uuid.Store("8e0da4e0-01ef-441e-a64a-75db8614a535")
+	var reads, mutations atomic.Int64
+	pve := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodGet {
+			mutations.Add(1)
+			http.Error(w, "read-only VM", http.StatusMethodNotAllowed)
+			return
+		}
+		reads.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		switch req.URL.Path {
+		case "/api2/json/nodes":
+			_, _ = w.Write([]byte(`{"data":[{"node":"pve1"}]}`))
+		case "/api2/json/nodes/pve1/qemu":
+			_, _ = w.Write([]byte(`{"data":[{"name":"existing","vmid":101,"status":"stopped"}]}`))
+		case "/api2/json/nodes/pve1/qemu/101/config":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+				"smbios1": "uuid=" + uuid.Load().(string), "cores": 2, "sockets": 1, "memory": "2048", "name": "existing",
+			}})
+		default:
+			t.Errorf("unexpected provider read: %s", req.URL.Path)
+			http.NotFound(w, req)
+		}
+	}))
+	defer pve.Close()
+	p, err := pmprovider.NewMulti(map[string]*pmprovider.Config{
+		"source": {Endpoint: pve.URL, CAFile: proxmoxFixtureCA(t, pve), TokenID: "test", TokenSecret: "test"},
+	}, "source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := providers.NewRegistry()
+	reg.Register(p)
+	h, db, _ := migrationFixture(t, reg)
+	db.SetMaxOpenConns(1)
+	identities := provideridentity.New(db)
+	p.SetIdentityStore(identities)
+	discovered, err := p.Discover(ctx, "source")
+	if err != nil || len(discovered) != 1 || discovered[0].Identity == "" {
+		t.Fatalf("discover reviewable VM: %v", err)
+	}
+	reviewed := discovered[0].Identity
+	desired := migrationVM()
+	wire, err := resourceToProto(desired)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var initialChanges int64
+	if err := db.QueryRowContext(ctx, "SELECT total_changes()").Scan(&initialChanges); err != nil {
+		t.Fatal(err)
+	}
+	assertUntracked := func() {
+		t.Helper()
+		if saved, err := h.manifests.Load(ctx, desired.APIVersion, desired.Kind, desired.Metadata.Name); err != nil || saved != nil {
+			t.Fatalf("rejected adoption recorded desired tracking: %v", err)
+		}
+		if binding, err := identities.LoadIdentity(ctx, desired.Metadata.Name); err != nil || binding != nil {
+			t.Fatalf("rejected adoption bound identity: %v", err)
+		}
+		entries, err := os.ReadDir(h.mirror.Root())
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("rejected adoption wrote disk projection: %v", err)
+		}
+		var changes int64
+		if err := db.QueryRowContext(ctx, "SELECT total_changes()").Scan(&changes); err != nil || changes != initialChanges {
+			t.Fatalf("rejected adoption changed durable state: changes=%d, initial=%d, err=%v", changes, initialChanges, err)
+		}
+		if mutations.Load() != 0 {
+			t.Fatalf("adoption mutated provider: %d", mutations.Load())
+		}
+	}
+	for _, expected := range []string{"", " \t\n"} {
+		before := reads.Load()
+		if _, err := h.AdoptResource(ctx, &apiv1.AdoptResourceRequest{Resource: wire, ExpectedIdentity: expected}); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("missing reviewed identity: %v", err)
+		}
+		if reads.Load() != before {
+			t.Fatal("missing reviewed identity reached provider")
+		}
+		assertUntracked()
+	}
+	digest, err := manifests.MigrationDigest(desired)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := &apiv1.MigrationBundle{Version: 1, Resource: wire, ControllerId: "source", ManifestDigest: digest, Identity: reviewed}
+	before := reads.Load()
+	if _, err := h.AdoptResource(ctx, &apiv1.AdoptResourceRequest{Bundle: bundle, ExpectedIdentity: reviewed + " "}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("contradictory bundle identity: %v", err)
+	}
+	if reads.Load() != before {
+		t.Fatal("contradictory bundle identity reached provider")
+	}
+	assertUntracked()
+	// Same name, node and VMID, but a replacement instance after operator review.
+	uuid.Store("58bc2d47-5923-4a79-9d24-aa8f53a0ca7f")
+	for _, expected := range []string{reviewed, " " + reviewed} {
+		if _, err := h.AdoptResource(ctx, &apiv1.AdoptResourceRequest{Resource: wire, ExpectedIdentity: expected}); status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("replacement or normalized identity was admitted: %v", err)
+		}
+		assertUntracked()
+	}
+	refreshed, err := p.Discover(ctx, "source")
+	if err != nil || len(refreshed) != 1 || refreshed[0].Identity == reviewed || refreshed[0].Identity == "" {
+		t.Fatalf("rediscover replacement: %v", err)
+	}
+	if _, err := h.AdoptResource(ctx, &apiv1.AdoptResourceRequest{Resource: wire, ExpectedIdentity: refreshed[0].Identity}); err != nil {
+		t.Fatalf("adopt explicitly reviewed replacement: %v", err)
+	}
+	if binding, err := identities.LoadIdentity(ctx, desired.Metadata.Name); err != nil || binding == nil || binding.Identity != refreshed[0].Identity {
+		t.Fatalf("replacement identity not bound: %v", err)
+	}
+	if saved, err := h.manifests.Load(ctx, desired.APIVersion, desired.Kind, desired.Metadata.Name); err != nil || saved == nil {
+		t.Fatalf("reviewed replacement not tracked: %v", err)
+	}
+	projection := filepath.Join(h.mirror.Root(), h.mirror.RelPathFor(desired.APIVersion, desired.Kind, desired.Metadata.Name))
+	if _, err := os.Stat(projection); err != nil {
+		t.Fatalf("reviewed replacement not materialized: %v", err)
+	}
+	if mutations.Load() != 0 {
+		t.Fatalf("adoption mutated provider: %d", mutations.Load())
 	}
 }
 
@@ -262,7 +406,11 @@ func TestMigrationMalformedAndUnsafeRequests(t *testing.T) {
 		{"both inputs", &apiv1.AdoptResourceRequest{Resource: wire, Bundle: bundle}, codes.InvalidArgument},
 		{"unknown bundle version", &apiv1.AdoptResourceRequest{Bundle: &apiv1.MigrationBundle{Version: 2}}, codes.InvalidArgument},
 		{"tampered digest", &apiv1.AdoptResourceRequest{Bundle: &apiv1.MigrationBundle{Version: 1, Resource: wire, ControllerId: "source", ManifestDigest: strings.Repeat("0", 64), Identity: "identity"}}, codes.InvalidArgument},
-		{"unconfigured provider", &apiv1.AdoptResourceRequest{Resource: wire}, codes.FailedPrecondition},
+		{"missing reviewed identity", &apiv1.AdoptResourceRequest{Resource: wire}, codes.InvalidArgument},
+		{"whitespace reviewed identity", &apiv1.AdoptResourceRequest{Resource: wire, ExpectedIdentity: " \t\n"}, codes.InvalidArgument},
+		{"contradictory bundle identity", &apiv1.AdoptResourceRequest{Bundle: bundle, ExpectedIdentity: "different"}, codes.InvalidArgument},
+		{"whitespace bundle identity override", &apiv1.AdoptResourceRequest{Bundle: bundle, ExpectedIdentity: " "}, codes.InvalidArgument},
+		{"unconfigured provider", &apiv1.AdoptResourceRequest{Resource: wire, ExpectedIdentity: "identity"}, codes.FailedPrecondition},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := h.AdoptResource(ctx, tc.request); status.Code(err) != tc.code {
@@ -277,7 +425,7 @@ func TestMigrationMalformedAndUnsafeRequests(t *testing.T) {
 	} {
 		unsafe := proto.Clone(wire).(*apiv1.Resource)
 		mutate(unsafe)
-		if _, err := h.AdoptResource(ctx, &apiv1.AdoptResourceRequest{Resource: unsafe}); status.Code(err) != codes.FailedPrecondition {
+		if _, err := h.AdoptResource(ctx, &apiv1.AdoptResourceRequest{Resource: unsafe, ExpectedIdentity: "identity"}); status.Code(err) != codes.FailedPrecondition {
 			t.Fatalf("unsafe resource not refused: %v", err)
 		}
 	}
@@ -293,7 +441,7 @@ func TestMigrationMalformedAndUnsafeRequests(t *testing.T) {
 }
 
 func TestMigrationRESTRoutesReachRegisteredHandlers(t *testing.T) {
-	base, token := startGatewayTestServer(t)
+	base, token, _ := startGatewayTestServer(t)
 	for _, route := range []string{"export", "adopt", "forget"} {
 		req, err := http.NewRequest(http.MethodPost, base+"/v1/resources:"+route, strings.NewReader(`{}`))
 		if err != nil {
@@ -361,7 +509,7 @@ func TestMigrationRejectsProviderOwnershipAndMissingCapability(t *testing.T) {
 				desired.Metadata.Labels = map[string]string{providers.LabelOwnerKind: "Cluster", providers.LabelOwnerName: "owner"}
 			}
 			wire, _ := resourceToProto(desired)
-			if _, err := h.AdoptResource(context.Background(), &apiv1.AdoptResourceRequest{Resource: wire}); status.Code(err) != codes.FailedPrecondition {
+			if _, err := h.AdoptResource(context.Background(), &apiv1.AdoptResourceRequest{Resource: wire, ExpectedIdentity: "identity"}); status.Code(err) != codes.FailedPrecondition {
 				t.Fatalf("unsafe provider migration: %v", err)
 			}
 			if p, ok := tc.provider.(*migrationOwnedProvider); ok && p.identityReads != 0 {

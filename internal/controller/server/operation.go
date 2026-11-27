@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/openctl/openctl/internal/controller/auth"
 	"github.com/openctl/openctl/internal/controller/operations"
 	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 	"github.com/openctl/openctl/pkg/protocol"
@@ -38,6 +39,9 @@ func newOperationHandler(store *operations.Store, canceler runningCanceler) *ope
 }
 
 func (h *operationHandler) GetOperation(ctx context.Context, req *apiv1.GetOperationRequest) (*apiv1.Operation, error) {
+	if err := authorize(ctx, auth.RoleViewer); err != nil {
+		return nil, err
+	}
 	if req.GetId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "id is required")
 	}
@@ -48,15 +52,42 @@ func (h *operationHandler) GetOperation(ctx context.Context, req *apiv1.GetOpera
 		}
 		return nil, status.Errorf(codes.Internal, "get: %v", err)
 	}
+	return h.operationResponse(ctx, op, req.GetIncludeChildren())
+}
+
+func (h *operationHandler) GetOperationByRequest(ctx context.Context, req *apiv1.GetOperationByRequestRequest) (*apiv1.Operation, error) {
+	if err := authorize(ctx, auth.RoleViewer); err != nil {
+		return nil, err
+	}
+	if req.GetRequestId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "request_id is required")
+	}
+	if err := operations.ValidateRequestID(req.GetRequestId()); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	op, err := h.store.GetByRequest(ctx, req.GetRequestId())
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, status.Error(codes.NotFound, "request_id has no accepted operation")
+		}
+		var pruned *operations.RequestPrunedError
+		if errors.As(err, &pruned) {
+			return nil, status.Error(codes.FailedPrecondition, pruned.Error())
+		}
+		return nil, status.Errorf(codes.Internal, "get by request: %v", err)
+	}
+	return h.operationResponse(ctx, op, req.GetIncludeChildren())
+}
+
+func (h *operationHandler) operationResponse(ctx context.Context, op *operations.Operation, includeChildren bool) (*apiv1.Operation, error) {
 	pb, err := opToProto(op)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "encode: %v", err)
 	}
-	// UI Phase U7: GetOperation includes the submitted manifest so the
-	// browser's retry path can pre-fill the editor with the exact YAML
-	// the failed/interrupted op was applying. List/Watch omit it.
+	// Recovery returns the original unresolved declaration, not provider input
+	// with expanded secrets/references. List/Watch deliberately omit it.
 	pb.ManifestJson = op.ManifestJSON
-	if req.GetIncludeChildren() {
+	if includeChildren {
 		children, err := h.store.ListChildren(ctx, op.ID)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "list children: %v", err)
@@ -153,6 +184,7 @@ func opToProto(op *operations.Operation) (*apiv1.Operation, error) {
 		StartedAt:    op.StartedAt,
 		CompletedAt:  op.CompletedAt,
 		Source:       op.Source,
+		RequestId:    op.RequestID,
 	}
 	if op.ResultJSON != "" {
 		var r protocol.Resource

@@ -83,6 +83,12 @@ func NewHTTPGateway(ctx context.Context, grpcAddr string, caCertPEM []byte, serv
 	if err := apiv1.RegisterOperationServiceHandler(ctx, gw, conn); err != nil {
 		return nil, err
 	}
+	if err := apiv1.RegisterOverviewServiceHandler(ctx, gw, conn); err != nil {
+		return nil, err
+	}
+	if err := apiv1.RegisterInventoryServiceHandler(ctx, gw, conn); err != nil {
+		return nil, err
+	}
 	if err := apiv1.RegisterSchemaServiceHandler(ctx, gw, conn); err != nil {
 		return nil, err
 	}

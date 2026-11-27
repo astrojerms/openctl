@@ -7,31 +7,42 @@ describe('statusBadge', () => {
   });
 
   it('maps Proxmox VM state.running to a "good" tone', () => {
-    expect(statusBadge({ state: 'running' })).toEqual({ label: 'running', tone: 'good' });
+    expect(statusBadge({ apiVersion: 'proxmox.openctl.io/v1', status: { state: 'running' } })).toEqual({ label: 'running', tone: 'good' });
   });
 
   it('maps k3s Cluster phase.ready to a "good" tone (lower-cased)', () => {
     // phase comes through from the controller capitalised; the label
     // preserves the original casing but tone is matched case-insensitively.
-    expect(statusBadge({ phase: 'Ready' })).toEqual({ label: 'Ready', tone: 'good' });
+    expect(statusBadge({ apiVersion: 'k3s.openctl.io/v1', status: { phase: 'Ready' } })).toEqual({ label: 'Ready', tone: 'good' });
   });
 
   it('maps failed to bad', () => {
-    expect(statusBadge({ phase: 'failed' })).toEqual({ label: 'failed', tone: 'bad' });
+    expect(statusBadge({ apiVersion: 'k3s.openctl.io/v1', status: { phase: 'failed' } })).toEqual({ label: 'failed', tone: 'bad' });
   });
 
   it('falls back to "unknown" tone for unrecognised labels but preserves the label text', () => {
-    expect(statusBadge({ state: 'frobnicating' })).toEqual({
+    expect(statusBadge({ apiVersion: 'example.io/v1', status: { state: 'frobnicating' } })).toEqual({
       label: 'frobnicating',
       tone: 'unknown',
     });
   });
 
   it('prefers state over phase when both are present', () => {
-    expect(statusBadge({ state: 'running', phase: 'failed' })).toEqual({
+    expect(statusBadge({ apiVersion: 'proxmox.openctl.io/v1', status: { state: 'running', phase: 'failed' } })).toEqual({
       label: 'running',
       tone: 'good',
     });
+  });
+
+  it.each([
+    [{ phase: 'ready' }, 'Unknown', 'unknown'],
+    [{ phase: 'ready', ready: true, checks: { gpu: { state: 'not_ready' } } }, 'Not ready', 'warn'],
+    [{ phase: 'ready', ready: true, checks: { gpu: { state: 'unknown' } } }, 'Unknown', 'unknown'],
+    [{ phase: 'ready', ready: true, checks: [] }, 'Unknown', 'unknown'],
+    [{ phase: 'ready', ready: false }, 'Not ready', 'warn'],
+    [{ ready: true, checks: { http: { state: 'ready' }, publicEndpoint: { state: 'not_configured' } } }, 'Ready', 'good'],
+  ] as const)('uses application readiness rather than lifecycle for %j', (status, label, tone) => {
+    expect(statusBadge({ apiVersion: 'apps.openctl.io/v1', status })).toEqual({ label, tone });
   });
 });
 

@@ -13,6 +13,12 @@ providers:
         endpoint: https://pve.home.local:8006
         node: pve1
         credentials: homelab-creds
+        # HTTPS verifies certificates and hostnames using system roots.
+        # Optional private CA bundle on the controller/plugin host:
+        # caFile: /etc/openctl/proxmox-ca.pem
+        # Insecure opt-in only: disables certificate/hostname verification.
+        # Never combine with caFile; HTTP is still forbidden.
+        # insecureSkipVerify: true
       work:
         endpoint: https://proxmox.work.example.com:8006
         node: node1

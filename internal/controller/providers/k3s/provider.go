@@ -93,9 +93,7 @@ func (p *Provider) AdvancedKinds() []providers.AdvancedKind {
 	}
 }
 
-// Actions implements providers.Actioner. Cluster supports one
-// runtime action today: get-kubeconfig, which returns the stored
-// kubeconfig contents from ~/.openctl/k3s/<name>/kubeconfig.
+// Actions implements providers.Actioner for Cluster runtime operations.
 func (p *Provider) Actions(kind string) []string {
 	if kind != kindCluster {
 		return nil
@@ -103,10 +101,8 @@ func (p *Provider) Actions(kind string) []string {
 	return []string{"get-kubeconfig", "upgrade", "logs", "restart"}
 }
 
-// ActionSpecs implements providers.ActionDescriber: it annotates the Cluster
-// actions with their parameter schemas so the UI can render inputs. Only
-// `upgrade` takes a parameter today (the target k3s version); `get-kubeconfig`
-// is parameterless. Names must match Actions.
+// ActionSpecs describes Cluster runtime actions and their parameter schemas.
+// Names and ordering match Actions.
 func (p *Provider) ActionSpecs(kind string) []providers.ActionSpec {
 	if kind != kindCluster {
 		return nil
@@ -114,10 +110,12 @@ func (p *Provider) ActionSpecs(kind string) []providers.ActionSpec {
 	return []providers.ActionSpec{
 		{
 			Name:        "get-kubeconfig",
+			Label:       "Download kubeconfig",
 			Description: "Download the cluster's kubeconfig.",
 		},
 		{
 			Name:        "upgrade",
+			Label:       "Upgrade k3s",
 			Description: "Rolling k3s version upgrade — control planes first (for etcd quorum), then workers, health-gated. Idempotent: nodes already at the target are skipped.",
 			Parameters: []providers.ActionParameter{
 				{
@@ -130,6 +128,7 @@ func (p *Provider) ActionSpecs(kind string) []providers.ActionSpec {
 		},
 		{
 			Name:        "logs",
+			Label:       "Download node logs",
 			Description: "Download a node's k3s journal via its agent (mTLS). Leave node blank for a single-node cluster.",
 			Parameters: []providers.ActionParameter{
 				{
@@ -148,6 +147,7 @@ func (p *Provider) ActionSpecs(kind string) []providers.ActionSpec {
 		},
 		{
 			Name:        "restart",
+			Label:       "Restart k3s",
 			Description: "Restart the k3s service on a node via its agent (mTLS).",
 			Parameters: []providers.ActionParameter{
 				{
@@ -161,10 +161,8 @@ func (p *Provider) ActionSpecs(kind string) []providers.ActionSpec {
 	}
 }
 
-// DoActionWithParams implements providers.ParameterizedActioner. The `upgrade`
-// action takes a `version` parameter and rolls every node to that k3s version
-// (control planes first for etcd quorum, then workers, health-gated); all other
-// actions ignore parameters and delegate to DoAction.
+// DoActionWithParams dispatches upgrade, logs, and restart with their parameters.
+// Other actions delegate to DoAction.
 func (p *Provider) DoActionWithParams(ctx context.Context, kind, name, action string, params map[string]string) (*providers.ActionResult, error) {
 	if kind == kindCluster {
 		switch action {
@@ -215,30 +213,42 @@ func (p *Provider) DoAction(_ context.Context, kind, name, action string) (*prov
 // block Delete on owned resources (e.g. attempting to delete a proxmox VM
 // that's a member of a cluster).
 func (p *Provider) OwnerOf(kind, name string) (string, string, bool) {
+	ownerKind, ownerName, owned, _ := p.CheckedOwnerOf(context.Background(), kind, name)
+	return ownerKind, ownerName, owned
+}
+
+// CheckedOwnerOf refuses to authorize deletion when ownership state is unreadable.
+func (p *Provider) CheckedOwnerOf(ctx context.Context, kind, name string) (string, string, bool, error) {
 	dir, err := stateDir()
 	if err != nil {
-		return "", "", false
+		return "", "", false, err
 	}
 	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return "", "", false, nil
+	}
 	if err != nil {
-		return "", "", false
+		return "", "", false, fmt.Errorf("read cluster ownership state: %w", err)
 	}
 	for _, e := range entries {
+		if err := ctx.Err(); err != nil {
+			return "", "", false, err
+		}
 		if e.IsDir() || filepath.Ext(e.Name()) != ".yaml" {
 			continue
 		}
 		clusterName := strings.TrimSuffix(e.Name(), ".yaml")
 		children, err := readChildren(clusterName)
 		if err != nil {
-			continue
+			return "", "", false, fmt.Errorf("read ownership of cluster %q: %w", clusterName, err)
 		}
 		for _, c := range children {
 			if c.Kind == kind && c.Name == name {
-				return kindCluster, clusterName, true
+				return kindCluster, clusterName, true, nil
 			}
 		}
 	}
-	return "", "", false
+	return "", "", false, nil
 }
 
 // ChildrenOf implements providers.ChildrenLister: returns the VirtualMachine

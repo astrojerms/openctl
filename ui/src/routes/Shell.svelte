@@ -3,6 +3,7 @@
   import type { PingResponse, WhoAmIResponse } from '../lib/api';
   import { ping } from '../lib/api';
   import { logout } from '../lib/auth';
+  import { manifestAuthority, refreshAuthority, resetAuthority } from '../lib/authority';
   import { route } from '../lib/router';
   import {
     catalogue, catalogueError, refreshCatalogue, stopCatalogue,
@@ -10,6 +11,7 @@
   } from '../lib/catalogue';
   import { routeHref } from '../lib/router';
   import { startOpsWatcher, stopOpsWatcher } from '../lib/ops';
+  import { overview, startOverview, stopOverview } from '../lib/overview';
   import GitStatus from '../components/GitStatus.svelte';
   import Nav from '../components/Nav.svelte';
   import OpsDrawer from '../components/OpsDrawer.svelte';
@@ -21,6 +23,8 @@
   import TemplateWizard from './TemplateWizard.svelte';
   import Providers from './Providers.svelte';
   import Settings from './Settings.svelte';
+  import Discovery from './Discovery.svelte';
+  import JellyfinWizard from './JellyfinWizard.svelte';
 
   export let me: WhoAmIResponse;
 
@@ -40,20 +44,32 @@
   // running — sidesteps "is my UI change even deployed?" without
   // digging into the Home tab.
   let pong: PingResponse | null = null;
+  let buildError = '';
+  const buildController = new AbortController();
 
   onMount(() => {
+    startOverview();
     void refreshCatalogue();
+    void refreshAuthority();
     startOpsWatcher();
-    void ping.ping().then((p) => (pong = p)).catch(() => { /* ignore */ });
+    void ping.ping('hello from ui', { signal: buildController.signal }).then((p) => {
+      if (!buildController.signal.aborted) pong = p;
+    }).catch((err) => {
+      if (!buildController.signal.aborted) buildError = err instanceof Error ? err.message : String(err);
+    });
   });
 
   onDestroy(() => {
+    buildController.abort();
+    stopOverview();
     stopOpsWatcher();
     stopCatalogue();
+    resetAuthority();
   });
 
   async function doLogout() {
     busy = true;
+    stopOverview();
     try {
       await logout();
     } finally {
@@ -118,6 +134,16 @@
   <aside class:open={sidebarOpen}>
     <a
       class="sidebar-link"
+      class:active={$route.name === 'discover'}
+      href={routeHref({ name: 'discover' })}
+    >Discover infrastructure</a>
+    <a
+      class="sidebar-link"
+      class:active={$route.name === 'jellyfin'}
+      href={routeHref({ name: 'jellyfin' })}
+    >Deploy Jellyfin</a>
+    <a
+      class="sidebar-link"
       class:active={$route.name === 'templates' || $route.name === 'template'}
       href={routeHref({ name: 'templates' })}
     >Templates</a>
@@ -134,27 +160,43 @@
     {#if $catalogueError}
       <p class="err">{$catalogueError}</p>
     {/if}
+    {#if $overview.error}
+      <p class="err">Managed counts unavailable.</p>
+    {/if}
     <Nav catalogue={$catalogue} activeKindKey={activeKindKey} />
   </aside>
 
   <main>
+    {#if $manifestAuthority.mode === 'gitops'}
+      <p class="authority-banner" role="status">GitOps owns desired intent. Edit the upstream repository to apply or delete resources. Runtime controls remain subject to your role.</p>
+    {:else if $manifestAuthority.error}
+      <p class="authority-banner" role="alert">Cannot verify running manifest authority: {$manifestAuthority.error} <button on:click={refreshAuthority}>Refresh authority</button></p>
+    {/if}
     {#if $route.name === 'home'}
-      <HomePane />
+      <HomePane {pong} {buildError} viewer={me.role === 'viewer'} />
     {:else if $route.name === 'templates'}
       <Templates />
     {:else if $route.name === 'template'}
       <TemplateWizard template={$route.template} />
     {:else if $route.name === 'providers'}
       <Providers />
+    {:else if $route.name === 'discover'}
+      <Discovery />
+    {:else if $route.name === 'jellyfin'}
+      <JellyfinWizard />
     {:else if $route.name === 'settings'}
       <Settings />
     {:else if $route.name === 'list'}
       {@const entry = byKey.get(`${$route.apiVersion}/${$route.kind}`)}
-      <ResourceList
-        apiVersion={$route.apiVersion}
-        kind={$route.kind}
-        provider={entry?.provider ?? ''}
-      />
+      {#key `${me.sessionId}/${$route.apiVersion}/${$route.kind}`}
+        <ResourceList
+          apiVersion={$route.apiVersion}
+          kind={$route.kind}
+          provider={entry?.provider ?? ''}
+          observedOnly={entry?.observedOnly ?? false}
+          schemaAvailable={entry?.schemaAvailable ?? false}
+        />
+      {/key}
     {:else if $route.name === 'detail'}
       <Detail
         apiVersion={$route.apiVersion}
@@ -179,6 +221,11 @@
 <OpsDrawer />
 
 <style>
+  .authority-banner {
+    border-left: 3px solid currentColor;
+    padding: 0.75rem 1rem;
+    margin: 0 0 1rem;
+  }
   header {
     display: flex;
     align-items: center;

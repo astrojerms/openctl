@@ -27,16 +27,25 @@ type Handler struct {
 	client *client.Client
 }
 
-// New creates a new Handler
-func New(config *protocol.ProviderConfig) *Handler {
-	c := client.New(config.Endpoint, config.TokenID, config.TokenSecret)
+// New creates a Handler only after validating its endpoint and TLS trust.
+func New(config *protocol.ProviderConfig) (*Handler, error) {
+	if config == nil {
+		return nil, errors.New("proxmox handler: configuration is required")
+	}
+	c, err := client.New(config.Endpoint, config.TokenID, config.TokenSecret, client.TLSOptions{
+		CAFile:             config.CAFile,
+		InsecureSkipVerify: config.InsecureSkipVerify,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("proxmox handler: %w", err)
+	}
 	if config.SnippetSSH != nil {
 		c.SetSnippetSSH(config.SnippetSSH.Hosts, config.SnippetSSH.User, config.SnippetSSH.IdentityFile)
 	}
 	return &Handler{
 		config: config,
 		client: c,
-	}
+	}, nil
 }
 
 // Client returns the underlying Proxmox client. Exposed so the
@@ -216,7 +225,7 @@ func (h *Handler) listVMs(ctx context.Context) (*protocol.Response, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read VM %q config: %w", vm.Name, err)
 		}
-		result = append(result, resources.VMToResourceWithIP(vm, config, ""))
+		result = append(result, resources.VMToResource(vm, config))
 	}
 
 	return &protocol.Response{
@@ -241,15 +250,16 @@ func (h *Handler) getVM(ctx context.Context, name string) (*protocol.Response, e
 		return nil, fmt.Errorf("read VM %q config: %w", vm.Name, err)
 	}
 
-	// Try to get IP if VM is running (non-blocking)
+	// Observe guest addresses only for running VMs, using the config already read.
 	var ip string
+	var observationErr error
 	if vm.Status == "running" {
-		ip, _ = h.client.GetVMIPAddress(ctx, vm.Node, vm.VMID)
+		ip, observationErr = h.client.GetVMIPAddress(ctx, vm.Node, vm.VMID, config)
 	}
 
 	return &protocol.Response{
 		Status:   protocol.StatusSuccess,
-		Resource: resources.VMToResourceWithIP(vm, config, ip),
+		Resource: resources.VMToResourceWithIP(vm, config, ip, observationErr),
 	}, nil
 }
 
@@ -376,10 +386,7 @@ func (h *Handler) createVMFromTemplate(ctx context.Context, name, node string, s
 		}
 	}
 
-	return &protocol.Response{
-		Status:  protocol.StatusSuccess,
-		Message: fmt.Sprintf("VM %s created (vmid: %d)", name, vmid),
-	}, nil
+	return createdVMResponse(name, node, vmid), nil
 }
 
 // applyCloudInitVendorSnippet attaches a cicustom vendor snippet to the VM. When
@@ -597,10 +604,7 @@ func (h *Handler) createVMFromCloudImage(ctx context.Context, name, node string,
 		}
 	}
 
-	return &protocol.Response{
-		Status:  protocol.StatusSuccess,
-		Message: fmt.Sprintf("VM %s created from cloud image (vmid: %d, template: %s)", name, vmid, templateName),
-	}, nil
+	return createdVMResponse(name, node, vmid), nil
 }
 
 // createCloudImageTemplate downloads a cloud image and creates a template from it
@@ -800,10 +804,7 @@ func (h *Handler) createVMFromImage(ctx context.Context, name, node string, spec
 		}
 	}
 
-	return &protocol.Response{
-		Status:  protocol.StatusSuccess,
-		Message: fmt.Sprintf("VM %s created from image %s (vmid: %d)", name, spec.Image.File, vmid),
-	}, nil
+	return createdVMResponse(name, node, vmid), nil
 }
 
 func (h *Handler) deleteVM(ctx context.Context, name string) (*protocol.Response, error) {
@@ -861,6 +862,28 @@ func (h *Handler) applyVM(ctx context.Context, manifest *protocol.Resource) (*pr
 		return nil, err
 	}
 	return h.getVM(ctx, manifest.Metadata.Name)
+}
+
+// UpdateVM updates only the explicitly selected instance, never a name lookup.
+func (h *Handler) UpdateVM(ctx context.Context, vm *client.VM, manifest *protocol.Resource) error {
+	spec, err := resources.ParseVMSpec(manifest)
+	if err != nil {
+		return err
+	}
+	return h.resizeVM(ctx, vm, spec)
+}
+
+func createdVMResponse(name, node string, vmid int) *protocol.Response {
+	return &protocol.Response{
+		Status:  protocol.StatusSuccess,
+		Message: fmt.Sprintf("VM %s created (vmid: %d)", name, vmid),
+		Resource: &protocol.Resource{
+			APIVersion: "proxmox.openctl.io/v1", Kind: "VirtualMachine",
+			Metadata: protocol.ResourceMetadata{Name: name},
+			Spec:     map[string]any{"node": node},
+			Status:   map[string]any{"vmid": vmid},
+		},
+	}
 }
 
 func (h *Handler) listTemplates(ctx context.Context) (*protocol.Response, error) {

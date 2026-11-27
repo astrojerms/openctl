@@ -16,7 +16,7 @@ import (
 )
 
 func TestHandler_HandleUnknownResourceType(t *testing.T) {
-	h := New(&protocol.ProviderConfig{})
+	h := mustNewHandler(t, &protocol.ProviderConfig{Endpoint: "https://127.0.0.1:1"})
 
 	req := &protocol.Request{
 		Version:      protocol.ProtocolVersion,
@@ -41,7 +41,7 @@ func TestHandler_HandleUnknownResourceType(t *testing.T) {
 }
 
 func TestHandler_HandleVMUnknownAction(t *testing.T) {
-	h := New(&protocol.ProviderConfig{})
+	h := mustNewHandler(t, &protocol.ProviderConfig{Endpoint: "https://127.0.0.1:1"})
 
 	req := &protocol.Request{
 		Version:      protocol.ProtocolVersion,
@@ -63,7 +63,7 @@ func TestHandler_HandleVMUnknownAction(t *testing.T) {
 }
 
 func TestHandler_HandleTemplateUnsupportedAction(t *testing.T) {
-	h := New(&protocol.ProviderConfig{})
+	h := mustNewHandler(t, &protocol.ProviderConfig{Endpoint: "https://127.0.0.1:1"})
 
 	req := &protocol.Request{
 		Version:      protocol.ProtocolVersion,
@@ -82,7 +82,8 @@ func TestHandler_HandleTemplateUnsupportedAction(t *testing.T) {
 }
 
 func TestHandler_CreateVMMissingNode(t *testing.T) {
-	h := New(&protocol.ProviderConfig{
+	h := mustNewHandler(t, &protocol.ProviderConfig{
+		Endpoint: "https://127.0.0.1:1",
 		// No node configured
 	})
 
@@ -117,8 +118,9 @@ func TestHandler_CreateVMMissingNode(t *testing.T) {
 }
 
 func TestHandler_CreateVMWithoutTemplate(t *testing.T) {
-	h := New(&protocol.ProviderConfig{
-		Node: "pve1",
+	h := mustNewHandler(t, &protocol.ProviderConfig{
+		Endpoint: "https://127.0.0.1:1",
+		Node:     "pve1",
 	})
 
 	req := &protocol.Request{
@@ -150,8 +152,9 @@ func TestHandler_CreateVMWithoutTemplate(t *testing.T) {
 }
 
 func TestHandler_NodeFromConfig(t *testing.T) {
-	h := New(&protocol.ProviderConfig{
-		Node: "config-node",
+	h := mustNewHandler(t, &protocol.ProviderConfig{
+		Endpoint: "https://127.0.0.1:1",
+		Node:     "config-node",
 	})
 
 	// Verify the handler uses the config node
@@ -179,7 +182,7 @@ func TestHandler_RoutesToCorrectResourceType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.resourceType+"/"+tt.action, func(t *testing.T) {
-			h := New(&protocol.ProviderConfig{
+			h := mustNewHandler(t, &protocol.ProviderConfig{
 				Endpoint:    "https://pve.example.com:8006",
 				TokenID:     "test",
 				TokenSecret: "test",
@@ -245,7 +248,7 @@ func TestApplyVM_TransientErrorDoesNotCreate(t *testing.T) {
 	}))
 	defer server.Close()
 
-	h := New(&protocol.ProviderConfig{Endpoint: server.URL, TokenID: "t", TokenSecret: "s", Node: "pve1"})
+	h := mustNewHandler(t, &protocol.ProviderConfig{Endpoint: server.URL, CAFile: fixtureCA(t, server), TokenID: "t", TokenSecret: "s", Node: "pve1"})
 
 	resp, err := h.Handle(context.Background(), vmApplyRequest("existing-vm"))
 	if err == nil {
@@ -272,7 +275,7 @@ func TestApplyVM_NotFoundTakesCreatePath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	h := New(&protocol.ProviderConfig{Endpoint: server.URL, TokenID: "t", TokenSecret: "s", Node: "pve1"})
+	h := mustNewHandler(t, &protocol.ProviderConfig{Endpoint: server.URL, CAFile: fixtureCA(t, server), TokenID: "t", TokenSecret: "s", Node: "pve1"})
 
 	resp, err := h.Handle(context.Background(), vmApplyRequest("brand-new-vm"))
 	if err != nil {
@@ -310,7 +313,7 @@ func TestCreateVMFromTemplatePassesDiskStorageToClone(t *testing.T) {
 	}))
 	defer server.Close()
 
-	h := New(&protocol.ProviderConfig{Endpoint: server.URL, TokenID: "t", TokenSecret: "s", Node: "pve1"})
+	h := mustNewHandler(t, &protocol.ProviderConfig{Endpoint: server.URL, CAFile: fixtureCA(t, server), TokenID: "t", TokenSecret: "s", Node: "pve1"})
 	resp, err := h.Handle(context.Background(), &protocol.Request{
 		Version:      protocol.ProtocolVersion,
 		Action:       protocol.ActionCreate,
@@ -412,7 +415,7 @@ func TestCreateVMAutoSelectsSnippetsStorage(t *testing.T) {
 	defer server.Close()
 
 	// Default storage is the LVM one (can't hold snippets).
-	h := New(&protocol.ProviderConfig{Endpoint: server.URL, TokenID: "t", TokenSecret: "s", Node: "pve1",
+	h := mustNewHandler(t, &protocol.ProviderConfig{Endpoint: server.URL, CAFile: fixtureCA(t, server), TokenID: "t", TokenSecret: "s", Node: "pve1",
 		Defaults: map[string]string{"storage": "local-lvm"}})
 	err := h.applyCloudInitVendorSnippet(context.Background(), "pve1", 200, h.config.Defaults["storage"], &resources.CloudInitSpec{})
 	if err != nil {
@@ -433,7 +436,7 @@ func TestCreateVMFailsFastWhenNoSnippetsStorage(t *testing.T) {
 	}, &cicustom)
 	defer server.Close()
 
-	h := New(&protocol.ProviderConfig{Endpoint: server.URL, TokenID: "t", TokenSecret: "s", Node: "pve1"})
+	h := mustNewHandler(t, &protocol.ProviderConfig{Endpoint: server.URL, CAFile: fixtureCA(t, server), TokenID: "t", TokenSecret: "s", Node: "pve1"})
 	_, err := createVMWithPackages(t, h)
 	if err == nil {
 		t.Fatal("expected a fail-fast error when no snippets-capable storage exists")
@@ -455,8 +458,8 @@ func TestCreateVMFailsWhenSnippetNodeHasNoSSHMapping(t *testing.T) {
 
 	// A mapping for another node must not authorize uploads to pve1, even
 	// though the API endpoint can list and clone VMs there.
-	h := New(&protocol.ProviderConfig{
-		Endpoint: server.URL, TokenID: "t", TokenSecret: "s", Node: "pve1",
+	h := mustNewHandler(t, &protocol.ProviderConfig{
+		Endpoint: server.URL, CAFile: fixtureCA(t, server), TokenID: "t", TokenSecret: "s", Node: "pve1",
 		SnippetSSH: &protocol.SnippetSSHConfig{Hosts: map[string]string{"pve2": "pve2.home"}},
 	})
 	_, err := createVMWithPackages(t, h)
@@ -543,8 +546,9 @@ func TestExtractFilenameFromURL(t *testing.T) {
 }
 
 func TestCreateVMFromCloudImage_MissingURL(t *testing.T) {
-	h := New(&protocol.ProviderConfig{
-		Node: "pve1",
+	h := mustNewHandler(t, &protocol.ProviderConfig{
+		Endpoint: "https://127.0.0.1:1",
+		Node:     "pve1",
 	})
 
 	req := &protocol.Request{
@@ -581,8 +585,9 @@ func TestCreateVMFromCloudImage_MissingURL(t *testing.T) {
 }
 
 func TestCreateVMFromCloudImage_MissingStorage(t *testing.T) {
-	h := New(&protocol.ProviderConfig{
-		Node: "pve1",
+	h := mustNewHandler(t, &protocol.ProviderConfig{
+		Endpoint: "https://127.0.0.1:1",
+		Node:     "pve1",
 	})
 
 	req := &protocol.Request{
@@ -619,8 +624,9 @@ func TestCreateVMFromCloudImage_MissingStorage(t *testing.T) {
 }
 
 func TestCreateVMFromImage_MissingStorage(t *testing.T) {
-	h := New(&protocol.ProviderConfig{
-		Node: "pve1",
+	h := mustNewHandler(t, &protocol.ProviderConfig{
+		Endpoint: "https://127.0.0.1:1",
+		Node:     "pve1",
 	})
 
 	req := &protocol.Request{
@@ -657,8 +663,9 @@ func TestCreateVMFromImage_MissingStorage(t *testing.T) {
 }
 
 func TestCreateVMFromImage_MissingFile(t *testing.T) {
-	h := New(&protocol.ProviderConfig{
-		Node: "pve1",
+	h := mustNewHandler(t, &protocol.ProviderConfig{
+		Endpoint: "https://127.0.0.1:1",
+		Node:     "pve1",
 	})
 
 	req := &protocol.Request{
@@ -717,7 +724,7 @@ func TestVMObservationUsesConfiguredHardware(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			h := New(&protocol.ProviderConfig{Endpoint: server.URL, TokenID: "t", TokenSecret: "s"})
+			h := mustNewHandler(t, &protocol.ProviderConfig{Endpoint: server.URL, CAFile: fixtureCA(t, server), TokenID: "t", TokenSecret: "s"})
 			resp, err := h.Handle(context.Background(), &protocol.Request{
 				Action: action, ResourceType: "VirtualMachine", ResourceName: "dev-system",
 			})
@@ -786,7 +793,7 @@ func TestVMObservationPropagatesConfigFailure(t *testing.T) {
 					}
 				}))
 				defer server.Close()
-				h := New(&protocol.ProviderConfig{Endpoint: server.URL, TokenID: "t", TokenSecret: "s"})
+				h := mustNewHandler(t, &protocol.ProviderConfig{Endpoint: server.URL, CAFile: fixtureCA(t, server), TokenID: "t", TokenSecret: "s"})
 				resp, err := h.Handle(context.Background(), &protocol.Request{
 					Action: action, ResourceType: "VirtualMachine", ResourceName: "dev-system",
 				})
@@ -854,7 +861,7 @@ func TestCloudImageDiskOptionsPreserveVolumeAndBlockFailedStart(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			h := New(&protocol.ProviderConfig{Endpoint: server.URL, Node: "pve1"})
+			h := mustNewHandler(t, &protocol.ProviderConfig{Endpoint: server.URL, CAFile: fixtureCA(t, server), Node: "pve1"})
 			_, err := h.Handle(context.Background(), &protocol.Request{
 				Action: protocol.ActionCreate, ResourceType: "VirtualMachine",
 				Manifest: &protocol.Resource{

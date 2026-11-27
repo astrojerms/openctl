@@ -100,6 +100,7 @@ func TestResolveSubstitutesFieldRef(t *testing.T) {
 			},
 		},
 	}
+	original := in["cluster"].(map[string]any)["joinToken"]
 	out, err := r.Resolve(context.Background(), in)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -107,6 +108,10 @@ func TestResolveSubstitutesFieldRef(t *testing.T) {
 	got := out["cluster"].(map[string]any)["joinToken"]
 	if got != "K10::server:secret" {
 		t.Errorf("joinToken = %v, want K10::server:secret", got)
+	}
+	out["cluster"].(map[string]any)["joinToken"] = "changed after resolution"
+	if !reflect.DeepEqual(in["cluster"].(map[string]any)["joinToken"], original) {
+		t.Fatal("successful resolution or output mutation changed the input reference")
 	}
 }
 

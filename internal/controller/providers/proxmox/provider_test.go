@@ -28,7 +28,7 @@ func mockProxmox(t *testing.T, routes map[string]string) *httptest.Server {
 }
 
 func TestProviderName(t *testing.T) {
-	p := New(&Config{})
+	p := mustNewProvider(t, &Config{Endpoint: "https://127.0.0.1:1"})
 	if p.Name() != "proxmox" {
 		t.Errorf("Name = %q, want proxmox", p.Name())
 	}
@@ -49,7 +49,7 @@ func TestProviderName(t *testing.T) {
 }
 
 func TestProviderRejectsWrongKind(t *testing.T) {
-	p := New(&Config{})
+	p := mustNewProvider(t, &Config{Endpoint: "https://127.0.0.1:1"})
 	for _, op := range []func() error{
 		func() error { _, e := p.Apply(context.Background(), &protocol.Resource{Kind: "Other"}); return e },
 		func() error { _, e := p.Get(context.Background(), "Other", "x"); return e },
@@ -63,7 +63,7 @@ func TestProviderRejectsWrongKind(t *testing.T) {
 }
 
 func TestProviderRejectsApplyAndDeleteOnNode(t *testing.T) {
-	p := New(&Config{})
+	p := mustNewProvider(t, &Config{Endpoint: "https://127.0.0.1:1"})
 	if _, err := p.Apply(context.Background(), &protocol.Resource{Kind: "ProxmoxNode"}); err == nil || !strings.Contains(err.Error(), "observed-only") {
 		t.Errorf("Apply on ProxmoxNode: want observed-only error, got %v", err)
 	}
@@ -81,7 +81,7 @@ func TestProviderListNodes(t *testing.T) {
 	})
 	defer srv.Close()
 
-	p := New(&Config{Endpoint: srv.URL, TokenID: "t", TokenSecret: "s"})
+	p := mustNewProvider(t, &Config{Endpoint: srv.URL, CAFile: fixtureCA(t, srv), TokenID: "t", TokenSecret: "s"})
 
 	got, err := p.List(context.Background(), "ProxmoxNode")
 	if err != nil {
@@ -108,7 +108,7 @@ func TestProviderGetNodeNotFound(t *testing.T) {
 	})
 	defer srv.Close()
 
-	p := New(&Config{Endpoint: srv.URL, TokenID: "t", TokenSecret: "s"})
+	p := mustNewProvider(t, &Config{Endpoint: srv.URL, CAFile: fixtureCA(t, srv), TokenID: "t", TokenSecret: "s"})
 
 	_, err := p.Get(context.Background(), "ProxmoxNode", "missing")
 	if err == nil {
@@ -136,7 +136,7 @@ func TestProviderChildrenOfNodeReturnsVMs(t *testing.T) {
 	})
 	defer srv.Close()
 
-	p := New(&Config{Endpoint: srv.URL, TokenID: "t", TokenSecret: "s"})
+	p := mustNewProvider(t, &Config{Endpoint: srv.URL, CAFile: fixtureCA(t, srv), TokenID: "t", TokenSecret: "s"})
 
 	children := p.ChildrenOf("ProxmoxNode", "pve1")
 	if len(children) != 2 {
@@ -170,8 +170,9 @@ func TestProviderListReturnsVMs(t *testing.T) {
 	})
 	defer srv.Close()
 
-	p := New(&Config{
+	p := mustNewProvider(t, &Config{
 		Endpoint:    srv.URL,
+		CAFile:      fixtureCA(t, srv),
 		TokenID:     "fake@pam!t",
 		TokenSecret: "secret",
 	})
@@ -198,7 +199,7 @@ func TestProviderGetNotFoundMapsToSentinel(t *testing.T) {
 	})
 	defer srv.Close()
 
-	p := New(&Config{Endpoint: srv.URL, TokenID: "t", TokenSecret: "s"})
+	p := mustNewProvider(t, &Config{Endpoint: srv.URL, CAFile: fixtureCA(t, srv), TokenID: "t", TokenSecret: "s"})
 
 	_, err := p.Get(context.Background(), "VirtualMachine", "missing")
 	if err == nil {
@@ -217,7 +218,7 @@ func TestProviderDeleteIsIdempotent(t *testing.T) {
 	})
 	defer srv.Close()
 
-	p := New(&Config{Endpoint: srv.URL, TokenID: "t", TokenSecret: "s"})
+	p := mustNewProvider(t, &Config{Endpoint: srv.URL, CAFile: fixtureCA(t, srv), TokenID: "t", TokenSecret: "s"})
 
 	if err := p.Delete(context.Background(), "VirtualMachine", "missing"); err != nil {
 		t.Errorf("delete on missing VM should be idempotent, got: %v", err)

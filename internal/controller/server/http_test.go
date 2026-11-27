@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -19,12 +21,13 @@ import (
 	"github.com/openctl/openctl/internal/controller/operations"
 	"github.com/openctl/openctl/internal/controller/storage"
 	tlspkg "github.com/openctl/openctl/internal/controller/tls"
+	"github.com/openctl/openctl/pkg/protocol"
 )
 
 // startGatewayTestServer spins up the full controller (gRPC + HTTP gateway)
 // in-process and returns the gateway's base URL. Used by HTTP tests that
 // want to exercise the REST surface end-to-end.
-func startGatewayTestServer(t *testing.T) (gatewayBaseURL, rootToken string) {
+func startGatewayTestServer(t *testing.T) (gatewayBaseURL, rootToken string, opStore *operations.Store) {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -38,7 +41,7 @@ func startGatewayTestServer(t *testing.T) (gatewayBaseURL, rootToken string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	opStore := operations.New(db, 50)
+	opStore = operations.New(db, 50)
 	sessions := auth.NewSessionStore(db)
 
 	token, err := auth.GenerateToken()
@@ -77,11 +80,11 @@ func startGatewayTestServer(t *testing.T) (gatewayBaseURL, rootToken string) {
 	}
 	ts := httptest.NewServer(h)
 	t.Cleanup(ts.Close)
-	return ts.URL, token
+	return ts.URL, token, opStore
 }
 
 func TestHTTPGatewayPingRoutesToGRPC(t *testing.T) {
-	base, _ := startGatewayTestServer(t)
+	base, _, _ := startGatewayTestServer(t)
 	resp, err := http.Get(base + "/v1/ping")
 	if err != nil {
 		t.Fatalf("GET /v1/ping: %v", err)
@@ -94,7 +97,7 @@ func TestHTTPGatewayPingRoutesToGRPC(t *testing.T) {
 }
 
 func TestHTTPGatewayLoginSetsSessionCookie(t *testing.T) {
-	base, rootToken := startGatewayTestServer(t)
+	base, rootToken, _ := startGatewayTestServer(t)
 
 	req, _ := http.NewRequest(http.MethodPost, base+"/v1/session/login",
 		strings.NewReader(`{"display_name":"test"}`))
@@ -200,7 +203,7 @@ type emptyFS struct{}
 func (emptyFS) Open(_ string) (fs.File, error) { return nil, fs.ErrNotExist }
 
 func TestHTTPGatewayRootRedirectsToUI(t *testing.T) {
-	base, _ := startGatewayTestServer(t)
+	base, _, _ := startGatewayTestServer(t)
 	// http.Client follows redirects by default; turn off so we can verify
 	// the 301 itself.
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -216,5 +219,58 @@ func TestHTTPGatewayRootRedirectsToUI(t *testing.T) {
 	}
 	if got := resp.Header.Get("Location"); got != "/ui/" {
 		t.Errorf("Location = %q, want /ui/", got)
+	}
+}
+
+func TestHTTPGatewayRecoversOpaqueRequestIDs(t *testing.T) {
+	base, token, store := startGatewayTestServer(t)
+	for i, key := range []string{"opaque /?#% + request", ".", "..", " key ", `quotes"\backslash`, "%2F"} {
+		t.Run(key, func(t *testing.T) {
+			desired := &protocol.Resource{
+				APIVersion: "fake.openctl.io/v1", Kind: "FakeKind",
+				Metadata: protocol.ResourceMetadata{Name: "resource-" + strconv.Itoa(i)},
+			}
+			binding, err := operations.NewApplyRequest(key, auth.DefaultUserID, desired, false, false, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			op, _, err := store.SubmitRequest(context.Background(), &operations.Operation{
+				Type: operations.TypeApply, APIVersion: desired.APIVersion, Kind: desired.Kind,
+				ResourceName: desired.Metadata.Name, ManifestJSON: "{}",
+			}, binding)
+			if err != nil {
+				t.Fatal(err)
+			}
+			payload, err := json.Marshal(map[string]any{"requestId": key, "includeChildren": true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req, err := http.NewRequest(http.MethodPost, base+"/v1/operations:byRequest", bytes.NewReader(payload))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Authorization", "Bearer "+token)
+			req.Header.Set("Content-Type", "application/json")
+			client := &http.Client{Timeout: 5 * time.Second}
+			resp, err := client.Do(req) // #nosec G704 -- in-process test server
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(resp.Body)
+				t.Fatalf("lookup status %d: %s", resp.StatusCode, body)
+			}
+			var recovered struct {
+				ID        string `json:"id"`
+				RequestID string `json:"requestId"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&recovered); err != nil {
+				t.Fatal(err)
+			}
+			if recovered.ID != op.ID || recovered.RequestID != key {
+				t.Fatalf("lookup changed the accepted identity: %+v", recovered)
+			}
+		})
 	}
 }

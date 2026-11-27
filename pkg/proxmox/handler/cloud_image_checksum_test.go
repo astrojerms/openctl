@@ -43,7 +43,7 @@ func TestCloudImageChecksumMismatchBlocksTemplateCreation(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	h := New(&protocol.ProviderConfig{Endpoint: server.URL, Node: "pve1"})
+	h := mustNewHandler(t, &protocol.ProviderConfig{Endpoint: server.URL, CAFile: fixtureCA(t, server), Node: "pve1"})
 	_, err := h.Handle(context.Background(), checksumCreateRequest("sha256:"+strings.Repeat("0", 64)))
 	if err == nil || !strings.Contains(err.Error(), "checksum mismatch") || mutations != 0 {
 		t.Fatalf("mismatched image must fail before template creation: err=%v mutations=%d", err, mutations)
@@ -104,7 +104,7 @@ func TestCloudImageChecksumCacheRequiresVerifiedDigest(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			h := New(&protocol.ProviderConfig{Endpoint: server.URL, Node: "pve1"})
+			h := mustNewHandler(t, &protocol.ProviderConfig{Endpoint: server.URL, CAFile: fixtureCA(t, server), Node: "pve1"})
 			response, err := h.Handle(context.Background(), checksumCreateRequest(requested))
 			if tc.allowClone {
 				if err != nil || response == nil || response.Status != protocol.StatusSuccess || clones != 1 || downloads != 0 {
@@ -124,7 +124,7 @@ func TestCloudImageInvalidChecksumRejectedBeforeCacheLookup(t *testing.T) {
 		http.Error(w, "invalid checksum must not access the cache", http.StatusBadRequest)
 	}))
 	defer server.Close()
-	h := New(&protocol.ProviderConfig{Endpoint: server.URL, Node: "pve1"})
+	h := mustNewHandler(t, &protocol.ProviderConfig{Endpoint: server.URL, CAFile: fixtureCA(t, server), Node: "pve1"})
 	response, err := h.Handle(context.Background(), checksumCreateRequest("sha256:abc123"))
 	if err != nil || response == nil || response.Error == nil || response.Error.Code != protocol.ErrorCodeInvalidRequest || requests != 0 {
 		t.Fatalf("malformed checksum must be an invalid request before API access: response=%+v err=%v requests=%d", response, err, requests)

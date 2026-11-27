@@ -34,6 +34,12 @@ message PingResponse {
   string git_commit = 3;
   // RFC3339 build timestamp ("dev" for unlinked builds).
   string build_time = 4;
+  // Stable persisted identity; changes when connecting to another controller.
+  string controller_id = 5;
+  // Keyed Apply is durably deduplicated and recoverable by request ID.
+  bool supports_idempotent_apply = 6;
+  // Keyed Delete is durably deduplicated and recoverable by request ID.
+  bool supports_idempotent_delete = 7;
 }
 
 // ResourceService manages desired state and observed infrastructure. Apply
@@ -56,8 +62,8 @@ service ResourceService {
     option (google.api.http) = { post: "/v1/resources:list" body: "*" };
   }
 
-  // Delete removes a resource. Idempotent: delete on a missing resource
-  // returns success, not NotFound.
+  // Delete removes a tracked resource after ownership/dependency checks.
+  // An untracked name is not deletion authority, even if the provider is absent.
   rpc Delete(DeleteRequest) returns (DeleteResponse) {
     option (google.api.http) = { post: "/v1/resources:delete" body: "*" };
   }
@@ -126,6 +132,85 @@ service ResourceService {
   rpc ForgetResource(ForgetResourceRequest) returns (ForgetResourceResponse) {
     option (google.api.http) = { post: "/v1/resources:forget" body: "*" };
   }
+
+  // Confirm the physical identity of an already-tracked VM after upgrading
+  // from name-only tracking. Never adopts, applies, or changes infrastructure.
+  rpc ConfirmResourceIdentity(ConfirmResourceIdentityRequest) returns (ConfirmResourceIdentityResponse) {
+    option (google.api.http) = { post: "/v1/resources:confirmIdentity" body: "*" };
+  }
+
+  // Discovery observes configured infrastructure without adopting or changing it.
+  rpc ListDiscoveryContexts(ListDiscoveryContextsRequest) returns (ListDiscoveryContextsResponse) {
+    option (google.api.http) = { get: "/v1/discovery/contexts" };
+  }
+  rpc DiscoverResources(DiscoverResourcesRequest) returns (DiscoverResourcesResponse) {
+    option (google.api.http) = { post: "/v1/discovery/resources" body: "*" };
+  }
+  rpc TestDiscoveryConnection(TestDiscoveryConnectionRequest) returns (TestDiscoveryConnectionResponse) {
+    option (google.api.http) = { post: "/v1/discovery:testConnection" body: "*" };
+  }
+}
+message ConfirmResourceIdentityRequest {
+  string api_version = 1;
+  string kind = 2;
+  string name = 3;
+  string identity = 4;
+  string provider_context = 5;
+}
+
+message ConfirmResourceIdentityResponse {
+  Resource resource = 1;
+  string message = 2;
+}
+
+
+message ListDiscoveryContextsRequest {
+  string api_version = 1;
+}
+
+message DiscoveryContext {
+  string name = 1;
+  string endpoint = 2;
+  bool default_context = 3;
+}
+
+message ListDiscoveryContextsResponse {
+  repeated DiscoveryContext contexts = 1;
+}
+
+message DiscoverResourcesRequest {
+  string api_version = 1;
+  string context = 2;
+}
+
+message DiscoveredResource {
+  string context = 1;
+  string node = 2;
+  int64 vmid = 3;
+  string identity = 4;
+  Resource resource = 5;
+  bool managed = 6;
+  bool adoptable = 7;
+  string reason = 8;
+  bool identity_confirmation_required = 9;
+}
+
+message DiscoverResourcesResponse {
+  repeated DiscoveredResource resources = 1;
+}
+
+message TestDiscoveryConnectionRequest {
+  string api_version = 1;
+  string context = 2;
+}
+
+message TestDiscoveryConnectionResponse {
+  bool connected = 1;
+  string message = 2;
+  // Safe, machine-readable failure category; empty when connected. Never
+  // contains upstream URLs, certificate contents, response bodies or secrets.
+  // New categories may be added; clients must handle unknown values.
+  string failure_code = 3;
 }
 
 // MigrationBundle contains desired intent, not observed state. Treat it as
@@ -154,6 +239,10 @@ message AdoptResourceRequest {
   MigrationBundle bundle = 2;
   // Overrides spec.context at the destination without rewriting the bundle.
   string provider_context = 3;
+  // Required for plain-manifest adoption: the exact opaque identity returned
+  // by discovery and reviewed by the operator. Admission rejects replacements.
+  // Bundles already bind their identity; an explicit value must agree with it.
+  string expected_identity = 4;
 }
 
 message AdoptResourceResponse {
@@ -190,6 +279,9 @@ message ActionSpec {
   // Optional human-readable description for a tooltip/help text.
   string description = 2;
   repeated ActionParameterSpec parameters = 3;
+  // Optional provider-owned display label. Clients invoke name, never label.
+  // An absent label is displayed as the raw name.
+  string label = 4;
 }
 
 // ActionParameterSpec describes one argument an action accepts so the UI can
@@ -281,7 +373,8 @@ message DryRunApplyRequest {
 message DryRunApplyResponse {
   // Spec-level differences between the submitted manifest and the
   // currently-applied manifest, or empty when this would be the first
-  // apply. Same shape as Resource.drift.
+  // apply. desired is the stored value; observed is the submitted value.
+  // This orientation differs from live_drift (desired versus live observation).
   repeated DriftEntry diff = 1;
   // Per-child actions for composite resources (e.g. Cluster → VMs).
   // Empty for atomics. Verbs: "create" | "destroy" | "respec" | "no-op".
@@ -301,14 +394,35 @@ message DryRunApplyResponse {
   // of dumping them all in a bottom panel. Empty for schema-less kinds
   // or when validation passed.
   repeated FieldError field_errors = 6;
+  // Explicit intent: create, update, or no-op. A new atomic resource is
+  // create even when it has no previous spec to diff against.
+  string operation = 7;
+  // Submitted intent versus live provider observation, separate from edits
+  // against the last stored manifest.
+  repeated DriftEntry live_drift = 8;
+  // Desired labels/annotations replaced by Apply, separate from spec and
+  // live drift. Paths are relative to metadata (e.g. "labels.env").
+  // desired is the stored value; observed is the submitted value.
+  // Missing and empty maps are equivalent; removed keys remain visible.
+  // Excludes the lookup name and controller-owned metadata such as source.
+  // Empty on first apply.
+  repeated DriftEntry metadata_diff = 9;
 }
 
-// FieldError attributes a single schema violation to a dotted path
-// (e.g. "spec.cpu.cores"). Emitted alongside validation_errors on
-// DryRunApplyResponse so the editor can highlight the offending field.
+// FieldError attributes a schema or reference failure to a spec path
+// (e.g. "spec.cpu.cores" or "spec.servers[0].host"). Emitted alongside
+// validation_errors so clients can highlight the offending field.
 message FieldError {
   string path = 1;
   string message = 2;
+  // Optional safe machine-readable category. Empty for uncategorized schema
+  // validation. New categories may be added; never contains upstream data.
+  string code = 3;
+  // Optional complete declared target for a known reference-resolution failure.
+  // Never contains provider observations or identity inferred from error text.
+  ResourceRef reference = 4;
+  // Declared requested output path. Empty with reference means whole resource.
+  string reference_field = 5;
 }
 
 message ChildAction {
@@ -378,6 +492,12 @@ message ApplyRequest {
   // --allow-destructive and --i-know-this-breaks-the-cluster.
   bool allow_destructive = 2;
   bool i_know_this_breaks_the_cluster = 3;
+  // Refuse to overwrite an existing managed or provider resource.
+  bool create_only = 4;
+  // Optional caller-generated identity for one Apply attempt (1-128 printable
+  // ASCII characters). Reusing it with the same actor/intent returns the original
+  // operation, never another mutation; a different intent or actor is rejected.
+  string request_id = 5;
 }
 
 message ApplyResponse {
@@ -387,6 +507,8 @@ message ApplyResponse {
   string operation_id = 1;
   // Human-friendly message describing what was submitted.
   string message = 2;
+  // Echoes the durable request identity, including for an existing operation.
+  string request_id = 3;
 }
 
 message GetRequest {
@@ -422,12 +544,16 @@ message DeleteRequest {
   string api_version = 1;
   string kind = 2;
   string name = 3;
+  // Optional durable admission key, shared with Apply's request namespace.
+  // Exact replay returns the original operation, never a second deletion.
+  string request_id = 4;
 }
 
 message DeleteResponse {
   // operation_id identifies the async operation; poll via OperationService.
   string operation_id = 1;
   string message = 2;
+  string request_id = 3;
 }
 
 // WatchRequest configures a resource Watch stream. api_version + kind are
@@ -515,16 +641,21 @@ message ProviderEntry {
   // True when the secret is stored in a file (tokenSecretFile) rather
   // than inline. Purely informational for the UI.
   bool uses_secret_file = 5;
+  // Trust bundle path on the controller host; PEM contents are never returned.
+  string ca_file = 6;
+  bool insecure_skip_verify = 7;
 }
 
 message UpsertProviderRequest {
   string name = 1;
   string endpoint = 2;
   string token_id = 3;
-  // Empty preserves the existing secret. Non-empty replaces it inline
-  // (tokenSecret). Writing to tokenSecretFile is out of scope for the
-  // MVP — users who want file-backed secrets edit config.yaml directly.
+  // Empty preserves the existing secret. Non-empty replaces it inline.
+  // File-backed credential management remains controller-local.
   string token_secret = 4;
+  // Omitted trust fields preserve existing settings; explicit empty/false clears.
+  optional string ca_file = 5;
+  optional bool insecure_skip_verify = 6;
 }
 
 message UpsertProviderResponse {
@@ -558,6 +689,8 @@ message GetControllerConfigResponse {
   // Always true today: every tunable in ControllerConfig is read once at
   // startup, so the UI should tell the user changes apply after a restart.
   bool restart_required = 2;
+  // Running authority, not a pending edit to config.yaml. Read-only.
+  string manifest_mode = 3;
 }
 
 message UpdateControllerConfigRequest {
@@ -646,6 +779,11 @@ service OperationService {
   rpc GetOperation(GetOperationRequest) returns (Operation) {
     option (google.api.http) = { get: "/v1/operations/{id}" };
   }
+  // Read-only recovery when an Apply or Delete acknowledgement was lost.
+  rpc GetOperationByRequest(GetOperationByRequestRequest) returns (Operation) {
+    // Opaque request IDs may contain reserved URL characters or dot segments.
+    option (google.api.http) = { post: "/v1/operations:byRequest" body: "*" };
+  }
   rpc ListOperations(ListOperationsRequest) returns (ListOperationsResponse) {
     option (google.api.http) = { post: "/v1/operations:list" body: "*" };
   }
@@ -695,12 +833,18 @@ message Operation {
   // so the UI's retry path can pre-fill the editor with the exact YAML
   // the failed/interrupted op was trying to apply.
   string manifest_json = 16;
+  string request_id = 17;
 }
 
 message GetOperationRequest {
   string id = 1;
   // Phase 4.5: include child operations in the response. Children are
   // ordered oldest first. List responses never include children.
+  bool include_children = 2;
+}
+
+message GetOperationByRequestRequest {
+  string request_id = 1;
   bool include_children = 2;
 }
 
@@ -783,6 +927,9 @@ message WhoAmIResponse {
   string user_id = 1;
   string session_id = 2; // empty if authenticated via root bearer
   string role = 3;       // RBAC role of the caller
+  // Stable actor identity across bearer/session credentials and --no-auth.
+  // Unlike user_id, this is also populated for the root principal.
+  string principal_id = 4;
 }
 
 // SchemaService introspects the controller's embedded CUE schemas and
@@ -833,6 +980,8 @@ message SchemaInfo {
   bool advanced = 5;
   string owner_kind = 6;
   string advanced_note = 7;
+  // Discovery-only provider inventory; never counted as saved desired resources.
+  bool observed_only = 8;
 }
 
 message GetSchemaRequest {
@@ -942,6 +1091,8 @@ message GetRepoStatusResponse {
   int32 ahead = 8;
   int32 behind = 9;
   string push_mode = 10;   // "onCommit" | "periodic" | "manual"
+  // Exactly one desired-state authority: mirror (controller) or gitops (repo).
+  string mode = 11;
 }
 
 message PushRepoRequest {}
@@ -980,4 +1131,70 @@ message GetResourceAtCommitRequest {
 message GetResourceAtCommitResponse {
   string yaml = 1;  // the manifest YAML at that commit ("" if it didn't exist)
   bool existed = 2; // false when the file was absent at that commit
+}
+
+// Overview reads persisted control-plane metadata only. It never observes
+// providers, expands secrets or infers infrastructure readiness.
+service OverviewService {
+  rpc GetOverview(GetOverviewRequest) returns (GetOverviewResponse) {
+    option (google.api.http) = { get: "/v1/overview" };
+  }
+}
+
+message GetOverviewRequest {
+  // Per-list cap for active/review operations. 0 defaults to 10; maximum 100.
+  uint32 operation_limit = 1;
+}
+
+message ManagedKindCount {
+  string api_version = 1;
+  string kind = 2;
+  uint32 resources = 3;
+}
+
+message GetOverviewResponse {
+  string as_of = 1; // RFC3339 snapshot time; not a provider health observation.
+  uint32 managed_resources = 2; // Saved desired records, including owned children.
+  repeated ManagedKindCount kinds = 3;
+  // Top-level Apply/Delete requests only; child steps never double-count.
+  uint32 pending_operations = 4;
+  uint32 running_operations = 5;
+  // Resources whose latest retained root request failed/interrupted/was canceled.
+  // This describes operation history, not current resource health.
+  uint32 review_resources = 6;
+  // Bounded metadata-only rows. No manifests, results, errors or secret values.
+  repeated Operation active_operations = 7;
+  repeated Operation review_operations = 8;
+}
+
+// Inventory reads saved desired intent independently of provider availability.
+// These records are not live observations, readiness or ownership authorization.
+service InventoryService {
+  rpc ListSavedResources(ListRequest) returns (ListSavedResourcesResponse) {
+    option (google.api.http) = { post: "/v1/inventory:list" body: "*" };
+  }
+  rpc GetSavedResource(GetRequest) returns (GetSavedResourceResponse) {
+    option (google.api.http) = { post: "/v1/inventory:get" body: "*" };
+  }
+}
+
+message SavedResourceMetadata {
+  string api_version = 1;
+  string kind = 2;
+  Metadata metadata = 3;
+  string applied_at = 4;
+  string source = 5;
+}
+
+message ListSavedResourcesResponse {
+  // Metadata only: no spec/status, provider reads or expanded secrets.
+  repeated SavedResourceMetadata resources = 1;
+}
+
+message GetSavedResourceResponse {
+  // Raw persisted desired intent, markers intact. No observed status,
+  // drift, children or provider-derived ownership references.
+  Resource resource = 1;
+  string applied_at = 2;
+  string source = 3;
 }

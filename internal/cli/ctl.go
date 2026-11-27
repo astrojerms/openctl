@@ -31,12 +31,18 @@ the persistent controller. In Phase 6 these graduate to top-level commands
 and the exec-plugin paths are removed.`,
 	}
 	cmd.AddCommand(newCtlApplyCommand())
+	cmd.AddCommand(newCtlPreviewCommand())
+	cmd.AddCommand(newCtlActionCommand())
+	cmd.AddCommand(newCtlOverviewCommand())
 	cmd.AddCommand(newCtlGetCommand())
+	cmd.AddCommand(newCtlHealthCommand())
 	cmd.AddCommand(newCtlDeleteCommand())
 	cmd.AddCommand(newCtlOpCommand())
 	cmd.AddCommand(newCtlExportCommand())
 	cmd.AddCommand(newCtlAdoptCommand())
 	cmd.AddCommand(newCtlForgetCommand())
+	cmd.AddCommand(newCtlDiscoverCommand())
+	cmd.AddCommand(newCtlConfirmIdentityCommand())
 	return cmd
 }
 
@@ -48,6 +54,8 @@ func newCtlApplyCommand() *cobra.Command {
 		waitTimeout      time.Duration
 		allowDestructive bool
 		iKnowThisBreaks  bool
+		createOnly       bool
+		requestID        string
 	)
 	cmd := &cobra.Command{
 		Use:   "apply -f <manifest>",
@@ -72,7 +80,15 @@ Destructive convergence (Phase 5):
 			if err := schema.Validate(r); err != nil {
 				return fmt.Errorf("validation: %w", err)
 			}
-			return ctlApply(cmd.Context(), r, !noWait, waitTimeout, allowDestructive, iKnowThisBreaks)
+			pr, err := resourceToProto(r)
+			if err != nil {
+				return err
+			}
+			return ctlApply(cmd.Context(), &apiv1.ApplyRequest{
+				Resource: pr, AllowDestructive: allowDestructive,
+				IKnowThisBreaksTheCluster: iKnowThisBreaks,
+				CreateOnly:                createOnly, RequestId: requestID,
+			}, !noWait, waitTimeout)
 		},
 	}
 	cmd.Flags().StringVarP(&file, "file", "f", "", "manifest file (.yaml or .cue)")
@@ -81,11 +97,14 @@ Destructive convergence (Phase 5):
 	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 30*time.Minute, "max time to wait for completion when not --no-wait (the op keeps running server-side if this fires)")
 	cmd.Flags().BoolVar(&allowDestructive, "allow-destructive", false, "permit removing declared children when re-applying a Cluster")
 	cmd.Flags().BoolVar(&iKnowThisBreaks, "i-know-this-breaks-the-cluster", false, "override the catastrophic-op block (last CP, quorum loss, last worker)")
+	cmd.Flags().BoolVar(&createOnly, "create-only", false, "refuse to overwrite an existing managed or provider resource")
+	cmd.Flags().StringVar(&requestID, "request-id", "", "durable Apply attempt identity; reuse only with identical intent to recover a lost response (default: new UUID)")
 	return cmd
 }
 
 func newCtlGetCommand() *cobra.Command {
 	var apiVersion string
+	var saved bool
 	cmd := &cobra.Command{
 		Use:   "get <kind> [name]",
 		Short: "Get one or all resources of a kind from the controller",
@@ -95,6 +114,13 @@ func newCtlGetCommand() *cobra.Command {
 			if apiVersion == "" {
 				return fmt.Errorf("--api-version is required (e.g. proxmox.openctl.io/v1)")
 			}
+			if saved {
+				name := ""
+				if len(args) == 2 {
+					name = args[1]
+				}
+				return ctlSaved(cmd, apiVersion, kind, name)
+			}
 			if len(args) == 2 {
 				return ctlGet(cmd.Context(), apiVersion, kind, args[1])
 			}
@@ -102,27 +128,30 @@ func newCtlGetCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&apiVersion, "api-version", "", "resource apiVersion (e.g. proxmox.openctl.io/v1)")
+	cmd.Flags().BoolVar(&saved, "saved", false, "read saved desired intent/inventory without contacting providers (not live status or mutation authority)")
 	return cmd
 }
 
 func newCtlDeleteCommand() *cobra.Command {
 	var (
 		apiVersion  string
+		requestID   string
 		noWait      bool
 		waitTimeout time.Duration
 	)
 	cmd := &cobra.Command{
 		Use:   "delete <kind> <name>",
-		Short: "Delete a resource via the controller (idempotent)",
+		Short: "Delete a resource via the controller with durable request recovery",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if apiVersion == "" {
 				return fmt.Errorf("--api-version is required (e.g. proxmox.openctl.io/v1)")
 			}
-			return ctlDelete(cmd.Context(), apiVersion, args[0], args[1], !noWait, waitTimeout)
+			return ctlDelete(cmd.Context(), &apiv1.DeleteRequest{ApiVersion: apiVersion, Kind: args[0], Name: args[1], RequestId: requestID}, !noWait, waitTimeout)
 		},
 	}
 	cmd.Flags().StringVar(&apiVersion, "api-version", "", "resource apiVersion (e.g. proxmox.openctl.io/v1)")
+	cmd.Flags().StringVar(&requestID, "request-id", "", "durable Delete request identity (generated if omitted); reuse it to recover an uncertain submission")
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "return immediately after submission instead of polling for completion")
 	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 30*time.Minute, "max time to wait for completion when not --no-wait (the op keeps running server-side if this fires)")
 	return cmd
@@ -140,21 +169,37 @@ func newCtlOpCommand() *cobra.Command {
 
 func newCtlOpGetCommand() *cobra.Command {
 	var noChildren bool
+	var requestID string
 	cmd := &cobra.Command{
-		Use:   "get <op-id>",
-		Short: "Get an operation by ID",
-		Args:  cobra.ExactArgs(1),
+		Use:   "get [op-id]",
+		Short: "Get an operation by ID or --request-id",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if (len(args) == 0) == (requestID == "") {
+				return fmt.Errorf("provide exactly one operation ID or --request-id")
+			}
+			if requestID != "" {
+				if err := validateOperationRequestID(requestID); err != nil {
+					return err
+				}
+			}
 			conn, token, err := dialController()
 			if err != nil {
 				return err
 			}
 			defer func() { _ = conn.Close() }()
 			ctx := metadata.AppendToOutgoingContext(cmd.Context(), "authorization", "Bearer "+token)
-			op, err := apiv1.NewOperationServiceClient(conn).GetOperation(ctx, &apiv1.GetOperationRequest{
-				Id:              args[0],
-				IncludeChildren: !noChildren,
-			})
+			client := apiv1.NewOperationServiceClient(conn)
+			var op *apiv1.Operation
+			if requestID != "" {
+				op, err = client.GetOperationByRequest(ctx, &apiv1.GetOperationByRequestRequest{
+					RequestId: requestID, IncludeChildren: !noChildren,
+				})
+			} else {
+				op, err = client.GetOperation(ctx, &apiv1.GetOperationRequest{
+					Id: args[0], IncludeChildren: !noChildren,
+				})
+			}
 			if err != nil {
 				return err
 			}
@@ -162,6 +207,7 @@ func newCtlOpGetCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&noChildren, "no-children", false, "skip fetching child operations")
+	cmd.Flags().StringVar(&requestID, "request-id", "", "recover an Apply/Delete operation by its durable request identity, without submitting work")
 	return cmd
 }
 
@@ -218,25 +264,34 @@ func printOp(op *apiv1.Operation) error {
 	return nil
 }
 
-func ctlApply(ctx context.Context, r *protocol.Resource, wait bool, waitTimeout time.Duration, allowDestructive, iKnowThisBreaks bool) error {
+func ctlApply(ctx context.Context, req *apiv1.ApplyRequest, wait bool, waitTimeout time.Duration) error {
 	conn, token, err := dialController()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = conn.Close() }()
 
-	pr, err := resourceToProto(r)
-	if err != nil {
+	if err := prepareApplyRequest(req); err != nil {
 		return err
 	}
 	ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
-	resp, err := apiv1.NewResourceServiceClient(conn).Apply(ctx, &apiv1.ApplyRequest{
-		Resource:                  pr,
-		AllowDestructive:          allowDestructive,
-		IKnowThisBreaksTheCluster: iKnowThisBreaks,
-	})
+	capabilities, err := apiv1.NewPingServiceClient(conn).Ping(ctx, &apiv1.PingRequest{})
 	if err != nil {
-		return fmt.Errorf("apply: %w", err)
+		return fmt.Errorf("check controller Apply recovery support: %w", err)
+	}
+	if !capabilities.GetSupportsIdempotentApply() {
+		return fmt.Errorf("controller does not support durable Apply request recovery; upgrade it before submitting")
+	}
+	fmt.Fprintf(os.Stderr, "Apply request: %s\n", req.GetRequestId())
+	resp, err := apiv1.NewResourceServiceClient(conn).Apply(ctx, req)
+	if err != nil {
+		return fmt.Errorf("apply request %s: %w; recover with 'openctl ctl op get --request-id <request-id>' before choosing a new request ID", req.GetRequestId(), err)
+	}
+	if resp.GetRequestId() != req.GetRequestId() {
+		return fmt.Errorf("controller did not acknowledge request %s; operation %s may already be running; inspect it before retrying", req.GetRequestId(), resp.GetOperationId())
+	}
+	if resp.GetOperationId() == "" {
+		return fmt.Errorf("controller did not return an operation ID for request %s; recover by request ID before retrying", req.GetRequestId())
 	}
 	fmt.Fprintln(os.Stderr, resp.GetMessage())
 	if !wait {
@@ -286,41 +341,81 @@ func ctlList(ctx context.Context, apiVersion, kind string) error {
 	return nil
 }
 
-func ctlDelete(ctx context.Context, apiVersion, kind, name string, wait bool, waitTimeout time.Duration) error {
+func ctlDelete(ctx context.Context, req *apiv1.DeleteRequest, wait bool, waitTimeout time.Duration) error {
+	if err := prepareDeleteRequest(req); err != nil {
+		return err
+	}
 	conn, token, err := dialController()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = conn.Close() }()
 	ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
-	resp, err := apiv1.NewResourceServiceClient(conn).Delete(ctx, &apiv1.DeleteRequest{
-		ApiVersion: apiVersion,
-		Kind:       kind,
-		Name:       name,
-	})
+	capabilities, err := apiv1.NewPingServiceClient(conn).Ping(ctx, &apiv1.PingRequest{})
 	if err != nil {
-		return fmt.Errorf("delete: %w", err)
+		return fmt.Errorf("check controller Delete recovery support: %w", err)
+	}
+	if !capabilities.GetSupportsIdempotentDelete() {
+		return fmt.Errorf("controller does not support durable Delete request recovery; upgrade it before submitting")
+	}
+	fmt.Fprintf(os.Stderr, "Delete request: %s\n", req.GetRequestId())
+	const recovery = "recover with 'openctl ctl op get --request-id <request-id>' using the request ID above before choosing a new request ID"
+	resp, err := apiv1.NewResourceServiceClient(conn).Delete(ctx, req)
+	if err != nil {
+		return fmt.Errorf("delete request %s: %w; %s", req.GetRequestId(), err, recovery)
+	}
+	if resp.GetRequestId() != req.GetRequestId() {
+		return fmt.Errorf("controller did not acknowledge Delete request %s; %s", req.GetRequestId(), recovery)
+	}
+	if resp.GetOperationId() == "" {
+		return fmt.Errorf("controller did not return an operation ID for Delete request %s; %s", req.GetRequestId(), recovery)
 	}
 	fmt.Fprintln(os.Stderr, resp.GetMessage())
 	if !wait {
 		fmt.Println(resp.GetOperationId())
 		return nil
 	}
-	return waitForOp(ctx, conn, resp.GetOperationId(), waitTimeout)
+	if err := waitForOp(ctx, conn, resp.GetOperationId(), waitTimeout); err != nil {
+		return fmt.Errorf("delete request %s: %w; %s", req.GetRequestId(), err, recovery)
+	}
+	return nil
 }
 
 // waitForOp polls the controller for op completion. Prints the final op
 // state on stdout. Errors out if the timeout fires or the op terminates
 // with a non-success status.
 func waitForOp(ctx context.Context, conn *grpc.ClientConn, opID string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
 	client := apiv1.NewOperationServiceClient(conn)
-	for {
-		op, err := client.GetOperation(ctx, &apiv1.GetOperationRequest{Id: opID})
+	lastStatus := "unknown"
+	waitError := func() error {
+		err := ctx.Err()
+		if err == nil {
+			if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+				err = context.DeadlineExceeded
+			}
+		}
 		if err != nil {
+			return fmt.Errorf("stopped waiting for operation %s; the operation may still be running: %w", opID, err)
+		}
+		return fmt.Errorf("operation %s did not finish within %s (still %s — poll with `openctl ctl op get %s`)",
+			opID, timeout, lastStatus, opID)
+	}
+	for {
+		op, err := client.GetOperation(waitCtx, &apiv1.GetOperationRequest{Id: opID})
+		if err != nil {
+			// gRPC can observe the deadline before the context timer closes Done.
+			deadline, _ := waitCtx.Deadline()
+			if waitCtx.Err() != nil || !time.Now().Before(deadline) {
+				return waitError()
+			}
 			return fmt.Errorf("get op %s: %w", opID, err)
 		}
-		switch op.GetStatus() {
+		lastStatus = op.GetStatus()
+		switch lastStatus {
 		case "succeeded":
 			fmt.Fprintf(os.Stderr, "operation %s succeeded\n", opID)
 			if op.GetResult() != nil {
@@ -331,12 +426,14 @@ func waitForOp(ctx context.Context, conn *grpc.ClientConn, opID string, timeout 
 			return fmt.Errorf("operation %s failed: %s", opID, op.GetError())
 		case "interrupted":
 			return fmt.Errorf("operation %s interrupted: %s", opID, op.GetError())
+		case "canceled":
+			return fmt.Errorf("operation %s canceled: %s", opID, op.GetError())
 		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("operation %s did not finish within %s (still %s — poll with `openctl ctl op get %s`)",
-				opID, timeout, op.GetStatus(), opID)
+		select {
+		case <-waitCtx.Done():
+			return waitError()
+		case <-ticker.C:
 		}
-		time.Sleep(500 * time.Millisecond)
 	}
 }
 

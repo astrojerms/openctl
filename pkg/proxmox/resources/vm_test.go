@@ -1,6 +1,8 @@
 package resources
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/openctl/openctl/pkg/protocol"
@@ -100,6 +102,32 @@ func TestVMToResource_NoConfig(t *testing.T) {
 	// 4GB in bytes / 1024 / 1024 = 4096 MB
 	if memory["size"] != int64(4096) {
 		t.Errorf("expected memory.size=4096 from VM, got %v", memory["size"])
+	}
+}
+
+func TestVMToResourceWithIPRejectsContradictoryEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state string
+		err   error
+		code  string
+	}{
+		{"failed observation", "running", errors.New("POISON private provider response"), "guest_ip_unavailable"},
+		{"stopped VM", "stopped", nil, "vm_not_running"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resource := VMToResourceWithIP(&client.VM{Status: tc.state}, nil, "10.0.0.8", tc.err)
+			if _, present := resource.Status["ip"]; present {
+				t.Fatal("contradictory evidence published an address")
+			}
+			observation := resource.Status["ipObservation"].(map[string]any)
+			if observation["state"] != "unavailable" || observation["code"] != tc.code {
+				t.Fatalf("unexpected observation: %v", observation)
+			}
+			if strings.Contains(observation["message"].(string), "POISON") {
+				t.Fatal("raw observation failure was exposed")
+			}
+		})
 	}
 }
 

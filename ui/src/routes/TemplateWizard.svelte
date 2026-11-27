@@ -1,14 +1,7 @@
 <script lang="ts">
-  // TemplateWizard: fetches a template's parameter set, renders a
-  // form using the parameters (a lightweight cousin of FormField for
-  // template shape, since template params are flat name+type pairs
-  // instead of a nested schema tree), and on submit:
-  //   1. calls RenderTemplate to get a full Resource
-  //   2. submits it via the normal Apply RPC
-  //   3. navigates to the new resource's detail page on success
-  //
-  // Same DryRun preview + Apply pipeline as the Create flow, just
-  // fronted by a template-specific parameter form.
+  // Parameters and rendered intent stay in memory. Only the durable controller
+  // request identity survives reloads; an uncertain acknowledgement is recovered
+  // read-only, never submitted again.
 
   import { onDestroy, onMount, setContext } from 'svelte';
   import { writable } from 'svelte/store';
@@ -19,10 +12,16 @@
     type GetTemplateResponse,
     type TemplateParameter,
     type DryRunApplyResponse,
+    type Resource,
   } from '../lib/api';
   import { ensureOptions, optionsStore } from '../lib/options';
-  import { routeHref, navigate } from '../lib/router';
+  import { routeHref } from '../lib/router';
   import { resourceToYAML } from '../lib/yaml';
+  import { canEditDesired, desiredMutationHint } from '../lib/authority';
+  import { auth } from '../lib/auth';
+  import { createApplyAttempt } from '../lib/applyAttempt';
+  import ApplyAttemptPanel from '../components/ApplyAttemptPanel.svelte';
+  import FieldDiagnostic from '../components/FieldDiagnostic.svelte';
 
   export let template: string;
 
@@ -43,41 +42,97 @@
   let dryRun: DryRunApplyResponse | null = null;
   let dryRunError = '';
   let previewing = false;
+  let previewRevision = 0;
+  let reviewedParams = '';
+  let reviewedResource: Resource | null = null;
+  let checkedGates: Record<string, boolean> = {};
 
-  // Apply state.
-  let submitting = false;
-  let submitError = '';
+  let mounted = false;
+  let activeScope = '';
+  let scopeRevision = 0;
+  let loadController: AbortController | undefined;
+  let previewController: AbortController | undefined;
+  const attempt = createApplyAttempt({
+    storage: () => sessionStorage,
+    canSubmit: () => mounted && $auth.kind === 'signed-in' && $canEditDesired,
+    onUnauthorized: () => auth.set({ kind: 'signed-out' }),
+  });
 
   // options context so the OptionsKind dropdowns can resolve against
   // the containing apiVersion (which we know from the template summary).
   const apiVersionCtx = writable('');
   setContext('resourceAPIVersionStore', apiVersionCtx);
 
-  onMount(async () => {
+  onMount(() => { mounted = true; });
+
+  $: scopeKey = JSON.stringify([template, $auth]);
+  $: if (mounted && scopeKey !== activeScope) {
+    activeScope = scopeKey;
+    void openTemplate();
+  }
+
+  function resetPreview() {
+    if (previewTimer !== undefined) clearTimeout(previewTimer);
+    previewTimer = undefined;
+    previewController?.abort();
+    previewRevision++;
+    dryRun = null;
+    reviewedResource = null;
+    reviewedParams = '';
+    checkedGates = {};
+    renderedYAML = '';
+    renderError = '';
+    dryRunError = '';
+    previewing = false;
+  }
+
+  async function openTemplate() {
+    const revision = ++scopeRevision;
+    const requestedTemplate = template;
+    loadController?.abort();
+    resetPreview();
+    attempt.close();
+    info = null;
+    params = {};
+    apiVersionCtx.set('');
+    loadError = '';
+    loading = true;
+    const controller = new AbortController();
+    loadController = controller;
+    // Binding/recovery is independent of template availability and defaults.
+    void attempt.open({ source: 'template', template: requestedTemplate }, $auth.kind === 'signed-in' ? $auth.me : null);
     try {
-      info = await templatesApi.get(template);
-      apiVersionCtx.set(info.summary.apiVersion);
-      for (const p of info.parameters ?? []) {
+      const loaded = await templatesApi.get(requestedTemplate, { signal: controller.signal });
+      if (!mounted || revision !== scopeRevision) return;
+      info = loaded;
+      apiVersionCtx.set(loaded.summary.apiVersion);
+      const defaults: Record<string, unknown> = {};
+      for (const p of loaded.parameters ?? []) {
         if (p.defaultJson) {
           try {
-            params[p.name] = JSON.parse(p.defaultJson);
+            defaults[p.name] = JSON.parse(p.defaultJson);
           } catch {
             /* ignore malformed defaults; user fills in */
           }
         }
       }
-      params = { ...params };
+      params = defaults;
       schedulePreview();
     } catch (err) {
-      if (err instanceof UnauthorizedError) return;
+      if (!mounted || revision !== scopeRevision) return;
+      if (err instanceof UnauthorizedError) { auth.set({ kind: 'signed-out' }); return; }
       loadError = err instanceof Error ? err.message : String(err);
     } finally {
-      loading = false;
+      if (mounted && revision === scopeRevision) loading = false;
     }
-  });
+  }
 
   onDestroy(() => {
-    if (previewTimer !== undefined) clearTimeout(previewTimer);
+    mounted = false;
+    scopeRevision++;
+    loadController?.abort();
+    resetPreview();
+    attempt.close();
   });
 
   function setParam(name: string, value: unknown) {
@@ -86,62 +141,82 @@
   }
 
   function schedulePreview() {
-    if (previewTimer !== undefined) clearTimeout(previewTimer);
+    resetPreview();
+    if (!info || !mounted) return;
+    previewing = true;
     previewTimer = setTimeout(runPreview, PREVIEW_DEBOUNCE_MS) as unknown as number;
   }
 
   async function runPreview() {
     if (!info) return;
-    renderError = '';
-    dryRunError = '';
-    dryRun = null;
-    previewing = true;
+    const revision = previewRevision;
+    const requestedTemplate = template;
+    const paramsKey = JSON.stringify(params);
+    const previewParams = { ...params };
+    const controller = new AbortController();
+    previewController = controller;
     try {
-      const rendered = await templatesApi.render(template, params);
+      const rendered = await templatesApi.render(requestedTemplate, previewParams, { signal: controller.signal });
+      if (revision !== previewRevision) return;
       renderedYAML = resourceToYAML(rendered.resource);
       try {
-        dryRun = await resources.dryRunApply(rendered.resource);
+        const plan = await resources.dryRunApply(rendered.resource, { signal: controller.signal });
+        if (revision !== previewRevision) return;
+        dryRun = plan;
+        reviewedResource = rendered.resource;
+        reviewedParams = paramsKey;
+        checkedGates = Object.fromEntries((plan.requiredGates ?? []).map((g) => [g, false]));
       } catch (err) {
-        if (err instanceof UnauthorizedError) return;
+        if (revision !== previewRevision) return;
+        if (err instanceof UnauthorizedError) { auth.set({ kind: 'signed-out' }); return; }
         dryRunError = err instanceof Error ? err.message : String(err);
       }
     } catch (err) {
-      if (err instanceof UnauthorizedError) return;
+      if (revision !== previewRevision) return;
+      if (err instanceof UnauthorizedError) { auth.set({ kind: 'signed-out' }); return; }
       renderError = err instanceof Error ? err.message : String(err);
       renderedYAML = '';
     } finally {
-      previewing = false;
+      if (revision === previewRevision) previewing = false;
     }
+  }
+  $: previewErrors = (dryRun?.validationErrors ?? []).filter((problem) =>
+    !(dryRun?.fieldErrors ?? []).some((field) => problem === field.message || problem === `${field.path}: ${field.message}`));
+
+  function reviewValid() {
+    return !!info && !previewing && !renderError && !dryRunError && !!dryRun
+      && !!reviewedResource && reviewedParams === JSON.stringify(params)
+      && dryRun.operation === 'create'
+      && (dryRun.requiredGates ?? []).every((g) =>
+        (g === 'allow_destructive' || g === 'i_know_this_breaks_the_cluster') && checkedGates[g])
+      && !(dryRun.validationErrors?.length) && !(dryRun.fieldErrors?.length);
   }
 
   async function submit() {
-    if (!info || submitting) return;
-    submitError = '';
-    submitting = true;
-    try {
-      // Render one more time so the applied manifest matches the last
-      // preview even if params changed mid-preview.
-      const rendered = await templatesApi.render(template, params);
-      const resp = await resources.apply({ resource: rendered.resource });
-      if (resp.operationId) {
-        // Navigate to the new resource's detail page — the op will tail
-        // in the drawer + the detail's inline op banner.
-        const name = rendered.resource.metadata?.name ?? '';
-        if (name && info.summary.apiVersion && info.summary.kind) {
-          navigate({
-            name: 'detail',
-            apiVersion: info.summary.apiVersion,
-            kind: info.summary.kind,
-            resourceName: name,
-          });
-        }
-      }
-    } catch (err) {
-      if (err instanceof UnauthorizedError) return;
-      submitError = err instanceof Error ? err.message : String(err);
-    } finally {
-      submitting = false;
-    }
+    if (applyBlocked || !$canEditDesired || $auth.kind !== 'signed-in' || !reviewedResource) return;
+    const resource = reviewedResource;
+    const revision = previewRevision;
+    const scope = scopeRevision;
+    const reviewedTemplate = template;
+    const paramsKey = JSON.stringify(params);
+    const allowDestructive = checkedGates['allow_destructive'] ?? false;
+    const iKnowThisBreaksTheCluster = checkedGates['i_know_this_breaks_the_cluster'] ?? false;
+    await attempt.submit({
+      resource,
+      createOnly: true,
+      allowDestructive,
+      iKnowThisBreaksTheCluster,
+    }, () => mounted && scope === scopeRevision && revision === previewRevision
+      && template === reviewedTemplate && paramsKey === JSON.stringify(params)
+      && reviewedResource === resource && reviewValid()
+      && allowDestructive === (checkedGates['allow_destructive'] ?? false)
+      && iKnowThisBreaksTheCluster === (checkedGates['i_know_this_breaks_the_cluster'] ?? false));
+  }
+
+  async function reviewNew() {
+    if (!$canEditDesired || $auth.kind !== 'signed-in') return;
+    const scope = scopeRevision;
+    if (await attempt.reviewNew() && mounted && scope === scopeRevision) schedulePreview();
   }
 
   // OptionsKind dropdown support: for each param with optionsKind set,
@@ -160,12 +235,21 @@
     return $optionsStore.data[`${info.summary.apiVersion}/${p.optionsKind}`] ?? null;
   }
 
-  $: hasChange = !!dryRun && (
-    (dryRun.diff?.length ?? 0) > 0 ||
-    (dryRun.children ?? []).some((c) => c.verb !== 'no-op')
-  );
-  $: applyBlocked = submitting || !!renderError || !!dryRunError || !dryRun || !hasChange
-    || (dryRun.validationErrors?.length ?? 0) > 0;
+  function gateLabel(g: string): string {
+    switch (g) {
+      case 'allow_destructive': return 'Allow destructive changes';
+      case 'i_know_this_breaks_the_cluster': return 'I know this breaks the cluster';
+      default: return g;
+    }
+  }
+
+  $: nameCollision = !!dryRun && dryRun.operation !== 'create';
+  $: applyBlocked = !!$attempt.busy || !$attempt.ready || (!!$attempt.attempt && !$attempt.reviewingNew)
+    || previewing || !!renderError || !!dryRunError || !dryRun
+    || !reviewedResource || reviewedParams !== JSON.stringify(params)
+    || nameCollision || !(dryRun.requiredGates ?? []).every((g) =>
+      (g === 'allow_destructive' || g === 'i_know_this_breaks_the_cluster') && checkedGates[g])
+    || (dryRun.validationErrors?.length ?? 0) > 0 || (dryRun.fieldErrors?.length ?? 0) > 0;
 </script>
 
 <section>
@@ -180,6 +264,13 @@
       <h2>Loading…</h2>
     {/if}
   </header>
+
+  <ApplyAttemptPanel
+    state={$attempt}
+    onRecover={() => attempt.recover()}
+    onVerify={() => attempt.verify()}
+    onReviewNew={reviewNew}
+  />
 
   {#if loadError}
     <p class="err">{loadError}</p>
@@ -256,29 +347,45 @@
           </div>
         {/each}
 
+        {#if nameCollision}
+          <article class="diag">
+            <h4>Name already in use</h4>
+            <p class="err small">This template would overwrite an existing resource. Choose a different name to create a new one.</p>
+          </article>
+        {/if}
+        {#if (dryRun?.requiredGates?.length ?? 0) > 0}
+          <article class="diag">
+            <h4>Destructive change — confirm before creating:</h4>
+            {#each dryRun?.requiredGates ?? [] as g}
+              <label class="bool">
+                <input type="checkbox" bind:checked={checkedGates[g]} />
+                <span>{gateLabel(g)}</span>
+              </label>
+            {/each}
+          </article>
+        {/if}
         <div class="actions">
-          <button class="primary" disabled={applyBlocked} on:click={submit}>
-            {submitting ? 'Creating…' : 'Create'}
+          <button class="primary" disabled={applyBlocked || !$canEditDesired} on:click={submit}
+            title={!$canEditDesired ? $desiredMutationHint : ''}>
+            {$attempt.busy === 'submitting' ? 'Creating…' : 'Create'}
           </button>
           {#if previewing}
             <span class="muted small">previewing…</span>
           {/if}
         </div>
-        {#if submitError}
-          <p class="err small">{submitError}</p>
-        {/if}
         {#if renderError}
           <p class="err small">Render error: {renderError}</p>
         {/if}
         {#if dryRunError}
           <p class="err small">Dry-run error: {dryRunError}</p>
         {/if}
-        {#if dryRun && (dryRun.validationErrors?.length ?? 0) > 0}
-          <article class="diag">
+        {#if dryRun && ((dryRun.fieldErrors?.length ?? 0) > 0 || previewErrors.length > 0)}
+          <article class="diag" aria-label="Preview validation errors">
             <h4>Validation</h4>
-            {#each dryRun.validationErrors ?? [] as e}
-              <p class="err small mono">{e}</p>
+            {#each dryRun.fieldErrors ?? [] as field}
+              <p class="err small mono"><FieldDiagnostic {field} /></p>
             {/each}
+            {#each previewErrors as problem}<p class="err small mono">{problem}</p>{/each}
           </article>
         {/if}
       </div>
@@ -292,6 +399,40 @@
         {/if}
         {#if dryRun?.summary}
           <p class="muted small preview-summary">{dryRun.summary}</p>
+        {/if}
+        {#if (dryRun?.metadataDiff?.length ?? 0) > 0}
+          <h4>Desired metadata changes</h4>
+          <table class="drift">
+            <thead>
+              <tr><th>Metadata path</th><th>Stored intent</th><th>Submitted intent</th></tr>
+            </thead>
+            <tbody>
+              {#each dryRun?.metadataDiff ?? [] as d}
+                <tr>
+                  <td class="mono">{d.path}</td>
+                  <td class="mono">{d.desired}</td>
+                  <td class="mono">{d.observed}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        {/if}
+        {#if (dryRun?.liveDrift?.length ?? 0) > 0}
+          <h4>Live infrastructure drift</h4>
+          <table class="drift">
+            <thead>
+              <tr><th>Path</th><th>Desired</th><th>Observed</th></tr>
+            </thead>
+            <tbody>
+              {#each dryRun?.liveDrift ?? [] as d}
+                <tr>
+                  <td class="mono">{d.path}</td>
+                  <td class="mono">{d.desired}</td>
+                  <td class="mono">{d.observed}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
         {/if}
       </div>
     </div>
@@ -429,6 +570,22 @@
   .preview-summary {
     margin-top: 0.5rem;
     color: #6ea8ff;
+  }
+  .drift {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+  }
+  .drift th, .drift td {
+    text-align: left;
+    padding: 0.35rem 0.6rem;
+    border-bottom: 1px solid rgba(127, 127, 127, 0.15);
+  }
+  .drift th {
+    font-size: 0.7rem;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
   }
   .muted {
     color: #888;

@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { ApiError, repo, type RepoStatus } from '../lib/api';
+  import { canMutate } from '../lib/auth';
+  import { recordAuthority, refreshAuthority } from '../lib/authority';
 
   // Poll repo status — there's no Watch RPC for repo state, and the
   // signal-to-noise of a stream would be low (status changes on apply
@@ -28,12 +30,14 @@
   async function refresh() {
     try {
       status = await repo.status();
+      recordAuthority(status.mode);
       error = '';
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
-        // Older controller without RepoService — hide quietly.
+        // Mirror-only controllers may have their disk projection disabled.
         status = { enabled: false };
         error = '';
+        await refreshAuthority();
         return;
       }
       error = err instanceof Error ? err.message : String(err);
@@ -97,14 +101,14 @@
   // the mode), even if there's nothing to send — the server will return
   // a friendly "nothing to push" message.
   $: showPush =
+    $canMutate &&
     !!status?.enabled &&
+    status?.mode !== 'gitops' &&
     !!status?.remote &&
     ((status?.ahead ?? 0) > 0 || status?.pushMode === 'manual');
 
-  // "Pull" shows whenever a remote is configured — it's how an operator picks
-  // up out-of-band commits (another controller, a manual git push to the
-  // remote). Highlighted when the local is behind.
-  $: showPull = !!status?.enabled && !!status?.remote;
+  // Only the upstream-authored mode may import remote desired state.
+  $: showPull = $canMutate && status?.mode === 'gitops' && !!status?.enabled && !!status?.remote;
 </script>
 
 <span

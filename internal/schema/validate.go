@@ -189,6 +189,13 @@ func SchemaSelector(apiVersion, kind string) (pkg, def string, ok bool) {
 		if kind == "AgentInstall" {
 			return "k3s", "#AgentInstall", true
 		}
+	case "apps":
+		switch kind {
+		case "ComposeApplication":
+			return "apps", "#ComposeApplication", true
+		case "Jellyfin":
+			return "apps", "#Jellyfin", true
+		}
 	}
 	return "", "", false
 }

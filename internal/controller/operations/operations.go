@@ -14,12 +14,15 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/openctl/openctl/internal/controller/manifests"
+	"github.com/openctl/openctl/internal/controller/refs"
+	"github.com/openctl/openctl/pkg/protocol"
 )
 
 // Op type values. Kept as string constants so the wire format and the SQL
@@ -74,6 +77,11 @@ type Operation struct {
 	// (SourceCLI, SourceUI); kept as a free-form string here so this
 	// package doesn't pull in manifests just for the constants.
 	Source string
+	// CreateOnly rejects an existing managed or live resource instead of
+	// updating it. Persisted so a restart cannot turn creation into upsert.
+	CreateOnly bool
+	// RequestID is the durable Apply or Delete request key, when supplied.
+	RequestID string
 }
 
 // IsTerminal reports whether the operation has reached a final status —
@@ -86,14 +94,26 @@ func (o *Operation) IsTerminal() bool {
 	return false
 }
 
-// ConflictError is returned by Submit when an in-flight op already exists
-// for the same resource. The CLI/RPC layer maps this to AlreadyExists +
-// surfaces InflightID so the user can poll the existing op.
+// ConflictError is returned by Submit for an in-flight operation, a conflicting
+// reference mutation, or a create-only request conflicting with desired state.
+// The CLI/RPC layer maps these cases to AlreadyExists.
 type ConflictError struct {
 	InflightID string
+	// ResourceExists distinguishes an existing desired-state record from
+	// an in-flight operation. InflightID is empty in this case.
+	ResourceExists bool
+	// Reason explains cross-resource reference conflicts. InflightID identifies
+	// the operation that must finish or be canceled before retrying.
+	Reason string
 }
 
 func (e *ConflictError) Error() string {
+	if e.Reason != "" {
+		return fmt.Sprintf("%s (operation %s)", e.Reason, e.InflightID)
+	}
+	if e.ResourceExists {
+		return "resource already has desired state; use update instead of create"
+	}
 	return fmt.Sprintf("operation %s already in flight for this resource", e.InflightID)
 }
 
@@ -115,11 +135,19 @@ func New(db *sql.DB, retainPerResource int) *Store {
 // Submit inserts a new operation in `pending` state. Enforces the
 // fail-fast concurrency rule: returns *ConflictError if another op for
 // the same (apiVersion, kind, name) is currently pending or running.
+// Reference targets are also fenced against concurrent deletion in either order.
 //
 // Also runs the per-resource GC after a successful submission.
 func (s *Store) Submit(ctx context.Context, op *Operation) (*Operation, error) {
+	return s.submit(ctx, op, nil)
+}
+
+func (s *Store) submit(ctx context.Context, op *Operation, request *RequestBinding) (*Operation, error) {
 	if op.Type == "" || op.APIVersion == "" || op.Kind == "" || op.ResourceName == "" {
 		return nil, fmt.Errorf("submit: type, apiVersion, kind, resource_name all required")
+	}
+	if op.CreateOnly && op.Type != TypeApply {
+		return nil, fmt.Errorf("submit: create-only is only valid for apply")
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -127,9 +155,28 @@ func (s *Store) Submit(ctx context.Context, op *Operation) (*Operation, error) {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if request != nil {
+		accepted, err := replayRequest(ctx, tx, *request)
+		if err != nil || accepted != nil {
+			return accepted, err
+		}
+	}
 
 	if err := manifests.CheckNotForgotten(ctx, tx, op.APIVersion, op.Kind, op.ResourceName); err != nil {
 		return nil, err
+	}
+	if op.CreateOnly {
+		var exists bool
+		if err := tx.QueryRowContext(ctx,
+			`SELECT EXISTS(SELECT 1 FROM applied_manifests
+			 WHERE api_version = ? AND kind = ? AND name = ?)`,
+			op.APIVersion, op.Kind, op.ResourceName,
+		).Scan(&exists); err != nil {
+			return nil, fmt.Errorf("create-only desired-state check: %w", err)
+		}
+		if exists {
+			return nil, &ConflictError{ResourceExists: true}
+		}
 	}
 
 	// Fail-fast concurrency check inside the transaction.
@@ -148,6 +195,9 @@ func (s *Store) Submit(ctx context.Context, op *Operation) (*Operation, error) {
 	if inflightID.Valid && inflightID.String != "" {
 		return nil, &ConflictError{InflightID: inflightID.String}
 	}
+	if err := checkReferenceFence(ctx, tx, op); err != nil {
+		return nil, err
+	}
 
 	// Mint an ID, set defaults.
 	op.ID = newOpID()
@@ -157,13 +207,22 @@ func (s *Store) Submit(ctx context.Context, op *Operation) (*Operation, error) {
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO operations
 		   (id, parent_id, type, api_version, kind, resource_name, label,
-		    manifest_json, status, submitted_at, source)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		    manifest_json, status, submitted_at, source, create_only)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		op.ID, nullable(op.ParentID), op.Type, op.APIVersion, op.Kind, op.ResourceName,
 		nullable(op.Label), nullable(op.ManifestJSON), op.Status, op.SubmittedAt,
-		nullable(op.Source),
+		nullable(op.Source), op.CreateOnly,
 	); err != nil {
 		return nil, fmt.Errorf("insert: %w", err)
+	}
+	if request != nil {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO operation_requests (request_id, actor, intent_hash, operation_id) VALUES (?, ?, ?, ?)`,
+			request.ID, request.Actor, request.IntentHash, op.ID,
+		); err != nil {
+			return nil, fmt.Errorf("bind request: %w", err)
+		}
+		op.RequestID = request.ID
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -179,6 +238,86 @@ func (s *Store) Submit(ctx context.Context, op *Operation) (*Operation, error) {
 	}
 
 	return op, nil
+}
+
+// checkReferenceFence shares Submit's transaction with its insert, fencing
+// both admission orders: a dependent cannot start while its target is being
+// deleted, and a target cannot be deleted while a dependent apply is active.
+// Once Apply finishes, the execution-time delete guard checks persisted intent.
+func checkReferenceFence(ctx context.Context, tx *sql.Tx, op *Operation) error {
+	switch op.Type {
+	case TypeApply:
+		dependencies, err := operationRefs(op.ManifestJSON)
+		if err != nil {
+			return fmt.Errorf("apply reference admission: %w", err)
+		}
+		for _, ref := range dependencies {
+			var deletingID string
+			err := tx.QueryRowContext(ctx,
+				`SELECT id FROM operations
+				 WHERE type = ? AND api_version = ? AND kind = ? AND resource_name = ?
+				   AND status IN (?, ?) LIMIT 1`,
+				TypeDelete, ref.APIVersion, ref.Kind, ref.Name, StatusPending, StatusRunning,
+			).Scan(&deletingID)
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			if err != nil {
+				return fmt.Errorf("apply reference deletion check: %w", err)
+			}
+			return &ConflictError{
+				InflightID: deletingID,
+				Reason: fmt.Sprintf("cannot apply %s/%s/%s: referenced resource %s/%s/%s is being deleted; wait for deletion or cancel it before retrying",
+					op.APIVersion, op.Kind, op.ResourceName, ref.APIVersion, ref.Kind, ref.Name),
+			}
+		}
+	case TypeDelete:
+		rows, err := tx.QueryContext(ctx,
+			`SELECT id, api_version, kind, resource_name, COALESCE(manifest_json, '')
+			 FROM operations WHERE type = ? AND status IN (?, ?) ORDER BY id`,
+			TypeApply, StatusPending, StatusRunning,
+		)
+		if err != nil {
+			return fmt.Errorf("delete reference admission: %w", err)
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var id, version, kind, name, body string
+			if err := rows.Scan(&id, &version, &kind, &name, &body); err != nil {
+				return fmt.Errorf("delete reference admission: %w", err)
+			}
+			dependencies, err := operationRefs(body)
+			if err != nil {
+				return &ConflictError{InflightID: id, Reason: fmt.Sprintf("cannot establish deletion safety: active apply %s has invalid references: %v; finish or cancel that operation before retrying", id, err)}
+			}
+			for _, ref := range dependencies {
+				if ref.APIVersion == op.APIVersion && ref.Kind == op.Kind && ref.Name == op.ResourceName {
+					return &ConflictError{
+						InflightID: id,
+						Reason: fmt.Sprintf("cannot delete %s/%s/%s: active apply %s/%s/%s references it; wait for that apply or cancel it before retrying",
+							op.APIVersion, op.Kind, op.ResourceName, version, kind, name),
+					}
+				}
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("delete reference admission: %w", err)
+		}
+	}
+	return nil
+}
+
+func operationRefs(body string) ([]refs.Ref, error) {
+	if body == "" {
+		// Legacy/internal operation rows without manifests cannot resolve any
+		// references or reach provider Apply through the dispatcher.
+		return nil, nil
+	}
+	var raw protocol.Resource
+	if err := json.Unmarshal([]byte(body), &raw); err != nil {
+		return nil, fmt.Errorf("decode manifest: %w", err)
+	}
+	return refs.CollectStrict(raw.Spec)
 }
 
 // Get returns the op by ID, or sql.ErrNoRows if missing.
@@ -505,7 +644,8 @@ const baseSelect = `SELECT id, COALESCE(parent_id, ''), type, api_version, kind,
 	COALESCE(label, ''),
 	COALESCE(manifest_json, ''), COALESCE(result_json, ''), status,
 	COALESCE(error, ''), submitted_at, COALESCE(started_at, ''), COALESCE(completed_at, ''),
-	COALESCE(source, '')
+	COALESCE(source, ''), create_only,
+	COALESCE((SELECT request_id FROM operation_requests WHERE operation_id = operations.id), '')
 	FROM operations`
 
 // rowScanner is the common interface implemented by sql.Row and sql.Rows.
@@ -520,7 +660,7 @@ func scanOp(s rowScanner) (*Operation, error) {
 		&op.Label,
 		&op.ManifestJSON, &op.ResultJSON, &op.Status,
 		&op.Error, &op.SubmittedAt, &op.StartedAt, &op.CompletedAt,
-		&op.Source,
+		&op.Source, &op.CreateOnly, &op.RequestID,
 	); err != nil {
 		return nil, err
 	}

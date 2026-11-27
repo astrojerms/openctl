@@ -40,7 +40,11 @@ func TestForgetWaitsForAnAlreadyStartedRuntimeAction(t *testing.T) {
 	defer pve.Close()
 	defer releaseAction()
 	reg := providers.NewRegistry()
-	reg.Register(pmprovider.NewMulti(map[string]*pmprovider.Config{"source": {Endpoint: pve.URL, TokenID: "fixture", TokenSecret: "fixture"}}, "source"))
+	provider, err := pmprovider.NewMulti(map[string]*pmprovider.Config{"source": {Endpoint: pve.URL, CAFile: proxmoxFixtureCA(t, pve), TokenID: "fixture", TokenSecret: "fixture"}}, "source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg.Register(provider)
 	h, _, _ := migrationFixture(t, reg)
 	vm := migrationVM()
 	if err := h.mirror.Save(ctx, vm); err != nil {

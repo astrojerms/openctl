@@ -2,12 +2,14 @@ package server
 
 import (
 	"context"
+	"net/url"
 	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"github.com/openctl/openctl/internal/config"
+	"github.com/openctl/openctl/internal/controller/auth"
 	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 )
 
@@ -25,11 +27,15 @@ const (
 // (so the UI can edit endpoint/tokenId without re-typing).
 type configHandler struct {
 	apiv1.UnimplementedConfigServiceServer
+	manifestMode string
 }
 
-func newConfigHandler() *configHandler { return &configHandler{} }
+func newConfigHandler() *configHandler { return &configHandler{manifestMode: "mirror"} }
 
-func (h *configHandler) ListProviders(_ context.Context, _ *apiv1.ListProvidersRequest) (*apiv1.ListProvidersResponse, error) {
+func (h *configHandler) ListProviders(ctx context.Context, _ *apiv1.ListProvidersRequest) (*apiv1.ListProvidersResponse, error) {
+	if err := authorize(ctx, auth.RoleViewer); err != nil {
+		return nil, err
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "load config: %v", err)
@@ -41,7 +47,10 @@ func (h *configHandler) ListProviders(_ context.Context, _ *apiv1.ListProvidersR
 	return out, nil
 }
 
-func (h *configHandler) UpsertProvider(_ context.Context, req *apiv1.UpsertProviderRequest) (*apiv1.UpsertProviderResponse, error) {
+func (h *configHandler) UpsertProvider(ctx context.Context, req *apiv1.UpsertProviderRequest) (*apiv1.UpsertProviderResponse, error) {
+	if err := authorize(ctx, auth.RoleAdmin); err != nil {
+		return nil, err
+	}
 	if req.GetName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "name is required")
 	}
@@ -78,6 +87,26 @@ func (h *configHandler) UpsertProvider(_ context.Context, req *apiv1.UpsertProvi
 	if p.Contexts[ctxName] == nil {
 		p.Contexts[ctxName] = &config.Context{Credentials: credName}
 	}
+	if p.Contexts[ctxName].Credentials != "" {
+		credName = p.Contexts[ctxName].Credentials
+	} else {
+		p.Contexts[ctxName].Credentials = credName
+	}
+	if req.CaFile != nil {
+		p.Contexts[ctxName].CAFile = req.GetCaFile()
+	}
+	if req.InsecureSkipVerify != nil {
+		p.Contexts[ctxName].InsecureSkipVerify = req.GetInsecureSkipVerify()
+	}
+	if p.Contexts[ctxName].CAFile != "" && p.Contexts[ctxName].InsecureSkipVerify {
+		return nil, status.Error(codes.InvalidArgument, "choose a CA file or explicit insecure certificate verification, not both")
+	}
+	if req.GetName() == "proxmox" {
+		endpoint, err := url.Parse(req.GetEndpoint())
+		if err != nil || endpoint.Scheme != "https" || endpoint.Hostname() == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+			return nil, status.Error(codes.InvalidArgument, "Proxmox endpoint must be an absolute HTTPS URL without embedded credentials, query or fragment")
+		}
+	}
 	p.Contexts[ctxName].Endpoint = req.GetEndpoint()
 	if p.Credentials[credName] == nil {
 		p.Credentials[credName] = &config.Credential{}
@@ -99,7 +128,10 @@ func (h *configHandler) UpsertProvider(_ context.Context, req *apiv1.UpsertProvi
 	return &apiv1.UpsertProviderResponse{Provider: providerEntry(req.GetName(), p)}, nil
 }
 
-func (h *configHandler) DeleteProvider(_ context.Context, req *apiv1.DeleteProviderRequest) (*apiv1.DeleteProviderResponse, error) {
+func (h *configHandler) DeleteProvider(ctx context.Context, req *apiv1.DeleteProviderRequest) (*apiv1.DeleteProviderResponse, error) {
+	if err := authorize(ctx, auth.RoleAdmin); err != nil {
+		return nil, err
+	}
 	if req.GetName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "name is required")
 	}
@@ -116,7 +148,10 @@ func (h *configHandler) DeleteProvider(_ context.Context, req *apiv1.DeleteProvi
 
 // GetControllerConfig returns the editable controller tunables with defaults
 // filled in for omitted blocks, so the UI always renders concrete values.
-func (h *configHandler) GetControllerConfig(_ context.Context, _ *apiv1.GetControllerConfigRequest) (*apiv1.GetControllerConfigResponse, error) {
+func (h *configHandler) GetControllerConfig(ctx context.Context, _ *apiv1.GetControllerConfigRequest) (*apiv1.GetControllerConfigResponse, error) {
+	if err := authorize(ctx, auth.RoleViewer); err != nil {
+		return nil, err
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "load config: %v", err)
@@ -124,6 +159,7 @@ func (h *configHandler) GetControllerConfig(_ context.Context, _ *apiv1.GetContr
 	return &apiv1.GetControllerConfigResponse{
 		Config:          controllerConfigEntry(cfg),
 		RestartRequired: true,
+		ManifestMode:    h.manifestMode,
 	}, nil
 }
 
@@ -131,7 +167,10 @@ func (h *configHandler) GetControllerConfig(_ context.Context, _ *apiv1.GetContr
 // saves. Validates the reconcile interval as a Go duration and rejects a
 // negative retention. Only the reconciler + operations blocks are touched;
 // everything else in the file is preserved.
-func (h *configHandler) UpdateControllerConfig(_ context.Context, req *apiv1.UpdateControllerConfigRequest) (*apiv1.UpdateControllerConfigResponse, error) {
+func (h *configHandler) UpdateControllerConfig(ctx context.Context, req *apiv1.UpdateControllerConfigRequest) (*apiv1.UpdateControllerConfigResponse, error) {
+	if err := authorize(ctx, auth.RoleAdmin); err != nil {
+		return nil, err
+	}
 	in := req.GetConfig()
 	if in == nil {
 		return nil, status.Error(codes.InvalidArgument, "config is required")
@@ -220,6 +259,8 @@ func providerEntry(name string, p *config.Provider) *apiv1.ProviderEntry {
 		return entry
 	}
 	entry.Endpoint = ctx.Endpoint
+	entry.CaFile = ctx.CAFile
+	entry.InsecureSkipVerify = ctx.InsecureSkipVerify
 	if ctx.Credentials == "" {
 		return entry
 	}

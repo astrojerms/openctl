@@ -1,7 +1,10 @@
 package manifest
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -20,24 +23,24 @@ func Load(path string) (*protocol.Resource, error) {
 	return Parse(data)
 }
 
-// Parse parses a manifest from YAML data
+// Parse parses exactly one resource. Additional resources are rejected rather
+// than silently dropping all but the first declaration from a YAML stream.
 func Parse(data []byte) (*protocol.Resource, error) {
-	var resource protocol.Resource
-	if err := yaml.Unmarshal(data, &resource); err != nil {
-		return nil, fmt.Errorf("failed to parse manifest: %w", err)
-	}
-
-	if resource.APIVersion == "" {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	resource, err := nextManifest(decoder)
+	if errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("manifest missing required field: apiVersion")
 	}
-	if resource.Kind == "" {
-		return nil, fmt.Errorf("manifest missing required field: kind")
+	if err != nil {
+		return nil, err
 	}
-	if resource.Metadata.Name == "" {
-		return nil, fmt.Errorf("manifest missing required field: metadata.name")
+	if _, err := nextManifest(decoder); !errors.Is(err, io.EOF) {
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("expected one resource, found multiple YAML documents; apply each resource separately")
 	}
-
-	return &resource, nil
+	return resource, nil
 }
 
 // LoadMultiple loads multiple manifests from a file (separated by ---)
@@ -50,25 +53,49 @@ func LoadMultiple(path string) ([]*protocol.Resource, error) {
 	return ParseMultiple(data)
 }
 
-// ParseMultiple parses multiple manifests from YAML data
+// ParseMultiple parses a YAML stream, skipping only empty/comment documents.
 func ParseMultiple(data []byte) ([]*protocol.Resource, error) {
-	docs := strings.Split(string(data), "\n---")
-
-	resources := make([]*protocol.Resource, 0, len(docs))
-	for _, doc := range docs {
-		doc = strings.TrimSpace(doc)
-		if doc == "" {
-			continue
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	resources := make([]*protocol.Resource, 0)
+	for {
+		resource, err := nextManifest(decoder)
+		if errors.Is(err, io.EOF) {
+			return resources, nil
 		}
-
-		resource, err := Parse([]byte(doc))
 		if err != nil {
 			return nil, err
 		}
 		resources = append(resources, resource)
 	}
+}
 
-	return resources, nil
+func nextManifest(decoder *yaml.Decoder) (*protocol.Resource, error) {
+	for {
+		var document yaml.Node
+		if err := decoder.Decode(&document); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil, err
+			}
+			return nil, fmt.Errorf("failed to parse manifest: %w", err)
+		}
+		if len(document.Content) == 0 || (len(document.Content) == 1 && document.Content[0].ShortTag() == "!!null" && document.Content[0].Value == "") {
+			continue
+		}
+		var resource protocol.Resource
+		if err := document.Decode(&resource); err != nil {
+			return nil, fmt.Errorf("failed to parse manifest: %w", err)
+		}
+		if resource.APIVersion == "" {
+			return nil, fmt.Errorf("manifest missing required field: apiVersion")
+		}
+		if resource.Kind == "" {
+			return nil, fmt.Errorf("manifest missing required field: kind")
+		}
+		if resource.Metadata.Name == "" {
+			return nil, fmt.Errorf("manifest missing required field: metadata.name")
+		}
+		return &resource, nil
+	}
 }
 
 // ExtractProvider extracts the provider name from an apiVersion

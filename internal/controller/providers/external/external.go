@@ -198,21 +198,25 @@ func mapErr(kind, name string, err error) error {
 
 // --- optional capabilities (base, always implemented) ---
 
-// OwnerOf implements providers.OwnershipChecker. No-op (unowned) unless the
-// plugin advertised ownership. A failed probe returns unowned rather than
-// blocking a delete — the in-process interface has no error channel, and a
-// plugin that can't answer shouldn't wedge deletes.
+// OwnerOf is best-effort for display; deletion uses CheckedOwnerOf.
 func (p *Provider) OwnerOf(kind, name string) (ownerKind, ownerName string, owned bool) {
+	ownerKind, ownerName, owned, _ = p.CheckedOwnerOf(context.Background(), kind, name)
+	return ownerKind, ownerName, owned
+}
+
+// CheckedOwnerOf propagates failed ownership probes instead of treating an
+// unavailable plugin as permission to delete its children.
+func (p *Provider) CheckedOwnerOf(ctx context.Context, kind, name string) (string, string, bool, error) {
 	if !p.caps[pluginproto.CapabilityOwnership] {
-		return "", "", false
+		return "", "", false, nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), metaCallTimeout)
+	ctx, cancel := context.WithTimeout(ctx, metaCallTimeout)
 	defer cancel()
 	res, err := p.client.OwnerOf(ctx, pluginproto.RefParams{Kind: kind, Name: name})
 	if err != nil {
-		return "", "", false
+		return "", "", false, fmt.Errorf("check %s ownership: %w", p.name, err)
 	}
-	return res.OwnerKind, res.OwnerName, res.Owned
+	return res.OwnerKind, res.OwnerName, res.Owned, nil
 }
 
 // ChildrenOf implements providers.ChildrenLister. Empty unless the plugin

@@ -158,3 +158,39 @@ func TestUpdateControllerConfigPreservesOtherBlocks(t *testing.T) {
 		t.Error("provider block was clobbered by controller-config update")
 	}
 }
+
+func TestUpsertProviderUsesSelectedContextsCredential(t *testing.T) {
+	sandboxHome(t)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Providers = map[string]*config.Provider{
+		"proxmox": {
+			DefaultContext: "site",
+			Contexts:       map[string]*config.Context{"site": {Endpoint: "https://old", Credentials: "site-token"}},
+			Credentials: map[string]*config.Credential{
+				"site-token": {TokenID: "old", TokenSecret: "preserved"},
+				"default":    {TokenID: "unrelated", TokenSecret: "unrelated-secret"},
+			},
+		},
+	}
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	_, err = newConfigHandler().UpsertProvider(context.Background(), &apiv1.UpsertProviderRequest{Name: "proxmox", Endpoint: "https://new", TokenId: "new"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := cfg.Providers["proxmox"]
+	if p.Credentials["site-token"].TokenID != "new" || p.Credentials["site-token"].TokenSecret != "preserved" {
+		t.Fatalf("selected credential not updated safely: %+v", p.Credentials["site-token"])
+	}
+	if p.Credentials["default"].TokenID != "unrelated" || p.Credentials["default"].TokenSecret != "unrelated-secret" {
+		t.Fatal("unrelated credential overwritten")
+	}
+}

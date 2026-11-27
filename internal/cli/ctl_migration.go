@@ -57,10 +57,11 @@ func newCtlExportCommand() *cobra.Command {
 }
 
 func newCtlAdoptCommand() *cobra.Command {
-	var file, providerContext string
+	var file, providerContext, expectedIdentity string
 	cmd := &cobra.Command{
 		Use:   "adopt -f <bundle.json|manifest.yaml|manifest.cue>",
 		Short: "Adopt an existing VM without changing it",
+		Long:  "Adopt an existing VM without changing it. For a plain YAML/CUE manifest, obtain the exact opaque fingerprint from read-only ctl discover --provider-context NAME -o json, review placement and desired intent, then pass it explicitly with --expected-identity. Migration bundles use their recorded identity.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if file == "" {
@@ -70,6 +71,14 @@ func newCtlAdoptCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if req.Bundle == nil {
+				if strings.TrimSpace(expectedIdentity) == "" {
+					return fmt.Errorf("--expected-identity is required for plain manifests; obtain the exact opaque fingerprint from read-only ctl discover --provider-context NAME -o json, review placement and desired intent, then pass it explicitly")
+				}
+			} else if cmd.Flags().Changed("expected-identity") && expectedIdentity != req.Bundle.Identity {
+				return fmt.Errorf("--expected-identity must exactly match the migration bundle identity")
+			}
+			req.ExpectedIdentity = expectedIdentity
 			req.ProviderContext = providerContext
 			conn, token, err := dialController()
 			if err != nil {
@@ -86,6 +95,7 @@ func newCtlAdoptCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&file, "file", "f", "", "migration bundle or single YAML/CUE manifest")
 	cmd.Flags().StringVar(&providerContext, "provider-context", "", "destination provider context (original bundle remains unchanged)")
+	cmd.Flags().StringVar(&expectedIdentity, "expected-identity", "", "exact reviewed discovery fingerprint (required for plain manifests)")
 	return cmd
 }
 
@@ -204,39 +214,23 @@ func loadMigrationAdoption(path string) (*apiv1.AdoptResourceRequest, error) {
 	return &apiv1.AdoptResourceRequest{Resource: wire}, nil
 }
 
-func writeMigrationExport(path string, export func() (*apiv1.MigrationBundle, error), completed func() error) (err error) {
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if err != nil {
-		return fmt.Errorf("cannot create export file: %w", err)
-	}
-	committed := false
-	defer func() {
-		_ = file.Close()
-		if !committed {
-			_ = os.Remove(path)
+func writeMigrationExport(path string, export func() (*apiv1.MigrationBundle, error), completed func() error) error {
+	return writePrivateExport(path, func(out io.Writer) error {
+		bundle, err := export()
+		if err != nil {
+			return err
 		}
-	}()
-	bundle, err := export()
-	if err != nil {
+		if err := validateMigrationBundle(bundle); err != nil {
+			return err
+		}
+		data, err := (protojson.MarshalOptions{Indent: "  "}).Marshal(bundle)
+		if err != nil {
+			return fmt.Errorf("cannot encode migration bundle")
+		}
+		if _, err := out.Write(data); err != nil {
+			return fmt.Errorf("cannot write export file: %w", err)
+		}
+		_, err = io.WriteString(out, "\n")
 		return err
-	}
-	if err := validateMigrationBundle(bundle); err != nil {
-		return err
-	}
-	data, err := (protojson.MarshalOptions{Indent: "  "}).Marshal(bundle)
-	if err != nil {
-		return fmt.Errorf("cannot encode migration bundle")
-	}
-	data = append(data, '\n')
-	if _, err := file.Write(data); err != nil {
-		return fmt.Errorf("cannot write export file: %w", err)
-	}
-	if err := file.Sync(); err != nil {
-		return fmt.Errorf("cannot sync export file: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("cannot close export file: %w", err)
-	}
-	committed = true
-	return completed()
+	}, completed)
 }

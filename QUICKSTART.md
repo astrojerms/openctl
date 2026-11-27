@@ -1,7 +1,8 @@
 # openctl Quickstart
 
-A practical walkthrough for getting a k3s cluster up and managing it. For
-architecture and design rationale, see [DESIGN.md](DESIGN.md).
+A practical walkthrough for connecting an existing homelab and managing
+infrastructure and applications. Kubernetes is optional. For architecture and
+design rationale, see [DESIGN.md](DESIGN.md).
 
 ## Prerequisites
 
@@ -37,18 +38,27 @@ CLI's `openctl ctl ...` commands route through it. The legacy exec-plugin
 commands still work for transition, and graduate to top-level after
 Phase 6.
 
-### Install as a per-user LaunchAgent (macOS, recommended)
+### Install as a local service (macOS or Linux)
 
 ```sh
 make build
 ./bin/openctl-controller install --local
 ```
 
-This copies the controller into `~/Library/Application Support/openctl/bin/`,
-writes a LaunchAgent plist at `~/Library/LaunchAgents/io.openctl.controller.plist`,
-loads it (RunAtLoad + KeepAlive), verifies the controller comes up, and
-seeds `~/.openctl/config.yaml` with a controller section if missing. Logs
-land at `~/Library/Logs/openctl/controller.{out,err}.log`.
+macOS uses a per-user LaunchAgent; Linux uses a user systemd service. Both
+verify the listener and seed CLI config only when it is missing. For a
+remote Linux host, build the matching controller and use:
+
+```sh
+make build-controller-linux
+./bin/openctl-controller install --target ssh://user@controller --ssh-key ~/.ssh/controller
+```
+
+The SSH user needs passwordless sudo. Provider credentials, guest keys and
+verified host keys must be installed on the **controller host**. Copy its
+controller CA/token securely and point your local CLI config at that controller.
+Proxmox controller-VM bootstrap is also supported; see
+`openctl-controller install --help`.
 
 To remove:
 
@@ -74,6 +84,146 @@ under `~/.openctl/controller/tls/` and a random API token at
 them automatically from the same default paths; override via the
 `controller:` section in `~/.openctl/config.yaml`.
 
+Only one daemon may open a state directory. Development `--no-auth` requires
+loopback gRPC **and** HTTP listeners; use normal authentication for any remote
+listener. Provider credentials and global settings require an admin role.
+
+Before relying on the controller, practice
+[offline backup and restore](README.md#back-up-and-recover-the-controller).
+Stop the daemon first; protect the archive like a private key. Restore into new
+paths and review external dependencies before restarting automation.
+
+## Connect And Adopt Before Rebuilding
+
+After configuring Proxmox, restart the controller and open **Discover
+infrastructure** in the console. Choose **Discover VMs** beside the intended
+context: it tests read access and reads only that endpoint. Discovering every
+context is a separate explicit action. Review physical context/node/VMID/UUID
+evidence and the observed manifest before adopting an existing standalone VM.
+Adoption records intent without changing the VM; admin access, an idle controller
+and disabled GitOps are required.
+
+The console submits the exact fingerprint shown in that review; a replacement
+requires new discovery and consent. Testing or rediscovering a context invalidates
+only its old inventory/review; independent contexts remain inspectable. Failed
+reads are unavailable, not empty inventories. Session or authority changes clear
+private reviews and bundles; leaving the page does not roll back accepted tracking.
+For CLI adoption of a plain YAML/CUE manifest, pass the full reviewed discovery
+`identity` with `--expected-identity`; a UUID alone is not the fingerprint.
+Migration bundles already carry their identity. See
+[adoption and handoff](README.md#move-vm-management-between-controllers).
+
+```sh
+openctl ctl discover --contexts
+openctl ctl discover --provider-context homelab
+```
+
+Existing tracked VMs from name-only controller versions require explicit
+identity confirmation before mutation. Discovery exposes this recovery action;
+it preserves desired intent and composite ownership.
+
+The console overview and `openctl ctl overview` show saved inventory and root
+request activity without querying every provider. Counts are not live health;
+open a resource for actual observation. Snapshot failures are shown as unavailable
+or explicitly stale, not an empty lab.
+Saved resources remain inspectable in their lists and detail pages when a
+provider fails or reports them missing. Use `ctl get KIND NAME --api-version API
+--saved -o yaml` for unresolved desired intent; secret/reference markers remain
+intact. Stored intent is not live health or permission to mutate/recreate.
+
+For a standalone application, open **Deploy Jellyfin**: select/provision a
+dedicated Ubuntu 24.04 NVIDIA VM, supply NAS and secret references, review each
+resource, and inspect independent health. Prepared reviews survive reload in the
+same tab; explicitly resume to observe accepted work, then refresh previews and
+confirmations before any new attempt. Its GPU driver reboot is explicit; there
+is no automatic VM recreation. Use `openctl ctl preview -f resource.yaml` before
+CLI Apply; previews distinguish metadata edits from spec edits and live drift.
+
+New VM provisioning exposes CPU cores, RAM in MiB and OS disk in GiB, defaulting
+to 4 / 4096 / 32. Chosen sizes survive review, reload and manifest downloads.
+Verify workload/host capacity and the template's existing disk size yourself;
+preview does not reserve capacity. Existing guests are not resized.
+
+Guest IP discovery matches Proxmox-configured NIC MACs, not interface order.
+Missing or ambiguous matching IPv4 leaves `status.ip` unknown and blocks dependent
+references. For intentionally multi-address guests, explicitly declare the
+application's `spec.target.host`; verify reachability and SSH trust separately.
+Open the VM's **Guest address** section for a safe reason code and repair guidance.
+Fresh named CLI/API reads expose the same `status.ipObservation`; List does not
+probe agents. Address observation is not SSH/service readiness, and stale or
+missing evidence remains unknown.
+
+The Jellyfin wizard checks its referenced VM before application review and again
+before Apply. Address blockers link directly to VM inspection; recheck after
+repair, refresh the preview and renew consent. Blocked checks never admit another
+request or retry VM creation. Accepted-request recovery remains read-only.
+
+For failed references in editor, template or guided previews, use **Inspect
+referenced resource**. It opens the declared dependency in another tab without
+discarding the draft. Check its requested output, repair explicitly, then obtain
+a fresh preview; the link is not existence/readiness evidence or Apply approval.
+CLI preview shows the same dependency and output, including structured JSON.
+
+The wizard's staged ZIP contains one numbered YAML file per resource stage;
+the current stage can also be downloaded alone. Preview/apply files individually
+in order, not as a bulk directory: public deployments have initial and final
+versions of the same application. Keep exports private and outside watched
+GitOps directories. Downloads contain declarations, not consent or request recovery.
+
+Jellyfin media readiness checks both the guest's protected NAS mount and the
+running container's exact read-only `/media` binding and UID-1000 access.
+Wrong sources, writable/overridden mounts and unreadable directories block
+readiness; missing runtime evidence is unknown. Inspection never repairs mounts
+or restarts containers automatically.
+
+Application checks distinguish **Ready**, **Not ready**, **Unknown** and
+**Not configured**. Guest access failure leaves skipped dependent checks unknown,
+not falsely failed; an absent optional public endpoint is neutral. Required
+unknown/failed checks still block readiness and guided progression.
+Console lists, details, child summaries and deployment gates require explicit
+boolean readiness with consistent checks, just like `ctl health`. Even
+`ready: true` cannot override failed, unknown or malformed evidence; a `ready`
+phase alone is not application readiness.
+For automation, `openctl ctl health Jellyfin NAME --api-version apps.openctl.io/v1 -o json`
+reports live health-only diagnostics and exits nonzero unless readiness
+is established. It reads only that resource, with no Apply, polling, retry or saved
+fallback. A VM merely reported as running is not readiness proof.
+Jellyfin public readiness also requires onboarded JSON from the same server
+observed through guest SSH. A login page or different instance returning HTTP
+200 is not ready; unavailable guest identity is unknown. Public probing sends
+no credentials and never bypasses access policy or certificate checks.
+
+The wizard's existing-guest list uses saved VM metadata without scanning every
+Proxmox context. An unrelated provider outage does not hide choices; saved names
+do not prove GPU/SSH readiness. Preview resolves the selected VM reference.
+Active-context and saved-inventory failures are independent; refreshing guest
+choices clears the old selection and guest consent rather than reusing them.
+
+Blocked guided previews show schema/field/dependency diagnostics without enabling
+Apply or creating a request ID. Repair the reported cause, refresh the preview
+and renew consent. Reload does not preserve diagnostics as readiness evidence.
+Reference failures identify the destination spec path and a safe failure code:
+distinguish an absent output from provider authentication, trust or availability
+problems. Raw upstream error details are not forwarded by reference resolution.
+
+Previously accepted prerequisites have an exact-resource blocker with an
+inspection link and, when the baseline matches, current readiness checks.
+Repair that resource, then choose **Recheck prerequisites** for a fresh preview
+and renewed consent. This does not resubmit accepted work or publish anything.
+
+Apply and Delete print request IDs before submission;
+`openctl ctl op get --request-id ID` recovers a lost acknowledgement without
+submitting again. Console Apply and Delete attempts survive reload in the same
+tab as identity metadata, not saved credentials or consent. Explicit recovery
+observes the original operation; **Reconcile** opens the editor for fresh review.
+Runtime buttons first open a review of the exact target, provider-described
+effect and parameters; no request is sent until explicit Run. Cancel does
+nothing. Runtime actions are not durable Apply requests; inspect uncertain
+outcomes before repeating them.
+For CLI application logs and typed runtime actions, see
+[controller commands](README.md#common-commands). See also
+[managed Jellyfin](README.md#managed-jellyfin-on-proxmox).
+
 ## Configure
 
 Create `~/.openctl/config.yaml`:
@@ -91,6 +241,8 @@ providers:
         endpoint: https://pve.example.com:8006
         node: pve1
         credentials: homelab-creds
+        # Optional private CA, installed on the controller/plugin host:
+        # caFile: /etc/openctl/proxmox-ca.pem
     credentials:
       homelab-creds:
         tokenId: root@pam!openctl
@@ -98,6 +250,22 @@ providers:
 ```
 
 Put the API token in the `tokenSecretFile` path (mode `0600`).
+
+Proxmox HTTPS certificates and hostnames are verified by default. Obtain private
+CA bundles through a trusted out-of-band channel; `caFile` appends that PEM
+bundle to system roots. The endpoint name/IP must match the certificate. Native
+clients no longer silently skip verification: upgrading self-signed labs must
+configure trust before connecting. Explicit per-context `insecureSkipVerify:
+true` disables certificate/hostname checks for HTTPS only, exposes API tokens to
+impersonation, and cannot be combined with `caFile`. HTTP and API redirects are
+rejected. Restart the controller after saving credential or trust changes.
+
+Use **Discover infrastructure → Test connection** or
+`openctl ctl discover --test --provider-context homelab` before adoption.
+Failures distinguish CA trust, certificate names/validity, rejected credentials,
+missing read permissions and reachability. The CLI exits nonzero, retaining a
+safe failure code and next step in table/JSON/YAML output; inspect these rather
+than disabling verification or granting write access.
 
 ## Write a cluster manifest
 

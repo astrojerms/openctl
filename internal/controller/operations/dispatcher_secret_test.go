@@ -95,6 +95,30 @@ func TestApplyManifest_SecretResolvedForProviderButRedactedInStore(t *testing.T)
 	if want := mStore.Hash(raw); refsHash != want {
 		t.Errorf("refs_hash %q != hash of raw manifest %q — a resolved secret may have leaked into the hash", refsHash, want)
 	}
+
+	// A marker's value can rotate without either manifest hash changing.
+	// A successful Get must not turn that unchanged marker into a cache hit.
+	p.getOut = raw
+	if err := os.WriteFile(filepath.Join(secDir, "db.pw"), []byte("rotated-password"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result, err = d.ApplyManifest(context.Background(), raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := result.Spec["password"]; got != "rotated-password" {
+		t.Fatalf("rotated secret not delivered to provider: %v", got)
+	}
+	if got := p.applies.Load(); got != 2 {
+		t.Fatalf("rotation skipped real Apply: %d applies", got)
+	}
+	_, rotatedHash, err := mStore.LoadHashes(context.Background(), raw.APIVersion, raw.Kind, raw.Metadata.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rotatedHash != refsHash {
+		t.Fatal("secret rotation must not persist a value-derived hash")
+	}
 }
 
 // A manifest with a $secret marker but no secrets registry configured fails
@@ -117,17 +141,12 @@ func TestApplyManifest_SecretWithoutRegistryIsNotApplied(t *testing.T) {
 		Metadata:   protocol.ResourceMetadata{Name: "x"},
 		Spec:       map[string]any{"password": map[string]any{"$secret": map[string]any{"file": "db.pw"}}},
 	}
-	result, err := d.ApplyManifest(context.Background(), raw)
-	if err != nil {
-		t.Fatalf("ApplyManifest: %v", err)
+	_, err = d.ApplyManifest(context.Background(), raw)
+	if err == nil {
+		t.Fatal("expected unresolved secret to fail before provider Apply")
 	}
-	// With no resolver, the provider receives the marker unchanged (rather than
-	// a silent empty value). The marker is inert and visibly wrong, so a
-	// misconfigured controller surfaces the problem instead of leaking or
-	// zeroing the field.
-	pw, ok := result.Spec["password"].(map[string]any)
-	if !ok || pw["$secret"] == nil {
-		t.Errorf("expected unresolved marker to pass through, got %v", result.Spec["password"])
+	if p.applies.Load() != 0 {
+		t.Fatalf("provider received an unresolved secret marker: %d applies", p.applies.Load())
 	}
 }
 

@@ -56,7 +56,10 @@ func handleRequest() error {
 		return fmt.Errorf("failed to decode request: %w", err)
 	}
 
-	h := handler.New(&req.Config)
+	h, err := handler.New(&req.Config)
+	if err != nil {
+		return fmt.Errorf("initialize proxmox provider: %w", err)
+	}
 	resp, err := h.Handle(context.Background(), &req)
 	if err != nil {
 		return err

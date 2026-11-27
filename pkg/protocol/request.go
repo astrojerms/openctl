@@ -19,12 +19,15 @@ type Request struct {
 
 // ProviderConfig contains the configuration passed to a plugin
 type ProviderConfig struct {
-	Endpoint    string            `json:"endpoint,omitempty"`
-	Node        string            `json:"node,omitempty"`
-	TokenID     string            `json:"tokenId,omitempty"`
-	TokenSecret string            `json:"tokenSecret,omitempty"`
-	Defaults    map[string]string `json:"defaults,omitempty"`
-	SnippetSSH  *SnippetSSHConfig `json:"snippetSSH,omitempty"`
+	Endpoint    string `json:"endpoint,omitempty"`
+	Node        string `json:"node,omitempty"`
+	TokenID     string `json:"tokenId,omitempty"`
+	TokenSecret string `json:"tokenSecret,omitempty"`
+	// CAFile is a PEM trust bundle on the controller/plugin host.
+	CAFile             string            `json:"caFile,omitempty"`
+	InsecureSkipVerify bool              `json:"insecureSkipVerify,omitempty"`
+	Defaults           map[string]string `json:"defaults,omitempty"`
+	SnippetSSH         *SnippetSSHConfig `json:"snippetSSH,omitempty"`
 }
 
 // SnippetSSHConfig configures SSH uploads to explicitly mapped Proxmox nodes.

@@ -23,6 +23,7 @@ type fakeProvider struct {
 	deletes   atomic.Int32
 	applyErr  error
 	deleteErr error
+	getErr    error
 	applyOut  *protocol.Resource
 	getOut    *protocol.Resource
 	// blockUntilCtx makes Apply block until its context is canceled, then
@@ -57,7 +58,7 @@ func (f *fakeProvider) Apply(ctx context.Context, m *protocol.Resource) (*protoc
 }
 func (f *fakeProvider) Get(_ context.Context, _, _ string) (*protocol.Resource, error) {
 	f.gets.Add(1)
-	return f.getOut, nil
+	return f.getOut, f.getErr
 }
 func (f *fakeProvider) List(_ context.Context, _ string) ([]*protocol.Resource, error) {
 	return nil, nil

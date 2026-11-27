@@ -28,6 +28,11 @@ type OwnershipChecker interface {
 	OwnerOf(kind, name string) (ownerKind, ownerName string, owned bool)
 }
 
+// CheckedOwnershipChecker fails closed when ownership cannot be determined.
+type CheckedOwnershipChecker interface {
+	CheckedOwnerOf(ctx context.Context, kind, name string) (ownerKind, ownerName string, owned bool, err error)
+}
+
 // ResourceRef is a fully-qualified (apiVersion, kind, name) reference to
 // another resource. Used by Registry.ChildrenOf / OwnerRefOf to surface
 // composition relationships through the gRPC API (arch Phase 8 scoped
@@ -220,7 +225,9 @@ type ActionParameter struct {
 // ActionSpec describes a runtime action and any parameters it accepts. It is
 // the richer form of a bare action name returned by Actioner.Actions.
 type ActionSpec struct {
-	Name        string
+	Name string
+	// Label is optional provider-owned presentation; Name remains the action ID.
+	Label       string
 	Description string
 	Parameters  []ActionParameter
 }
@@ -352,6 +359,24 @@ func (r *Registry) OwnerOf(kind, name string) (ownerKind, ownerName string, owne
 		}
 	}
 	return "", "", false
+}
+
+// CheckedOwnerOf is the mutation admission counterpart of OwnerOf.
+func (r *Registry) CheckedOwnerOf(ctx context.Context, kind, name string) (string, string, bool, error) {
+	for _, p := range r.providers {
+		if checker, ok := p.(CheckedOwnershipChecker); ok {
+			k, n, owned, err := checker.CheckedOwnerOf(ctx, kind, name)
+			if err != nil || owned {
+				return k, n, owned, err
+			}
+		} else if checker, ok := p.(OwnershipChecker); ok {
+			k, n, owned := checker.OwnerOf(kind, name)
+			if owned {
+				return k, n, true, nil
+			}
+		}
+	}
+	return "", "", false, nil
 }
 
 // OwnerRefOf returns the typed ResourceRef of the owner of (kind, name),

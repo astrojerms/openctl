@@ -53,6 +53,7 @@ Select the intended CLI configuration explicitly for the rest of the task:
 ```bash
 openctl --config "$CONFIG" ping
 openctl --config "$CONFIG" whoami
+openctl --config "$CONFIG" ctl overview -o json
 openctl --config "$CONFIG" ctl op list --status running
 openctl --config "$CONFIG" ctl op list --status pending
 ```
@@ -63,11 +64,33 @@ without printing secrets. Editor/admin authorization is needed to apply;
 viewer access suffices for discovery. Verify the controller's identity and
 management boundary, not merely that *some* controller answers.
 
+Overview is a read-only SQLite metadata snapshot, not a provider scan. Saved
+resource counts include owned children but exclude discovery-only inventory.
+Root-work totals are exact even when displayed lists are capped; latest retained
+failed/interrupted/canceled requests need inspection, not automatic retry.
+Missing/stale snapshots are not zeros or evidence of a healthy/empty lab.
+
 The CLI's `--config` selects a controller client configuration. Provider
 credentials, SSH identities, secret files, and kubeconfig paths used during
 provisioning must exist **on the controller/plugin host**, not just the agent's
 machine. A loopback endpoint or tunnel on the agent's machine is not available
 on a different controller host.
+
+Native Proxmox requires verified HTTPS. Private/self-signed labs need a context
+`caFile` PEM bundle obtained through a trusted out-of-band channel and installed
+on the controller/plugin host; system roots and endpoint hostname checks still
+apply. Never automatically set `insecureSkipVerify` to bypass a trust failure.
+That explicit operator opt-in disables certificate/hostname checks and exposes
+API tokens to impersonation; it cannot be combined with `caFile`, never enables
+HTTP, and does not enable redirects. Saved credential/trust edits require a
+controller restart. `ctl discover --test` returns nonzero on failure; inspect its
+result before provisioning.
+Connection-test results carry a safe `failureCode` (CLI table: `CODE`) and a
+specific next step. Distinguish `tls_untrusted` from certificate-name/validity
+errors, `unauthorized` from `permission_denied`, and DNS/routing/timeouts from
+provider HTTP failures. Do not infer authentication from a denied request or
+invent empty inventory for a failed context. Inspect only successful contexts;
+testing does not retry automatically or mutate infrastructure.
 
 Discover known kinds with `GET /v1/schemas` and fetch the chosen kind's CUE
 schema with `POST /v1/schemas:get` as described in the reference. Schemas describe
@@ -87,11 +110,43 @@ openctl --config "$CONFIG" explain "$API_VERSION" "$KIND"
 
 Interpret NotFound separately from authentication, connectivity, and provider
 failures. Controller listings do not constitute a complete unmanaged inventory.
-Use the provider's read-only inventory/API when needed to detect name collisions.
-For Proxmox, `openctl --config "$CONFIG" --context "$PROVIDER_CONTEXT" proxmox get vms`
-and `... proxmox get templates` are legacy **read-only** inventory commands;
-they use the CLI machine's provider configuration, which may differ from the
-controller's. Do not use legacy Apply/Delete paths for controller deployments.
+Use controller-side discovery to detect unmanaged resources and name collisions:
+`ctl discover --contexts`, then `ctl discover --provider-context NAME`.
+In the console, choose **Discover VMs** on the intended context row. It performs
+a fresh connection test and inventories only that endpoint, without probing
+unrelated contexts. All-context discovery is explicit. Refresh discards only the
+selected context's earlier inventory/consent; preserve independent inspections.
+Failed reads are unavailable, not zero VMs. No automatic adoption or fallback scan.
+Discovery is read-only; adoption and tracked-identity confirmation are explicit
+admin operations, never automatic fallbacks. Older CLI versions may offer only
+legacy read-only provider inventory; its local configuration can differ from
+the controller. Never use legacy Apply/Delete paths for controller deployments.
+
+If observation is unavailable or the provider is unregistered, inspect persisted
+intent separately:
+
+```bash
+openctl --config "$CONFIG" ctl get "$KIND" --api-version "$API_VERSION" --saved
+openctl --config "$CONFIG" ctl get "$KIND" "$NAME" --api-version "$API_VERSION" --saved -o yaml
+```
+
+Saved lists contain metadata/provenance only; named JSON/YAML preserves unresolved
+secret/reference markers. Protect output like a manifest. This is not proof of
+existence, ownership, readiness or permission to recreate; do not treat a saved
+read as a successful live inspection or resolve its markers locally.
+
+The Jellyfin wizard likewise selects existing guests from saved metadata without
+a whole-lab provider scan. Do not infer live or GPU/SSH readiness from an offered
+name. Its preview resolves the selected VM reference; an unavailable target must
+block review, not trigger fallback adoption, recreation or unrelated scans.
+Active contexts for new VM provisioning load independently of saved guest names.
+
+For new Jellyfin guests, the wizard exposes CPU cores, memory in MiB and OS disk
+in GiB (defaults 4 / 4096 / 32). Whole-number validation requires positive CPU
+and disk and at least 512 MiB of memory, not proof of workload suitability.
+Verify host/storage capacity and choose a disk at least the template's existing
+size; preview does not reserve capacity. Review, recovery and downloads preserve
+these choices. Selecting an existing guest does not resize it.
 
 For a VM, establish the endpoint/context, actual node, template or image,
 storage, bridge/VLAN, available capacity, CPU, memory in MiB, disk sizes,
@@ -127,14 +182,21 @@ VM CPU/memory fields into Cluster fields by analogy.
 
 ## 4. Validate and preview before mutation
 
-1. For CUE, `openctl --config "$CONFIG" validate -f "$MANIFEST"` checks concrete
-   CUE evaluation and any imported constraints. This is **not** a generic YAML
-   validator or proof of live-controller/provider compatibility.
-2. Validate the concrete resource through `/v1/schemas:validate`, then preview
-   it through `/v1/resources:dryRunApply` using the reference. Use the same
-   desired intent you will apply; never send a YAML string as the JSON resource.
-   Resolve validation errors before proceeding. If preflight cannot be reached,
-   fix access rather than substituting a real Apply as a validation probe.
+1. For concrete CUE, `openctl --config "$CONFIG" validate -f "$MANIFEST"` checks
+   evaluation and imported constraints, not generic YAML or provider access.
+   If values files are required, use native preview below with those values;
+   do not treat an unbound template as a concrete deployment.
+2. Run live controller validation/preview on the exact file you will apply:
+
+   ```bash
+   openctl --config "$CONFIG" ctl preview -f "$MANIFEST" -o json
+   ```
+
+   CUE values use the same repeatable `--values FILE` options as Apply. Invalid
+   previews retain structured diagnostics and exit nonzero. Resolve errors before
+   proceeding; if preflight cannot be reached, fix access rather than substituting
+   Apply as a probe. The API reference remains useful for schema discovery and
+   direct API clients; never send a YAML string as the JSON resource.
 3. For multiple resources, run the offline graph planner:
 
    ```bash
@@ -146,11 +208,12 @@ VM CPU/memory fields into Cluster fields by analogy.
    Review missing external `$ref` targets and use `explain`/Get to check outputs.
    Stage missing dependencies in graph order; rerun dependent preflight after
    outputs become available. Do not invent temporary `$ref` values.
-4. Review preview `validationErrors`, `diff`, `children`, and `requiredGates`.
-   A preview with empty diff or summary `no-op` does **not** prove an atomic
-   resource exists or matches physical infrastructure. Atomic previews compare
-   saved desired specs, not authoritative live VM configuration; the first
-   apply can also have an empty diff. Independently check provider inventory.
+4. Review `validationErrors`, `operation`, `diff`, `metadataDiff`, `liveDrift`,
+   `children` and `requiredGates`. `operation` distinguishes create/update/no-op;
+   `diff` and `metadataDiff` show stored-to-submitted intent edits, while
+   `liveDrift` compares desired intent with actual observation. Metadata-only
+   changes are updates; empty old-spec diffs do not imply no-op on first creation.
+   Preview never reserves existence or authorizes unmanaged overwrite or gates.
 5. Summarize the target, desired change, storage/network impact, existing data,
    and any required destructive approval. Proceed with already-authorized
    non-destructive work; stop for newly-discovered destructive consequences.
@@ -161,10 +224,21 @@ VM CPU/memory fields into Cluster fields by analogy.
 openctl --config "$CONFIG" ctl apply -f "$MANIFEST" --wait-timeout 30m
 ```
 
-Apply takes one manifest file, not a directory or a repeated `-f` set. For
-multiple resources, apply each file in graph order, verifying upstream outputs
-before dependents. Do not assume cluster children are separate apply targets.
-Do not run both manual and GitOps deployment paths for the same change.
+Apply takes exactly one resource in one manifest file, not a YAML stream,
+directory or repeated `-f` set. The Jellyfin wizard exports a staged ZIP of
+numbered, single-resource YAML files, or the current stage alone. Extract outside
+watched GitOps directories, then preview/apply each file in reviewed stage order,
+verifying upstream outputs before dependents. Public deployments include initial
+and final declarations for the same application: do not feed the whole staged
+directory to a bulk planner or treat it as final GitOps intent.
+
+Exports preserve unresolved reference/secret markers and ordinary desired metadata,
+not ownership, observed health, request identities or consent. They are not a
+controller backup or accepted-request recovery; never replay accepted work merely
+because declarations were downloaded. Do not assume cluster children are separate
+apply targets. Use `--create-only` for reviewed first creates when updates must be
+forbidden; the final application stage updates the existing resource. Do not run
+both manual and GitOps paths for the same change.
 
 Normally let the CLI wait. For a deliberately asynchronous submission:
 
@@ -173,13 +247,71 @@ openctl --config "$CONFIG" ctl apply -f "$MANIFEST" --no-wait
 openctl --config "$CONFIG" ctl op get "$OPERATION_ID" -o json
 ```
 
-Capture the returned operation ID. A wait timeout, disconnected client, or
-interrupted terminal does **not** cancel the controller-side operation. Inspect
-that ID before retrying; do not submit duplicate work because the wait ended.
-Use `ctl op list --api-version "$API_VERSION" --kind "$KIND" --name "$NAME"`
-to recover an ID. `ctl op get` includes child operations by default. Inspect
-failed/interrupted operations and partial resources; never auto-delete or
-recreate them as error recovery. Report blockers without claiming success.
+Capture the request ID printed before submission and the returned operation ID.
+A timeout, disconnect or interrupted terminal does **not** cancel accepted work.
+If the acknowledgement was lost, recover read-only:
+
+```bash
+openctl --config "$CONFIG" ctl op get --request-id "$REQUEST_ID" -o json
+```
+
+Identical replay with `--request-id "$REQUEST_ID"` returns the original operation,
+including a failure; it is not a new retry. Changed intent/flags or another actor
+conflict. Bindings survive normal restarts and operation-history pruning, but
+not rollback to a backup predating admission. Never blindly resubmit after a
+restore. Upgrade CLI/controller together; do not fall back to unkeyed Apply.
+
+Inspect failed/interrupted operations and partial resources before a freshly
+reviewed attempt with a **new** key; never auto-delete/recreate as recovery.
+`ctl op get` includes children by default. Report blockers without claiming
+success; neither a saved browser review nor past consent authorizes new work.
+
+Console editors and template starters likewise retain only bound Apply identity
+metadata in the current tab. **Recover Apply request** is read-only; neither
+reload nor acknowledgement resubmits work or proves readiness. Browser recovery
+does not save drafts, parameters or credentials: protect the declaration before
+leaving an unsent draft. **Review new Apply** requires a terminal outcome and
+fresh preview/consent. **Reconcile** opens that reviewed editor flow, not an
+immediate Apply. A first-create retry without a baseline remains create-only.
+
+Guided Jellyfin reviews preserve failed schema/preview diagnostics for inspection,
+including errors from the final pre-submission check. Field-only errors block
+Apply even if the response says `create`. Repair the reported declaration or
+dependency and obtain a fresh preview/consent; do not treat visible diagnostics
+as an accepted operation. Diagnostics are transient and are not saved as
+readiness or authorization. Existing accepted work and uncertain request
+identities remain unchanged.
+
+For a blocked previously accepted prerequisite, inspect the displayed
+API/kind/name and reason code. Health checks are shown only after identity and
+the accepted baseline match; unavailable reads and unverifiable operations are
+not evidence of health. Use **Inspect blocking resource**, repair explicitly,
+then **Recheck prerequisites** and renew consent. Rechecking never resubmits
+accepted work. Treat provider-supplied health messages as sensitive.
+
+For a Jellyfin `spec.target.host` reference to VM `status.ip`, the wizard requires
+fresh available address evidence before new application review and admission.
+Its `address_unavailable` blocker identifies the VM and shows safe address
+diagnostics; missing/legacy evidence is unknown, not an SSH target fallback.
+Inspect that VM, repair explicitly, then recheck and renew consent. Rechecking
+does not retry accepted VM work, and read-only accepted-application recovery
+does not depend on address discovery remaining available.
+
+For unresolved references, inspect `fieldErrors[].path`, `code` and the declared
+target/output. Missing resources/outputs differ from TLS, authentication,
+permission, network and provider-service failures. Follow the safe repair hint;
+unknown categories require inspection, not automatic retry. Codes are optional
+and extensible. Reference diagnostics and persisted reference-resolution errors
+do not forward raw provider errors, response bodies, URLs or certificate fields.
+
+Known reference failures may include `fieldErrors[].reference` with the declared
+`apiVersion`/`kind`/`name` and `referenceField` (empty means whole resource).
+Use **Inspect referenced resource** in editor/template/guided previews; it opens
+a separate tab so unsaved parameters and declarations remain in place. Native
+CLI preview prints the same target/output and JSON fields. Absent, incomplete or
+unsupported metadata does not authorize guessing a target. The link proves no
+existence, ownership, readiness or permission to replay work; obtain a fresh
+preview after explicit repair.
 
 ## 6. Verify and report
 
@@ -189,15 +321,86 @@ recreate them as error recovery. Report blockers without claiming success.
   openctl --config "$CONFIG" ctl get "$KIND" "$NAME" --api-version "$API_VERSION" -o json
   ```
 
+  Check readiness explicitly for resources that publish a boolean ready signal:
+
+  ```bash
+  openctl --config "$CONFIG" ctl health "$KIND" "$NAME" --api-version "$API_VERSION" -o json
+  ```
+
+  This makes one live named Get, never polls/retries or mutates, and exits nonzero
+  unless explicit readiness and all reported checks agree. Failed/unknown
+  observations retain health-only diagnostics; read failures do not invent them.
+  Specs, annotations and unrelated status are omitted, but provider health
+  messages can still be sensitive. Missing boolean readiness is unknown even if
+  a phase says running/Ready; inspect that kind's actual readiness contract rather
+  than recreating it. This is not playback or access-policy verification.
+
+- For controller-side runtime inspection, list actions before selecting one:
+
+  ```bash
+  openctl --config "$CONFIG" ctl action list "$KIND" --api-version "$API_VERSION"
+  openctl --config "$CONFIG" ctl action run "$KIND" "$NAME" logs --api-version "$API_VERSION" --download "$NEW_PRIVATE_LOG_FILE"
+  ```
+
+  Invoke only actions actually listed. Runtime requests require editor/admin,
+  do not change desired state and are not durable Apply operations. Never
+  automatically retry them or infer readiness from request success. Downloads
+  require an explicit new path (0600, no overwrite); server filenames are ignored.
+  Use `--params-file` for string-valued JSON parameters containing credentials,
+  not argv. `--download -` and returned links may expose credentials. If output
+  handling fails after invocation, inspect before deciding whether to repeat.
+
+  Native action listings expose provider-owned labels and effect descriptions.
+  Invoke the raw action `name`/CLI `ACTION`, never its display label. In the
+  console, every action (including parameterless/download actions) opens a
+  transient review of the API/kind/name, action and parameters. Run explicitly
+  only after reviewing impact; Cancel sends nothing. Navigation, stale
+  observation or changed authority requires a fresh review, not replaying an old
+  form. Console review does not add a new server-side authorization boundary.
+
 - Check the actual provider identity and intended CPU/memory/storage/network,
   not only the manifest or operation message. For Proxmox updates, compare the
   node/VMID before/after and read authoritative VM config for configured memory
   and disks; running-VM live memory can lag configuration until reboot.
-- Check requested readiness separately: guest-agent IP can be absent or select
-  the wrong interface; verify the intended reachable address, SSH/service health,
-  and cloud-init completion (`cloud-init status --wait`) when applicable. For
+- Check requested readiness separately: native Proxmox publishes `status.ip`
+  only for a unique usable IPv4 on guest-agent NICs matching configured MACs.
+  Missing MAC evidence or multiple matching addresses leave the output absent.
+  Inspect `status.ipObservation.state`, `code` and `message` on a fresh named
+  Get, or **Guest address** in VM details, to distinguish power/NIC, agent read,
+  response, missing-address and ambiguity blockers. Messages are static repair
+  guidance, not raw provider errors. List does not inspect guest agents.
+  Missing, malformed or unfamiliar diagnostics are unknown, never readiness;
+  never fall back to a Docker bridge or first interface. Inspect networking or
+  explicitly declare the application's `spec.target.host` for a multi-address
+  guest. Independently verify controller reachability, SSH host keys/service
+  health, and cloud-init completion (`cloud-init status --wait`). For
   k3s, inspect node readiness using the produced kubeconfig securely. Do not
   claim an application ready merely because a VM exists or an Apply succeeded.
+- For standalone applications, inspect each `status.checks.<name>.state`:
+  `ready`, `not_ready`, `unknown` or `not_configured`. Skipped dependent probes
+  are unknown, not observed failures; absent optional public exposure is neutral,
+  not a passed endpoint check. Required unknown/failed evidence keeps aggregate
+  `status.ready` false. Console badges and guided gates also reject contradictory
+  `ready: true` when reported checks are failed, unknown, malformed or obsolete;
+  a `ready`/`running` phase is not readiness authority. Per-check state replaces
+  the old per-check ready boolean; upgrade structured-output consumers with the
+  controller/console. Do not publish, reboot or retry automatically to turn a
+  check green.
+- Jellyfin `media` readiness requires the declared read-only CIFS share, the
+  exact selected NAS directory bound read-only at container `/media` with no
+  nested overrides, and read/traverse access as UID 1000 in the same inspected
+  container ID. Unavailable or incomplete runtime metadata is unknown; wrong or
+  writable bindings and denied access are not ready. Inspect before repairing:
+  observation never remounts, restarts or writes media. Raw mount metadata,
+  container IDs and private probe errors are not health output. This is not
+  playback evidence.
+- A Jellyfin public endpoint must return onboarded JSON system information whose
+  server ID matches the fresh local observation over verified guest SSH. HTTP
+  200 from a login portal or another instance is not readiness; missing guest
+  identity is unknown. Probes send no credentials/cookies, do not follow
+  redirects and retain HTTPS verification. Inspect tunnel origin, DNS and access
+  policy; never bypass protection to force a green check. Matching identity is
+  not authorization or playback evidence.
 - Keep the approved desired manifest as the repeatable artifact. Delete only
   task-owned temporary preflight files. Never clean up infrastructure by default.
 - Report controller/context, resource names and physical IDs, manifest paths,
@@ -213,3 +416,24 @@ SQLite copy. Migration requires admin access, idle controllers, disabled GitOps
 watch/pull automation with restart, and verified standalone Proxmox VM identity;
 it is not an implicit fallback for a failed deployment. Consult the installed
 commands' help and current migration documentation before a requested handoff.
+
+Plain YAML/CUE adoption requires `--expected-identity` (API: `expected_identity`)
+with the exact full opaque fingerprint explicitly reviewed from controller
+discovery, including node/VMID/UUID evidence. Never auto-fetch the latest
+fingerprint just to make adoption pass: a replacement needs fresh inspection
+and consent. Missing/blank fingerprints fail closed before provider reads;
+identity disagreement records no tracking. Bundles use their recorded identity;
+an explicit override must agree exactly. Console connection retests invalidate
+only that context's inventory/review, and session/authority changes clear private
+bundles and consent. Canceling a request cannot undo accepted tracking; after an
+uncertain response, inspect saved intent and fresh discovery before retrying.
+
+Delete also prints a durable request ID before submission and supports the same
+read-only `ctl op get --request-id "$REQUEST_ID"` recovery. Keep the original key
+on uncertainty; never mint a new one automatically. Apply/Delete share the key
+namespace, but changed action, target or actor conflicts. Exact Delete replay
+returns the original operation after deletion or replacement, not a new mutation.
+Require a successful terminal delete operation; NotFound or a missing saved row
+alone is insufficient. A failed/interrupted/canceled deletion requires fresh
+inspection and explicitly authorized review before using a new key. Upgrade
+CLI/controller together rather than falling back to an unkeyed destructive call.

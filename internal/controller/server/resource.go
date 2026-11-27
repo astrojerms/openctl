@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -51,7 +52,7 @@ func sourceFromContext(ctx context.Context) string {
 // insert ops into the operations Store and notify the Dispatcher; Get/List
 // remain synchronous (read-only).
 //
-// If ops or dispatcher are nil (test mode), Apply/Delete fall back to
+// If ops or dispatcher are nil (test mode), unkeyed Apply/Delete fall back to
 // calling the Provider synchronously and return a synthetic operation_id.
 type resourceHandler struct {
 	apiv1.UnimplementedResourceServiceServer
@@ -66,6 +67,7 @@ type resourceHandler struct {
 	manifests     *manifests.Store
 	mirror        *manifests.DiskMirror
 	gitopsEnabled bool
+	manifestMode  string
 }
 
 func newResourceHandler(reg *providers.Registry, ops *operations.Store, d *operations.Dispatcher, m *manifests.Store) *resourceHandler {
@@ -78,13 +80,38 @@ func (h *resourceHandler) Apply(ctx context.Context, req *apiv1.ApplyRequest) (*
 	}
 	h.managementMu.RLock()
 	defer h.managementMu.RUnlock()
+	if err := h.checkManifestAuthority(); err != nil {
+		return nil, err
+	}
+	if err := operations.ValidateRequestID(req.GetRequestId()); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	if req.GetRequestId() != "" && (h.ops == nil || h.dispatcher == nil) {
+		return nil, status.Error(codes.FailedPrecondition, "request_id requires durable operations and an active dispatcher")
+	}
 	if req.GetResource() == nil {
 		return nil, status.Error(codes.InvalidArgument, "resource is required")
 	}
-	if _, err := h.registry.For(req.GetResource().GetApiVersion()); err != nil {
+	manifest := protoToResource(req.GetResource())
+	var request *operations.RequestBinding
+	if req.GetRequestId() != "" {
+		actor := auth.DefaultUserID
+		if principal, ok := auth.PrincipalFromContext(ctx); ok {
+			actor = principal.ActorID()
+		}
+		binding, err := operations.NewApplyRequest(req.GetRequestId(), actor, manifest,
+			req.GetCreateOnly(), req.GetAllowDestructive(), req.GetIKnowThisBreaksTheCluster())
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "request binding: %v", err)
+		}
+		request = &binding
+		if replay, err := h.replayApplyRequest(ctx, binding); err != nil || replay != nil {
+			return replay, err
+		}
+	}
+	if _, err := h.registry.For(manifest.APIVersion); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	manifest := protoToResource(req.GetResource())
 	// Re-validate server-side; the CLI already validated, but the controller
 	// never trusts the wire blindly.
 	if err := schema.Validate(manifest); err != nil {
@@ -93,7 +120,15 @@ func (h *resourceHandler) Apply(ctx context.Context, req *apiv1.ApplyRequest) (*
 	if manifest.Metadata.Name == "" {
 		return nil, status.Error(codes.InvalidArgument, "metadata.name is required")
 	}
-	if err := h.checkNotForgotten(ctx, manifest.APIVersion, manifest.Kind, manifest.Metadata.Name); err != nil {
+	if err := h.checkApplyAdmission(ctx, manifest, req.GetCreateOnly()); err != nil {
+		// Another admission can finish between the initial lookup and these
+		// mutable checks. Its committed binding must win over newly-existing
+		// provider/tracking state (especially for initial create-only replay).
+		if request != nil {
+			if replay, replayErr := h.replayApplyRequest(ctx, *request); replayErr != nil || replay != nil {
+				return replay, replayErr
+			}
+		}
 		return nil, err
 	}
 
@@ -101,6 +136,9 @@ func (h *resourceHandler) Apply(ctx context.Context, req *apiv1.ApplyRequest) (*
 	// Annotations ride along on manifest_json through the operations table,
 	// so the dispatcher delivers them to provider.Apply unchanged.
 	if req.GetAllowDestructive() || req.GetIKnowThisBreaksTheCluster() {
+		// protoToResource shares metadata maps with the wire request. Do not
+		// mutate it: the fingerprint must stay stable if the caller retries it.
+		manifest.Metadata.Annotations = maps.Clone(manifest.Metadata.Annotations)
 		if manifest.Metadata.Annotations == nil {
 			manifest.Metadata.Annotations = map[string]string{}
 		}
@@ -122,32 +160,95 @@ func (h *resourceHandler) Apply(ctx context.Context, req *apiv1.ApplyRequest) (*
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "encode manifest: %v", err)
 	}
-	op, err := h.ops.Submit(ctx, &operations.Operation{
+	candidate := &operations.Operation{
 		Type:         operations.TypeApply,
 		APIVersion:   manifest.APIVersion,
 		Kind:         manifest.Kind,
 		ResourceName: manifest.Metadata.Name,
 		ManifestJSON: string(manifestJSON),
 		Source:       sourceFromContext(ctx),
-	})
-	if err != nil {
-		var forgotten *manifests.ForgottenError
-		if errors.As(err, &forgotten) {
-			return nil, status.Error(codes.FailedPrecondition, forgotten.Error())
-		}
-		var conflict *operations.ConflictError
-		if errors.As(err, &conflict) {
-			return nil, status.Errorf(codes.AlreadyExists,
-				"operation %s already in flight for %s/%s", conflict.InflightID, manifest.Kind, manifest.Metadata.Name)
-		}
-		return nil, status.Errorf(codes.Internal, "submit op: %v", err)
+		CreateOnly:   req.GetCreateOnly(),
 	}
-	h.dispatcher.Notify()
+	var op *operations.Operation
+	admitted := true
+	if request != nil {
+		op, admitted, err = h.ops.SubmitRequest(ctx, candidate, *request)
+	} else {
+		op, err = h.ops.Submit(ctx, candidate)
+	}
+	if err != nil {
+		return nil, operationSubmissionError(err)
+	}
+	if admitted {
+		h.dispatcher.Notify()
+	}
+	return applyOperationResponse(op), nil
+}
 
+func (h *resourceHandler) checkApplyAdmission(ctx context.Context, manifest *protocol.Resource, createOnly bool) error {
+	if err := h.checkNotForgotten(ctx, manifest.APIVersion, manifest.Kind, manifest.Metadata.Name); err != nil {
+		return err
+	}
+	if !createOnly {
+		return nil
+	}
+	if h.manifests != nil {
+		existing, err := h.manifests.Load(ctx, manifest.APIVersion, manifest.Kind, manifest.Metadata.Name)
+		if err != nil {
+			return status.Error(codes.FailedPrecondition, "cannot verify existing management tracking")
+		}
+		if existing != nil {
+			return status.Error(codes.AlreadyExists, "resource is already managed")
+		}
+	}
+	p, _ := h.registry.For(manifest.APIVersion)
+	existing, err := p.Get(ctx, manifest.Kind, manifest.Metadata.Name)
+	if err != nil && !isNotFound(err) {
+		return status.Errorf(codes.FailedPrecondition, "cannot verify provider resource absence: %v", err)
+	}
+	if existing != nil {
+		return status.Error(codes.AlreadyExists, "provider resource already exists; use adoption, not creation")
+	}
+	return nil
+}
+
+func (h *resourceHandler) replayApplyRequest(ctx context.Context, request operations.RequestBinding) (*apiv1.ApplyResponse, error) {
+	op, err := h.ops.ReplayRequest(ctx, request)
+	if err != nil {
+		return nil, operationSubmissionError(err)
+	}
+	if op == nil {
+		return nil, nil
+	}
+	return applyOperationResponse(op), nil
+}
+
+func applyOperationResponse(op *operations.Operation) *apiv1.ApplyResponse {
 	return &apiv1.ApplyResponse{
 		OperationId: op.ID,
-		Message:     fmt.Sprintf("%s %q apply submitted as %s", manifest.Kind, manifest.Metadata.Name, op.ID),
-	}, nil
+		RequestId:   op.RequestID,
+		Message:     fmt.Sprintf("%s %q apply submitted as %s", op.Kind, op.ResourceName, op.ID),
+	}
+}
+
+func operationSubmissionError(err error) error {
+	var forgotten *manifests.ForgottenError
+	if errors.As(err, &forgotten) {
+		return status.Error(codes.FailedPrecondition, forgotten.Error())
+	}
+	var pruned *operations.RequestPrunedError
+	if errors.As(err, &pruned) {
+		return status.Error(codes.FailedPrecondition, pruned.Error())
+	}
+	var requestConflict *operations.RequestConflictError
+	if errors.As(err, &requestConflict) {
+		return status.Error(codes.AlreadyExists, requestConflict.Error())
+	}
+	var conflict *operations.ConflictError
+	if errors.As(err, &conflict) {
+		return status.Error(codes.AlreadyExists, conflict.Error())
+	}
+	return status.Errorf(codes.Internal, "submit op: %v", err)
 }
 
 // applySync is the Phase 2 synchronous fallback used by tests that don't
@@ -260,9 +361,9 @@ func attachRelationships(reg *providers.Registry, out *apiv1.Resource) {
 // DryRunApply previews what an Apply would do without enqueuing an op or
 // touching any provider state. Runs the same schema validation the Apply
 // path runs (errors surface in the response, NOT as an RPC error — the
-// editor wants to see them inline), computes spec-level drift against
-// the currently-applied manifest, and asks any DryRunner-capable provider
-// for the per-child action list + required-gate set.
+// editor wants to see them inline), computes desired spec and metadata edits
+// against the currently-applied manifest, and asks any DryRunner-capable
+// provider for the per-child action list + required-gate set.
 func (h *resourceHandler) DryRunApply(ctx context.Context, req *apiv1.DryRunApplyRequest) (*apiv1.DryRunApplyResponse, error) {
 	if err := authorize(ctx, auth.RoleViewer); err != nil {
 		return nil, err
@@ -271,6 +372,7 @@ func (h *resourceHandler) DryRunApply(ctx context.Context, req *apiv1.DryRunAppl
 		return nil, status.Error(codes.InvalidArgument, "resource is required")
 	}
 	manifest := protoToResource(req.GetResource())
+	submittedSpec := manifest.Spec
 
 	resp := &apiv1.DryRunApplyResponse{}
 
@@ -317,28 +419,46 @@ func (h *resourceHandler) DryRunApply(ctx context.Context, req *apiv1.DryRunAppl
 		resolver := refs.New(h.registry)
 		resolved, rerr := resolver.Resolve(ctx, manifest.Spec)
 		if rerr != nil {
-			resp.ValidationErrors = append(resp.ValidationErrors, rerr.Error())
+			diagnostic := referenceFieldError(rerr)
+			resp.FieldErrors = append(resp.FieldErrors, diagnostic)
+			resp.ValidationErrors = append(resp.ValidationErrors, diagnostic.Path+": "+diagnostic.Message)
 			resp.Summary = "unresolved ref"
 			return resp, nil
 		}
 		manifest.Spec = resolved
 	}
 
-	// Spec-level diff vs the last applied manifest. Empty when this would
-	// be the first apply.
+	// Diff remains desired-versus-desired; live drift has its own field.
+	resp.Operation = "create"
+	var saved *protocol.Resource
 	if h.manifests != nil {
-		desired, _, lerr := h.manifests.LoadWithTime(ctx,
-			manifest.APIVersion, manifest.Kind, manifest.Metadata.Name)
-		if lerr != nil {
-			return nil, status.Errorf(codes.Internal, "load applied manifest: %v", lerr)
+		saved, err = h.manifests.Load(ctx, manifest.APIVersion, manifest.Kind, manifest.Metadata.Name)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "load applied manifest: %v", err)
 		}
-		if desired != nil {
-			resp.Diff = computeDrift(desired.Spec, manifest.Spec)
+	}
+	if saved != nil {
+		resp.Diff = computeDrift(saved.Spec, submittedSpec)
+		resp.MetadataDiff = computeMetadataDiff(saved.Metadata, manifest.Metadata)
+		resp.Operation = "no-op"
+		observed, getErr := p.Get(ctx, manifest.Kind, manifest.Metadata.Name)
+		if getErr != nil && !isNotFound(getErr) {
+			return nil, status.Errorf(codes.FailedPrecondition, "cannot preview live resource: %v", getErr)
+		}
+		if observed == nil || isNotFound(getErr) {
+			resp.Operation = "update"
+			resp.ValidationErrors = append(resp.ValidationErrors, "managed resource is missing; inspect its identity before attempting replacement")
+		} else {
+			desiredSpec, observedSpec := providers.DriftSpecs(p, manifest.Kind, manifest.Spec, observed.Spec)
+			resp.LiveDrift = computeDrift(desiredSpec, observedSpec)
+		}
+		if len(resp.Diff) != 0 || len(resp.MetadataDiff) != 0 || len(resp.LiveDrift) != 0 {
+			resp.Operation = "update"
 		}
 	}
 
 	// Provider-side plan for composites. Atomic providers don't implement
-	// DryRunner; the spec-diff above is all the editor gets.
+	// DryRunner; they receive desired-intent diffs and live drift only.
 	if dr, ok := p.(providers.DryRunner); ok {
 		plan, derr := dr.DryRun(ctx, manifest)
 		if derr != nil {
@@ -356,12 +476,69 @@ func (h *resourceHandler) DryRunApply(ctx context.Context, req *apiv1.DryRunAppl
 			}
 		}
 	}
+	if saved != nil {
+		for _, child := range resp.Children {
+			if child.Verb != "no-op" {
+				resp.Operation = "update"
+				break
+			}
+		}
+	}
 
-	if resp.Summary == "" {
+	if len(resp.MetadataDiff) > 0 {
+		metadataSummary := fmt.Sprintf("would update %d metadata field(s)", len(resp.MetadataDiff))
+		if resp.Summary != "" {
+			// A composite's summary only describes its provider plan, not
+			// metadata that Apply persists even on a provider cache hit.
+			resp.Summary = metadataSummary + "; provider plan: " + resp.Summary
+		} else {
+			resp.Summary = metadataSummary
+			if len(resp.Diff) > 0 || len(resp.LiveDrift) > 0 {
+				resp.Summary += "; " + summarizeDryRun(resp)
+			}
+		}
+	} else if resp.Summary == "" {
 		resp.Summary = summarizeDryRun(resp)
 	}
 
 	return resp, nil
+}
+
+// computeMetadataDiff compares whole desired maps: Apply replaces rather than
+// merges labels and annotations, so both additions and removals are changes.
+// Only user-controlled metadata is considered; name is the lookup identity.
+func computeMetadataDiff(stored, submitted protocol.ResourceMetadata) []*apiv1.DriftEntry {
+	var out []*apiv1.DriftEntry
+	for _, field := range [...]struct {
+		path              string
+		stored, submitted map[string]string
+	}{
+		{"labels", stored.Labels, submitted.Labels},
+		{"annotations", stored.Annotations, submitted.Annotations},
+	} {
+		for key, before := range field.stored {
+			after, present := field.submitted[key]
+			if present && before == after {
+				continue
+			}
+			afterValue := renderValue(nil)
+			if present {
+				afterValue = after
+			}
+			out = append(out, &apiv1.DriftEntry{
+				Path: field.path + "." + key, Desired: before, Observed: afterValue,
+			})
+		}
+		for key, after := range field.submitted {
+			if _, present := field.stored[key]; !present {
+				out = append(out, &apiv1.DriftEntry{
+					Path: field.path + "." + key, Desired: renderValue(nil), Observed: after,
+				})
+			}
+		}
+	}
+	slices.SortFunc(out, func(a, b *apiv1.DriftEntry) int { return strings.Compare(a.Path, b.Path) })
+	return out
 }
 
 // ListActions returns the runtime action names the responsible provider
@@ -392,6 +569,7 @@ func (h *resourceHandler) ListActions(ctx context.Context, req *apiv1.ListAction
 		}
 		pbSpecs = append(pbSpecs, &apiv1.ActionSpec{
 			Name:        s.Name,
+			Label:       s.Label,
 			Description: s.Description,
 			Parameters:  params,
 		})
@@ -708,6 +886,12 @@ func (g *graphBuilder) response() *apiv1.GetChildrenGraphResponse {
 // didn't supply one. Used for atomic providers: "no-op" when nothing
 // would change, "would update N field(s)" otherwise.
 func summarizeDryRun(r *apiv1.DryRunApplyResponse) string {
+	if r.GetOperation() == "create" {
+		return "would create resource"
+	}
+	if len(r.GetLiveDrift()) > 0 && len(r.GetDiff()) == 0 {
+		return fmt.Sprintf("would repair %d live drift field(s)", len(r.GetLiveDrift()))
+	}
 	if len(r.GetDiff()) == 0 && len(r.GetChildren()) == 0 {
 		return "no-op"
 	}
@@ -858,26 +1042,46 @@ func (h *resourceHandler) Delete(ctx context.Context, req *apiv1.DeleteRequest) 
 	if err := authorize(ctx, auth.RoleEditor); err != nil {
 		return nil, err
 	}
-	h.managementMu.RLock()
-	defer h.managementMu.RUnlock()
-	if _, err := h.registry.For(req.GetApiVersion()); err != nil {
+	if err := operations.ValidateRequestID(req.GetRequestId()); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	if err := h.checkNotForgotten(ctx, req.GetApiVersion(), req.GetKind(), req.GetName()); err != nil {
+	if req.GetApiVersion() == "" || req.GetKind() == "" || req.GetName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "api_version, kind, and name are required")
+	}
+	if req.GetRequestId() != "" && (h.ops == nil || h.dispatcher == nil) {
+		return nil, status.Error(codes.FailedPrecondition, "request_id requires durable operations and an active dispatcher")
+	}
+	var request *operations.RequestBinding
+	if req.GetRequestId() != "" {
+		actor := auth.DefaultUserID
+		if principal, ok := auth.PrincipalFromContext(ctx); ok {
+			actor = principal.ActorID()
+		}
+		binding, err := operations.NewDeleteRequest(req.GetRequestId(), actor, req.GetApiVersion(), req.GetKind(), req.GetName())
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "request binding: %v", err)
+		}
+		request = &binding
+		if replay, err := h.replayDeleteRequest(ctx, binding); err != nil || replay != nil {
+			return replay, err
+		}
+	}
+
+	h.managementMu.RLock()
+	defer h.managementMu.RUnlock()
+	if err := h.checkDeleteAdmission(ctx, req.GetApiVersion(), req.GetKind(), req.GetName()); err != nil {
+		// An identical request can finish after the first lookup and remove its
+		// tracking before these mutable checks return. Its binding wins.
+		if request != nil {
+			if replay, replayErr := h.replayDeleteRequest(ctx, *request); replayErr != nil || replay != nil {
+				return replay, replayErr
+			}
+		}
 		return nil, err
 	}
 
-	// Block-on-references: refuse to delete a resource owned by another
-	// resource. Caller must delete the owner instead. (Architectural
-	// decision from CONTROLLER.md "Resource semantics: Delete".)
-	if ownerKind, ownerName, owned := h.registry.OwnerOf(req.GetKind(), req.GetName()); owned {
-		return nil, status.Errorf(codes.FailedPrecondition,
-			"%s %q is owned by %s %q; delete the owner instead",
-			req.GetKind(), req.GetName(), ownerKind, ownerName)
-	}
-
 	if h.ops == nil || h.dispatcher == nil {
-		// Phase 2 sync fallback — used by tests.
+		// Legacy unkeyed sync fallback — used by tests.
 		p, err := h.registry.For(req.GetApiVersion())
 		if err != nil {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -890,31 +1094,60 @@ func (h *resourceHandler) Delete(ctx context.Context, req *apiv1.DeleteRequest) 
 		}, nil
 	}
 
-	op, err := h.ops.Submit(ctx, &operations.Operation{
+	candidate := &operations.Operation{
 		Type:         operations.TypeDelete,
 		APIVersion:   req.GetApiVersion(),
 		Kind:         req.GetKind(),
 		ResourceName: req.GetName(),
 		Source:       sourceFromContext(ctx),
-	})
-	if err != nil {
-		var forgotten *manifests.ForgottenError
-		if errors.As(err, &forgotten) {
-			return nil, status.Error(codes.FailedPrecondition, forgotten.Error())
-		}
-		var conflict *operations.ConflictError
-		if errors.As(err, &conflict) {
-			return nil, status.Errorf(codes.AlreadyExists,
-				"operation %s already in flight for %s/%s", conflict.InflightID, req.GetKind(), req.GetName())
-		}
-		return nil, status.Errorf(codes.Internal, "submit op: %v", err)
 	}
-	h.dispatcher.Notify()
+	var op *operations.Operation
+	var err error
+	admitted := true
+	if request != nil {
+		op, admitted, err = h.ops.SubmitRequest(ctx, candidate, *request)
+	} else {
+		op, err = h.ops.Submit(ctx, candidate)
+	}
+	if err != nil {
+		return nil, operationSubmissionError(err)
+	}
+	if admitted {
+		h.dispatcher.Notify()
+	}
+	return deleteOperationResponse(op), nil
+}
 
+func (h *resourceHandler) checkDeleteAdmission(ctx context.Context, apiVersion, kind, name string) error {
+	if err := h.checkManifestAuthority(); err != nil {
+		return err
+	}
+	if _, err := h.registry.For(apiVersion); err != nil {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	if err := h.checkNotForgotten(ctx, apiVersion, kind, name); err != nil {
+		return err
+	}
+	return h.CheckDelete(ctx, apiVersion, kind, name)
+}
+
+func (h *resourceHandler) replayDeleteRequest(ctx context.Context, request operations.RequestBinding) (*apiv1.DeleteResponse, error) {
+	op, err := h.ops.ReplayRequest(ctx, request)
+	if err != nil {
+		return nil, operationSubmissionError(err)
+	}
+	if op == nil {
+		return nil, nil
+	}
+	return deleteOperationResponse(op), nil
+}
+
+func deleteOperationResponse(op *operations.Operation) *apiv1.DeleteResponse {
 	return &apiv1.DeleteResponse{
 		OperationId: op.ID,
-		Message:     fmt.Sprintf("%s %q delete submitted as %s", req.GetKind(), req.GetName(), op.ID),
-	}, nil
+		RequestId:   op.RequestID,
+		Message:     fmt.Sprintf("%s %q delete submitted as %s", op.Kind, op.ResourceName, op.ID),
+	}
 }
 
 // protoToResource converts the wire form into the in-process Resource type

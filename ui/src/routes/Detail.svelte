@@ -1,15 +1,23 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { resources, UnauthorizedError, type GetResourceResponse, type Resource, type ResourceRef, type ActionSpec } from '../lib/api';
-  import { canMutate } from '../lib/auth';
-
+  import { get } from 'svelte/store';
+  import { resources, ownership, operations, UnauthorizedError } from '../lib/api';
+  import type { Operation, Resource, ResourceRef, ActionSpec, MigrationBundle } from '../lib/api';
+  import { auth, canMutate } from '../lib/auth';
+  import { canEditDesired, canManageOwnership, desiredMutationHint } from '../lib/authority';
+  import { applicationCheckBadge, applicationChecks, childHealth } from '../lib/detailState';
+  import type { ChildState } from '../lib/detailState';
+  import { guestAddressObservation } from '../lib/guestAddress';
+  import { createDetailInspection, detailManifestYAML } from '../lib/detailInspection';
+  import type { DetailLease } from '../lib/detailInspection';
+  import { createDeleteAttempt } from '../lib/deletionAttempt';
+  import { focusOpsDrawer } from '../lib/opsDrawer';
   // Shown on disabled mutation controls for a read-only (viewer) session.
   const readOnlyTitle = 'Read-only session — requires editor or admin role';
   import { watchResources } from '../lib/watch';
-  import { statusBadge, type StatusBadge } from '../lib/format';
+  import { statusBadge } from '../lib/format';
   import { routeHref, navigate } from '../lib/router';
   import { ops as opsStore } from '../lib/ops';
-  import { resourceToYAML } from '../lib/yaml';
   import HistoryDiff from '../components/HistoryDiff.svelte';
   import DagView from '../components/DagView.svelte';
 
@@ -17,111 +25,178 @@
   export let kind: string;
   export let resourceName: string;
 
-  let data: GetResourceResponse | null = null;
-  let loading = true;
-  let error = '';
-  // U9.3: bumped on every successful (re)load so the topology graph re-fetches
-  // node status alongside the Watch-driven Get. Reset per resource switch.
+  const inspection = createDetailInspection(() => {
+    childController?.abort();
+    childStates = {};
+    operationHistory = null;
+    historyError = '';
+    actionSpecs = [];
+    actionMsg = '';
+    actionErr = '';
+    migrationMessage = '';
+    migrationError = '';
+    copyMsg = '';
+    exportedBundle = null;
+    cancelRuntimeActionReview();
+    auth.set({ kind: 'signed-out' });
+  });
+  // Uncertain Delete admission stays recovery-only. A missing resource or
+  // declaration never establishes success or authorizes a new request identity.
+  const deletion = createDeleteAttempt({
+    storage: () => sessionStorage,
+    canDelete: () => inspection.canAct() && get(canEditDesired),
+    canReviewNew: (operation) => inspection.canAct() && get(canEditDesired)
+      && (operation.status !== 'succeeded' || !!get(inspection).data?.applied),
+    refreshAfterTerminal: () => inspection.refresh(),
+    confirm: (target, newAttempt) => prompt(newAttempt
+      ? `Review a NEW deletion of ${target.kind} ${target.name}?\n\nThis deletes the currently observed resource with a fresh request ID. It is NOT a replay of the previous Delete.\n\nType the name to confirm this NEW deletion:`
+      : `Delete ${target.kind} ${target.name}?\n\nType the name to confirm:`),
+    onUnauthorized: () => inspection.unauthorized(),
+  });
+  $: data = $inspection.data;
+  $: saved = $inspection.saved;
+  $: loading = $inspection.loading;
+  $: error = $inspection.error;
+  $: fresh = $inspection.observation === 'fresh' && !!data;
+  $: inspectionSignal = data ? inspection.capture()?.signal : undefined;
   let graphVersion = 0;
-
-  let controller: AbortController | null = null;
   let watching = '';
-
-  // U6: per-child status pills. Keyed by `<apiVersion>/<kind>/<name>`;
-  // value is `null` while fetching, an object once resolved. We only
-  // populate this for composite resources (parent has children). Each
-  // entry is one extra Get RPC at mount — fine for the homelab fanout
-  // (a Cluster has ≤ ~10 children in practice).
-  type ChildState = { badge: StatusBadge; driftCount: number; error?: string };
+  let childController: AbortController | null = null;
   let childStates: Record<string, ChildState | null> = {};
+  const unsubscribeDeleteAuth = auth.subscribe((state) => {
+    if (watching && state.kind === 'signed-out') {
+      inspection.invalidate(new Error('Sign in and refresh to inspect the resource again'));
+    }
+    if (watching) void deletion.open(
+      { apiVersion, kind, name: resourceName },
+      state.kind === 'signed-in' ? state.me : null,
+    );
+  });
 
   function childKey(ref: ResourceRef): string {
     return `${ref.apiVersion}/${ref.kind}/${ref.name}`;
   }
 
-  // Reactive re-fetch + re-subscribe on route change.
-  $: void switchTo(apiVersion, kind, resourceName);
+  $: for (const operation of $opsStore) deletion.observe(operation);
 
-  async function switchTo(av: string, k: string, n: string) {
+  $: switchTo(apiVersion, kind, resourceName);
+
+  function switchTo(av: string, k: string, n: string) {
     const target = `${av}/${k}/${n}`;
     if (target === watching) return;
     watching = target;
-    controller?.abort();
-    controller = new AbortController();
-    data = null;
-    loading = true;
-    error = '';
+    childController?.abort();
     childStates = {};
-    await load(av, k, n);
-    void subscribe(av, k, n, controller.signal);
-  }
-
-  async function load(av: string, k: string, n: string) {
-    try {
-      data = await resources.get(av, k, n);
-      error = '';
-      graphVersion += 1;
-      // Fan out one Get per child to populate per-row badges.
-      void loadChildStates(data.resource);
-    } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
-    } finally {
-      loading = false;
+    graphVersion = 0;
+    exportedBundle = null;
+    secretAcknowledged = false;
+    migrationMessage = '';
+    migrationError = '';
+    migrating = false;
+    actionSpecs = [];
+    actionInflight = '';
+    actionMsg = '';
+    actionErr = '';
+    copyMsg = '';
+    operationHistory = null;
+    historyLoading = false;
+    historyError = '';
+    lastSeenOpId = '';
+    cancelRuntimeActionReview();
+    released = false;
+    inspection.open({ apiVersion: av, kind: k, name: n });
+    const session = get(auth);
+    void deletion.open({ apiVersion: av, kind: k, name: n }, session.kind === 'signed-in' ? session.me : null);
+    const lease = inspection.capture();
+    if (lease) {
+      void subscribe(av, k, n, lease);
     }
   }
 
-  async function loadChildStates(parent: Resource) {
+  $: if (data) {
+    graphVersion += 1;
+    const lease = inspection.capture();
+    if (lease) {
+      void loadChildStates(data.resource, lease);
+      void loadActions(lease.target.apiVersion, lease.target.kind, lease);
+    }
+  } else {
+    childController?.abort();
+    childStates = {};
+    cancelRuntimeActionReview();
+    exportedBundle = null;
+    secretAcknowledged = false;
+  }
+
+  async function loadChildStates(parent: Resource, lease: DetailLease) {
+    childController?.abort();
+    const childRequest = new AbortController();
+    childController = childRequest;
+    const abort = () => childRequest.abort();
+    lease.signal.addEventListener('abort', abort, { once: true });
     const refs = parent.children ?? [];
-    if (refs.length === 0) return;
-    // Seed all keys as "loading" up-front so the row count is stable.
     const seed: Record<string, ChildState | null> = {};
     for (const ref of refs) seed[childKey(ref)] = null;
     childStates = seed;
-
-    await Promise.all(refs.map(async (ref) => {
-      try {
-        const r = await resources.get(ref.apiVersion, ref.kind, ref.name);
-        childStates[childKey(ref)] = {
-          badge: statusBadge(r.resource.status),
-          driftCount: r.resource.drift?.length ?? 0,
-        };
-      } catch (err) {
-        childStates[childKey(ref)] = {
-          badge: { label: '—', tone: 'unknown' },
-          driftCount: 0,
-          error: err instanceof Error ? err.message : String(err),
-        };
-      }
-      // Trigger Svelte reactivity on object-key mutation.
-      childStates = { ...childStates };
-    }));
-  }
-
-  async function subscribe(av: string, k: string, n: string, signal: AbortSignal) {
-    // Single-resource Watch — any event triggers a re-Get so the applied
-    // manifest + drift come along, not just the observed state Watch
-    // carries. Cheap: one extra RPC per change to this one resource.
-    let backoffMs = 1000;
-    while (!signal.aborted) {
-      try {
-        await watchResources(av, k, n, () => {
-          void load(av, k, n);
-        }, { signal });
-        backoffMs = 1000;
-      } catch (err) {
-        if (signal.aborted) return;
-        if (err instanceof UnauthorizedError) return;
-        if (err instanceof DOMException && err.name === 'AbortError') return;
-        // Stale-cache fallback: surface the error but keep showing
-        // whatever we last fetched successfully.
-        error = err instanceof Error ? err.message : String(err);
-        backoffMs = Math.min(backoffMs * 2, 15_000);
-      }
-      await new Promise((r) => setTimeout(r, backoffMs));
+    try {
+      await Promise.all(refs.map(async (ref) => {
+        try {
+          const r = await resources.get(ref.apiVersion, ref.kind, ref.name, { signal: childRequest.signal });
+          if (!inspection.current(lease, true) || childRequest.signal.aborted) return;
+          childStates = { ...childStates, [childKey(ref)]: {
+            badge: statusBadge(r.resource),
+            driftCount: r.resource.drift?.length ?? 0,
+          } };
+        } catch (err) {
+          if (!inspection.current(lease) || childRequest.signal.aborted) return;
+          if (err instanceof UnauthorizedError) { inspection.unauthorized(); return; }
+          if (!inspection.current(lease, true)) return;
+          childStates = { ...childStates, [childKey(ref)]: {
+            badge: { label: '—', tone: 'unknown' },
+            driftCount: 0,
+            error: err instanceof Error ? err.message : String(err),
+          } };
+        }
+      }));
+    } finally {
+      lease.signal.removeEventListener('abort', abort);
     }
   }
 
-  onDestroy(() => controller?.abort());
+  async function subscribe(av: string, k: string, n: string, lease: DetailLease) {
+    let backoffMs = 1000;
+    while (inspection.current(lease)) {
+      try {
+        await watchResources(av, k, n, () => {
+          if (inspection.current(lease)) void inspection.refresh();
+        }, { signal: lease.signal });
+        if (!inspection.current(lease)) return;
+        inspection.invalidate(new Error('Resource watch disconnected'));
+        backoffMs = 1000;
+      } catch (err) {
+        if (!inspection.current(lease)) return;
+        inspection.invalidate(err);
+        if (!inspection.current(lease)) return;
+        backoffMs = Math.min(backoffMs * 2, 15_000);
+      }
+      const delay = Promise.withResolvers<void>();
+      const timer = setTimeout(delay.resolve, backoffMs);
+      const abort = () => { clearTimeout(timer); delay.resolve(); };
+      lease.signal.addEventListener('abort', abort, { once: true });
+      await delay.promise;
+      lease.signal.removeEventListener('abort', abort);
+      if (inspection.current(lease)) void inspection.refresh();
+    }
+  }
+
+  onDestroy(() => {
+    childController?.abort();
+    inspection.stop();
+    unsubscribeDeleteAuth();
+    unsubscribeRuntimeActionAuth();
+    unsubscribeRuntimeActionInspection();
+    deletion.close();
+  });
 
   // Pretty-print JSON for the desired/observed panes. The proto wire
   // format is JSON-on-the-fence anyway (grpc-gateway), and the editor
@@ -147,77 +222,162 @@
     return `${Math.floor(seconds / 86400)}d ago`;
   }
 
-  $: state = data ? statusBadge(data.resource.status) : null;
+  $: displayState = data ? statusBadge(data.resource) : null;
+  $: appChecks = apiVersion === 'apps.openctl.io/v1' ? applicationChecks(data?.resource.status) : [];
 
-  // Manual reconcile: re-submit the stored manifest through the normal
-  // Apply path so the dispatcher pushes desired state over observed. The
-  // resulting op surfaces in the bottom drawer like any other apply, so
-  // there's no separate "reconcile op" type to add on the wire.
-  let reconciling = false;
-  let reconcileMsg = '';
-  let reconcileErr = '';
+  $: guestAddress = fresh && $auth.kind === 'signed-in'
+    ? guestAddressObservation(data?.resource.status) : null;
+  // Address evidence has one conservative presentation, not a conflicting raw
+  // status.ip fallback from older controllers.
+  $: observedStatus = apiVersion === 'proxmox.openctl.io/v1' && kind === 'VirtualMachine'
+    ? Object.fromEntries(Object.entries(data?.resource.status ?? {})
+      .filter(([key]) => key !== 'ip' && key !== 'ipObservation'))
+    : data?.resource.status;
+  $: standaloneVM = apiVersion === 'proxmox.openctl.io/v1' && kind === 'VirtualMachine'
+    && !!data?.applied && !data.resource.metadata.ownerRefs?.length && !data.resource.children?.length;
 
-  async function doReconcile() {
-    if (reconciling || !data?.applied) return;
-    reconciling = true;
-    reconcileMsg = '';
-    reconcileErr = '';
+  let exportedBundle: MigrationBundle | null = null;
+  let secretAcknowledged = false;
+  let migrating = false;
+  let migrationMessage = '';
+  let migrationError = '';
+  let released = false;
+
+  async function exportBundle() {
+    if (!inspection.canAct() || !$canManageOwnership || !standaloneVM || !secretAcknowledged || migrating || activeOp) return;
+    const lease = inspection.capture();
+    if (!lease) return;
+    migrating = true;
+    migrationError = '';
+    migrationMessage = '';
+    exportedBundle = null;
     try {
-      const resp = await resources.apply({
-        resource: {
-          apiVersion: data.applied.apiVersion,
-          kind: data.applied.kind,
-          metadata: { name: data.applied.metadata?.name ?? resourceName },
-          spec: data.applied.spec as Record<string, unknown> | undefined,
-        },
-      });
-      reconcileMsg = resp.operationId
-        ? `Reconcile submitted (operation ${resp.operationId})`
-        : 'Reconcile submitted';
+      const response = await ownership.export(apiVersion, kind, resourceName, { signal: lease.signal });
+      if (!inspection.current(lease, true)) return;
+      const url = URL.createObjectURL(new Blob([JSON.stringify(response.bundle, null, 2)], { type: 'application/json' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${resourceName}-migration.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      exportedBundle = response.bundle;
+      migrationMessage = 'Bundle download requested. Verify it is safely saved before releasing tracking. Export did not change ownership or prove destination adoption.';
     } catch (err) {
-      if (err instanceof UnauthorizedError) return;
-      reconcileErr = err instanceof Error ? err.message : String(err);
+      if (!inspection.current(lease)) return;
+      if (err instanceof UnauthorizedError) { inspection.unauthorized(); return; }
+      if (inspection.current(lease, true)) migrationError = err instanceof Error ? err.message : String(err);
     } finally {
-      reconciling = false;
+      if (inspection.current(lease)) migrating = false;
     }
   }
 
-  // U8.12: runtime actions. Fetched once per kind on load. Empty means
-  // the provider has no runtime actions for this kind — bar hides.
-  // U10.1: actions carry parameter schemas so parameterized actions
-  // (e.g. Cluster upgrade's target version) can prompt for inputs.
+  async function forgetVM() {
+    if (!inspection.canAct() || !$canManageOwnership || !standaloneVM || !exportedBundle || !secretAcknowledged || migrating || activeOp) return;
+    const lease = inspection.capture();
+    if (!lease) return;
+    const typed = prompt(`Release controller tracking for ${resourceName}?\n\nThis is NOT Delete. The VM stays intact and its power state is unchanged. This controller stops managing it; destination adoption has not been proven. Keep the exported bundle safely saved.\n\nType the resource name to confirm:`);
+    if (typed === null) return;
+    if (typed !== resourceName) {
+      migrationError = 'Name did not match; release cancelled.';
+      return;
+    }
+    if (!inspection.current(lease, true) || !$canManageOwnership || !exportedBundle) return;
+    migrating = true;
+    migrationError = '';
+    try {
+      const response = await ownership.forget(exportedBundle, { signal: lease.signal });
+      if (!inspection.current(lease, true)) return;
+      inspection.stop();
+      childController?.abort();
+      released = true;
+      migrationMessage = response.message || 'Controller tracking released. The provider VM remains intact.';
+    } catch (err) {
+      if (!inspection.current(lease)) return;
+      if (err instanceof UnauthorizedError) { inspection.unauthorized(); return; }
+      if (inspection.current(lease, true)) migrationError = err instanceof Error ? err.message : String(err);
+    } finally {
+      if (inspection.current(lease)) migrating = false;
+    }
+  }
+
+  // Reconciliation uses the editor's fresh preview and durable Apply protocol.
+  // Navigating here grants no destructive consent and submits no operation.
+  function reviewReconcile() {
+    if (!inspection.canAct() || !data?.applied || !$canEditDesired) return;
+    navigate({ name: 'edit', apiVersion, kind, resourceName });
+  }
+
+  // Every runtime action needs transient consent tied to this observation.
   let actionSpecs: ActionSpec[] = [];
   let actionInflight = '';
   let actionMsg = '';
   let actionErr = '';
 
-  // Parameterized-action prompt: when an action declares parameters, clicking
-  // it opens this inline form instead of firing immediately.
-  let paramAction: ActionSpec | null = null;
-  let paramValues: Record<string, string> = {};
-  let paramError = '';
+  interface RuntimeActionReview {
+    spec: ActionSpec;
+    lease: DetailLease;
+    values: Record<string, string>;
+    error: string;
+  }
+  let runtimeActionReview: RuntimeActionReview | null = null;
+  const unsubscribeRuntimeActionAuth = auth.subscribe(() => cancelRuntimeActionReview());
+  const unsubscribeRuntimeActionInspection = inspection.subscribe(() => {
+    if (runtimeActionReview && !inspection.current(runtimeActionReview.lease, true)) cancelRuntimeActionReview();
+  });
 
-  async function loadActions(av: string, k: string) {
+  function runtimeActionAllowed(lease: DetailLease): boolean {
+    return inspection.current(lease, true) && get(canMutate) && get(auth).kind !== 'signed-out'
+      && !actionInflight && lease.target.apiVersion === apiVersion
+      && lease.target.kind === kind && lease.target.name === resourceName;
+  }
+
+  function openRuntimeActionReview(spec: ActionSpec) {
+    const lease = inspection.capture();
+    if (!lease || !runtimeActionAllowed(lease)) return;
+    const values: Record<string, string> = {};
+    for (const p of spec.parameters ?? []) values[p.name] = p.defaultValue ?? '';
+    runtimeActionReview = { spec, lease, values, error: '' };
+  }
+
+  function cancelRuntimeActionReview() {
+    runtimeActionReview = null;
+  }
+
+  async function loadActions(av: string, k: string, lease: DetailLease) {
     try {
-      const resp = await resources.listActions(av, k);
+      const resp = await resources.listActions(av, k, { signal: lease.signal });
+      if (!inspection.current(lease, true)) return;
       // Prefer the richer specs; fall back to bare names for older servers.
       actionSpecs = resp.actionSpecs ?? (resp.actions ?? []).map((name) => ({ name }));
     } catch (err) {
-      if (err instanceof UnauthorizedError) return;
-      // Actions are best-effort — a failure just hides the bar, no toast.
-      // eslint-disable-next-line no-console
-      console.warn('listActions failed', err);
-      actionSpecs = [];
+      if (!inspection.current(lease)) return;
+      if (err instanceof UnauthorizedError) { inspection.unauthorized(); return; }
+      if (inspection.current(lease, true)) actionSpecs = [];
     }
   }
 
-  async function doAction(action: string, parameters?: Record<string, string>) {
-    if (actionInflight) return;
+  async function submitRuntimeActionReview(review: RuntimeActionReview) {
+    if (runtimeActionReview !== review || !runtimeActionAllowed(review.lease)) return;
+    for (const p of review.spec.parameters ?? []) {
+      if (p.required && !(review.values[p.name] ?? '').trim()) {
+        review.error = `${p.name} is required`;
+        runtimeActionReview = review;
+        return;
+      }
+    }
+    const { lease, spec } = review;
+    const parameters = spec.parameters?.length ? { ...review.values } : undefined;
+    const action = spec.name;
+    const actor = get(auth);
+    cancelRuntimeActionReview();
     actionInflight = action;
     actionMsg = '';
     actionErr = '';
     try {
-      const resp = await resources.invokeAction(apiVersion, kind, resourceName, action, parameters);
+      const resp = await resources.invokeAction(lease.target.apiVersion, lease.target.kind, lease.target.name, action, parameters, { signal: lease.signal });
+      if (!inspection.current(lease, true) || get(auth) !== actor) return;
       // Dispatch on result shape: URL → open in new tab, download →
       // stream a file, otherwise show the message inline.
       if (resp.downloadContent && resp.downloadFilename) {
@@ -239,117 +399,22 @@
           ? `${action} → ${resp.message}`
           : `${action} submitted`;
       }
-      // Refetch after a brief pause so status updates from the provider
-      // are reflected. Watch will catch up too, but the immediate refetch
-      // gives faster feedback for click→result. Skip for pure link/
-      // download actions — they don't change resource state.
-      if (!resp.url && !resp.downloadContent) {
-        setTimeout(() => void load(apiVersion, kind, resourceName), 800);
-      }
+      // The refresh is tied to this route; no delayed callback can refresh a
+      // different resource after navigation.
+      if (!resp.url && !resp.downloadContent) void inspection.refresh();
     } catch (err) {
-      if (err instanceof UnauthorizedError) return;
-      actionErr = err instanceof Error ? err.message : String(err);
+      if (!inspection.current(lease) || get(auth) !== actor) return;
+      if (err instanceof UnauthorizedError) { inspection.unauthorized(); return; }
+      if (inspection.current(lease, true)) actionErr = err instanceof Error ? err.message : String(err);
     } finally {
-      actionInflight = '';
+      if (inspection.current(lease)) actionInflight = '';
     }
   }
 
-  // Load actions when the kind changes. Independent of the resource
-  // fetch so a slow provider doesn't hold up rendering.
-  $: void loadActions(apiVersion, kind);
-
-  // Human labels for known actions. Falls back to the raw action name
-  // so unknown actions still render (with a plain label).
-  function actionLabel(a: string): string {
-    switch (a) {
-      case 'start': return 'Start';
-      case 'stop': return 'Force stop';
-      case 'shutdown': return 'Shutdown';
-      case 'reboot': return 'Reboot';
-      case 'console': return 'Console';
-      case 'get-kubeconfig': return 'Kubeconfig';
-      case 'upgrade': return 'Upgrade';
-      case 'logs': return 'Logs';
-      case 'restart': return 'Restart k3s';
-      default: return a;
-    }
-  }
-
-  // Destructive actions get a confirmation prompt.
-  function actionIsDestructive(a: string): boolean {
-    return a === 'stop' || a === 'shutdown' || a === 'reboot' || a === 'restart';
-  }
-
-  function openParamForm(spec: ActionSpec) {
-    paramAction = spec;
-    paramError = '';
-    const seed: Record<string, string> = {};
-    for (const p of spec.parameters ?? []) seed[p.name] = p.defaultValue ?? '';
-    paramValues = seed;
-  }
-
-  function cancelParamForm() {
-    paramAction = null;
-    paramValues = {};
-    paramError = '';
-  }
-
-  async function submitParamForm() {
-    if (!paramAction) return;
-    // Validate required params client-side before invoking.
-    for (const p of paramAction.parameters ?? []) {
-      if (p.required && !(paramValues[p.name] ?? '').trim()) {
-        paramError = `${p.name} is required`;
-        return;
-      }
-    }
-    const spec = paramAction;
-    const values = { ...paramValues };
-    cancelParamForm();
-    await doAction(spec.name, values);
-  }
-
-  async function onActionClick(spec: ActionSpec) {
-    // Parameterized actions open an input form; others fire immediately
-    // (with a confirm for destructive ones).
-    if (spec.parameters && spec.parameters.length > 0) {
-      openParamForm(spec);
-      return;
-    }
-    if (actionIsDestructive(spec.name)) {
-      const ok = confirm(`${actionLabel(spec.name)} ${resourceName}?`);
-      if (!ok) return;
-    }
-    await doAction(spec.name);
-  }
-
-  // U8.14: destructive delete flow. Requires the user to type the
-  // resource name back to confirm — same guard shape kubectl and the
-  // AWS console use for destructive actions. Success navigates to
-  // the list (the resource is gone; there's nothing to render here).
-  let deleting = false;
-  let deleteErr = '';
-  async function doDelete() {
-    if (deleting) return;
-    const typed = prompt(`Delete ${kind} ${resourceName}?\n\nType the name to confirm:`);
-    if (typed === null) return;
-    if (typed !== resourceName) {
-      deleteErr = 'Name did not match; delete cancelled.';
-      return;
-    }
-    deleting = true;
-    deleteErr = '';
-    try {
-      await resources.delete(apiVersion, kind, resourceName);
-      // Immediately navigate back — the delete is submitted and the
-      // resource will disappear from the list on the next Watch tick.
-      navigate({ name: 'list', apiVersion, kind });
-    } catch (err) {
-      if (err instanceof UnauthorizedError) return;
-      deleteErr = err instanceof Error ? err.message : String(err);
-    } finally {
-      deleting = false;
-    }
+  function inspectDeleteOperation() {
+    const attempt = $deletion.attempt;
+    if (!attempt?.operationId) return;
+    focusOpsDrawer({ apiVersion, kind, resourceName, opId: attempt.operationId });
   }
 
   // U8.17: live progress on the detail page. Subscribe to the global
@@ -357,11 +422,11 @@
   // an inline banner. When the op completes, we auto-refetch to catch
   // up before the reconciler tick and then drop the banner. Composite
   // resources also match children whose ops are still running.
-  $: activeOp = $opsStore.find((o) => {
+  $: activeOp = $auth.kind === 'signed-in' && $inspection.observation !== 'unauthorized' ? $opsStore.find((o) => {
     if (o.apiVersion !== apiVersion || o.kind !== kind) return false;
     if (o.resourceName !== resourceName) return false;
     return o.status === 'pending' || o.status === 'running';
-  }) ?? null;
+  }) ?? null : null;
 
   // When the active op transitions to terminal (out of pending/running),
   // refetch once so status catches up promptly.
@@ -372,38 +437,51 @@
       lastSeenOpId = id;
     } else if (lastSeenOpId) {
       // Just cleared — refetch to see the result.
-      void load(apiVersion, kind, resourceName);
+      void inspection.refresh();
       lastSeenOpId = '';
     }
   }
 
-  // U8.19: YAML actions. Copy / download the applied manifest (falls
-  // back to the observed resource shape when no applied manifest is
-  // on file — usually observed-only kinds like ProxmoxNode).
-  let copyMsg = '';
-  function manifestYAML(): string {
-    if (!data) return '';
-    const source = data.applied ?? data.resource;
-    return resourceToYAML({
-      apiVersion: source.apiVersion,
-      kind: source.kind,
-      metadata: source.metadata,
-      spec: source.spec,
-    });
+  let operationHistory: Operation[] | null = null;
+  let historyLoading = false;
+  let historyError = '';
+  async function inspectHistory() {
+    const lease = inspection.capture();
+    if (!lease || historyLoading) return;
+    historyLoading = true;
+    historyError = '';
+    try {
+      const result = await operations.list({
+        apiVersion: lease.target.apiVersion, kind: lease.target.kind,
+        resourceName: lease.target.name, limit: 100,
+      }, { signal: lease.signal });
+      if (inspection.current(lease)) operationHistory = result.operations ?? [];
+    } catch (err) {
+      if (!inspection.current(lease)) return;
+      if (err instanceof UnauthorizedError) { inspection.unauthorized(); return; }
+      historyError = err instanceof Error ? err.message : String(err);
+    } finally {
+      if (inspection.current(lease)) historyLoading = false;
+    }
   }
+
+  // Read-only exports prefer raw persisted intent, including unresolved markers.
+  let copyMsg = '';
   async function copyYAML() {
-    const y = manifestYAML();
-    if (!y) return;
+    const lease = inspection.capture();
+    const y = detailManifestYAML(saved, data);
+    if (!lease || !y) return;
     try {
       await navigator.clipboard.writeText(y);
+      if (!inspection.current(lease)) return;
       copyMsg = 'Copied.';
-      setTimeout(() => (copyMsg = ''), 1500);
     } catch (err) {
+      if (!inspection.current(lease)) return;
       copyMsg = `Copy failed: ${err instanceof Error ? err.message : String(err)}`;
     }
   }
   function downloadYAML() {
-    const y = manifestYAML();
+    const y = detailManifestYAML(saved, data);
     if (!y) return;
     const blob = new Blob([y], { type: 'application/x-yaml' });
     const url = URL.createObjectURL(blob);
@@ -417,18 +495,10 @@
   }
 
   // Current desired manifest YAML — the right-hand side of the History diff.
-  $: appliedYamlStr = data ? manifestYAML() : '';
+  $: appliedYamlStr = detailManifestYAML(saved, data);
 
-  // U6 aggregations: count children we've heard back from that are
-  // drifted or in a non-good state. Reactive on childStates so the
-  // numbers tick up as the fanout completes.
   $: childTotal = data?.resource.children?.length ?? 0;
-  $: childDrifted = Object.values(childStates).filter(
-    (s): s is ChildState => s !== null && s.driftCount > 0,
-  ).length;
-  $: childUnhealthy = Object.values(childStates).filter(
-    (s): s is ChildState => s !== null && (s.badge.tone === 'bad' || s.badge.tone === 'warn'),
-  ).length;
+  $: childSummary = childHealth(data?.resource.children ?? [], childStates);
 </script>
 
 <section>
@@ -442,57 +512,104 @@
       <h2>{resourceName}</h2>
     </div>
     <div class="header-right">
-      {#if state}
-        <span class="state state-{state.tone}">{state.label}</span>
+      {#if !released}
+      {#if displayState}
+        <span class="state state-{displayState.tone}">{displayState.label}</span>
+      {:else}
+        <span class="state state-unknown">{loading ? 'Observing / unknown' : 'Observation unknown'}</span>
       {/if}
       {#if childTotal > 0}
-        <span class="state state-{childDrifted > 0 || childUnhealthy > 0 ? 'warn' : 'good'}" title="Aggregated child status">
+        <span class="state state-{childSummary.tone}" title="Aggregated child status; unknown or loading children are not healthy">
           {childTotal} {childTotal === 1 ? 'child' : 'children'}
-          {#if childDrifted > 0} · {childDrifted} drifted{/if}
-          {#if childUnhealthy > 0} · {childUnhealthy} unhealthy{/if}
+          {#if childSummary.drifted > 0} · {childSummary.drifted} drifted{/if}
+          {#if childSummary.unhealthy > 0} · {childSummary.unhealthy} unhealthy{/if}
+          {#if childSummary.unknown > 0} · {childSummary.unknown} unknown / loading{/if}
         </span>
       {/if}
       {#each actionSpecs as a}
         <button
           type="button"
           class="action-btn"
-          class:destructive={actionIsDestructive(a.name)}
-          disabled={!!actionInflight || !$canMutate}
-          title={$canMutate ? (a.description || `Invoke '${a.name}' on ${resourceName}`) : readOnlyTitle}
-          on:click={() => onActionClick(a)}
+          disabled={!fresh || !!actionInflight || !$canMutate}
+          title={!fresh ? 'Requires fresh provider observation' : $canMutate ? (a.description || `Invoke '${a.name}' on ${resourceName}`) : readOnlyTitle}
+          on:click={() => openRuntimeActionReview(a)}
         >
-          {actionInflight === a.name ? '…' : actionLabel(a.name)}
-          {#if a.parameters && a.parameters.length > 0}…{/if}
+          {actionInflight === a.name ? '…' : (a.label || a.name)}
         </button>
       {/each}
       <button
         type="button"
         class="reconcile-btn"
-        disabled={reconciling || !data?.applied || !$canMutate}
-        title={!$canMutate
-          ? readOnlyTitle
+        disabled={!fresh || !data?.applied || !$canEditDesired}
+        title={!fresh ? 'Requires fresh provider observation' : !$canEditDesired
+          ? $desiredMutationHint
           : data?.applied
-            ? 'Re-apply the stored manifest to push desired state over observed'
+            ? 'Review stored intent and live drift before submitting a recoverable Apply'
             : 'No applied manifest on file — nothing to reconcile from'}
-        on:click={doReconcile}
+        on:click={reviewReconcile}
       >
-        {reconciling ? 'Reconciling…' : 'Reconcile'}
+        Reconcile
       </button>
-      {#if $canMutate}
-        <a class="edit-btn" href={routeHref({ name: 'edit', apiVersion, kind, resourceName })}>Edit</a>
+      {#if $canEditDesired}
+        {#if fresh}
+          <a class="edit-btn" href={routeHref({ name: 'edit', apiVersion, kind, resourceName })} on:click={(event) => { if (!inspection.canAct() || !$canEditDesired) event.preventDefault(); }}>Edit</a>
+        {:else}
+          <button type="button" class="edit-btn" disabled title="Requires fresh provider observation">Edit</button>
+        {/if}
         <button
           type="button"
           class="delete-btn"
-          disabled={deleting}
-          title="Delete this resource"
-          on:click={doDelete}
-        >{deleting ? 'Deleting…' : 'Delete'}</button>
+          disabled={!fresh || !$deletion.ready || !!$deletion.busy || !!$deletion.attempt}
+          title={!fresh ? 'Requires fresh provider observation' : $deletion.attempt ? 'Recover the existing request; another Delete is blocked' : 'Delete this resource with durable request recovery'}
+          on:click={() => deletion.submit()}
+        >{$deletion.busy === 'submitting' ? 'Submitting delete…' : 'Delete'}</button>
+      {/if}
       {/if}
     </div>
   </header>
 
-  {#if deleteErr}
-    <p class="err small">{deleteErr}</p>
+  {#if $deletion.error}
+    <p class="err small" role="alert">{$deletion.error}</p>
+  {/if}
+  {#if $auth.kind === 'signed-in'}
+    {#if $deletion.attempt}
+      <article class="card">
+        <div class="card-head">
+          <h3>Delete request</h3>
+          <div class="card-actions">
+            <button type="button" class="mini-btn" disabled={!!$deletion.busy || !$deletion.ready} on:click={() => deletion.recover()}>
+              {$deletion.busy === 'recovering' ? 'Recovering…' : 'Recover request'}
+            </button>
+            {#if $deletion.attempt.operationId}
+              <button type="button" class="mini-btn" on:click={inspectDeleteOperation}>Inspect delete operation</button>
+            {/if}
+            {#if $deletion.reviewable && $canEditDesired}
+              <button type="button" class="mini-btn" disabled={!!$deletion.busy || !fresh || ($deletion.operation?.status === 'succeeded' && !data?.applied)} on:click={() => deletion.reviewNew()}>Review new delete attempt</button>
+            {/if}
+          </div>
+        </div>
+        <p class="small">Request ID: <code>{$deletion.attempt.requestId}</code></p>
+        {#if $deletion.attempt.operationId}
+          <p class="small">Operation ID: <code>{$deletion.attempt.operationId}</code></p>
+        {/if}
+        {#if $deletion.operation}
+          <p role="status">Delete operation: <strong>{$deletion.operation.status}</strong></p>
+          {#if $deletion.operation.error}<p class="err">{$deletion.operation.error}</p>{/if}
+          {#if $deletion.operation.status === 'succeeded'}
+            <p class="muted small">The Delete operation succeeded. A missing resource alone is not proof of success.</p>
+          {:else if ['failed', 'interrupted', 'canceled'].includes($deletion.operation.status)}
+            <p class="muted small">This Delete did not succeed. Inspect its operation and current resource before considering any new deletion.</p>
+          {/if}
+        {:else}
+          <p class="muted small">{$deletion.attempt.operationId ? 'Delete acknowledged; operation outcome not yet observed.' : 'Delete admission is uncertain or not yet acknowledged.'}</p>
+        {/if}
+        <p class="muted small">Recovery is read-only and works without a live resource or saved declaration. Unknown or active attempts never resubmit Delete. A new deletion requires confirmed terminal recovery, a fresh provider observation and new typed consent; a succeeded attempt also requires a currently tracked declaration. Leaving this page does not cancel accepted work.</p>
+      </article>
+    {:else if !$deletion.ready}
+      <button type="button" class="mini-btn" disabled={!!$deletion.busy} on:click={() => deletion.verify()}>
+        {$deletion.busy === 'binding' ? 'Verifying delete recovery…' : 'Verify delete recovery'}
+      </button>
+    {/if}
   {/if}
 
   {#if activeOp}
@@ -506,46 +623,47 @@
     </article>
   {/if}
 
-  {#if reconcileMsg}
-    <p class="muted small reconcile-msg">{reconcileMsg}</p>
-  {/if}
-  {#if reconcileErr}
-    <p class="err small">{reconcileErr}</p>
-  {/if}
-  {#if paramAction}
-    <form class="param-form" on:submit|preventDefault={submitParamForm}>
-      <div class="param-form-head">{actionLabel(paramAction.name)} {resourceName}</div>
-      {#if paramAction.description}
-        <p class="muted small">{paramAction.description}</p>
-      {/if}
-      {#each paramAction.parameters ?? [] as p}
-        <label class="param-row">
-          <span class="param-label">{p.name}{#if p.required}<span class="req">*</span>{/if}</span>
-          {#if p.type === 'bool'}
-            <select bind:value={paramValues[p.name]}>
-              <option value="true">true</option>
-              <option value="false">false</option>
-            </select>
-          {:else}
-            <input
-              type={p.type === 'int' ? 'number' : 'text'}
-              bind:value={paramValues[p.name]}
-              placeholder={p.description || ''}
-              required={p.required}
-            />
-          {/if}
-          {#if p.description}<span class="param-help muted small">{p.description}</span>{/if}
-        </label>
-      {/each}
-      {#if paramError}<p class="err small">{paramError}</p>{/if}
-      <div class="param-form-actions">
-        <button type="submit" class="action-btn" disabled={!!actionInflight}>
-          {actionInflight === paramAction.name ? '…' : `Run ${actionLabel(paramAction.name)}`}
-        </button>
-        <button type="button" class="param-cancel" on:click={cancelParamForm}>Cancel</button>
-      </div>
-    </form>
-  {/if}
+  {#each runtimeActionReview && fresh ? [runtimeActionReview] : [] as review (review)}
+      <form class="runtime-action-review" aria-label="Review runtime action" on:submit|preventDefault={() => submitRuntimeActionReview(review)}>
+        <div class="runtime-action-review-head">Review {review.spec.label || review.spec.name}</div>
+        <p class="small">API version: <code>{review.lease.target.apiVersion}</code><br />
+          Kind: <code>{review.lease.target.kind}</code><br />
+          Resource name: <code>{review.lease.target.name}</code><br />
+          Action ID: <code>{review.spec.name}</code></p>
+        {#if review.spec.description}
+          <p class="muted small">{review.spec.description}</p>
+        {/if}
+        <p class="muted small">This runs a live runtime action, not saved desired intent or durable Apply. There are no automatic retries; inspect an uncertain outcome before repeating. Downloads and URLs may contain sensitive information.</p>
+        {#each review.spec.parameters ?? [] as p}
+          <label class="runtime-action-field">
+            <span class="runtime-action-label">{p.name}{#if p.required}<span class="req">*</span>{/if}</span>
+            {#if p.type === 'bool'}
+              <select value={review.values[p.name]} on:change={(event) => { review.values[p.name] = event.currentTarget.value; }} required={p.required}>
+                <option value="">Select a value</option>
+                <option value="true">true</option>
+                <option value="false">false</option>
+              </select>
+            {:else}
+              <input
+                type={p.type === 'int' ? 'number' : 'text'}
+                value={review.values[p.name]}
+                on:input={(event) => { review.values[p.name] = event.currentTarget.value; }}
+                placeholder={p.description || ''}
+                required={p.required}
+              />
+            {/if}
+            {#if p.description}<span class="runtime-action-help muted small">{p.description}</span>{/if}
+          </label>
+        {/each}
+        {#if review.error}<p class="err small" role="alert">{review.error}</p>{/if}
+        <div class="runtime-action-review-actions">
+          <button type="submit" class="action-btn" disabled={!fresh || !$canMutate || !!actionInflight}>
+            Run {review.spec.label || review.spec.name}
+          </button>
+          <button type="button" class="runtime-action-cancel" on:click={() => { if (runtimeActionReview === review) cancelRuntimeActionReview(); }}>Cancel</button>
+        </div>
+      </form>
+  {/each}
   {#if actionMsg}
     <p class="muted small">{actionMsg}</p>
   {/if}
@@ -553,11 +671,86 @@
     <p class="err small">{actionErr}</p>
   {/if}
 
-  {#if loading}
-    <p class="muted">Loading…</p>
-  {:else if error}
-    <p class="err">{error}</p>
-  {:else if data}
+  {#if !released && $inspection.observation !== 'unauthorized'}
+    <article class="card">
+      <div class="card-head">
+        <h3>Provider observation</h3>
+        <button type="button" class="mini-btn" disabled={loading} on:click={() => inspection.refresh()}>Retry observation</button>
+      </div>
+      {#if loading}
+        <p class="muted" role="status">Observing provider… Readiness, drift and ownership are unknown until Get succeeds.</p>
+      {:else if error}
+        <p class="err" role="alert">{error}</p>
+        <p class="muted small">Readiness, drift and ownership are unknown. Mutations are disabled; saved intent is not a replacement instruction.</p>
+      {:else}
+        <p class="muted small">Live Get succeeded. Saved intent remains separate from this provider observation.</p>
+      {/if}
+    </article>
+
+    {#if apiVersion === 'proxmox.openctl.io/v1' && kind === 'VirtualMachine'}
+      <article class="card" aria-label="Guest address">
+        <div class="card-head">
+          <h3>Guest address</h3>
+          <span class="state state-unknown">{guestAddress?.state === 'available'
+            ? 'Address observed' : guestAddress?.state === 'unavailable'
+              ? 'Address unavailable' : 'Address observation unknown'}</span>
+        </div>
+        {#if guestAddress?.state === 'available'}
+          <p>Observed address: <code>{guestAddress.ip}</code></p>
+        {:else if guestAddress?.state === 'unavailable'}
+          <p><code>{guestAddress.code}</code> — {guestAddress.message}</p>
+        {:else}
+          {#if guestAddress?.code}<p>Reason code: <code>{guestAddress.code}</code></p>{/if}
+          <p class="muted">No current guest address evidence. Inspect VM power, configured networking and guest-agent support, then retry the provider observation.</p>
+        {/if}
+        <p class="muted small">Reachability unverified. An observed address does not prove SSH access or service readiness. IP-dependent application setup needs address evidence and separate access checks.</p>
+      </article>
+    {/if}
+
+    {#if saved}
+      <article class="card">
+        <div class="card-head">
+          <h3>Saved desired intent</h3>
+          <div class="card-actions">
+            <button type="button" class="mini-btn" on:click={copyYAML}>Copy YAML</button>
+            <button type="button" class="mini-btn" on:click={downloadYAML}>Download YAML</button>
+            {#if copyMsg}<span class="muted small">{copyMsg}</span>{/if}
+          </div>
+        </div>
+        <p class="muted small">Read-only persisted declaration, not observed readiness or proof of ownership. Unresolved markers are preserved; inspection does not resolve secrets or write state.</p>
+        <p class="muted small">Source: <span class="path">{saved.source || 'Not recorded'}</span> · Applied at: <span class="path">{saved.appliedAt || 'Not recorded'}</span>{#if saved.appliedAt} ({timeAgo(saved.appliedAt)}){/if}</p>
+        <pre>{pretty({ apiVersion: saved.resource.apiVersion, kind: saved.resource.kind, metadata: saved.resource.metadata, spec: saved.resource.spec })}</pre>
+      </article>
+    {:else if $inspection.savedLoading}
+      <p class="muted" role="status">Loading saved declaration independently of provider observation…</p>
+    {:else if $inspection.savedError}
+      <p class="muted small">{$inspection.savedError}</p>
+    {/if}
+
+    <article class="card">
+      <div class="card-head">
+        <h3>Operation history</h3>
+        <button type="button" class="mini-btn" disabled={historyLoading} on:click={inspectHistory}>{historyLoading ? 'Loading…' : 'Inspect operation history'}</button>
+      </div>
+      <p class="muted small">Historical operations are read-only evidence, not current provider readiness or authority to retry.</p>
+      {#if historyError}<p class="err" role="alert">{historyError}</p>{/if}
+      {#if operationHistory}
+        {#if operationHistory.length === 0}<p class="muted">No recorded operations for this resource.</p>{/if}
+        {#each operationHistory as op}
+          <p class="small"><code>{op.id}</code> · {op.type} · {op.status} · {op.submittedAt || 'Time not recorded'}{#if op.error} · {op.error}{/if}</p>
+        {/each}
+      {/if}
+    </article>
+  {/if}
+
+  {#if released}
+    <article class="card">
+      <h3>Tracking released — VM kept</h3>
+      <p role="status">{migrationMessage}</p>
+      <p>Release is not Delete. The VM remains at the provider; destination adoption has not been proven.</p>
+      <a href={routeHref({ name: 'discover' })}>Discover or import the bundle at a destination controller</a>
+    </article>
+  {:else if fresh && data}
     {@const drift = data.resource.drift ?? []}
     {@const lastApplied = data.appliedAt}
 
@@ -572,6 +765,41 @@
       </p>
     {/if}
 
+    {#if standaloneVM}
+      <article class="card">
+        <h3>Export and release tracking</h3>
+        <p>Export preserves ownership. Release tracking is <strong>not Delete</strong>: it keeps the provider VM intact but stops this controller managing it. Neither action proves adoption at a destination controller.</p>
+        <p class="muted small">Requires an admin, an idle controller, and manifest GitOps watch/pull disabled. Owned VMs, managed references, or opaque provider state may block migration; the server enforces all safeguards.</p>
+        {#if $canManageOwnership}
+          <label class="migration-confirm"><input type="checkbox" bind:checked={secretAcknowledged} disabled={migrating} /> I understand the downloaded bundle may contain literal cloud-init credentials and other secrets; I will store and transfer it securely.</label>
+          <div class="card-actions">
+            <button class="action-btn" disabled={migrating || !secretAcknowledged || !!activeOp} on:click={exportBundle}>{migrating ? 'Working…' : 'Export bundle'}</button>
+            <button class="action-btn destructive" disabled={migrating || !secretAcknowledged || !exportedBundle || !!activeOp} on:click={forgetVM}>Release tracking (keep VM)</button>
+          </div>
+          {#if migrationMessage}<p class="muted small" role="status">{migrationMessage}</p>{/if}
+          {#if migrationError}<p class="err small" role="alert">{migrationError}</p>{/if}
+        {:else}<p class="muted">Export/release requires admin access and controller-owned intent with GitOps disabled.</p>{/if}
+      </article>
+    {/if}
+
+    {#if appChecks.length > 0}
+      <article class="card">
+        <h3>Application checks</h3>
+        {#if typeof data.resource.status?.message === 'string'}<p>{data.resource.status.message}</p>{/if}
+        <p class="muted small">Checks show individual readiness, not just whether the VM is running. An unconfigured public endpoint does not imply the application itself is unhealthy.</p>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>Check</th><th>Readiness</th><th>Details</th></tr></thead>
+            <tbody>
+              {#each appChecks as check}
+                {@const badge = applicationCheckBadge(check.state)}
+                <tr><td>{check.name}</td><td><span class="state state-{badge.tone}">{badge.label}</span></td><td>{check.message || 'No details reported'}</td></tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      </article>
+    {/if}
     {#if drift.length > 0}
       <article class="card drift-card">
         <h3>Drift ({drift.length})</h3>
@@ -595,6 +823,7 @@
     {/if}
 
     <div class="grid">
+      {#if !saved}
       <article class="card">
         <div class="card-head">
           <h3>Desired manifest</h3>
@@ -619,10 +848,11 @@
           <p class="muted">No manifest on file.</p>
         {/if}
       </article>
+      {/if}
 
       <article class="card">
         <h3>Observed state</h3>
-        <pre>{pretty(data.resource.status)}</pre>
+        <pre>{pretty(observedStatus)}</pre>
       </article>
     </div>
 
@@ -650,9 +880,11 @@
       </article>
     {/if}
 
-    {#if children.length > 0}
-      <DagView {apiVersion} {kind} {resourceName} version={graphVersion} />
+    {#key watching}
+      <DagView {apiVersion} {kind} {resourceName} version={graphVersion} signal={inspectionSignal} onUnauthorized={inspection.unauthorized} />
+    {/key}
 
+    {#if children.length > 0}
       <article class="card">
         <h3>Children ({children.length})</h3>
         <p class="muted small">
@@ -666,8 +898,8 @@
               <a href={routeHref({ name: 'detail', apiVersion: child.apiVersion, kind: child.kind, resourceName: child.name })}>
                 <span class="ref-kind">{child.kind}</span>
                 <span class="ref-name">{child.name}</span>
-                {#if s === null}
-                  <span class="state state-unknown shimmer">loading…</span>
+                {#if s == null}
+                  <span class="state state-unknown shimmer">loading / unknown</span>
                 {:else if s?.error}
                   <span class="state state-bad" title={s.error}>error</span>
                 {:else if s}
@@ -686,7 +918,9 @@
       </article>
     {/if}
 
-    <HistoryDiff {apiVersion} {kind} {resourceName} appliedYaml={appliedYamlStr} />
+    {#key watching}
+      <HistoryDiff {apiVersion} {kind} {resourceName} appliedYaml={appliedYamlStr} signal={inspectionSignal} onUnauthorized={inspection.unauthorized} />
+    {/key}
   {/if}
 </section>
 
@@ -731,6 +965,7 @@
     display: flex;
     align-items: center;
     gap: 0.75rem;
+    flex-wrap: wrap;
   }
   .edit-btn {
     background: #4a8ef0;
@@ -761,9 +996,6 @@
     opacity: 0.4;
     cursor: not-allowed;
   }
-  .reconcile-msg {
-    color: #4a8ef0;
-  }
   .action-btn {
     background: transparent;
     color: #ccc;
@@ -789,7 +1021,7 @@
     background: rgba(255, 137, 128, 0.1);
     color: #ff8980;
   }
-  .param-form {
+  .runtime-action-review {
     margin: 0.75em 0;
     padding: 0.9em 1em;
     border: 1px solid rgba(127, 127, 127, 0.3);
@@ -797,26 +1029,26 @@
     background: rgba(127, 127, 127, 0.06);
     max-width: 32rem;
   }
-  .param-form-head {
+  .runtime-action-review-head {
     font-weight: 600;
     margin-bottom: 0.4em;
   }
-  .param-row {
+  .runtime-action-field {
     display: flex;
     flex-direction: column;
     gap: 0.2em;
     margin: 0.6em 0;
   }
-  .param-label {
+  .runtime-action-label {
     font-size: 0.85rem;
     color: #ccc;
   }
-  .param-label .req {
+  .runtime-action-label .req {
     color: #ff8980;
     margin-left: 0.15em;
   }
-  .param-row input,
-  .param-row select {
+  .runtime-action-field input,
+  .runtime-action-field select {
     padding: 0.4em 0.6em;
     border-radius: 6px;
     border: 1px solid rgba(127, 127, 127, 0.35);
@@ -824,15 +1056,15 @@
     color: #eee;
     font: inherit;
   }
-  .param-help {
+  .runtime-action-help {
     opacity: 0.75;
   }
-  .param-form-actions {
+  .runtime-action-review-actions {
     display: flex;
     gap: 0.5em;
     margin-top: 0.6em;
   }
-  .param-cancel {
+  .runtime-action-cancel {
     background: transparent;
     color: #aaa;
     border: 1px solid rgba(127, 127, 127, 0.35);
@@ -841,7 +1073,7 @@
     font-size: 0.85rem;
     cursor: pointer;
   }
-  .param-cancel:hover {
+  .runtime-action-cancel:hover {
     color: #fff;
     background: rgba(127, 127, 127, 0.12);
   }
@@ -906,6 +1138,7 @@
     display: flex;
     align-items: center;
     gap: 0.4rem;
+    flex-wrap: wrap;
   }
   .mini-btn {
     background: transparent;
@@ -1035,6 +1268,12 @@
   .ref-list .state {
     font-size: 0.72rem;
     padding: 0.1em 0.55em;
+  }
+  .migration-confirm { display: flex; align-items: baseline; gap: 0.6rem; margin: 1rem 0; }
+  @media (max-width: 45rem) {
+    header { align-items: flex-start; flex-direction: column; }
+    .header-right { gap: 0.5rem; }
+    .card-head { flex-wrap: wrap; }
   }
   .shimmer {
     opacity: 0.55;

@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
 	"maps"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"sort"
@@ -38,6 +41,19 @@ func debugf(format string, args ...any) {
 // still there, and Apply would clone a duplicate.
 var ErrNotFound = errors.New("not found")
 
+// APIError preserves the HTTP status independently of the untrusted response body.
+// Callers exposing diagnostics must classify HTTPStatusCode, not forward Error().
+type APIError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("API error (status %d): %s", e.StatusCode, e.Body)
+}
+
+func (e *APIError) HTTPStatusCode() int { return e.StatusCode }
+
 // Client is a Proxmox API client
 type Client struct {
 	endpoint               string
@@ -49,28 +65,96 @@ type Client struct {
 	snippetSSHIdentityFile string
 }
 
-// New creates a new Proxmox client with API token authentication
-func New(endpoint, tokenID, tokenSecret string) *Client {
+// TLSOptions configures certificate verification for a Proxmox HTTPS endpoint.
+// CAFile adds a controller-local PEM bundle to the operating system trust roots.
+// InsecureSkipVerify explicitly disables certificate verification; it cannot be
+// combined with CAFile and never permits plaintext HTTP.
+type TLSOptions struct {
+	CAFile             string
+	InsecureSkipVerify bool
+}
+
+// New creates a Proxmox client with API token authentication and verified HTTPS.
+// Endpoint and trust configuration are validated before any network request.
+func New(endpoint, tokenID, tokenSecret string, options TLSOptions) (*Client, error) {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.Opaque != "" {
+		return nil, errors.New("proxmox endpoint must be an absolute HTTPS URL")
+	}
+	if u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(endpoint, "#") {
+		return nil, errors.New("proxmox endpoint must not contain credentials, a query, or a fragment")
+	}
+	if strings.HasSuffix(u.Host, ":") {
+		return nil, errors.New("proxmox endpoint has an invalid port")
+	}
+	if port := u.Port(); port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return nil, errors.New("proxmox endpoint has an invalid port")
+		}
+	}
+	if strings.HasPrefix(u.Host, "[") && net.ParseIP(u.Hostname()) == nil {
+		return nil, errors.New("proxmox endpoint has an invalid IP address")
+	}
+	if options.CAFile != "" && options.InsecureSkipVerify {
+		return nil, errors.New("proxmox CA file and insecure certificate verification are mutually exclusive")
+	}
+	tlsConfig := &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: options.InsecureSkipVerify, // Explicit HTTPS-only opt-in.
+	}
+	if options.CAFile != "" {
+		bundle, err := os.ReadFile(options.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("read Proxmox CA bundle: %w", err)
+		}
+		roots, err := x509.SystemCertPool()
+		if err != nil {
+			return nil, fmt.Errorf("load system certificate roots: %w", err)
+		}
+		count := 0
+		for rest := bytes.TrimSpace(bundle); len(rest) > 0; {
+			if !bytes.HasPrefix(rest, []byte("-----BEGIN CERTIFICATE-----")) {
+				return nil, errors.New("proxmox CA bundle contains invalid certificate PEM")
+			}
+			block, remaining := pem.Decode(rest)
+			if block == nil || block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
+				return nil, errors.New("proxmox CA bundle contains invalid certificate PEM")
+			}
+			// Decode may otherwise skip a malformed block before a valid one.
+			consumed := rest[:len(rest)-len(remaining)]
+			if bytes.Count(consumed, []byte("-----BEGIN ")) != 1 {
+				return nil, errors.New("proxmox CA bundle contains invalid certificate PEM")
+			}
+			cert, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				return nil, fmt.Errorf("parse Proxmox CA certificate: %w", err)
+			}
+			roots.AddCert(cert)
+			count++
+			rest = bytes.TrimSpace(remaining)
+		}
+		if count == 0 {
+			return nil, errors.New("proxmox CA bundle contains no certificates")
+		}
+		tlsConfig.RootCAs = roots
+	}
 	return &Client{
-		endpoint:    strings.TrimSuffix(endpoint, "/"),
+		endpoint:    strings.TrimRight(endpoint, "/"),
 		tokenID:     tokenID,
 		tokenSecret: tokenSecret,
 		httpClient: &http.Client{
 			Timeout: 60 * time.Second,
+			CheckRedirect: func(req *http.Request, _ []*http.Request) error {
+				return &APIError{StatusCode: req.Response.StatusCode, Body: "Proxmox API redirects are not permitted"}
+			},
 			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: true,
-				},
-				// Bound the TCP connect phase separately from the overall
-				// 60s request timeout. When the Proxmox host is offline or
-				// black-holing packets, dials would otherwise hang the full
-				// 60s per request; a tight connect timeout fails fast so
-				// watches and the reconciler shed the dead endpoint quickly
-				// instead of holding streams open.
+				TLSClientConfig: tlsConfig,
+				// Bound offline-host TCP connects separately from requests.
 				DialContext: (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
 			},
 		},
-	}
+	}, nil
 }
 
 // Node represents a Proxmox cluster member as returned by /api2/json/nodes.
@@ -318,14 +402,12 @@ func (c *Client) ListVMs(ctx context.Context) ([]*VM, error) {
 	var allVMs []*VM
 	for _, node := range nodes {
 		debugf("ListVMs: fetching VMs from node %s", node)
-		vms, err := c.listNodeVMs(ctx, node)
+		vms, err := c.ListNodeVMs(ctx, node)
 		if err != nil {
-			debugf("ListVMs: failed to list VMs on node %s: %v", node, err)
-			continue
+			return nil, fmt.Errorf("list VMs on node %q: %w", node, err)
 		}
 		debugf("ListVMs: found %d VMs on node %s", len(vms), node)
 		for _, vm := range vms {
-			vm.Node = node
 			debugf("ListVMs: VM vmid=%d name=%s template=%d status=%s", vm.VMID, vm.Name, vm.Template, vm.Status)
 			allVMs = append(allVMs, vm)
 		}
@@ -942,7 +1024,9 @@ func (c *Client) listNodes(ctx context.Context) ([]string, error) {
 	return names, nil
 }
 
-func (c *Client) listNodeVMs(ctx context.Context, node string) ([]*VM, error) {
+// ListNodeVMs reads one node without coupling known-instance operations to
+// inventory availability on unrelated nodes.
+func (c *Client) ListNodeVMs(ctx context.Context, node string) ([]*VM, error) {
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu", node)
 	resp, err := c.get(ctx, path)
 	if err != nil {
@@ -956,6 +1040,9 @@ func (c *Client) listNodeVMs(ctx context.Context, node string) ([]*VM, error) {
 		return nil, fmt.Errorf("failed to parse VMs: %w", err)
 	}
 
+	for _, vm := range result.Data {
+		vm.Node = node
+	}
 	return result.Data, nil
 }
 
@@ -1036,7 +1123,7 @@ func (c *Client) doRequest(ctx context.Context, method, path string, params map[
 	debugf("HTTP response body: %s", truncate(string(respBody), 500))
 
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(respBody)}
 	}
 
 	return respBody, nil
@@ -1063,12 +1150,36 @@ type AgentIPAddress struct {
 	Prefix  int    `json:"prefix"`
 }
 
-// GetVMIPAddress gets the IP address of a VM using the QEMU guest agent
-func (c *Client) GetVMIPAddress(ctx context.Context, node string, vmid int) (string, error) {
+// GetVMIPAddress returns the unique usable IPv4 address on a NIC whose MAC
+// matches the authoritative VM config. Missing or ambiguous evidence is an error.
+func (c *Client) GetVMIPAddress(ctx context.Context, node string, vmid int, config *VMConfig) (string, error) {
+	if config == nil {
+		return "", guestIPFailure("vm_nic_unavailable", nil)
+	}
+	configuredMACs := make(map[[6]byte]struct{})
+	for key, value := range config.Raw {
+		index, ok := strings.CutPrefix(key, "net")
+		if !ok || index == "" {
+			continue
+		}
+		if _, err := strconv.ParseUint(index, 10, 32); err != nil {
+			continue
+		}
+		network, _ := value.(string)
+		model, _, _ := strings.Cut(network, ",")
+		_, address, _ := strings.Cut(model, "=")
+		mac, err := net.ParseMAC(address)
+		if err == nil && len(mac) == 6 {
+			configuredMACs[[6]byte(mac)] = struct{}{}
+		}
+	}
+	if len(configuredMACs) == 0 {
+		return "", guestIPFailure("vm_nic_unavailable", nil)
+	}
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/agent/network-get-interfaces", node, vmid)
 	resp, err := c.get(ctx, path)
 	if err != nil {
-		return "", fmt.Errorf("failed to get network interfaces from agent: %w", err)
+		return "", guestIPFailure("guest_agent_unavailable", err)
 	}
 
 	var result struct {
@@ -1077,26 +1188,44 @@ func (c *Client) GetVMIPAddress(ctx context.Context, node string, vmid int) (str
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(resp, &result); err != nil {
-		return "", fmt.Errorf("failed to parse agent response: %w", err)
+		return "", guestIPFailure("guest_agent_invalid_response", err)
 	}
 
-	// Find the first non-loopback IPv4 address
+	var candidate netip.Addr
 	for _, iface := range result.Data.Result {
-		if iface.Name == "lo" {
+		mac, err := net.ParseMAC(iface.HWAddr)
+		if err != nil || len(mac) != 6 {
+			continue
+		}
+		if _, configured := configuredMACs[[6]byte(mac)]; !configured {
 			continue
 		}
 		for _, addr := range iface.IPAddresses {
-			if addr.Type == "ipv4" && !strings.HasPrefix(addr.Address, "127.") {
-				return addr.Address, nil
+			if addr.Type != "ipv4" {
+				continue
 			}
+			ip, err := netip.ParseAddr(addr.Address)
+			if err != nil || !ip.Is4() || !ip.IsGlobalUnicast() || ip.IsLinkLocalUnicast() {
+				continue
+			}
+			if candidate.IsValid() && candidate != ip {
+				return "", guestIPFailure("guest_ip_ambiguous", nil)
+			}
+			candidate = ip
 		}
 	}
-
-	return "", fmt.Errorf("no IPv4 address found")
+	if !candidate.IsValid() {
+		return "", guestIPFailure("guest_ip_unavailable", nil)
+	}
+	return candidate.String(), nil
 }
 
 // WaitForVMIP waits for a VM to get an IP address
 func (c *Client) WaitForVMIP(ctx context.Context, node string, vmid int, timeout time.Duration) (string, error) {
+	config, err := c.GetVMConfig(ctx, node, vmid)
+	if err != nil {
+		return "", fmt.Errorf("read VM config for guest address selection: %w", err)
+	}
 	deadline := time.Now().Add(timeout)
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -1106,7 +1235,7 @@ func (c *Client) WaitForVMIP(ctx context.Context, node string, vmid int, timeout
 			return "", fmt.Errorf("timeout waiting for VM IP")
 		}
 
-		ip, err := c.GetVMIPAddress(ctx, node, vmid)
+		ip, err := c.GetVMIPAddress(ctx, node, vmid, config)
 		if err == nil && ip != "" {
 			return ip, nil
 		}

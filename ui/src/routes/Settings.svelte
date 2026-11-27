@@ -5,6 +5,7 @@
   // after the controller restarts — hence the persistent banner.
 
   import { onMount } from 'svelte';
+  import { canAdminister } from '../lib/authority';
   import {
     controllerConfigApi,
     UnauthorizedError,
@@ -53,6 +54,7 @@
   }
 
   async function save() {
+    if (!$canAdminister || saving) return;
     saving = true;
     saveError = '';
     saved = false;
@@ -93,6 +95,7 @@
   {:else if loadError}
     <p class="err">{loadError}</p>
   {:else}
+    {#if !$canAdminister}<p class="muted">An admin role is required to change controller-wide settings.</p>{/if}
     {#if restartRequired}
       <p class="banner">
         These settings are read when the controller starts. Saving updates
@@ -105,7 +108,7 @@
       <h3>Drift reconciler</h3>
       <div class="row check">
         <label class="inline" for="rec-enabled">
-          <input id="rec-enabled" type="checkbox" bind:checked={form.reconcilerEnabled} on:change={touched} />
+          <input id="rec-enabled" type="checkbox" bind:checked={form.reconcilerEnabled} on:change={touched} disabled={!$canAdminister || saving} />
           Enabled
         </label>
         <p class="hint">The periodic pass that recomputes drift for every managed resource.</p>
@@ -118,7 +121,7 @@
           placeholder="5m"
           bind:value={form.reconcilerInterval}
           on:input={touched}
-          disabled={!form.reconcilerEnabled}
+          disabled={!form.reconcilerEnabled || !$canAdminister || saving}
         />
         <p class="hint">Go duration between passes (e.g. <code>30s</code>, <code>5m</code>, <code>1h</code>). Blank uses the default <code>5m</code>.</p>
       </div>
@@ -133,6 +136,7 @@
           placeholder="50"
           bind:value={form.retain}
           on:input={touched}
+          disabled={!$canAdminister || saving}
         />
         <p class="hint">Completed operation rows kept per resource before older ones are pruned. Blank uses the default <code>50</code>.</p>
       </div>
@@ -144,7 +148,7 @@
         <p class="ok">Saved to config.yaml. Restart the controller to apply.</p>
       {/if}
       <div class="actions">
-        <button class="primary" disabled={saving} on:click={save}>
+        <button class="primary" disabled={saving || !$canAdminister} on:click={save}>
           {saving ? 'Saving…' : 'Save'}
         </button>
         <button on:click={refresh} disabled={saving}>Reset</button>

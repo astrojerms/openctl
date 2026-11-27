@@ -97,7 +97,7 @@ func TestProxmoxVMConformance(t *testing.T) {
 	providertest.Suite{
 		NewProvider: func(t *testing.T) (providers.Provider, func()) {
 			srv := newFakeProxmox().newServer(t)
-			p := New(&Config{Endpoint: srv.URL, TokenID: "t", TokenSecret: "s"})
+			p := mustNewProvider(t, &Config{Endpoint: srv.URL, CAFile: fixtureCA(t, srv), TokenID: "t", TokenSecret: "s"})
 			return p, func() {}
 		},
 		Kind: kindVM,

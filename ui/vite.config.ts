@@ -20,8 +20,10 @@ import path from 'node:path';
 // controller's self-signed cert.
 const HTTP_GATEWAY = process.env.OPENCTL_HTTP_GATEWAY ?? 'https://127.0.0.1:9445';
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [svelte()],
+  // Mounted component tests need Svelte's browser runtime, not index-server.
+  resolve: mode === 'test' ? { conditions: ['browser'] } : undefined,
   base: '/ui/',
   build: {
     outDir: path.resolve(__dirname, '../internal/controller/server/uiassets/dist'),
@@ -49,4 +51,4 @@ export default defineConfig({
     include: ['src/**/*.test.ts'],
     globals: false,
   },
-});
+}));

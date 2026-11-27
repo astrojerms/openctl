@@ -30,6 +30,7 @@ export interface RequestOptions {
   // post-login calls rely on the HttpOnly session cookie set by the
   // gateway, so they leave bearer unset.
   bearer?: string;
+  signal?: AbortSignal;
 }
 
 async function request<T>(
@@ -53,6 +54,7 @@ async function request<T>(
     credentials: 'same-origin',
     headers,
     body: payload,
+    signal: opts?.signal,
   });
 
   if (resp.status === 401) {
@@ -97,6 +99,8 @@ export interface WhoAmIResponse {
   // server didn't report one (older server, or --no-auth) — treated as
   // full access by the UI, since the server is the real gate.
   role?: string;
+  // Canonical actor, including root/no-auth, independent of credential type.
+  principalId?: string;
 }
 
 export const session = {
@@ -111,7 +115,7 @@ export const session = {
       { bearer: rootToken },
     ),
   logout: () => api.post<Record<string, never>>('/v1/session/logout'),
-  whoami: () => api.get<WhoAmIResponse>('/v1/session/whoami'),
+  whoami: (opts?: RequestOptions) => api.get<WhoAmIResponse>('/v1/session/whoami', opts),
 };
 
 export interface PingResponse {
@@ -121,14 +125,17 @@ export interface PingResponse {
   gitCommit?: string;
   // RFC3339 build timestamp. "dev" when unlinked.
   buildTime?: string;
+  controllerId?: string;
+  supportsIdempotentApply?: boolean;
+  supportsIdempotentDelete?: boolean;
 }
 
 export const ping = {
   // PingService.Ping is GET /v1/ping?message=...; the message echo is
   // returned in the response body. No client-side payload needed beyond
   // the query string.
-  ping: (message = 'hello from ui') =>
-    api.get<PingResponse>('/v1/ping?message=' + encodeURIComponent(message)),
+  ping: (message = 'hello from ui', opts?: RequestOptions) =>
+    api.get<PingResponse>('/v1/ping?message=' + encodeURIComponent(message), opts),
 };
 
 // --- Schemas -------------------------------------------------------------
@@ -144,6 +151,8 @@ export interface SchemaInfo {
   advanced?: boolean;
   ownerKind?: string;
   advancedNote?: string;
+  // Discovery observations are not saved desired resources.
+  observedOnly?: boolean;
 }
 
 export interface ListSchemasResponse {
@@ -165,13 +174,13 @@ export interface GetSchemaResponse {
 }
 
 export const schemas = {
-  list: () => api.get<ListSchemasResponse>('/v1/schemas'),
-  validate: (resource: Resource | Partial<Resource>) =>
-    api.post<ValidateResponse>('/v1/schemas:validate', { resource }),
-  getForm: (apiVersion: string, kind: string) =>
-    api.post<GetFormSchemaResponse>('/v1/schemas:getForm', { apiVersion, kind }),
-  get: (apiVersion: string, kind: string) =>
-    api.post<GetSchemaResponse>('/v1/schemas:get', { apiVersion, kind }),
+  list: (opts?: RequestOptions) => api.get<ListSchemasResponse>('/v1/schemas', opts),
+  validate: (resource: Resource | Partial<Resource>, opts?: RequestOptions) =>
+    api.post<ValidateResponse>('/v1/schemas:validate', { resource }, opts),
+  getForm: (apiVersion: string, kind: string, opts?: RequestOptions) =>
+    api.post<GetFormSchemaResponse>('/v1/schemas:getForm', { apiVersion, kind }, opts),
+  get: (apiVersion: string, kind: string, opts?: RequestOptions) =>
+    api.post<GetSchemaResponse>('/v1/schemas:get', { apiVersion, kind }, opts),
 };
 
 // --- Resources -----------------------------------------------------------
@@ -217,6 +226,33 @@ export interface ListResourcesResponse {
   resources?: Resource[];
 }
 
+// Saved desired intent is independent of provider observations. Metadata-only
+// lists must never be promoted into Resource.status or mutation authority.
+export interface SavedResourceMetadata {
+  apiVersion: string;
+  kind: string;
+  metadata: ResourceMetadata;
+  appliedAt?: string;
+  source?: string;
+}
+
+export interface ListSavedResourcesResponse {
+  resources?: SavedResourceMetadata[];
+}
+
+export interface GetSavedResourceResponse {
+  resource: Resource;
+  appliedAt?: string;
+  source?: string;
+}
+
+export const inventoryApi = {
+  list: (apiVersion: string, kind: string, opts?: RequestOptions) =>
+    api.post<ListSavedResourcesResponse>('/v1/inventory:list', { apiVersion, kind }, opts),
+  get: (apiVersion: string, kind: string, name: string, opts?: RequestOptions) =>
+    api.post<GetSavedResourceResponse>('/v1/inventory:get', { apiVersion, kind, name }, opts),
+};
+
 export interface DryRunChildAction {
   verb: string;       // "create" | "destroy" | "respec" | "no-op"
   kind: string;
@@ -225,7 +261,11 @@ export interface DryRunChildAction {
 }
 
 export interface DryRunApplyResponse {
+  operation?: 'create' | 'update' | 'no-op';
   diff?: DriftEntry[];
+  // Paths relative to metadata; desired = stored, observed = submitted.
+  metadataDiff?: DriftEntry[];
+  liveDrift?: DriftEntry[];
   children?: DryRunChildAction[];
   requiredGates?: string[];
   validationErrors?: string[];
@@ -238,6 +278,9 @@ export interface DryRunApplyResponse {
 export interface FieldError {
   path?: string;
   message?: string;
+  code?: string;
+  reference?: ResourceRef;
+  referenceField?: string;
 }
 
 // --- Composite DAG (Phase U9) --------------------------------------------
@@ -281,11 +324,14 @@ export interface ApplyRequest {
   resource: Resource | Partial<Resource>;
   allowDestructive?: boolean;
   iKnowThisBreaksTheCluster?: boolean;
+  createOnly?: boolean;
+  requestId?: string;
 }
 
 export interface ApplyResponse {
   operationId?: string;
   message?: string;
+  requestId?: string;
 }
 
 export interface ActionParameterSpec {
@@ -299,6 +345,7 @@ export interface ActionParameterSpec {
 
 export interface ActionSpec {
   name: string;
+  label?: string;
   description?: string;
   parameters?: ActionParameterSpec[];
 }
@@ -320,9 +367,17 @@ export interface InvokeActionResponse {
   downloadFilename?: string;
 }
 
+export interface DeleteResourceRequest {
+  apiVersion: string;
+  kind: string;
+  name: string;
+  requestId: string;
+}
+
 export interface DeleteResourceResponse {
   operationId?: string;
   message?: string;
+  requestId?: string;
 }
 
 export interface TemplateSummary {
@@ -363,6 +418,8 @@ export interface ProviderEntry {
   tokenId?: string;
   hasSecret?: boolean;
   usesSecretFile?: boolean;
+  caFile?: string;
+  insecureSkipVerify?: boolean;
 }
 
 export interface ListProvidersResponse {
@@ -374,14 +431,70 @@ export interface UpsertProviderRequest {
   endpoint: string;
   tokenId: string;
   tokenSecret?: string;
+  caFile?: string;
+  insecureSkipVerify?: boolean;
 }
 
 export const providersApi = {
-  list: () => api.get<ListProvidersResponse>('/v1/config/providers'),
-  upsert: (req: UpsertProviderRequest) =>
-    api.post<{ provider: ProviderEntry }>('/v1/config/providers', req),
-  delete: (name: string) =>
-    api.delete<Record<string, never>>('/v1/config/providers/' + encodeURIComponent(name)),
+  list: (opts?: RequestOptions) => api.get<ListProvidersResponse>('/v1/config/providers', opts),
+  upsert: (req: UpsertProviderRequest, opts?: RequestOptions) =>
+    api.post<{ provider: ProviderEntry }>('/v1/config/providers', req, opts),
+  delete: (name: string, opts?: RequestOptions) =>
+    api.delete<Record<string, never>>('/v1/config/providers/' + encodeURIComponent(name), opts),
+};
+
+export interface DiscoveryContext {
+  name: string;
+  endpoint?: string;
+  defaultContext?: boolean;
+}
+
+export interface DiscoveredResource {
+  context: string;
+  node: string;
+  vmid: string;
+  identity: string;
+  resource: Resource;
+  managed?: boolean;
+  adoptable?: boolean;
+  reason?: string;
+  identityConfirmationRequired?: boolean;
+}
+
+export interface MigrationBundle {
+  version: number;
+  resource: Resource;
+  controllerId: string;
+  manifestDigest: string;
+  identity: string;
+}
+
+export interface TestDiscoveryConnectionResponse {
+  connected?: boolean;
+  message?: string;
+  failureCode?: string;
+}
+
+export const discovery = {
+  contexts: (apiVersion = 'proxmox.openctl.io/v1', opts?: RequestOptions) =>
+    api.get<{ contexts?: DiscoveryContext[] }>('/v1/discovery/contexts?api_version=' + encodeURIComponent(apiVersion), opts),
+  inventory: (context: string, apiVersion = 'proxmox.openctl.io/v1', opts?: RequestOptions) =>
+    api.post<{ resources?: DiscoveredResource[] }>('/v1/discovery/resources', { apiVersion, context }, opts),
+  test: (context: string, apiVersion = 'proxmox.openctl.io/v1', opts?: RequestOptions) =>
+    api.post<TestDiscoveryConnectionResponse>('/v1/discovery:testConnection', { apiVersion, context }, opts),
+};
+
+export const ownership = {
+  confirmIdentity: (apiVersion: string, kind: string, name: string, identity: string, providerContext: string, opts?: RequestOptions) =>
+    api.post<{ resource: Resource; message?: string }>('/v1/resources:confirmIdentity', { apiVersion, kind, name, identity, providerContext }, opts),
+  adopt: (resource: Resource, providerContext: string, expectedIdentity: string, opts?: RequestOptions) =>
+    api.post<{ resource: Resource; message?: string }>('/v1/resources:adopt', { resource, providerContext, expectedIdentity }, opts),
+  adoptBundle: (bundle: MigrationBundle, providerContext: string, opts?: RequestOptions) =>
+    api.post<{ resource: Resource; message?: string }>('/v1/resources:adopt', { bundle, providerContext, expectedIdentity: bundle.identity }, opts),
+  export: (apiVersion: string, kind: string, name: string, opts?: RequestOptions) =>
+    api.post<{ bundle: MigrationBundle }>('/v1/resources:export', { apiVersion, kind, name }, opts),
+  forget: (bundle: MigrationBundle, opts?: RequestOptions) =>
+    api.post<{ message?: string }>('/v1/resources:forget', { bundle }, opts),
 };
 
 // Controller-behavior tunables (reconciler + operation retention). All are
@@ -395,6 +508,7 @@ export interface ControllerConfig {
 export interface ControllerConfigResponse {
   config?: ControllerConfig;
   restartRequired?: boolean;
+  manifestMode?: 'mirror' | 'gitops';
 }
 
 export const controllerConfigApi = {
@@ -405,43 +519,43 @@ export const controllerConfigApi = {
 
 export const templates = {
   list: () => api.get<ListTemplatesResponse>('/v1/templates'),
-  get: (name: string) =>
-    api.get<GetTemplateResponse>('/v1/templates/' + encodeURIComponent(name)),
-  render: (name: string, params: Record<string, unknown>) =>
+  get: (name: string, opts?: RequestOptions) =>
+    api.get<GetTemplateResponse>('/v1/templates/' + encodeURIComponent(name), opts),
+  render: (name: string, params: Record<string, unknown>, opts?: RequestOptions) =>
     api.post<RenderTemplateResponse>(
       '/v1/templates/' + encodeURIComponent(name) + ':render',
       { name, params },
+      opts,
     ),
 };
 
 export const resources = {
-  list: (apiVersion: string, kind: string) =>
-    api.post<ListResourcesResponse>('/v1/resources:list', { apiVersion, kind }),
-  get: (apiVersion: string, kind: string, name: string) =>
-    api.post<GetResourceResponse>('/v1/resources:get', { apiVersion, kind, name }),
-  childrenGraph: (apiVersion: string, kind: string, name: string) =>
-    api.post<ChildrenGraphResponse>('/v1/resources:childrenGraph', { apiVersion, kind, name }),
-  dryRunApply: (resource: Resource | Partial<Resource>) =>
-    api.post<DryRunApplyResponse>('/v1/resources:dryRunApply', { resource }),
-  apply: (req: ApplyRequest) =>
-    api.post<ApplyResponse>('/v1/resources:apply', req),
-  listActions: (apiVersion: string, kind: string) =>
-    api.post<ListActionsResponse>('/v1/resources:listActions', { apiVersion, kind }),
+  list: (apiVersion: string, kind: string, opts?: RequestOptions) =>
+    api.post<ListResourcesResponse>('/v1/resources:list', { apiVersion, kind }, opts),
+  get: (apiVersion: string, kind: string, name: string, opts?: RequestOptions) =>
+    api.post<GetResourceResponse>('/v1/resources:get', { apiVersion, kind, name }, opts),
+  childrenGraph: (apiVersion: string, kind: string, name: string, opts?: RequestOptions) =>
+    api.post<ChildrenGraphResponse>('/v1/resources:childrenGraph', { apiVersion, kind, name }, opts),
+  dryRunApply: (resource: Resource | Partial<Resource>, opts?: RequestOptions) =>
+    api.post<DryRunApplyResponse>('/v1/resources:dryRunApply', { resource }, opts),
+  apply: (req: ApplyRequest, opts?: RequestOptions) =>
+    api.post<ApplyResponse>('/v1/resources:apply', req, opts),
+  listActions: (apiVersion: string, kind: string, opts?: RequestOptions) =>
+    api.post<ListActionsResponse>('/v1/resources:listActions', { apiVersion, kind }, opts),
   invokeAction: (
     apiVersion: string,
     kind: string,
     resourceName: string,
     action: string,
     parameters?: Record<string, string>,
+    opts?: RequestOptions,
   ) =>
     api.post<InvokeActionResponse>('/v1/resources:invokeAction', {
       apiVersion, kind, resourceName, action,
       ...(parameters && Object.keys(parameters).length > 0 ? { parameters } : {}),
-    }),
-  delete: (apiVersion: string, kind: string, name: string) =>
-    api.post<DeleteResourceResponse>('/v1/resources:delete', {
-      apiVersion, kind, name,
-    }),
+    }, opts),
+  delete: (req: DeleteResourceRequest, opts?: RequestOptions) =>
+    api.post<DeleteResourceResponse>('/v1/resources:delete', req, opts),
 };
 
 // --- Operations ----------------------------------------------------------
@@ -461,6 +575,7 @@ export interface Operation {
   label?: string;
   source?: string;
   manifestJson?: string;
+  requestId?: string;
   children?: Operation[];
 }
 
@@ -485,17 +600,44 @@ export interface CancelOperationResponse {
 }
 
 export const operations = {
-  get: (id: string, includeChildren = false) =>
-    api.get<Operation>(`/v1/operations/${encodeURIComponent(id)}${includeChildren ? '?include_children=true' : ''}`),
-  list: (req: ListOperationsRequest = {}) =>
-    api.post<ListOperationsResponse>('/v1/operations:list', req),
+  get: (id: string, includeChildren = false, opts?: RequestOptions) =>
+    api.get<Operation>(`/v1/operations/${encodeURIComponent(id)}${includeChildren ? '?include_children=true' : ''}`, opts),
+  byRequest: (requestId: string, includeChildren = false, opts?: RequestOptions) =>
+    api.post<Operation>('/v1/operations:byRequest', { requestId, includeChildren }, opts),
+  list: (req: ListOperationsRequest = {}, opts?: RequestOptions) =>
+    api.post<ListOperationsResponse>('/v1/operations:list', req, opts),
   cancel: (id: string) =>
     api.post<CancelOperationResponse>(`/v1/operations/${encodeURIComponent(id)}:cancel`, {}),
+};
+
+// --- Persisted control-plane overview (never probes providers) -------------
+
+export interface ManagedKindCount {
+  apiVersion: string;
+  kind: string;
+  resources: number;
+}
+
+export interface OverviewResponse {
+  asOf: string;
+  managedResources: number;
+  kinds: ManagedKindCount[];
+  pendingOperations: number;
+  runningOperations: number;
+  reviewResources: number;
+  activeOperations: Operation[];
+  reviewOperations: Operation[];
+}
+
+export const overviewApi = {
+  get: (operationLimit = 10, opts?: RequestOptions) =>
+    api.get<OverviewResponse>(`/v1/overview?operation_limit=${operationLimit}`, opts),
 };
 
 // --- Repo (manifest dir / git) -------------------------------------------
 
 export interface RepoStatus {
+  mode?: 'mirror' | 'gitops';
   enabled?: boolean;
   dir?: string;
   branch?: string;
@@ -539,8 +681,8 @@ export const repo = {
   status: () => api.get<RepoStatus>('/v1/repo/status'),
   push: () => api.post<RepoActionResponse>('/v1/repo:push'),
   pull: () => api.post<RepoActionResponse>('/v1/repo:pull'),
-  history: (r: ResourceRef) =>
-    api.post<ResourceHistory>('/v1/repo:history', r),
-  atCommit: (r: ResourceRef, sha: string) =>
-    api.post<ResourceAtCommit>('/v1/repo:atCommit', { ...r, sha }),
+  history: (r: ResourceRef, opts?: RequestOptions) =>
+    api.post<ResourceHistory>('/v1/repo:history', r, opts),
+  atCommit: (r: ResourceRef, sha: string, opts?: RequestOptions) =>
+    api.post<ResourceAtCommit>('/v1/repo:atCommit', { ...r, sha }, opts),
 };
