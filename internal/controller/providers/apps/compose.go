@@ -17,6 +17,9 @@ func composeBase(l locator) string {
 }
 
 func (p *Provider) applyCompose(ctx context.Context, l locator, s spec) (resultErr error) {
+	if err := p.checkComposePrerequisites(ctx, l); err != nil {
+		return err
+	}
 	// Sibling staging preserves the original relative include/build/bind base.
 	// Compose normalizes paths before we redirect only the managed service .env
 	// reference, so validation never reads the installed environment by mistake.

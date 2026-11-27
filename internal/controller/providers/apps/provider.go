@@ -34,6 +34,7 @@ var _ providers.DryRunner = (*Provider)(nil)
 var _ providers.Actioner = (*Provider)(nil)
 var _ providers.ActionDescriber = (*Provider)(nil)
 var _ providers.DriftProjector = (*Provider)(nil)
+var _ providers.CreateRecoverer = (*Provider)(nil)
 
 func (p *Provider) lock(kind, name string) func() {
 	value, _ := p.locks.LoadOrStore(kind+"/"+name, &sync.Mutex{})
@@ -80,6 +81,13 @@ func (p *Provider) save(ctx context.Context, kind, name string, l locator) error
 	return nil
 }
 
+// CanResumeCreate recognizes this controller's retained partial work. Apply
+// independently rechecks placement, directory ownership and the project sentinel.
+func (p *Provider) CanResumeCreate(ctx context.Context, kind, name string) (bool, error) {
+	l, err := p.load(ctx, kind, name)
+	return l != nil && err == nil, err
+}
+
 func (p *Provider) DryRun(ctx context.Context, r *protocol.Resource) (*providers.DryRunResult, error) {
 	_, l, err := parse(r, false)
 	if err != nil {
@@ -91,6 +99,11 @@ func (p *Provider) DryRun(ctx context.Context, r *protocol.Resource) (*providers
 	}
 	if old != nil {
 		if err := placementChange(*old, l); err != nil {
+			return nil, err
+		}
+	}
+	if r.Kind == "ComposeApplication" {
+		if err := p.checkComposePrerequisites(ctx, l); err != nil {
 			return nil, err
 		}
 	}

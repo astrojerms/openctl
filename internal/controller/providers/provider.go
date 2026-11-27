@@ -91,6 +91,14 @@ type DryRunner interface {
 	DryRun(ctx context.Context, manifest *protocol.Resource) (*DryRunResult, error)
 }
 
+// CreateRecoverer permits a fresh create-only request to resume a retained,
+// controller-owned partial creation. Callers must first establish that no
+// completed desired baseline exists. Apply must still enforce the original
+// placement and ownership guards; this never authorizes unmanaged overwrite.
+type CreateRecoverer interface {
+	CanResumeCreate(ctx context.Context, kind, name string) (bool, error)
+}
+
 // DryRunResult carries provider-side planning info for DryRunApply. Maps
 // 1:1 onto apiv1.DryRunApplyResponse.{children,required_gates,summary} —
 // kept in this package so providers don't need to import the proto.

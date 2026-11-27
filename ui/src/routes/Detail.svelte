@@ -380,8 +380,8 @@
       if (!inspection.current(lease, true) || get(auth) !== actor) return;
       // Dispatch on result shape: URL → open in new tab, download →
       // stream a file, otherwise show the message inline.
-      if (resp.downloadContent && resp.downloadFilename) {
-        const blob = new Blob([resp.downloadContent], { type: 'application/octet-stream' });
+      if (resp.downloadFilename) {
+        const blob = new Blob([resp.downloadContent ?? ''], { type: 'application/octet-stream' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -401,7 +401,7 @@
       }
       // The refresh is tied to this route; no delayed callback can refresh a
       // different resource after navigation.
-      if (!resp.url && !resp.downloadContent) void inspection.refresh();
+      if (!resp.url && !resp.downloadContent && !resp.downloadFilename) void inspection.refresh();
     } catch (err) {
       if (!inspection.current(lease) || get(auth) !== actor) return;
       if (err instanceof UnauthorizedError) { inspection.unauthorized(); return; }

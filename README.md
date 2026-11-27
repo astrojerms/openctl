@@ -104,6 +104,12 @@ The local install writes:
 
 ```text
 ~/.openctl/controller/                         controller state, token, TLS
+
+# Linux
+~/.local/share/openctl/bin/                    installed controller + agents
+~/.config/systemd/user/openctl-controller.service
+
+# macOS
 ~/Library/Application Support/openctl/bin/     installed controller + agents
 ~/Library/LaunchAgents/io.openctl.controller.plist
 ~/Library/Logs/openctl/controller.out.log
@@ -130,7 +136,14 @@ make build build-plugin-k3s-agent-linux
 ./bin/openctl ping
 ```
 
-To uninstall the LaunchAgent:
+Local installation checks YAML and manifest-authority configuration before replacing
+the installed binary or service definition. Linux reinstall restarts the unit so
+the new binary actually serves requests. Before upgrading an older controller,
+back up its stopped configuration/state. To retain SQLite authority, replace a
+legacy `manifests.gitops: {enabled: false}` block with `manifests.mode: mirror`;
+do not enable GitOps merely to bypass an upgrade error.
+
+To uninstall the local service:
 
 ```bash
 ./bin/openctl-controller uninstall
@@ -1146,9 +1159,15 @@ metadata:
 ## Standalone Compose Applications
 
 Choose `apps.openctl.io/v1` / `ComposeApplication` in the console or declare it
-directly. Supply the SSH `target`, `compose`, `environment` (literal or `$secret`
-marker), and `probe.url`. Use a current Docker Compose plugin supporting
-`config --no-env-resolution --format json` on the guest.
+directly. Supply the SSH `target`, `compose` (literal or `$secret` marker),
+`environment` (a controller-side `$secret` marker), and `probe.url`.
+The guest requires **Docker Compose 5.8.0 or newer**. Preview checks the plugin
+over verified SSH, and Apply checks it again before staging proposed files.
+Older bundled plugins can resolve required service env files despite
+`--no-env-resolution`, so they are rejected with an upgrade diagnostic.
+Use the current official Compose plugin; installing Ubuntu's `docker-compose-v2`
+package alone does not establish this prerequisite. Pin downloads and verify
+their publisher checksum in reproducible guest bootstrap.
 
 Candidate Compose and environment files are staged privately and validated,
 including required service env files, before replacing installed configuration.
@@ -1161,6 +1180,23 @@ An initial SSH failure proven to precede the first command releases the fresh
 locator so target/key settings can be corrected. Once a command might have run,
 or an existing binding was present, placement remains bound: inspect the original
 guest and retry with the same host/project/directory rather than orphaning it.
+
+After a failed first app rollout, inspect the original operation and perform a
+fresh preview before submitting a new request ID. Create-only recovery is
+allowed only for retained provider-owned partial work without a saved desired
+baseline. The original placement and guest ownership checks still apply.
+Completed deployments and unmanaged resources remain protected; replaying the
+old request ID returns its old outcome rather than rerunning it.
+
+Declare the desired Compose boot policy explicitly (for example,
+`restart: unless-stopped`); OpenCtl does not inject one. Runtime Stop does not
+change that policy. Check `ctl health` after Start or a guest reboot: task
+acceptance and a running VM are not application readiness.
+
+A raw-intent no-op preview does not prove that referenced secret contents are
+unchanged. A reviewed Apply still refreshes secret-bearing app inputs; verify
+the actual application afterward. Quiet applications can return an empty log
+file: choose `ctl action run ... logs --download NEW_PRIVATE_PATH` explicitly.
 
 ## Managed Jellyfin On Proxmox
 

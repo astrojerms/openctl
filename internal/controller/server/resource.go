@@ -207,6 +207,15 @@ func (h *resourceHandler) checkApplyAdmission(ctx context.Context, manifest *pro
 		return status.Errorf(codes.FailedPrecondition, "cannot verify provider resource absence: %v", err)
 	}
 	if existing != nil {
+		if recovery, ok := p.(providers.CreateRecoverer); ok && err == nil && h.manifests != nil {
+			resume, err := recovery.CanResumeCreate(ctx, manifest.Kind, manifest.Metadata.Name)
+			if err != nil {
+				return status.Error(codes.FailedPrecondition, "cannot verify retained creation ownership")
+			}
+			if resume {
+				return nil
+			}
+		}
 		return status.Error(codes.AlreadyExists, "provider resource already exists; use adoption, not creation")
 	}
 	return nil
@@ -307,7 +316,13 @@ func (h *resourceHandler) Get(ctx context.Context, req *apiv1.GetRequest) (*apiv
 			return nil, status.Errorf(codes.Internal, "load applied manifest: %v", lerr)
 		}
 		if desired != nil {
-			desiredSpec, observedSpec := providers.DriftSpecs(p, r.Kind, desired.Spec, r.Spec)
+			// Resolve only comparison input, retaining the saved reference and
+			// secret markers in Applied and in the manifest store.
+			resolvedSpec, rerr := refs.New(h.registry).Resolve(ctx, desired.Spec)
+			if rerr != nil {
+				return nil, status.Errorf(codes.FailedPrecondition, "resolve drift refs: %v", rerr)
+			}
+			desiredSpec, observedSpec := providers.DriftSpecs(p, r.Kind, resolvedSpec, r.Spec)
 			out.Drift = computeDrift(desiredSpec, observedSpec)
 			applied, perr := resourceToProto(desired)
 			if perr != nil {
@@ -410,11 +425,10 @@ func (h *resourceHandler) DryRunApply(ctx context.Context, req *apiv1.DryRunAppl
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	// Phase 8 step 1: resolve any ResourceRefs in the spec so the diff
-	// reflects what the provider would actually see at Apply-time. When
-	// a ref target is missing, surface as a validation error rather than
-	// a hard 500 — dry-run should be honest about "your refs don't
-	// resolve yet" without failing the whole preview.
+	// Resolve references for live drift and provider planning only. The
+	// submittedSpec remains raw for desired-versus-desired edits; neither
+	// reference resolution nor inspection reads secrets.
+	// Missing reference outputs are honest preview validation errors.
 	if manifest.Spec != nil {
 		resolver := refs.New(h.registry)
 		resolved, rerr := resolver.Resolve(ctx, manifest.Spec)
@@ -1033,7 +1047,11 @@ func (h *resourceHandler) attachDrift(ctx context.Context, out *apiv1.Resource, 
 	if err != nil {
 		return err
 	}
-	desiredSpec, observedSpec := providers.DriftSpecs(p, observed.Kind, desired.Spec, observed.Spec)
+	resolvedSpec, err := refs.New(h.registry).Resolve(ctx, desired.Spec)
+	if err != nil {
+		return fmt.Errorf("resolve drift refs: %w", err)
+	}
+	desiredSpec, observedSpec := providers.DriftSpecs(p, observed.Kind, resolvedSpec, observed.Spec)
 	out.Drift = computeDrift(desiredSpec, observedSpec)
 	return nil
 }

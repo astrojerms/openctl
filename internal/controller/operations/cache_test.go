@@ -15,7 +15,7 @@ import (
 // newDispatcherWithManifests is like newDispatcherWithStore but wires a
 // real manifests.Store as the dispatcher's ManifestSink so the verifying-
 // trace cache is exercised end-to-end.
-func newDispatcherWithManifests(t *testing.T, p *fakeProvider) (*Store, *Dispatcher) {
+func newDispatcherWithManifests(t *testing.T, p providers.Provider) (*Store, *Dispatcher) {
 	t.Helper()
 	db, err := storage.Open(context.Background(), filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {

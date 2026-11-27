@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/openctl/openctl/internal/config"
 )
 
 // Install/uninstall constants shared across service managers.
@@ -165,6 +167,10 @@ func runInstallLocal() error {
 	paths, err := resolveInstallPaths()
 	if err != nil {
 		return err
+	}
+	// Reject incompatible configuration before replacing a working installation.
+	if _, err := config.Load(); err != nil {
+		return fmt.Errorf("validate controller config before installation: %w", err)
 	}
 
 	src, err := os.Executable()

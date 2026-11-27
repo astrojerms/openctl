@@ -77,8 +77,9 @@ type Operation struct {
 	// (SourceCLI, SourceUI); kept as a free-form string here so this
 	// package doesn't pull in manifests just for the constants.
 	Source string
-	// CreateOnly rejects an existing managed or live resource instead of
-	// updating it. Persisted so a restart cannot turn creation into upsert.
+	// CreateOnly rejects completed management or unmanaged live resources.
+	// Providers may resume owned partial work without a desired baseline.
+	// Persisted so a restart cannot turn creation into unrestricted upsert.
 	CreateOnly bool
 	// RequestID is the durable Apply or Delete request key, when supplied.
 	RequestID string

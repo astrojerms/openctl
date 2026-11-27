@@ -149,6 +149,75 @@ func TestCtlActionRawDownloadHasNoMixedOutput(t *testing.T) {
 	}
 }
 
+func TestCtlActionEmptyDownloads(t *testing.T) {
+	for _, destination := range []string{"file", "-"} {
+		t.Run(destination, func(t *testing.T) {
+			dir := t.TempDir()
+			serverPath := filepath.Join(dir, "server-must-not-select-path")
+			handler := &actionRPC{invoke: func(context.Context, *apiv1.InvokeActionRequest) (*apiv1.InvokeActionResponse, error) {
+				return &apiv1.InvokeActionResponse{DownloadFilename: serverPath, Message: "private message", Url: "https://sensitive.invalid"}, nil
+			}}
+			setupActionRPC(t, handler)
+			path := destination
+			if destination == "file" {
+				path = filepath.Join(dir, "quiet.log")
+			}
+			var out bytes.Buffer
+			diagnostic, err := executeAction(context.Background(), "", &out, actionRunArgs("--download", path)...)
+			if err != nil || diagnostic != "" || handler.calls.Load() != 1 {
+				t.Fatalf("err=%v diagnostic=%q calls=%d", err, diagnostic, handler.calls.Load())
+			}
+			if destination == "-" {
+				if out.Len() != 0 {
+					t.Fatalf("raw download mixed output: %q", &out)
+				}
+			} else {
+				info, err := os.Stat(path)
+				if err != nil || info.Size() != 0 || info.Mode().Perm() != 0600 {
+					t.Fatalf("invalid empty private download: %v %v", info, err)
+				}
+				_, err = executeAction(context.Background(), "", &out, actionRunArgs("--download", path)...)
+				if err == nil || handler.calls.Load() != 1 {
+					t.Fatalf("existing empty download overwritten: err=%v calls=%d", err, handler.calls.Load())
+				}
+			}
+			if _, err := os.Lstat(serverPath); !os.IsNotExist(err) {
+				t.Fatalf("server filename used as path: %v", err)
+			}
+		})
+	}
+}
+
+func TestCtlActionEmptyDownloadRequiresExplicitDestination(t *testing.T) {
+	handler := &actionRPC{invoke: func(context.Context, *apiv1.InvokeActionRequest) (*apiv1.InvokeActionResponse, error) {
+		return &apiv1.InvokeActionResponse{DownloadFilename: "quiet.log"}, nil
+	}}
+	setupActionRPC(t, handler)
+	var out bytes.Buffer
+	diagnostic, err := executeAction(context.Background(), "", &out, actionRunArgs()...)
+	if err == nil || !strings.Contains(err.Error(), "not saved") || !strings.Contains(err.Error(), "request already completed") || handler.calls.Load() != 1 {
+		t.Fatalf("err=%v calls=%d", err, handler.calls.Load())
+	}
+	if out.Len() != 0 || diagnostic != "" {
+		t.Fatalf("unexpected output=%q diagnostic=%q", &out, diagnostic)
+	}
+}
+
+func TestCtlActionMissingRawDownloadFailsWithoutOutput(t *testing.T) {
+	handler := &actionRPC{invoke: func(context.Context, *apiv1.InvokeActionRequest) (*apiv1.InvokeActionResponse, error) {
+		return &apiv1.InvokeActionResponse{Message: "private message", Url: "https://sensitive.invalid"}, nil
+	}}
+	setupActionRPC(t, handler)
+	var out bytes.Buffer
+	diagnostic, err := executeAction(context.Background(), "", &out, actionRunArgs("--download", "-")...)
+	if err == nil || !strings.Contains(err.Error(), "no download content") || !strings.Contains(err.Error(), "request already completed") || handler.calls.Load() != 1 {
+		t.Fatalf("err=%v calls=%d", err, handler.calls.Load())
+	}
+	if out.Len() != 0 || diagnostic != "" || strings.Contains(err.Error(), "private message") || strings.Contains(err.Error(), "sensitive.invalid") {
+		t.Fatalf("private result leaked: output=%q diagnostic=%q err=%v", &out, diagnostic, err)
+	}
+}
+
 func TestCtlActionNeverPrintsUnrequestedPayload(t *testing.T) {
 	handler := &actionRPC{invoke: func(context.Context, *apiv1.InvokeActionRequest) (*apiv1.InvokeActionResponse, error) {
 		return &apiv1.InvokeActionResponse{DownloadContent: "sensitive-payload"}, nil

@@ -31,6 +31,7 @@ beforeEach(() => {
   vi.spyOn(inventoryApi, 'get').mockResolvedValue(saved);
   vi.spyOn(resources, 'listActions').mockResolvedValue({ actionSpecs: [{ name: 'start', label: 'Start' }, { name: 'upgrade', label: 'Upgrade', parameters: [{ name: 'version', required: true, defaultValue: 'v1' }] }] });
   vi.spyOn(resources, 'childrenGraph').mockResolvedValue({ nodes: [], edges: [] });
+  vi.spyOn(repo, 'status').mockResolvedValue({ enabled: true });
   vi.spyOn(repo, 'history').mockResolvedValue({ commits: [] });
   vi.spyOn(watch, 'watchResources').mockImplementation((_av, _kind, _name, onEvent, opts) => {
     const pending = Promise.withResolvers<void>();
@@ -641,23 +642,41 @@ describe('runtime action review', () => {
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 
-  it('downloads only after explicit review submission and retains filename and content handling', async () => {
+  it.each([
+    { content: 'sensitive credentials', filename: 'cluster.yaml' },
+    { content: '', filename: 'quiet.log' },
+  ])('downloads reviewed content including empty files ($filename)', async ({ content, filename }) => {
     const createURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:runtime-download');
     const revokeURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
     const downloads: { href: string; filename: string }[] = [];
     vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
       downloads.push({ href: this.href, filename: this.download });
     });
-    const invoke = vi.spyOn(resources, 'invokeAction').mockResolvedValue({ downloadContent: 'sensitive credentials', downloadFilename: 'cluster.yaml' });
+    const invoke = vi.spyOn(resources, 'invokeAction').mockResolvedValue({ downloadContent: content, downloadFilename: filename });
     await openAction({ name: 'get-kubeconfig', label: 'Download credentials' });
     expect(downloads).toEqual([]);
     expect(invoke).not.toHaveBeenCalled();
     button('Run Download credentials').click();
     await settle();
-    expect(downloads).toEqual([{ href: 'blob:runtime-download', filename: 'cluster.yaml' }]);
+    expect(downloads).toEqual([{ href: 'blob:runtime-download', filename }]);
     expect(createURL).toHaveBeenCalledExactlyOnceWith(expect.any(Blob));
+    expect((createURL.mock.calls[0][0] as Blob).size).toBe(new Blob([content]).size);
     expect(revokeURL).toHaveBeenCalledExactlyOnceWith('blob:runtime-download');
-    expect(target.textContent).toContain('Downloaded cluster.yaml');
+    expect(target.textContent).toContain(`Downloaded ${filename}`);
+    expect(target.textContent).not.toContain('sensitive credentials');
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not manufacture a download when the completed action returns no download metadata', async () => {
+    const createURL = vi.spyOn(URL, 'createObjectURL');
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const invoke = vi.spyOn(resources, 'invokeAction').mockResolvedValue({});
+    await openAction({ name: 'logs', label: 'Download logs' });
+    button('Run Download logs').click();
+    await settle();
+    expect(createURL).not.toHaveBeenCalled();
+    expect(click).not.toHaveBeenCalled();
+    expect(target.textContent).not.toContain('Downloaded');
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount, tick, unmount } from 'svelte';
 import DagView from './DagView.svelte';
 import HistoryDiff from './HistoryDiff.svelte';
@@ -13,7 +13,10 @@ function host(): HTMLDivElement {
   document.body.append(target);
   return target;
 }
-async function settle() { await Promise.resolve(); await tick(); }
+async function settle() { await Promise.resolve(); await tick(); await tick(); }
+beforeEach(() => {
+  vi.spyOn(repo, 'status').mockResolvedValue({ enabled: true });
+});
 afterEach(async () => {
   if (component) await unmount(component);
   component = undefined;
@@ -35,12 +38,33 @@ describe('child inspection evidence boundaries', () => {
     expect(target?.textContent).not.toContain('previous-private-resource');
   });
 
+  it('shows disabled Git as optional rather than a failed resource inspection', async () => {
+    vi.mocked(repo.status).mockResolvedValue({});
+    const history = vi.spyOn(repo, 'history').mockRejectedValue(new Error('history requested without Git'));
+    component = mount(HistoryDiff, { target: host(), props: identity });
+    await settle();
+    expect(target?.querySelector('[role="note"]')).not.toBeNull();
+    expect(target?.querySelector('[role="alert"]')).toBeNull();
+    expect(target?.querySelector('select')).toBeNull();
+    expect(history).not.toHaveBeenCalled();
+  });
+
+  it('does not report disabled Git when checking its availability loses authorization', async () => {
+    vi.mocked(repo.status).mockRejectedValue(new UnauthorizedError('expired'));
+    const ended = vi.fn();
+    component = mount(HistoryDiff, { target: host(), props: { ...identity, onUnauthorized: ended } });
+    await settle();
+    expect(ended).toHaveBeenCalledOnce();
+    expect(target?.querySelector('[role="alert"]')).not.toBeNull();
+    expect(target?.querySelector('[role="note"]')).toBeNull();
+  });
+
   it('does not offer old history after its inspection signal was canceled', async () => {
     const pending = Promise.withResolvers<ResourceHistory>();
     vi.spyOn(repo, 'history').mockReturnValue(pending.promise);
     const controller = new AbortController();
     component = mount(HistoryDiff, { target: host(), props: { ...identity, signal: controller.signal } });
-    await tick();
+    await settle();
     controller.abort();
     pending.resolve({ commits: [{ sha: 'private-old-revision', subject: 'previous-private-history' }] });
     await settle();

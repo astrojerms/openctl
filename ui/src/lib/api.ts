@@ -678,7 +678,7 @@ export interface ResourceRef {
 }
 
 export const repo = {
-  status: () => api.get<RepoStatus>('/v1/repo/status'),
+  status: (opts?: RequestOptions) => api.get<RepoStatus>('/v1/repo/status', opts),
   push: () => api.post<RepoActionResponse>('/v1/repo:push'),
   pull: () => api.post<RepoActionResponse>('/v1/repo:pull'),
   history: (r: ResourceRef, opts?: RequestOptions) =>
