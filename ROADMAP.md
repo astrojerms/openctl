@@ -207,6 +207,27 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 - Upgrade: self-signed installations that depended on the former silent bypass
   must configure trusted CA material or explicitly accept insecure HTTPS.
 
+**Actionable read-only connection diagnostics (2026-11-27):**
+
+- [x] Connection tests expose safe `failureCode` categories and specific next
+  steps for certificate trust/names/validity, TLS negotiation, authentication,
+  read permissions, DNS/reachability/timeouts, redirects, API routing, limits and
+  provider availability. Classification uses typed causes and HTTP status, never
+  upstream error-text matching or forwarding response bodies/certificate data.
+- [x] Console failures remain local to each context and display the safe code
+  beside the next step. Healthy contexts discover independently; failed contexts
+  are not rendered as empty inventory. Successful explicit retests clear old
+  failure codes. CLI table/JSON/YAML preserve categories with nonzero failure
+  exits; success omits the failure code.
+- Verification: native-client checks, 19 wrapped-cause/redaction cases, eight
+  real native TLS/HTTP outcomes, six CLI output/exit cases and three mounted
+  console tests passed. Svelte diagnostics and the production build passed.
+  Actual CLI/browser proof against six isolated native contexts distinguished
+  five failures from healthy discovery without leaking provider bodies/tokens.
+  Only GETs occurred, untrusted TLS received no authenticated HTTP, redirects
+  were not followed, and SQLite retained zero operations/desired manifests.
+  No live homelab changes or physical readiness claim.
+
 The next product acceptance gate is the complete operator journey on real
 hardware, including recovery, media playback and any approved public endpoint.
 See [direction](docs/direction.md). Provider breadth is downstream of that gate.

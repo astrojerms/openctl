@@ -755,9 +755,13 @@ func (x *TestDiscoveryConnectionRequest) GetContext() string {
 }
 
 type TestDiscoveryConnectionResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Connected     bool                   `protobuf:"varint,1,opt,name=connected,proto3" json:"connected,omitempty"`
-	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Connected bool                   `protobuf:"varint,1,opt,name=connected,proto3" json:"connected,omitempty"`
+	Message   string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	// Safe, machine-readable failure category; empty when connected. Never
+	// contains upstream URLs, certificate contents, response bodies or secrets.
+	// New categories may be added; clients must handle unknown values.
+	FailureCode   string `protobuf:"bytes,3,opt,name=failure_code,json=failureCode,proto3" json:"failure_code,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -802,6 +806,13 @@ func (x *TestDiscoveryConnectionResponse) GetConnected() bool {
 func (x *TestDiscoveryConnectionResponse) GetMessage() string {
 	if x != nil {
 		return x.Message
+	}
+	return ""
+}
+
+func (x *TestDiscoveryConnectionResponse) GetFailureCode() string {
+	if x != nil {
+		return x.FailureCode
 	}
 	return ""
 }
@@ -6743,10 +6754,11 @@ const file_api_proto_rawDesc = "" +
 	"\x1eTestDiscoveryConnectionRequest\x12\x1f\n" +
 	"\vapi_version\x18\x01 \x01(\tR\n" +
 	"apiVersion\x12\x18\n" +
-	"\acontext\x18\x02 \x01(\tR\acontext\"Y\n" +
+	"\acontext\x18\x02 \x01(\tR\acontext\"|\n" +
 	"\x1fTestDiscoveryConnectionResponse\x12\x1c\n" +
 	"\tconnected\x18\x01 \x01(\bR\tconnected\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xc7\x01\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\x12!\n" +
+	"\ffailure_code\x18\x03 \x01(\tR\vfailureCode\"\xc7\x01\n" +
 	"\x0fMigrationBundle\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\rR\aversion\x120\n" +
 	"\bresource\x18\x02 \x01(\v2\x14.openctl.v1.ResourceR\bresource\x12#\n" +

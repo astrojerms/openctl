@@ -18,11 +18,16 @@ type discoveryConnectionRPC struct {
 }
 
 func (s *discoveryConnectionRPC) TestDiscoveryConnection(context.Context, *apiv1.TestDiscoveryConnectionRequest) (*apiv1.TestDiscoveryConnectionResponse, error) {
-	message := "certificate trust or credentials rejected"
-	if s.connected {
-		message = "authenticated read-only inventory succeeded"
+	response := &apiv1.TestDiscoveryConnectionResponse{
+		FailureCode: "tls_untrusted",
+		Message:     "Server certificate is not trusted; configure controller-side CA trust.",
 	}
-	return &apiv1.TestDiscoveryConnectionResponse{Connected: s.connected, Message: message}, nil
+	if s.connected {
+		response.Connected = true
+		response.FailureCode = ""
+		response.Message = "authenticated read-only inventory succeeded"
+	}
+	return response, nil
 }
 
 func TestDiscoveryConnectionExitStatusPreservesOutput(t *testing.T) {
@@ -49,6 +54,9 @@ func TestDiscoveryConnectionExitStatusPreservesOutput(t *testing.T) {
 				if (err == nil) != connected {
 					t.Fatalf("connected=%t, exit error=%v, output=%s", connected, err, stdout.String())
 				}
+				if !connected && (!strings.Contains(err.Error(), "tls_untrusted") || !strings.Contains(stdout.String(), "tls_untrusted")) {
+					t.Fatalf("failure category missing from output or exit diagnostic: %s (%v)", stdout.String(), err)
+				}
 				if format == "table" {
 					value := "false"
 					if connected {
@@ -60,8 +68,9 @@ func TestDiscoveryConnectionExitStatusPreservesOutput(t *testing.T) {
 					return
 				}
 				var response struct {
-					Connected bool   `json:"connected" yaml:"connected"`
-					Message   string `json:"message" yaml:"message"`
+					Connected   bool   `json:"connected" yaml:"connected"`
+					Message     string `json:"message" yaml:"message"`
+					FailureCode string `json:"failureCode" yaml:"failureCode"`
 				}
 				if format == "json" {
 					err = json.Unmarshal(stdout.Bytes(), &response)
@@ -70,6 +79,9 @@ func TestDiscoveryConnectionExitStatusPreservesOutput(t *testing.T) {
 				}
 				if err != nil || response.Connected != connected || response.Message == "" {
 					t.Fatalf("connection outcome lost from %s: %s (%v)", format, stdout.String(), err)
+				}
+				if connected && response.FailureCode != "" || !connected && response.FailureCode != "tls_untrusted" {
+					t.Fatalf("incorrect structured failure category: %+v", response)
 				}
 			})
 		}

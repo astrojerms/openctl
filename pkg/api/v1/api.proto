@@ -207,6 +207,10 @@ message TestDiscoveryConnectionRequest {
 message TestDiscoveryConnectionResponse {
   bool connected = 1;
   string message = 2;
+  // Safe, machine-readable failure category; empty when connected. Never
+  // contains upstream URLs, certificate contents, response bodies or secrets.
+  // New categories may be added; clients must handle unknown values.
+  string failure_code = 3;
 }
 
 // MigrationBundle contains desired intent, not observed state. Treat it as

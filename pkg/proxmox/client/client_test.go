@@ -778,8 +778,9 @@ func TestAPIError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unauthorized request")
 	}
-	if !strings.Contains(err.Error(), "401") {
-		t.Errorf("expected 401 error, got: %v", err)
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.HTTPStatusCode() != http.StatusUnauthorized {
+		t.Fatalf("unauthorized response lost its typed HTTP status: %v", err)
 	}
 }
 

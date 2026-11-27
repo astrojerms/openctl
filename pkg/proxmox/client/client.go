@@ -40,6 +40,19 @@ func debugf(format string, args ...any) {
 // still there, and Apply would clone a duplicate.
 var ErrNotFound = errors.New("not found")
 
+// APIError preserves the HTTP status independently of the untrusted response body.
+// Callers exposing diagnostics must classify HTTPStatusCode, not forward Error().
+type APIError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("API error (status %d): %s", e.StatusCode, e.Body)
+}
+
+func (e *APIError) HTTPStatusCode() int { return e.StatusCode }
+
 // Client is a Proxmox API client
 type Client struct {
 	endpoint               string
@@ -131,8 +144,8 @@ func New(endpoint, tokenID, tokenSecret string, options TLSOptions) (*Client, er
 		tokenSecret: tokenSecret,
 		httpClient: &http.Client{
 			Timeout: 60 * time.Second,
-			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-				return errors.New("Proxmox API redirects are not permitted")
+			CheckRedirect: func(req *http.Request, _ []*http.Request) error {
+				return &APIError{StatusCode: req.Response.StatusCode, Body: "Proxmox API redirects are not permitted"}
 			},
 			Transport: &http.Transport{
 				TLSClientConfig: tlsConfig,
@@ -1109,7 +1122,7 @@ func (c *Client) doRequest(ctx context.Context, method, path string, params map[
 	debugf("HTTP response body: %s", truncate(string(respBody), 500))
 
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(respBody)}
 	}
 
 	return respBody, nil

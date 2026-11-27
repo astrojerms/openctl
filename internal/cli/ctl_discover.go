@@ -43,7 +43,11 @@ func newCtlDiscoverCommand() *cobra.Command {
 			}
 			var outcomeErr error
 			if response, ok := result.(*apiv1.TestDiscoveryConnectionResponse); ok && !response.GetConnected() {
-				outcomeErr = fmt.Errorf("provider connection test failed; check endpoint certificate trust, credentials and permissions")
+				if code := response.GetFailureCode(); code != "" {
+					outcomeErr = fmt.Errorf("provider connection test failed (%s)", code)
+				} else {
+					outcomeErr = fmt.Errorf("provider connection test failed")
+				}
 			}
 			if handled, err := printControllerStructured(cmd.OutOrStdout(), result); handled {
 				if err != nil {
@@ -59,7 +63,7 @@ func newCtlDiscoverCommand() *cobra.Command {
 					fmt.Fprintf(out, "%s\t%s\t%t\n", c.GetName(), c.GetEndpoint(), c.GetDefaultContext())
 				}
 			case *apiv1.TestDiscoveryConnectionResponse:
-				fmt.Fprintf(out, "CONNECTED\tMESSAGE\n%t\t%s\n", response.GetConnected(), response.GetMessage())
+				fmt.Fprintf(out, "CONNECTED\tCODE\tMESSAGE\n%t\t%s\t%s\n", response.GetConnected(), response.GetFailureCode(), response.GetMessage())
 			case *apiv1.DiscoverResourcesResponse:
 				fmt.Fprintln(out, "CONTEXT\tNODE\tVMID\tNAME\tMANAGED\tADOPTABLE\tCONFIRM_IDENTITY\tIDENTITY\tREASON")
 				for _, r := range response.GetResources() {

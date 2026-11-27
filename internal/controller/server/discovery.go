@@ -50,8 +50,7 @@ func (h *resourceHandler) TestDiscoveryConnection(ctx context.Context, req *apiv
 		return nil, err
 	}
 	if err := d.TestConnection(ctx, req.GetContext()); err != nil {
-		// Do not forward upstream errors: these may contain credential-bearing URLs.
-		return &apiv1.TestDiscoveryConnectionResponse{Message: "connection failed; check the controller's endpoint certificate trust, provider context, credentials and permissions"}, nil
+		return discoveryConnectionFailure(err), nil
 	}
 	return &apiv1.TestDiscoveryConnectionResponse{Connected: true, Message: "authenticated read-only node and VM inventory succeeded"}, nil
 }

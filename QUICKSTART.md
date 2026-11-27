@@ -171,6 +171,13 @@ true` disables certificate/hostname checks for HTTPS only, exposes API tokens to
 impersonation, and cannot be combined with `caFile`. HTTP and API redirects are
 rejected. Restart the controller after saving credential or trust changes.
 
+Use **Discover infrastructure → Test connection** or
+`openctl ctl discover --test --provider-context homelab` before adoption.
+Failures distinguish CA trust, certificate names/validity, rejected credentials,
+missing read permissions and reachability. The CLI exits nonzero, retaining a
+safe failure code and next step in table/JSON/YAML output; inspect these rather
+than disabling verification or granting write access.
+
 ## Write a cluster manifest
 
 Use [`examples/cluster.yaml`](examples/cluster.yaml) as a template. Local

@@ -540,6 +540,27 @@ openctl ctl discover --provider-context homelab -o json
 `ctl discover --test` exits nonzero when the connection test fails, while keeping
 its table/JSON/YAML result available for inspection. Discovery remains read-only.
 
+Failed connection tests return a safe `failureCode` and a specific next step in
+the console and CLI (`failureCode` in JSON/YAML, `CODE` in the table). Categories
+include:
+
+| Failure code | What to inspect on the controller/provider |
+| --- | --- |
+| `tls_untrusted` | Verified private CA bundle, `caFile`, then restart |
+| `tls_hostname_mismatch` | Endpoint DNS/IP versus certificate names; do not disable verification |
+| `tls_certificate_invalid`, `tls_handshake_failed` | Certificate dates/chain, controller clock, HTTPS port and TLS support |
+| `unauthorized`, `permission_denied` | Token ID/secret versus node/VM read ACLs; discovery needs no write grant |
+| `dns_failed`, `endpoint_unreachable`, `timeout` | Controller-side DNS, routing, firewall, API availability |
+| `redirect_rejected`, `endpoint_not_found` | Direct HTTPS API URL and reverse-proxy routing |
+| `rate_limited`, `provider_unavailable` | API limits or provider/proxy health before explicitly testing again |
+| `canceled`, `connection_failed` | Canceled test or an unclassified failure; no read-access claim |
+
+Classification uses typed causes, never upstream error-text matching. Response
+bodies, credential-bearing URLs and certificate contents are not forwarded.
+Success has no failure code; clients should tolerate future/unknown codes.
+Testing all contexts keeps failures local to each connection and discovers only
+contexts whose read test succeeded. No automatic retry or trust bypass occurs.
+
 VM operations bind to context, endpoint, node, VMID and SMBIOS UUID rather than
 trusting a name alone. After upgrading an older controller, Discovery offers
 **Confirm tracked VM identity** for already-managed VMs that lack this binding.

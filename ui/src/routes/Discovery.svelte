@@ -6,7 +6,7 @@
   import { observedDesired, parseMigrationBundle } from '../lib/discovery';
   import { resourceToYAML } from '../lib/yaml';
 
-  type ContextState = { connected: boolean; message: string; error?: string; count?: number };
+  type ContextState = { connected: boolean; message: string; failureCode?: string; error?: string; count?: number };
   let contexts: DiscoveryContext[] = [];
   let states: Record<string, ContextState> = {};
   let inventory: DiscoveredResource[] = [];
@@ -45,8 +45,9 @@
   async function test(context: string): Promise<boolean> {
     try {
       const response = await discovery.test(context);
-      states = { ...states, [context]: { connected: response.connected, message: response.message || (response.connected ? 'Connected' : 'Connection failed') } };
-      return response.connected;
+      const connected = response.connected === true;
+      states = { ...states, [context]: { connected, message: response.message || (connected ? 'Connected' : 'Connection failed'), failureCode: connected ? undefined : response.failureCode } };
+      return connected;
     } catch (err) {
       states = { ...states, [context]: { connected: false, message: 'Connection test failed', error: message(err) } };
       return false;
@@ -149,7 +150,7 @@
     <a href={routeHref({ name: 'providers' })}>Connect a provider</a>
   </header>
   <p class="notice">Discovery and connection tests are read-only. Adoption records desired intent and ownership; it does not Apply or change the VM. Adoption requires an admin, an idle controller, and manifest GitOps watch/pull disabled. The server verifies these safeguards and live identity.</p>
-  <p class="muted">Changed provider credentials? Restart the controller first; hot reload is intentionally disabled for safety.</p>
+  <p class="muted">Changed provider credentials or certificate trust? Restart the controller first; hot reload is intentionally disabled for safety.</p>
   {#if loading}
     <p class="muted">Loading configured contexts…</p>
   {:else if error}
@@ -170,6 +171,7 @@
                 <td>{context.endpoint || 'Not reported'}</td>
                 <td>
                   {states[context.name]?.message ?? 'Not tested'}
+                  {#if states[context.name]?.failureCode}<p class="err"><code>{states[context.name].failureCode}</code></p>{/if}
                   {#if states[context.name]?.count !== undefined} · {states[context.name].count} VMs{/if}
                   {#if states[context.name]?.error}<p class="err">{states[context.name].error}</p>{/if}
                 </td>

@@ -465,13 +465,19 @@ export interface MigrationBundle {
   identity: string;
 }
 
+export interface TestDiscoveryConnectionResponse {
+  connected?: boolean;
+  message?: string;
+  failureCode?: string;
+}
+
 export const discovery = {
   contexts: (apiVersion = 'proxmox.openctl.io/v1') =>
     api.get<{ contexts?: DiscoveryContext[] }>('/v1/discovery/contexts?api_version=' + encodeURIComponent(apiVersion)),
   inventory: (context: string, apiVersion = 'proxmox.openctl.io/v1') =>
     api.post<{ resources?: DiscoveredResource[] }>('/v1/discovery/resources', { apiVersion, context }),
   test: (context: string, apiVersion = 'proxmox.openctl.io/v1') =>
-    api.post<{ connected: boolean; message?: string }>('/v1/discovery:testConnection', { apiVersion, context }),
+    api.post<TestDiscoveryConnectionResponse>('/v1/discovery:testConnection', { apiVersion, context }),
 };
 
 export const ownership = {

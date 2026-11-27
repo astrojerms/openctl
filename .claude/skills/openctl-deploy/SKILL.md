@@ -85,6 +85,12 @@ API tokens to impersonation; it cannot be combined with `caFile`, never enables
 HTTP, and does not enable redirects. Saved credential/trust edits require a
 controller restart. `ctl discover --test` returns nonzero on failure; inspect its
 result before provisioning.
+Connection-test results carry a safe `failureCode` (CLI table: `CODE`) and a
+specific next step. Distinguish `tls_untrusted` from certificate-name/validity
+errors, `unauthorized` from `permission_denied`, and DNS/routing/timeouts from
+provider HTTP failures. Do not infer authentication from a denied request or
+invent empty inventory for a failed context. Inspect only successful contexts;
+testing does not retry automatically or mutate infrastructure.
 
 Discover known kinds with `GET /v1/schemas` and fetch the chosen kind's CUE
 schema with `POST /v1/schemas:get` as described in the reference. Schemas describe
