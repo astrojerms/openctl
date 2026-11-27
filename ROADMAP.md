@@ -390,6 +390,30 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
   desired/locator fingerprints. No live homelab, tunnel/DNS, GPU or playback
   acceptance; matching public identity is not access-policy proof.
 
+**Explicit per-resource CLI health checks (2026-11-27):**
+
+- [x] `ctl health KIND NAME --api-version API` performs one live named Get with
+  viewer access and a bounded timeout. It never polls, retries, applies, invokes
+  actions or substitutes saved intent. Zero exit requires explicit boolean
+  readiness with no failed/unknown evidence; phase/running labels, malformed or
+  obsolete checks cannot invent readiness. Optional unconfigured checks are neutral.
+- [x] Table/JSON/YAML preserve repair diagnostics on non-ready exits. Structured
+  output projects identity and normalized health only, omitting specs, annotations,
+  applied intent and unrelated status. Read/protocol/output errors fail closed;
+  raw upstream read errors are not forwarded. Provider health messages still
+  require sensitive-output handling.
+- Verification: focused CLI regressions passed for aggregate/check disagreement,
+  unknown evidence, projection privacy, structured diagnostics, identity mismatch,
+  private read failures, cancellation, output failure and explicit target/deadline.
+  The actual binary discovered the command and exercised healthy, HTTP-failed,
+  malformed-container, stopped-container and SSH-unavailable scenarios against
+  a native app-provider/SQLite/TLS controller as a viewer, over verified local SSH
+  with simulated guest responses. Healthy exit was zero; each unhealthy exit
+  retained diagnostics and was nonzero. Existing Get inspection still succeeded
+  for an unready app. Intent/locator fingerprints were unchanged; zero durable
+  operations and no guest command execution or live homelab mutation. No hardware,
+  GPU, media or playback acceptance.
+
 The next product acceptance gate is the complete operator journey on real
 hardware, including recovery, media playback and any approved public endpoint.
 See [direction](docs/direction.md). Provider breadth is downstream of that gate.

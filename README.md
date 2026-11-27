@@ -456,6 +456,27 @@ Upgrade CLI and controller together: keyed Apply/Delete refuse controllers
 without their durable capability. Request IDs are metadata, not credentials;
 prefer UUIDs.
 
+Check live readiness of exactly one resource without dumping its declaration:
+
+```bash
+openctl ctl health Jellyfin media --api-version apps.openctl.io/v1 -o json
+```
+
+`ctl health` makes one live named Get, with viewer access and the normal bounded
+`--timeout`; it never polls, retries, applies, invokes actions or falls back to
+saved intent. Exit zero requires explicit boolean readiness and no failed,
+unknown or malformed check. Optional `not_configured` checks are neutral;
+`running`/`Ready` phase text alone is unknown. Failed/unknown checks exit nonzero
+**after** emitting diagnostics in table, JSON or YAML. Read/protocol/output errors
+also exit nonzero; failed reads do not fabricate a health result.
+
+Structured output is a read-only resource-shaped health projection:
+`apiVersion`, `kind`, `metadata.name` and normalized `status.state`, `status.ready`,
+provider message and independent checks. It omits specs, annotations, saved intent
+and unrelated status fields; it is not an Apply manifest or a raw Get response.
+Provider health messages may still be sensitive. Readiness is current evidence,
+not playback, access-policy or future-readiness proof.
+
 Inspect controller runtime actions and retrieve application logs:
 
 ```bash

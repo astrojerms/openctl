@@ -276,6 +276,20 @@ do not forward raw provider errors, response bodies, URLs or certificate fields.
   openctl --config "$CONFIG" ctl get "$KIND" "$NAME" --api-version "$API_VERSION" -o json
   ```
 
+  Check readiness explicitly for resources that publish a boolean ready signal:
+
+  ```bash
+  openctl --config "$CONFIG" ctl health "$KIND" "$NAME" --api-version "$API_VERSION" -o json
+  ```
+
+  This makes one live named Get, never polls/retries or mutates, and exits nonzero
+  unless explicit readiness and all reported checks agree. Failed/unknown
+  observations retain health-only diagnostics; read failures do not invent them.
+  Specs, annotations and unrelated status are omitted, but provider health
+  messages can still be sensitive. Missing boolean readiness is unknown even if
+  a phase says running/Ready; inspect that kind's actual readiness contract rather
+  than recreating it. This is not playback or access-policy verification.
+
 - For controller-side runtime inspection, list actions before selecting one:
 
   ```bash

@@ -139,6 +139,10 @@ Application checks distinguish **Ready**, **Not ready**, **Unknown** and
 **Not configured**. Guest access failure leaves skipped dependent checks unknown,
 not falsely failed; an absent optional public endpoint is neutral. Required
 unknown/failed checks still block readiness and guided progression.
+For automation, `openctl ctl health Jellyfin NAME --api-version apps.openctl.io/v1 -o json`
+reports live health-only diagnostics and exits nonzero unless readiness
+is established. It reads only that resource, with no Apply, polling, retry or saved
+fallback. A VM merely reported as running is not readiness proof.
 Jellyfin public readiness also requires onboarded JSON from the same server
 observed through guest SSH. A login page or different instance returning HTTP
 200 is not ready; unavailable guest identity is unknown. Public probing sends
