@@ -43,6 +43,17 @@ async function open() { component = mount(Discovery, { target: host }); await se
 function buttons(label: string) {
   return [...host.querySelectorAll<HTMLButtonElement>('button')].filter((node) => node.textContent?.trim() === label);
 }
+function discoverButton(context: string) {
+  return host.querySelector<HTMLButtonElement>(`button[aria-label="Discover VMs in ${context}"]`)!;
+}
+function contextVM(context: string): DiscoveredResource {
+  const item = discoveredVM(`${context}-vm`);
+  return { ...item, context, identity: `${context}-identity`, resource: { ...item.resource, spec: { ...item.resource.spec, context } } };
+}
+function reviewContext(context: string) {
+  const row = [...host.querySelectorAll('tr')].find((node) => node.cells[0]?.textContent === `${context}-vm`)!;
+  row.querySelector<HTMLButtonElement>('button')!.click();
+}
 
 describe('read-only discovery connection diagnostics', () => {
   it('shows the safe failure category and next step without inventing empty inventory or adopting', async () => {
@@ -244,5 +255,103 @@ describe('private migration bundle lifecycle', () => {
     expect(host.textContent).not.toContain('private-bundle-secret');
     expect(host.textContent).not.toContain('Loaded private.json');
     expect(ownership.adoptBundle).not.toHaveBeenCalled();
+  });
+});
+
+describe('context-scoped discovery', () => {
+  it('lets a viewer test and discover one endpoint without probing an unrelated context', async () => {
+    await open();
+    expect(discovery.test).not.toHaveBeenCalled();
+    expect(discovery.inventory).not.toHaveBeenCalled();
+    discoverButton('working').click(); await settle();
+    expect(vi.mocked(discovery.test).mock.calls.map(([context]) => context)).toEqual(['working']);
+    expect(vi.mocked(discovery.inventory).mock.calls.map(([context]) => context)).toEqual(['working']);
+    expect(host.textContent).toContain('existing-vm');
+    expect(host.querySelector('tbody tr')?.textContent).toContain('Not tested');
+    expect(ownership.adopt).not.toHaveBeenCalled();
+    expect(ownership.confirmIdentity).not.toHaveBeenCalled();
+    expect(ownership.adoptBundle).not.toHaveBeenCalled();
+  });
+
+  it('retains another endpoint inventory when the selected connection fails, without querying its inventory', async () => {
+    await open(); discoverButton('working').click(); await settle();
+    discoverButton('private-ca').click(); await settle();
+    expect(host.textContent).toContain('existing-vm');
+    const failed = host.querySelector('tbody tr')!;
+    expect(failed.textContent).toContain('tls_untrusted');
+    expect(failed.textContent).not.toContain('0 VMs');
+    expect(vi.mocked(discovery.inventory).mock.calls.map(([context]) => context)).toEqual(['working']);
+    expect(ownership.adopt).not.toHaveBeenCalled();
+  });
+
+  it('discards only the selected old inventory and consent before a refresh that later fails', async () => {
+    vi.mocked(discovery.test).mockResolvedValue({ connected: true });
+    vi.mocked(discovery.inventory).mockImplementation(async (context) => ({ resources: [contextVM(context)] }));
+    await adminDiscovery(); reviewContext('working'); await tick(); consent(); await tick();
+    const staleAdopt = buttons('Adopt existing VM')[0];
+    const pending = Promise.withResolvers<{ resources: DiscoveredResource[] }>();
+    vi.mocked(discovery.inventory).mockReturnValueOnce(pending.promise);
+    discoverButton('working').click(); staleAdopt.click(); await settle();
+    expect(host.textContent).not.toContain('working-vm');
+    expect(host.textContent).toContain('private-ca-vm');
+    expect(buttons('Adopt existing VM')).toHaveLength(0);
+    expect(ownership.adopt).not.toHaveBeenCalled();
+    pending.reject(new Error('Selected inventory unavailable')); await settle();
+    const working = host.querySelectorAll('article table tbody tr')[1];
+    expect(working.textContent).toContain('Inventory unavailable');
+    expect(working.textContent).not.toContain('0 VMs');
+    expect(host.textContent).toContain('private-ca-vm');
+  });
+
+  it('preserves an unrelated review but requires new review and consent after rediscovering its own context', async () => {
+    vi.mocked(discovery.test).mockResolvedValue({ connected: true });
+    vi.mocked(discovery.inventory).mockImplementation(async (context) => ({ resources: [contextVM(context)] }));
+    await adminDiscovery(); reviewContext('working'); await tick(); consent(); await tick();
+    discoverButton('private-ca').click(); await settle();
+    expect(host.querySelector<HTMLInputElement>('.confirmation input')?.checked).toBe(true);
+    expect(buttons('Adopt existing VM')[0].disabled).toBe(false);
+    discoverButton('working').click(); await settle();
+    expect(buttons('Adopt existing VM')).toHaveLength(0);
+    reviewContext('working'); await tick();
+    expect(host.querySelector<HTMLInputElement>('.confirmation input')?.checked).toBe(false);
+    expect(buttons('Adopt existing VM')[0].disabled).toBe(true);
+    expect(ownership.adopt).not.toHaveBeenCalled();
+  });
+
+  it('reports a genuinely empty selected inventory only after a successful scoped read', async () => {
+    await open(); discoverButton('working').click(); await settle();
+    vi.mocked(discovery.inventory).mockResolvedValueOnce({});
+    discoverButton('working').click(); await settle();
+    expect(host.textContent).not.toContain('existing-vm');
+    expect(host.querySelectorAll('article table tbody tr')[1].textContent).toContain('0 VMs');
+    expect(ownership.adopt).not.toHaveBeenCalled();
+  });
+
+  it('rejects foreign-context rows rather than merging them into independent inventory', async () => {
+    vi.mocked(discovery.test).mockResolvedValue({ connected: true });
+    vi.mocked(discovery.inventory).mockImplementation(async (context) => ({ resources: [contextVM(context)] }));
+    await open(); discoverButton('private-ca').click(); await settle();
+    vi.mocked(discovery.inventory).mockResolvedValueOnce({ resources: [{ ...contextVM('private-ca'), resource: { ...contextVM('private-ca').resource, metadata: { name: 'foreign-private-vm' } } }] });
+    discoverButton('working').click(); await settle();
+    expect(host.textContent).toContain('private-ca-vm');
+    expect(host.textContent).not.toContain('foreign-private-vm');
+    expect(host.textContent).toContain('different context');
+    expect(host.querySelectorAll('article table tbody tr')[1].textContent).not.toContain('0 VMs');
+    expect(ownership.adopt).not.toHaveBeenCalled();
+  });
+
+  it('aborts scoped discovery on a principal change and ignores its late private response', async () => {
+    const pending = Promise.withResolvers<{ resources: DiscoveredResource[] }>();
+    vi.mocked(discovery.inventory).mockReturnValueOnce(pending.promise);
+    await open(); discoverButton('working').click(); await settle();
+    const signal = vi.mocked(discovery.inventory).mock.calls[0][2]?.signal;
+    auth.set({ kind: 'signed-in', me: { sessionId: 'new-reader-session', principalId: 'new-reader', role: 'viewer' } }); await settle();
+    expect(signal?.aborted).toBe(true);
+    vi.mocked(discovery.inventory).mockResolvedValueOnce({ resources: [discoveredVM('new-reader-vm')] });
+    discoverButton('working').click(); await settle();
+    pending.resolve({ resources: [discoveredVM('old-private-vm')] }); await settle();
+    expect(host.textContent).toContain('new-reader-vm');
+    expect(host.textContent).not.toContain('old-private-vm');
+    expect(ownership.adopt).not.toHaveBeenCalled();
   });
 });

@@ -112,6 +112,11 @@ Interpret NotFound separately from authentication, connectivity, and provider
 failures. Controller listings do not constitute a complete unmanaged inventory.
 Use controller-side discovery to detect unmanaged resources and name collisions:
 `ctl discover --contexts`, then `ctl discover --provider-context NAME`.
+In the console, choose **Discover VMs** on the intended context row. It performs
+a fresh connection test and inventories only that endpoint, without probing
+unrelated contexts. All-context discovery is explicit. Refresh discards only the
+selected context's earlier inventory/consent; preserve independent inspections.
+Failed reads are unavailable, not zero VMs. No automatic adoption or fallback scan.
 Discovery is read-only; adoption and tracked-identity confirmation are explicit
 admin operations, never automatic fallbacks. Older CLI versions may offer only
 legacy read-only provider inventory; its local configuration can differ from

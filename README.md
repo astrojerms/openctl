@@ -1056,6 +1056,8 @@ Useful areas:
 - Overview: saved inventory, exact root-work totals and bounded request review,
   with explicit operation inspection even beyond the live event cache.
 - Resources: browse Proxmox VMs, Proxmox nodes, and k3s clusters.
+- Discovery: inspect one selected Proxmox context, or explicitly discover all,
+  then review existing VM identity before changing tracking.
 - Detail: inspect desired state, observed state, drift, history, and topology.
 - Templates: create common resources from parameterized starters.
 - Operations drawer: watch parent and child operations, cancel running work,
@@ -1070,6 +1072,14 @@ records, not live instances. Discovery-only kinds have no managed-count badge, a
 saved kinds remain visible when their schema/provider is absent. Snapshot failures
 leave counts unknown; Home labels any retained values stale. Neither a count nor
 a successful historical operation proves current health.
+
+In **Discover infrastructure**, each connection's **Discover VMs** action runs
+a fresh read-access test and inventories only that context. Unrelated endpoints
+are not probed; the all-context button remains an explicit opt-in. Refresh clears
+the selected context's old rows and consent before reading, but preserves other
+contexts' inventory and reviews. Connection/inventory failures stay unavailable,
+not zero VMs; an observed zero requires a successful read. Discovery does not
+adopt, confirm identity, Apply or retry automatically.
 
 Retry restores the failed Apply's submitted intent even when a first deployment
 has no managed resource yet. Secret markers and desired metadata are preserved;

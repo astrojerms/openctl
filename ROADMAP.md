@@ -498,6 +498,26 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
   SQLite/TLS controller with simulated provider reads. Saved review stayed
   unchanged; zero operations/provider mutations and no live homelab changes.
 
+**Independent context discovery in the console (2026-11-27):**
+
+- [x] Each Proxmox connection has a viewer-accessible **Discover VMs** action,
+  using a fresh connection test and the existing context-scoped inventory API.
+  Unrelated endpoints are untouched; all-context discovery remains explicit.
+- [x] Refresh invalidates only the selected snapshot and consent before I/O,
+  preserving independent inventory/reviews. Failed reads cannot invent an empty
+  lab; only successful reads report zero VMs. Foreign-context responses are
+  rejected, and stale-principal results cannot restore private evidence.
+- Verification: 26 discovery/ownership regressions, frontend typecheck and
+  production build passed. The actual console used viewer access to a real
+  SQLite/TLS controller and native multi-context Proxmox provider with three
+  simulated HTTPS endpoints, verified CAs/hostnames and fixture API tokens.
+  Selecting one contacted only that endpoint. Native config-read failure cleared
+  stale selected rows without losing another context's inventory/review;
+  successful empty discovery reported zero and later recovery restored rows.
+  An explicitly tested unavailable sibling received no inventory read. All
+  Proxmox requests were GET; zero durable operations or saved tracking records.
+  No live homelab mutation or hardware acceptance.
+
 The next product acceptance gate is the complete operator journey on real
 hardware, including recovery, media playback and any approved public endpoint.
 See [direction](docs/direction.md). Provider breadth is downstream of that gate.

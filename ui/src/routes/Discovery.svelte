@@ -136,6 +136,30 @@
     try { await test(context, revision); } finally { if (current(revision)) busy = false; }
   }
 
+  async function discoverContext(context: string, revision: number) {
+    if (!await test(context, revision) || !current(revision)) return;
+    states = { ...states, [context]: { ...states[context], message: 'Discovering VMs…' } };
+    try {
+      const response = await discovery.inventory(context, undefined, { signal: requests.signal });
+      if (!current(revision)) return;
+      const found = response.resources ?? [];
+      if (found.some((item) => item.context !== context)) throw new Error('The controller returned inventory for a different context. No rows were accepted; inspect provider routing before discovering again.');
+      inventory = [...inventory, ...found].sort((a, b) => a.context.localeCompare(b.context) || a.node.localeCompare(b.node) || Number(a.vmid) - Number(b.vmid));
+      states = { ...states, [context]: { ...states[context], message: 'Inventory observed', count: found.length } };
+    } catch (err) {
+      if (!handled(err, revision)) states = { ...states, [context]: { ...states[context], message: 'Inventory unavailable', error: message(err) } };
+    }
+  }
+
+  async function discoverOne(context: string) {
+    if (!active || loading || busy || adopting || !contexts.some((item) => item.name === context)) return;
+    const revision = generation;
+    invalidateContext(context);
+    states = { ...states, [context]: { connected: false, message: 'Testing…' } };
+    busy = true;
+    try { await discoverContext(context, revision); } finally { if (current(revision)) busy = false; }
+  }
+
   async function discoverAll() {
     if (!active || loading || busy || adopting) return;
     const revision = generation;
@@ -146,18 +170,7 @@
     bundleConfirmed = false;
     adoptionError = '';
     try {
-      await Promise.all(contexts.map(async (context) => {
-        if (!await test(context.name, revision) || !current(revision)) return;
-        try {
-          const response = await discovery.inventory(context.name, undefined, { signal: requests.signal });
-          if (!current(revision)) return;
-          const found = response.resources ?? [];
-          inventory = [...inventory, ...found].sort((a, b) => a.context.localeCompare(b.context) || a.node.localeCompare(b.node) || Number(a.vmid) - Number(b.vmid));
-          states = { ...states, [context.name]: { ...states[context.name], count: found.length } };
-        } catch (err) {
-          if (!handled(err, revision)) states = { ...states, [context.name]: { ...states[context.name], error: message(err) } };
-        }
-      }));
+      await Promise.all(contexts.map((context) => discoverContext(context.name, revision)));
     } finally { if (current(revision)) busy = false; }
   }
 
@@ -248,13 +261,13 @@
   <header>
     <div>
       <h2>Discover infrastructure</h2>
-      <p class="muted">Observe all configured Proxmox contexts and review existing VMs before adopting them.</p>
+      <p class="muted">Choose a Proxmox context to discover existing VMs without scanning unrelated endpoints, then review before adopting.</p>
     </div>
     <a href={routeHref({ name: 'providers' })}>Connect a provider</a>
   </header>
   <p class="notice">Discovery and connection tests are read-only. Adoption records desired intent and ownership; it does not Apply or change the VM. Adoption requires an admin, an idle controller, and manifest GitOps watch/pull disabled. The server verifies these safeguards and live identity.</p>
   <p class="muted">Changed provider credentials or certificate trust? Restart the controller first; hot reload is intentionally disabled for safety.</p>
-  <p class="muted">Adoption binds the exact VM fingerprint you reviewed. Testing a context invalidates its earlier inventory and consent; discover again before changing tracking. Session or authority changes clear private reviews and bundles. Stopping a request does not roll back tracking already accepted by the controller.</p>
+  <p class="muted">Adoption binds the exact VM fingerprint you reviewed. Testing or rediscovering a context invalidates its earlier inventory and consent, but preserves other contexts. Session or authority changes clear private reviews and bundles. Stopping a request does not roll back tracking already accepted by the controller.</p>
   {#if loading}
     <p class="muted">Loading configured contexts…</p>
   {:else if error}
@@ -279,7 +292,10 @@
                   {#if states[context.name]?.count !== undefined} · {states[context.name].count} VMs{/if}
                   {#if states[context.name]?.error}<p class="err">{states[context.name].error}</p>{/if}
                 </td>
-                <td><button disabled={busy || adopting} on:click={() => testOne(context.name)}>Test connection</button></td>
+                <td>
+                  <button disabled={busy || adopting} on:click={() => testOne(context.name)}>Test connection</button>
+                  <button aria-label={`Discover VMs in ${context.name}`} disabled={busy || adopting} on:click={() => discoverOne(context.name)}>Discover VMs</button>
+                </td>
               </tr>
             {/each}
           </tbody>
