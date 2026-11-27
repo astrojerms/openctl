@@ -357,3 +357,21 @@ describe('template durable Apply review', () => {
     expect(next.iKnowThisBreaksTheCluster).toBe(true);
   });
 });
+
+it('shows coded reference paths and remaining diagnostics once without admitting template work', async () => {
+  const diagnostic = 'Referenced VM cannot be read; inspect provider service health';
+  vi.mocked(resources.dryRunApply).mockResolvedValue({
+    operation: 'create',
+    fieldErrors: [{ path: 'spec.target.host', code: 'provider_unavailable', message: diagnostic }],
+    validationErrors: [`spec.target.host: ${diagnostic}`, 'Other provider precondition failed'],
+  });
+  await open();
+  const panel = target.querySelector('[aria-label="Preview validation errors"]')!;
+  expect(panel.textContent).toContain('spec.target.host');
+  expect(panel.textContent).toContain('provider_unavailable');
+  expect(panel.textContent?.split(diagnostic)).toHaveLength(2);
+  expect(panel.textContent).toContain('Other provider precondition failed');
+  expect(button('Create').disabled).toBe(true);
+  expect(resources.apply).not.toHaveBeenCalled();
+  expect(entries.size).toBe(0);
+});

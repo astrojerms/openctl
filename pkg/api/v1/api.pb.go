@@ -2085,13 +2085,16 @@ func (x *DryRunApplyResponse) GetMetadataDiff() []*DriftEntry {
 	return nil
 }
 
-// FieldError attributes a single schema violation to a dotted path
-// (e.g. "spec.cpu.cores"). Emitted alongside validation_errors on
-// DryRunApplyResponse so the editor can highlight the offending field.
+// FieldError attributes a schema or reference failure to a spec path
+// (e.g. "spec.cpu.cores" or "spec.servers[0].host"). Emitted alongside
+// validation_errors so clients can highlight the offending field.
 type FieldError struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
-	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Path    string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	Message string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	// Optional safe machine-readable category. Empty for uncategorized schema
+	// validation. New categories may be added; never contains upstream data.
+	Code          string `protobuf:"bytes,3,opt,name=code,proto3" json:"code,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2136,6 +2139,13 @@ func (x *FieldError) GetPath() string {
 func (x *FieldError) GetMessage() string {
 	if x != nil {
 		return x.Message
+	}
+	return ""
+}
+
+func (x *FieldError) GetCode() string {
+	if x != nil {
+		return x.Code
 	}
 	return ""
 }
@@ -6866,11 +6876,12 @@ const file_api_proto_rawDesc = "" +
 	"\toperation\x18\a \x01(\tR\toperation\x125\n" +
 	"\n" +
 	"live_drift\x18\b \x03(\v2\x16.openctl.v1.DriftEntryR\tliveDrift\x12;\n" +
-	"\rmetadata_diff\x18\t \x03(\v2\x16.openctl.v1.DriftEntryR\fmetadataDiff\":\n" +
+	"\rmetadata_diff\x18\t \x03(\v2\x16.openctl.v1.DriftEntryR\fmetadataDiff\"N\n" +
 	"\n" +
 	"FieldError\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"a\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\x12\x12\n" +
+	"\x04code\x18\x03 \x01(\tR\x04code\"a\n" +
 	"\vChildAction\x12\x12\n" +
 	"\x04verb\x18\x01 \x01(\tR\x04verb\x12\x12\n" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x12\n" +

@@ -1146,6 +1146,16 @@ when validation errors exist. No new request ID or Apply is issued for an invali
 preview. Repair the declaration or selected dependency, refresh the preview and
 renew consent; accepted work is never canceled by a failed review.
 
+Unresolved `$ref` diagnostics include the destination `fieldErrors[].path`
+(for example, `spec.target.host`), the declared target/output and an optional
+`code`. Invalid references, missing resources and unavailable fields have
+distinct `reference_*` categories; typed TLS, authentication, permission, network
+and provider-service failures share connection-test categories and repair hints.
+Unknown provider failures use `reference_read_failed`. Consumers must tolerate
+new or absent codes. Reference failures in previews and operation errors never
+forward raw upstream error text, HTTP bodies, credential-bearing URLs or
+certificate fields; wrapped causes remain available internally for classification.
+
 Preview diagnostics are transient inspection data, not saved recovery evidence.
 Reloading restores only the declaration and existing request identity; a fresh
 review must fetch current diagnostics and authority again.

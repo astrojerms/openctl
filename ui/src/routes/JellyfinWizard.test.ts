@@ -174,12 +174,13 @@ describe('visible blocked deployment diagnostics', () => {
   it('shows controller field paths once, preserves other diagnostics, and blocks Apply without consent prompts', async () => {
     vi.mocked(resources.dryRunApply).mockResolvedValueOnce({
       operation: 'create', summary: 'invalid guest declaration',
-      fieldErrors: [{ path: 'spec.memory.size', message: 'Unsupported guest capacity' }],
+      fieldErrors: [{ path: 'spec.memory.size', code: 'reference_field_unavailable', message: 'Unsupported guest capacity' }],
       validationErrors: ['spec.memory.size: Unsupported guest capacity', 'Selected provider is unavailable'],
     });
     await prepareVMReview();
     const list = host.querySelector('[aria-label="Preview validation errors"]')!;
     expect(list.textContent).toContain('spec.memory.size');
+    expect(list.textContent).toContain('reference_field_unavailable');
     expect(list.textContent?.match(/Unsupported guest capacity/g)).toHaveLength(1);
     expect(list.textContent).toContain('Selected provider is unavailable');
     expect(button('Apply reviewed step').disabled).toBe(true);

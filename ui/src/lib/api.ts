@@ -278,6 +278,7 @@ export interface DryRunApplyResponse {
 export interface FieldError {
   path?: string;
   message?: string;
+  code?: string;
 }
 
 // --- Composite DAG (Phase U9) --------------------------------------------

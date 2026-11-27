@@ -447,7 +447,7 @@
       // validation fails, so this is the single source of truth.
       const errs: Record<string, string> = {};
       for (const fe of dResp.fieldErrors ?? []) {
-        if (fe.path && fe.message) errs[fe.path] = fe.message;
+        if (fe.path && fe.message) errs[fe.path] = fe.code ? `[${fe.code}] ${fe.message}` : fe.message;
       }
       fieldErrorsCtx.set(errs);
       checkedGates = Object.fromEntries((dResp.requiredGates ?? []).map((g) => [g, false]));

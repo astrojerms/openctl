@@ -179,6 +179,8 @@
       if (revision === previewRevision) previewing = false;
     }
   }
+  $: previewErrors = (dryRun?.validationErrors ?? []).filter((problem) =>
+    !(dryRun?.fieldErrors ?? []).some((field) => problem === field.message || problem === `${field.path}: ${field.message}`));
 
   function reviewValid() {
     return !!info && !previewing && !renderError && !dryRunError && !!dryRun
@@ -376,12 +378,13 @@
         {#if dryRunError}
           <p class="err small">Dry-run error: {dryRunError}</p>
         {/if}
-        {#if dryRun && (dryRun.validationErrors?.length ?? 0) > 0}
-          <article class="diag">
+        {#if dryRun && ((dryRun.fieldErrors?.length ?? 0) > 0 || previewErrors.length > 0)}
+          <article class="diag" aria-label="Preview validation errors">
             <h4>Validation</h4>
-            {#each dryRun.validationErrors ?? [] as e}
-              <p class="err small mono">{e}</p>
+            {#each dryRun.fieldErrors ?? [] as field}
+              <p class="err small mono">{#if field.code}<code>[{field.code}]</code>{' '}{/if}{#if field.path}<code>{field.path}</code>{': '}{/if}{field.message ?? 'Invalid value'}</p>
             {/each}
+            {#each previewErrors as problem}<p class="err small mono">{problem}</p>{/each}
           </article>
         {/if}
       </div>

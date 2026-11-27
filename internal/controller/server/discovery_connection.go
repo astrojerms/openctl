@@ -13,7 +13,13 @@ import (
 // discoveryConnectionFailure classifies typed causes only. Error strings, HTTP
 // bodies, URLs and certificate fields are untrusted and must never reach the UI.
 func discoveryConnectionFailure(err error) *apiv1.TestDiscoveryConnectionResponse {
-	code, message := "connection_failed", "Connection failed. Check the active controller-side provider context, endpoint and configuration; saved changes require a controller restart."
+	code, message := providerReadFailure(err)
+	return &apiv1.TestDiscoveryConnectionResponse{FailureCode: code, Message: message}
+}
+
+// providerReadFailure returns only static diagnostics derived from typed causes.
+func providerReadFailure(err error) (code, message string) {
+	code, message = "connection_failed", "Connection failed. Check the active controller-side provider context, endpoint and configuration; saved changes require a controller restart."
 	var untrusted x509.UnknownAuthorityError
 	var hostname x509.HostnameError
 	var invalid x509.CertificateInvalidError
@@ -39,7 +45,7 @@ func discoveryConnectionFailure(err error) *apiv1.TestDiscoveryConnectionRespons
 		case status == 401:
 			code, message = "unauthorized", "Provider rejected API authentication. Check the controller-side token ID and secret; restart after changing credentials."
 		case status == 403:
-			code, message = "permission_denied", "Provider denied read access. Check token/user permissions for node and VM inventory; discovery does not require granting write access."
+			code, message = "permission_denied", "Provider denied read access. Check token/user permissions for the requested resources; read access does not require granting write access."
 		case status == 404:
 			code, message = "endpoint_not_found", "Provider API route was not found. Check the direct HTTPS API endpoint and any reverse-proxy routing."
 		case status == 429:
@@ -48,7 +54,7 @@ func discoveryConnectionFailure(err error) *apiv1.TestDiscoveryConnectionRespons
 			code, message = "provider_unavailable", "Provider API returned a server error. Check provider service health and reverse-proxy logs before testing again."
 		}
 	case errors.Is(err, context.Canceled):
-		code, message = "canceled", "Connection test was canceled; it did not establish read access."
+		code, message = "canceled", "Provider read was canceled; it did not establish read access."
 	case errors.As(err, &timeout) && timeout.Timeout():
 		code, message = "timeout", "Connection timed out. Check controller-to-provider reachability and API responsiveness."
 	case errors.As(err, &dns):
@@ -56,5 +62,5 @@ func discoveryConnectionFailure(err error) *apiv1.TestDiscoveryConnectionRespons
 	case errors.As(err, &network):
 		code, message = "endpoint_unreachable", "Controller could not reach the provider. Check routing, firewall rules, the HTTPS API port and provider service availability."
 	}
-	return &apiv1.TestDiscoveryConnectionResponse{FailureCode: code, Message: message}
+	return code, message
 }

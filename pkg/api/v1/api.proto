@@ -406,12 +406,15 @@ message DryRunApplyResponse {
   repeated DriftEntry metadata_diff = 9;
 }
 
-// FieldError attributes a single schema violation to a dotted path
-// (e.g. "spec.cpu.cores"). Emitted alongside validation_errors on
-// DryRunApplyResponse so the editor can highlight the offending field.
+// FieldError attributes a schema or reference failure to a spec path
+// (e.g. "spec.cpu.cores" or "spec.servers[0].host"). Emitted alongside
+// validation_errors so clients can highlight the offending field.
 message FieldError {
   string path = 1;
   string message = 2;
+  // Optional safe machine-readable category. Empty for uncategorized schema
+  // validation. New categories may be added; never contains upstream data.
+  string code = 3;
 }
 
 message ChildAction {

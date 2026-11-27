@@ -300,6 +300,29 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
   requests were GET-only; zero operations/application locators, no SSH execution
   or live homelab changes. No physical application-readiness claim.
 
+**Safe, path-attributed reference failures (2026-11-27):**
+
+- [x] Reference failures retain typed causes internally while public messages
+  expose only the declared target/output, destination path and static guidance.
+  Missing targets (including nil provider results), unavailable outputs and
+  malformed markers fail safely; nested array and escaped-key paths are retained.
+  Successful traversal does not compute diagnostic paths.
+- [x] Preview field diagnostics include optional, extensible failure codes.
+  Typed TLS/authentication/permission/network/HTTP causes share connection-test
+  categories; unknown private failures fail closed. Guided, template and editor
+  surfaces show codes/paths without enabling invalid Apply.
+- Verification: resolver and focused native-server checks passed, along with
+  63 mounted console cases, Svelte diagnostics and the production build.
+  Chromium verified readable blocked-review diagnostics against a real native
+  Proxmox/app-provider/SQLite/dispatcher fixture whose HTTPS response echoed its
+  generated API token and a credential-bearing URL. Viewer CLI preview exited
+  nonzero without admitting work; an explicitly submitted isolated create-only
+  operation failed during reference resolution and exposed no upstream private
+  details in CLI output, SQLite errors or viewer history. Preview/browser
+  diagnostics and browser storage were likewise clean. All provider requests
+  were GET-only; no application locator/desired state, SSH execution or live
+  homelab changes. No physical application-readiness claim.
+
 The next product acceptance gate is the complete operator journey on real
 hardware, including recovery, media playback and any approved public endpoint.
 See [direction](docs/direction.md). Provider breadth is downstream of that gate.

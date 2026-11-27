@@ -145,6 +145,9 @@ choices clears the old selection and guest consent rather than reusing them.
 Blocked guided previews show schema/field/dependency diagnostics without enabling
 Apply or creating a request ID. Repair the reported cause, refresh the preview
 and renew consent. Reload does not preserve diagnostics as readiness evidence.
+Reference failures identify the destination spec path and a safe failure code:
+distinguish an absent output from provider authentication, trust or availability
+problems. Raw upstream error details are not forwarded by reference resolution.
 
 Apply and Delete print request IDs before submission;
 `openctl ctl op get --request-id ID` recovers a lost acknowledgement without

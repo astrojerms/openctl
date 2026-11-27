@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/openctl/openctl/pkg/protocol"
@@ -45,6 +46,98 @@ type Ref struct {
 	// to the whole resource — useful for callers that want to
 	// consume multiple fields.
 	Field string
+}
+
+// FailureKind identifies the safe, provider-independent reason resolution failed.
+type FailureKind uint8
+
+const (
+	InvalidReference FailureKind = iota + 1
+	UnavailableResource
+	UnavailableField
+	ProviderReadFailed
+)
+
+// ResolutionError attributes a failure to its destination in the spec. Cause is
+// retained for internal classification, but is never included in Error's text.
+type ResolutionError struct {
+	Path      string
+	Reference Ref
+	Kind      FailureKind
+	Cause     error
+}
+
+// SpecPath returns the destination path rooted at spec.
+func (e *ResolutionError) SpecPath() string {
+	if e.Path == "" {
+		return "spec"
+	}
+	if strings.HasPrefix(e.Path, "[") {
+		return "spec" + e.Path
+	}
+	return "spec." + e.Path
+}
+
+// Unwrap preserves the underlying error without exposing it in public messages.
+func (e *ResolutionError) Unwrap() error {
+	return e.Cause
+}
+
+func (e *ResolutionError) Error() string {
+	explanation := "reference resolution failed"
+	switch e.Kind {
+	case InvalidReference:
+		explanation = "invalid reference"
+	case UnavailableResource:
+		explanation = "referenced resource is unavailable"
+	case UnavailableField:
+		explanation = "referenced field is unavailable"
+	case ProviderReadFailed:
+		explanation = "provider could not read the referenced resource"
+	}
+	target := "reference"
+	if e.Reference != (Ref{}) {
+		target = fmt.Sprintf("reference %q/%q/%q", e.Reference.APIVersion, e.Reference.Kind, e.Reference.Name)
+		if e.Reference.Field != "" {
+			target += fmt.Sprintf(" field %q", e.Reference.Field)
+		}
+	}
+	return fmt.Sprintf("%s at %s: %s", target, e.SpecPath(), explanation)
+}
+
+// prependPath is called only while unwinding an error; successful traversal
+// never constructs or tracks destination paths.
+func (e *ResolutionError) prependPath(prefix string) {
+	if e.Path != "" && !strings.HasPrefix(e.Path, "[") {
+		prefix += "."
+	}
+	e.Path = prefix + e.Path
+}
+
+func (e *ResolutionError) prependField(key string) {
+	if isPathIdentifier(key) {
+		e.prependPath(key)
+	} else {
+		e.prependPath("[" + strconv.Quote(key) + "]")
+	}
+}
+
+func isPathIdentifier(key string) bool {
+	if key == "" {
+		return false
+	}
+	for i := range len(key) {
+		c := key[i]
+		if c != '_' && !(c >= 'a' && c <= 'z') && !(c >= 'A' && c <= 'Z') &&
+			!(i > 0 && c >= '0' && c <= '9') {
+			return false
+		}
+	}
+	switch key {
+	case "true", "false", "null", "if", "for", "in", "let":
+		return false
+	}
+	return true
 }
 
 // Getter is the minimal interface Resolver depends on. Provider
@@ -79,14 +172,19 @@ func (r *Resolver) Resolve(ctx context.Context, in map[string]any) (map[string]a
 	}
 	m, ok := out.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("resolver: top-level result is not a map (got %T)", out)
+		ref, _, _ := extractRef(in)
+		return nil, &ResolutionError{
+			Reference: *ref,
+			Kind:      InvalidReference,
+			Cause:     errors.New("top-level reference must resolve to an object"),
+		}
 	}
 	return m, nil
 }
 
 // walk is the recursive traversal. Returns a fresh value tree with
 // substitutions applied — input is never mutated.
-func (r *Resolver) walk(ctx context.Context, v any) (any, error) {
+func (r *Resolver) walk(ctx context.Context, v any) (any, *ResolutionError) {
 	switch x := v.(type) {
 	case map[string]any:
 		// A single-key map with key == RefMarker is a ref. Resolve
@@ -101,6 +199,7 @@ func (r *Resolver) walk(ctx context.Context, v any) (any, error) {
 		for k, v2 := range x {
 			resolved, err := r.walk(ctx, v2)
 			if err != nil {
+				err.prependField(k)
 				return nil, err
 			}
 			out[k] = resolved
@@ -111,6 +210,7 @@ func (r *Resolver) walk(ctx context.Context, v any) (any, error) {
 		for i, item := range x {
 			resolved, err := r.walk(ctx, item)
 			if err != nil {
+				err.prependPath("[" + strconv.Itoa(i) + "]")
 				return nil, err
 			}
 			out[i] = resolved
@@ -126,14 +226,17 @@ func (r *Resolver) walk(ctx context.Context, v any) (any, error) {
 // nil) when the map isn't a ref, and an error when the map contains
 // a RefMarker key but is malformed (missing required fields, wrong
 // types) — better to fail loud than substitute nothing.
-func extractRef(m map[string]any) (*Ref, bool, error) {
+func extractRef(m map[string]any) (*Ref, bool, *ResolutionError) {
 	raw, present := m[RefMarker]
 	if !present {
 		return nil, false, nil
 	}
 	obj, ok := raw.(map[string]any)
 	if !ok {
-		return nil, true, fmt.Errorf("ref: %s must be an object (got %T)", RefMarker, raw)
+		return nil, true, &ResolutionError{
+			Kind:  InvalidReference,
+			Cause: errors.New("reference marker must be an object"),
+		}
 	}
 	ref := &Ref{}
 	if v, ok := obj["apiVersion"].(string); ok {
@@ -148,12 +251,18 @@ func extractRef(m map[string]any) (*Ref, bool, error) {
 	if value, present := obj["field"]; present {
 		field, ok := value.(string)
 		if !ok {
-			return nil, true, fmt.Errorf("ref: field must be a string (got %T)", value)
+			return nil, true, &ResolutionError{
+				Kind:  InvalidReference,
+				Cause: errors.New("reference field must be a string"),
+			}
 		}
 		ref.Field = field
 	}
 	if ref.APIVersion == "" || ref.Kind == "" || ref.Name == "" {
-		return nil, true, fmt.Errorf("ref: apiVersion, kind, and name are required (got %+v)", ref)
+		return nil, true, &ResolutionError{
+			Kind:  InvalidReference,
+			Cause: errors.New("reference apiVersion, kind, and name are required"),
+		}
 	}
 	return ref, true, nil
 }
@@ -182,8 +291,8 @@ func collect(spec map[string]any, strict bool) ([]Ref, error) {
 		return nil, nil
 	}
 	var out []Ref
-	var visit func(v any) error
-	visit = func(v any) error {
+	var visit func(v any) *ResolutionError
+	visit = func(v any) *ResolutionError {
 		switch x := v.(type) {
 		case map[string]any:
 			ref, isRef, err := extractRef(x)
@@ -194,14 +303,16 @@ func collect(spec map[string]any, strict bool) ([]Ref, error) {
 				out = append(out, *ref)
 				return nil
 			}
-			for _, v2 := range x {
+			for k, v2 := range x {
 				if err := visit(v2); err != nil {
+					err.prependField(k)
 					return err
 				}
 			}
 		case []any:
-			for _, item := range x {
+			for i, item := range x {
 				if err := visit(item); err != nil {
+					err.prependPath("[" + strconv.Itoa(i) + "]")
 					return err
 				}
 			}
@@ -226,18 +337,22 @@ func collect(spec map[string]any, strict bool) ([]Ref, error) {
 	return out, nil
 }
 
-// resolveRef calls Get on the referenced resource and, if field is
-// set, walks the dotted path into it. Missing resources become
-// FailedPrecondition-shaped errors so schedulers can distinguish
-// "ref target isn't ready yet, retry after it's applied" from real
-// controller / provider failures.
-func (r *Resolver) resolveRef(ctx context.Context, ref *Ref) (any, error) {
+// resolveRef calls Get and optionally selects a field. Provider errors remain
+// available as causes, but only the declared reference is safe to stringify.
+func (r *Resolver) resolveRef(ctx context.Context, ref *Ref) (any, *ResolutionError) {
 	if r.get == nil {
-		return nil, errors.New("ref: no Getter configured on Resolver")
+		return nil, &ResolutionError{
+			Reference: *ref,
+			Kind:      ProviderReadFailed,
+			Cause:     errors.New("no Getter configured on Resolver"),
+		}
 	}
 	resource, err := r.get.Get(ctx, ref.APIVersion, ref.Kind, ref.Name)
 	if err != nil {
-		return nil, fmt.Errorf("ref %s/%s/%s: %w", ref.APIVersion, ref.Kind, ref.Name, err)
+		return nil, &ResolutionError{Reference: *ref, Kind: ProviderReadFailed, Cause: err}
+	}
+	if resource == nil {
+		return nil, &ResolutionError{Reference: *ref, Kind: UnavailableResource}
 	}
 	if ref.Field == "" {
 		// Whole-resource substitution: return a plain map so the
@@ -254,8 +369,7 @@ func (r *Resolver) resolveRef(ctx context.Context, ref *Ref) (any, error) {
 	}
 	value, err := walkPath(resource, ref.Field)
 	if err != nil {
-		return nil, fmt.Errorf("ref %s/%s/%s field %q: %w",
-			ref.APIVersion, ref.Kind, ref.Name, ref.Field, err)
+		return nil, &ResolutionError{Reference: *ref, Kind: UnavailableField, Cause: err}
 	}
 	return value, nil
 }

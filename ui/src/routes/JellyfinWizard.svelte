@@ -325,7 +325,7 @@
         <p><strong>{previewReviewed ? preview.operation : 'Preview blocked'}</strong> — {preview.summary}</p>
         {#if preview.fieldErrors?.length || previewErrors.length}
           <ul class="error" aria-label="Preview validation errors">
-            {#each preview.fieldErrors ?? [] as field}<li>{#if field.path}<code>{field.path}</code>: {/if}{field.message ?? 'Invalid value'}</li>{/each}
+            {#each preview.fieldErrors ?? [] as field}<li>{#if field.code}<code>[{field.code}]</code>{' '}{/if}{#if field.path}<code>{field.path}</code>{': '}{/if}{field.message ?? 'Invalid value'}</li>{/each}
             {#each previewErrors as problem}<li>{problem}</li>{/each}
           </ul>
         {/if}

@@ -419,7 +419,9 @@ func (h *resourceHandler) DryRunApply(ctx context.Context, req *apiv1.DryRunAppl
 		resolver := refs.New(h.registry)
 		resolved, rerr := resolver.Resolve(ctx, manifest.Spec)
 		if rerr != nil {
-			resp.ValidationErrors = append(resp.ValidationErrors, rerr.Error())
+			diagnostic := referenceFieldError(rerr)
+			resp.FieldErrors = append(resp.FieldErrors, diagnostic)
+			resp.ValidationErrors = append(resp.ValidationErrors, diagnostic.Path+": "+diagnostic.Message)
 			resp.Summary = "unresolved ref"
 			return resp, nil
 		}

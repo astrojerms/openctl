@@ -261,6 +261,13 @@ as an accepted operation. Diagnostics are transient and are not saved as
 readiness or authorization. Existing accepted work and uncertain request
 identities remain unchanged.
 
+For unresolved references, inspect `fieldErrors[].path`, `code` and the declared
+target/output. Missing resources/outputs differ from TLS, authentication,
+permission, network and provider-service failures. Follow the safe repair hint;
+unknown categories require inspection, not automatic retry. Codes are optional
+and extensible. Reference diagnostics and persisted reference-resolution errors
+do not forward raw provider errors, response bodies, URLs or certificate fields.
+
 ## 6. Verify and report
 
 - Require a successful terminal operation and then read the resulting resource:
