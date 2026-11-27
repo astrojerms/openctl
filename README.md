@@ -1138,6 +1138,18 @@ load independently. Saved-inventory failures are shown as unavailable, not an
 empty lab; refresh explicitly, reselect the guest and renew consent before
 preparing a review. No fallback provider scan or automatic Apply occurs.
 
+Blocked guided previews retain schema, field and dependency diagnostics inline,
+including a failure discovered by the final preview immediately before Apply.
+Field paths take precedence over duplicate plain-text messages; unrelated
+diagnostics remain visible. A reported `create` operation is not authorization
+when validation errors exist. No new request ID or Apply is issued for an invalid
+preview. Repair the declaration or selected dependency, refresh the preview and
+renew consent; accepted work is never canceled by a failed review.
+
+Preview diagnostics are transient inspection data, not saved recovery evidence.
+Reloading restores only the declaration and existing request identity; a fresh
+review must fetch current diagnostics and authority again.
+
 For CLI/GitOps, use `examples/jellyfin/vm.cue` and
 `examples/jellyfin/application.cue` with private CUE values:
 

@@ -134,7 +134,10 @@
   $: gatesSatisfied = (preview?.requiredGates ?? []).every((gate) => checkedGates[gate]);
   $: publicReview = steps.some((step) => step.resource.kind === 'TunnelRoute');
   $: consentSatisfied = dedicated && trustedKey && (!publicReview || publicConsent);
-  $: validPreview = verified && !!preview && (preview.validationErrors?.length ?? 0) === 0 && gatesSatisfied && consentSatisfied;
+  $: previewReviewed = verified && !!preview?.operation && !(preview.validationErrors?.length) && !(preview.fieldErrors?.length);
+  $: validPreview = previewReviewed && gatesSatisfied && consentSatisfied;
+  $: previewErrors = (preview?.validationErrors ?? []).filter((problem) =>
+    !(preview?.fieldErrors ?? []).some((field) => problem === field.message || problem === `${field.path}: ${field.message}`));
   $: monitorOnly = !!operation && ['pending', 'running'].includes(operation.status);
   $: uncertain = !!state?.saved.steps[index]?.attempt && !operation;
   $: applicationReady = current?.resource.apiVersion !== APP_API || observed?.status?.ready === true;
@@ -319,17 +322,24 @@
       {#if uncertain}<p class="notice">This request has no confirmed operation yet. Look it up first. If the controller still reports NotFound, a fresh review can explicitly retransmit the exact same request ID; a new ID must not be used.</p>{/if}
       {#if failedReviewOperation(operation)}<p class="notice">This Apply ended without success. Inspect partial infrastructure first. Refresh the preview and confirm permissions to explicitly retry with a new request ID. No rollback or cleanup is automatic.</p>{/if}
       {#if preview}
-        <p><strong>{preview.operation}</strong> — {preview.summary}</p>
-        {#if preview.validationErrors?.length}<ul class="error">{#each preview.validationErrors as problem}<li>{problem}</li>{/each}</ul>{/if}
+        <p><strong>{previewReviewed ? preview.operation : 'Preview blocked'}</strong> — {preview.summary}</p>
+        {#if preview.fieldErrors?.length || previewErrors.length}
+          <ul class="error" aria-label="Preview validation errors">
+            {#each preview.fieldErrors ?? [] as field}<li>{#if field.path}<code>{field.path}</code>: {/if}{field.message ?? 'Invalid value'}</li>{/each}
+            {#each previewErrors as problem}<li>{problem}</li>{/each}
+          </ul>
+        {/if}
         {#if preview.diff?.length}<ul>{#each preview.diff as change}<li><code>{change.path}</code>: stored {change.desired} → submitted {change.observed}</li>{/each}</ul>{/if}
         {#if preview.metadataDiff?.length}
           <h4>Desired metadata changes</h4>
           <ul>{#each preview.metadataDiff as change}<li><code>{change.path}</code>: stored {change.desired} → submitted {change.observed}</li>{/each}</ul>
         {/if}
-        {#each preview.requiredGates ?? [] as gate}<label class="check"><input type="checkbox" bind:checked={checkedGates[gate]} disabled={busy} /> Explicitly allow {gate}</label>{/each}
-        <label class="check"><input type="checkbox" bind:checked={dedicated} disabled={busy} /> I confirm this dedicated guest and authorize the reviewed guest configuration.</label>
-        <label class="check"><input type="checkbox" bind:checked={trustedKey} disabled={busy} /> I verified this guest’s SSH host key in the controller’s known_hosts.</label>
-        {#if publicReview}<label class="check"><input type="checkbox" bind:checked={publicConsent} disabled={busy} /> I freshly authorize the declared public hostname and access policy.</label>{/if}
+        {#if previewReviewed}
+          {#each preview.requiredGates ?? [] as gate}<label class="check"><input type="checkbox" bind:checked={checkedGates[gate]} disabled={busy} /> Explicitly allow {gate}</label>{/each}
+          <label class="check"><input type="checkbox" bind:checked={dedicated} disabled={busy} /> I confirm this dedicated guest and authorize the reviewed guest configuration.</label>
+          <label class="check"><input type="checkbox" bind:checked={trustedKey} disabled={busy} /> I verified this guest’s SSH host key in the controller’s known_hosts.</label>
+          {#if publicReview}<label class="check"><input type="checkbox" bind:checked={publicConsent} disabled={busy} /> I freshly authorize the declared public hostname and access policy.</label>{/if}
+        {/if}
       {/if}
       {#if operation}<p>Operation <code>{operation.id}</code>: <strong>{operation.status}</strong>. Leaving this page does not cancel it.</p>{/if}
       {#if operation?.error}<p class="error" role="alert">{operation.error}</p>{/if}

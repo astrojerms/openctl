@@ -142,6 +142,10 @@ do not prove GPU/SSH readiness. Preview resolves the selected VM reference.
 Active-context and saved-inventory failures are independent; refreshing guest
 choices clears the old selection and guest consent rather than reusing them.
 
+Blocked guided previews show schema/field/dependency diagnostics without enabling
+Apply or creating a request ID. Repair the reported cause, refresh the preview
+and renew consent. Reload does not preserve diagnostics as readiness evidence.
+
 Apply and Delete print request IDs before submission;
 `openctl ctl op get --request-id ID` recovers a lost acknowledgement without
 submitting again. Console Apply and Delete attempts survive reload in the same

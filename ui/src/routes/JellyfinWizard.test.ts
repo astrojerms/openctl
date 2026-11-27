@@ -2,10 +2,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount, tick, unmount } from 'svelte';
 import { get } from 'svelte/store';
 import JellyfinWizard from './JellyfinWizard.svelte';
-import { discovery, inventoryApi, operations, ping, resources, session, UnauthorizedError, type DiscoveryContext, type ListSavedResourcesResponse } from '../lib/api';
+import { discovery, inventoryApi, operations, ping, resources, schemas, session, ApiError, UnauthorizedError, type DiscoveryContext, type ListSavedResourcesResponse } from '../lib/api';
+import type * as ControllerAPI from '../lib/api';
 import { auth } from '../lib/auth';
 import { recordAuthority, resetAuthority } from '../lib/authority';
 import { REVIEW_KEY } from '../lib/deploymentReview';
+
+// DeploymentReview captures these functions at module initialization.
+vi.mock('../lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof ControllerAPI>();
+  return {
+    ...actual,
+    resources: { ...actual.resources, get: vi.fn(), apply: vi.fn(), dryRunApply: vi.fn() },
+    schemas: { ...actual.schemas, validate: vi.fn() },
+    operations: { ...actual.operations, get: vi.fn(), byRequest: vi.fn() },
+  };
+});
 
 let component: Record<string, unknown> | undefined;
 let host: HTMLDivElement;
@@ -20,9 +32,12 @@ beforeEach(() => {
   vi.spyOn(ping, 'ping').mockResolvedValue({ echo: '', serverVersion: 'fixture', supportsIdempotentApply: true, controllerId: 'controller' });
   vi.spyOn(session, 'whoami').mockResolvedValue({ userId: 'operator', sessionId: 'session', principalId: 'operator', role: 'admin' });
   vi.spyOn(resources, 'list').mockRejectedValue(new Error('An unrelated Proxmox context is offline'));
-  vi.spyOn(resources, 'get').mockRejectedValue(new Error('No live observation should be requested while choosing a saved name'));
-  vi.spyOn(resources, 'apply').mockRejectedValue(new Error('Unexpected Apply'));
-  vi.spyOn(operations, 'byRequest').mockRejectedValue(new Error('Unexpected request lookup'));
+  vi.mocked(resources.get).mockReset().mockRejectedValue(new Error('No live observation should be requested while choosing a saved name'));
+  vi.mocked(resources.apply).mockReset().mockRejectedValue(new Error('Unexpected Apply'));
+  vi.mocked(schemas.validate).mockReset().mockResolvedValue({});
+  vi.mocked(resources.dryRunApply).mockReset().mockResolvedValue({ operation: 'create', summary: 'Create reviewed resource' });
+  vi.mocked(operations.get).mockReset().mockRejectedValue(new Error('Unexpected operation lookup'));
+  vi.mocked(operations.byRequest).mockReset().mockRejectedValue(new Error('Unexpected request lookup'));
   vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Unexpected network in isolated wizard test')));
 });
 afterEach(async () => {
@@ -39,7 +54,7 @@ function button(label: string) {
 function control(label: string) {
   const node = [...host.querySelectorAll<HTMLLabelElement>('label')].find((item) => item.textContent?.trim().startsWith(label));
   if (!node) throw new Error(`Missing field ${label}`);
-  return node.querySelector<HTMLInputElement | HTMLSelectElement>('input,select')!;
+  return node.querySelector<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('input,select,textarea')!;
 }
 function check(label: string, checked = true) {
   const node = control(label) as HTMLInputElement; node.checked = checked; node.dispatchEvent(new Event('change', { bubbles: true }));
@@ -129,5 +144,80 @@ describe('saved metadata guest selection', () => {
     else vi.mocked(discovery.contexts).mockRejectedValueOnce(new UnauthorizedError('expired'));
     await open(); expect(get(auth).kind).toBe('signed-out');
     expect(resources.apply).not.toHaveBeenCalled();
+  });
+});
+
+async function prepareVMReview() {
+  vi.mocked(resources.get).mockRejectedValue(new ApiError(404, 'not found'));
+  await open(); check('Provision a new VM'); await tick();
+  const fields = {
+    'VM name': 'gpu', 'Proxmox node': 'pve1', 'Ubuntu 24.04 template VMID': '9000',
+    'VM disk and EFI storage': 'local-lvm', 'Network bridge': 'vmbr0',
+    'Verified PCI/GPU resource mapping': 'gpu', 'Guest SSH public key': 'ssh-ed25519 fixture',
+    'Controller-side SSH private key file': '/keys/guest', 'Official pinned image': 'jellyfin/jellyfin@sha256:' + 'a'.repeat(64),
+    'NAS hostname/address': 'nas.example.invalid', 'SMB share': 'media', 'SMB credentials secret key': 'nas',
+    'Admin username': 'admin', 'Admin password secret key': 'admin', 'Viewer username': 'viewer', 'Viewer password secret key': 'viewer',
+  };
+  for (const [label, value] of Object.entries(fields)) {
+    const field = control(label); field.value = value; field.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  check('This is a dedicated'); check('I will verify'); await tick();
+  host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await settle();
+  await waitForReview();
+}
+async function waitForReview() {
+  await tick();
+  await vi.waitFor(() => expect(button('Refresh preview').disabled).toBe(false));
+}
+
+describe('visible blocked deployment diagnostics', () => {
+  it('shows controller field paths once, preserves other diagnostics, and blocks Apply without consent prompts', async () => {
+    vi.mocked(resources.dryRunApply).mockResolvedValueOnce({
+      operation: 'create', summary: 'invalid guest declaration',
+      fieldErrors: [{ path: 'spec.memory.size', message: 'Unsupported guest capacity' }],
+      validationErrors: ['spec.memory.size: Unsupported guest capacity', 'Selected provider is unavailable'],
+    });
+    await prepareVMReview();
+    const list = host.querySelector('[aria-label="Preview validation errors"]')!;
+    expect(list.textContent).toContain('spec.memory.size');
+    expect(list.textContent?.match(/Unsupported guest capacity/g)).toHaveLength(1);
+    expect(list.textContent).toContain('Selected provider is unavailable');
+    expect(button('Apply reviewed step').disabled).toBe(true);
+    expect(host.querySelectorAll('input[type="checkbox"]')).toHaveLength(0);
+    expect(resources.apply).not.toHaveBeenCalled();
+    expect(JSON.parse(window.sessionStorage.getItem(REVIEW_KEY)!).steps[0].attempt).toBeUndefined();
+  });
+
+  it('shows schema failures before provider preview without making them saved recovery evidence', async () => {
+    vi.mocked(schemas.validate).mockResolvedValueOnce({ errors: ['spec.template: template VMID is invalid'] });
+    await prepareVMReview();
+    expect(host.querySelector('[aria-label="Preview validation errors"]')?.textContent).toContain('spec.template');
+    expect(resources.dryRunApply).not.toHaveBeenCalled();
+    expect(button('Apply reviewed step').disabled).toBe(true);
+    expect(window.sessionStorage.getItem(REVIEW_KEY)).not.toContain('template VMID is invalid');
+    expect(resources.apply).not.toHaveBeenCalled();
+  });
+
+  it('replaces failed diagnostics after repair but requires new consent before Apply', async () => {
+    vi.mocked(resources.dryRunApply).mockResolvedValueOnce({ validationErrors: ['Guest read unavailable'], summary: 'unresolved ref' });
+    await prepareVMReview();
+    expect(host.querySelector('[aria-label="Preview validation errors"]')).not.toBeNull();
+    button('Refresh preview').click(); await waitForReview();
+    expect(host.querySelector('[aria-label="Preview validation errors"]')).toBeNull();
+    expect(button('Apply reviewed step').disabled).toBe(true);
+    check('I confirm this dedicated'); check('I verified this guest'); await tick();
+    expect(button('Apply reviewed step').disabled).toBe(false);
+    expect(resources.apply).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a field-only submission-time failure without sending Apply or saving a new request key', async () => {
+    await prepareVMReview();
+    expect(button('Apply reviewed step').disabled).toBe(false);
+    vi.mocked(resources.dryRunApply).mockResolvedValueOnce({ operation: 'create', fieldErrors: [{ path: 'spec.target.host', message: 'Guest unavailable after review' }] });
+    button('Apply reviewed step').click(); await waitForReview();
+    expect(host.querySelector('[aria-label="Preview validation errors"]')?.textContent).toContain('Guest unavailable after review');
+    expect(button('Apply reviewed step').disabled).toBe(true);
+    expect(resources.apply).not.toHaveBeenCalled();
+    expect(JSON.parse(window.sessionStorage.getItem(REVIEW_KEY)!).steps[0].attempt).toBeUndefined();
   });
 });

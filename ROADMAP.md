@@ -279,6 +279,27 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
   operations, application locators, SSH execution or live homelab changes.
   No GPU, media playback or physical application-readiness claim.
 
+**Visible blocked guided-preview diagnostics (2026-11-27):**
+
+- [x] Guided reviews preserve schema and controller preview failures as transient
+  inspection data, including failures from the final pre-submission check.
+  Field-only errors and missing/unsafe operations block Apply even when another
+  response field suggests `create`; no new request identity is allocated.
+- [x] The console labels blocked previews, displays field paths and remaining
+  dependency/global errors without duplicate messages, and hides consent prompts
+  until a valid fresh review exists. Repair replaces obsolete diagnostics and
+  requires renewed consent. Accepted work/uncertain request identities remain
+  unchanged; diagnostics are never saved as recovery or readiness evidence.
+- Verification: focused review-engine regressions and all 13 mounted wizard
+  cases passed; Svelte diagnostics and the production build passed. Actual
+  Chromium proof used real native Proxmox, app provider, SQLite and dispatcher
+  wiring to expose an initial guest-read failure, repair/refresh it, and then
+  reject a newly unavailable guest during the final Apply precheck. Detailed
+  diagnostics remained visible, no request was admitted, and reload offered
+  declaration recovery without restoring diagnostic/consent authority. Provider
+  requests were GET-only; zero operations/application locators, no SSH execution
+  or live homelab changes. No physical application-readiness claim.
+
 The next product acceptance gate is the complete operator journey on real
 hardware, including recovery, media playback and any approved public endpoint.
 See [direction](docs/direction.md). Provider breadth is downstream of that gate.

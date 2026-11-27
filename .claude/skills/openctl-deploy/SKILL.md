@@ -253,6 +253,14 @@ leaving an unsent draft. **Review new Apply** requires a terminal outcome and
 fresh preview/consent. **Reconcile** opens that reviewed editor flow, not an
 immediate Apply. A first-create retry without a baseline remains create-only.
 
+Guided Jellyfin reviews preserve failed schema/preview diagnostics for inspection,
+including errors from the final pre-submission check. Field-only errors block
+Apply even if the response says `create`. Repair the reported declaration or
+dependency and obtain a fresh preview/consent; do not treat visible diagnostics
+as an accepted operation. Diagnostics are transient and are not saved as
+readiness or authorization. Existing accepted work and uncertain request
+identities remain unchanged.
+
 ## 6. Verify and report
 
 - Require a successful terminal operation and then read the resulting resource:

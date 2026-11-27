@@ -489,3 +489,75 @@ it('binds root and no-auth reviews to the explicit canonical principal instead o
   try { expect(await loadReviewBinding()).toEqual(binding); }
   finally { pingMock.mockRestore(); meMock.mockRestore(); }
 });
+
+describe('blocked preview diagnostics', () => {
+  it('retains schema errors for inspection without authorizing or persisting them', async () => {
+    const h = harness(); h.engine.save();
+    const diagnostics = ['spec.target.host: selected guest is unavailable', 'private transient diagnostic'];
+    h.api.validate.mockResolvedValueOnce({ errors: diagnostics });
+    await expect(h.engine.review()).rejects.toBeInstanceOf(Error);
+    expect(h.engine.state.preview?.validationErrors).toEqual(diagnostics);
+    expect(h.engine.state.verified).toBe(false);
+    await expect(h.engine.submit(consent)).rejects.toBeInstanceOf(Error);
+    expect(h.api.preview).not.toHaveBeenCalled();
+    expect(h.api.apply).not.toHaveBeenCalled();
+    expect(h.api.requestId).not.toHaveBeenCalled();
+    expect(h.storage.getItem(REVIEW_KEY)).not.toContain('private transient diagnostic');
+    expect(h.restore().state.preview).toBeNull();
+  });
+
+  it.each([
+    { summary: 'unresolved ref', validationErrors: ['target.host: selected VM cannot be read'] },
+    { operation: 'create' as const, fieldErrors: [{ path: 'spec.memory.size', message: 'unsupported capacity' }] },
+    { summary: 'provider cannot preview this declaration' },
+    { operation: 'update' as const, diff: [{ path: 'cpu.cores', desired: '2', observed: '4' }] },
+  ])('keeps a failed controller preview visible but never creates an Apply identity: %j', async (preview) => {
+    const h = harness(); h.engine.save();
+    h.api.preview.mockResolvedValueOnce(preview);
+    await expect(h.engine.review()).rejects.toBeInstanceOf(Error);
+    expect(h.engine.state.preview).toEqual(preview);
+    expect(h.engine.state.verified).toBe(false);
+    await expect(h.engine.submit(consent)).rejects.toBeInstanceOf(Error);
+    expect(h.api.apply).not.toHaveBeenCalled();
+    expect(h.api.requestId).not.toHaveBeenCalled();
+    expect(readSavedReview(h.storage, binding)!.steps[0].attempt).toBeUndefined();
+  });
+
+  it.each([
+    { summary: 'unresolved ref', validationErrors: ['target.host: VM disappeared after review'] },
+    { operation: 'create' as const, fieldErrors: [{ path: 'spec.nas.share', message: 'invalid share' }] },
+  ])('shows new submission-time diagnostics without admitting work: %j', async (preview) => {
+    const h = harness(); h.engine.save(); await h.engine.review();
+    h.api.preview.mockResolvedValueOnce(preview);
+    await expect(h.engine.submit(consent)).rejects.toBeInstanceOf(Error);
+    expect(h.engine.state.preview).toEqual(preview);
+    expect(h.engine.state.verified).toBe(false);
+    expect(h.api.apply).not.toHaveBeenCalled();
+    expect(h.api.requestId).not.toHaveBeenCalled();
+    expect(readSavedReview(h.storage, binding)!.steps[0].attempt).toBeUndefined();
+  });
+
+  it('replaces transient failure diagnostics only after a fresh valid review', async () => {
+    const h = harness(); h.engine.save();
+    h.api.preview.mockResolvedValueOnce({ validationErrors: ['old guest outage'] });
+    await expect(h.engine.review()).rejects.toBeInstanceOf(Error);
+    await h.engine.review();
+    expect(h.engine.state.verified).toBe(true);
+    expect(h.engine.state.preview?.operation).toBe('create');
+    expect(h.engine.state.preview?.validationErrors).toBeUndefined();
+    expect(h.api.apply).not.toHaveBeenCalled();
+  });
+
+  it('retains an uncertain original request while displaying a later failed preview', async () => {
+    const h = harness(); h.engine.save(); await h.engine.review();
+    h.api.apply.mockRejectedValueOnce(new TypeError('acknowledgement lost'));
+    await expect(h.engine.submit(consent)).rejects.toBeInstanceOf(Error);
+    const original = readSavedReview(h.storage, binding)!.steps[0].attempt;
+    h.api.preview.mockResolvedValueOnce({ operation: 'create', fieldErrors: [{ path: 'spec.target.host', message: 'guest unavailable' }] });
+    await expect(h.engine.review()).rejects.toBeInstanceOf(Error);
+    expect(h.engine.state.preview?.fieldErrors?.[0].path).toBe('spec.target.host');
+    expect(readSavedReview(h.storage, binding)!.steps[0].attempt).toEqual(original);
+    expect(h.api.apply).toHaveBeenCalledTimes(1);
+    expect(h.api.requestId).toHaveBeenCalledTimes(1);
+  });
+});

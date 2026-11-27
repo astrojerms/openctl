@@ -203,6 +203,13 @@ export class DeploymentReview {
     this.state.verified = false;
     this.emit();
   }
+  private blockPreview(preview: DryRunApplyResponse, reason: string): never {
+    this.planBaseline = null;
+    this.state.verified = false;
+    this.state.preview = preview;
+    this.emit();
+    throw new Error(reason);
+  }
   private ensureActive(): void {
     if (this.disposed) throw new Error('This browser review was closed. Inspect its original request in Operations; accepted controller work was not canceled.');
   }
@@ -333,11 +340,13 @@ export class DeploymentReview {
       this.state.verified = true; this.emit(); return;
     }
     const validation = await this.api.validate(this.step.resource);
-    if (validation.errors?.length) throw new Error('The declaration failed schema validation. Inspect the downloadable manifests before applying.');
+    if (validation.errors?.length) {
+      this.blockPreview({ summary: 'Schema validation failed', validationErrors: validation.errors }, 'The declaration failed schema validation. Inspect the diagnostics and downloadable manifest before reviewing again.');
+    }
     const baseline = await this.reviewBaseline();
     const preview = await this.api.preview(this.step.resource);
-    if (!preview.operation || preview.validationErrors?.length || (baseline.createOnly && preview.operation !== 'create')) {
-      throw new Error('The fresh preview cannot safely apply this declaration. Inspect the resource and controller preview before retrying.');
+    if (!preview.operation || preview.validationErrors?.length || preview.fieldErrors?.length || (baseline.createOnly && preview.operation !== 'create')) {
+      this.blockPreview(preview, 'The preview is blocked. Inspect its diagnostics, repair the selected resource or declaration, and refresh the review before Apply.');
     }
     this.planBaseline = signature(baseline.result?.applied ? desired(baseline.result.applied) : null);
     this.plannedCreateOnly = baseline.createOnly;
@@ -361,9 +370,12 @@ export class DeploymentReview {
     await this.verifyPrevious();
     const baseline = await this.reviewBaseline();
     const fresh = await this.api.preview(this.step.resource);
+    if (!fresh.operation || fresh.validationErrors?.length || fresh.fieldErrors?.length) {
+      this.blockPreview(fresh, 'The fresh preview is blocked. Inspect its diagnostics and refresh the review before any new Apply request.');
+    }
     if (signature(baseline.result?.applied ? desired(baseline.result.applied) : null) !== reviewedBaseline
       || baseline.createOnly !== reviewedCreateOnly || signature(fresh) !== signature(preview)) {
-      throw new Error('The resource baseline or preview changed. Refresh the review and confirm the new changes before applying.');
+      this.blockPreview(fresh, 'The resource baseline or preview changed. Refresh the review and confirm the new changes before applying.');
     }
     const flags = { createOnly: reviewedCreateOnly, allowDestructive: consent.gates.allow_destructive === true, iKnowThisBreaksTheCluster: consent.gates.i_know_this_breaks_the_cluster === true };
     const old = this.step.attempt;
