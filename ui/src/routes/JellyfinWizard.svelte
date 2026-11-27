@@ -322,6 +322,26 @@
       {#if state?.saved.steps[index]?.attempt}<p>Saved request: <code>{state.saved.steps[index].attempt?.requestId}</code>. Keep this identity when recovering an uncertain submission.</p>{/if}
       {#if uncertain}<p class="notice">This request has no confirmed operation yet. Look it up first. If the controller still reports NotFound, a fresh review can explicitly retransmit the exact same request ID; a new ID must not be used.</p>{/if}
       {#if failedReviewOperation(operation)}<p class="notice">This Apply ended without success. Inspect partial infrastructure first. Refresh the preview and confirm permissions to explicitly retry with a new request ID. No rollback or cleanup is automatic.</p>{/if}
+      {#if state?.blocker}
+        {@const blocker = state.blocker}
+        <aside class="notice" aria-label="Blocking deployment resource">
+          <h4>Blocked by {blocker.target.kind}/{blocker.target.name}</h4>
+          <p><code>{blocker.target.apiVersion}</code>{' '}<code>[{blocker.code}]</code></p>
+          <p>{blocker.message}</p>
+          {#if blocker.detail}<p>{blocker.detail}</p>{/if}
+          {#if blocker.checks.length}
+            <ul class="health" aria-label="Dependency readiness checks">{#each blocker.checks as check}
+              {@const badge = applicationCheckBadge(check.state)}
+              <li class="health-{badge.tone}"><strong>{check.name}: {badge.label}</strong> — {check.message || 'No readiness evidence'}</li>
+            {/each}</ul>
+          {/if}
+          <div class="actions">
+            <a href={routeHref({ name: 'detail', apiVersion: blocker.target.apiVersion, kind: blocker.target.kind, resourceName: blocker.target.name })}>Inspect blocking resource</a>
+            <button on:click={review} disabled={busy}>Recheck prerequisites</button>
+          </div>
+          <p class="hint">Inspection only. Accepted work and request identities are unchanged. Repair the resource, then recheck for a fresh preview and renewed consent.</p>
+        </aside>
+      {/if}
       {#if preview}
         <p><strong>{previewReviewed ? preview.operation : 'Preview blocked'}</strong> — {preview.summary}</p>
         {#if preview.fieldErrors?.length || previewErrors.length}
@@ -371,7 +391,7 @@
     {/if}
     {#if !busy}<p><button on:click={discard}>Discard / start a new browser review (keeps controller work and infrastructure)</button></p>{/if}
   {/if}
-  {#if error}<p class="error" role="alert">{error}</p>{/if}
+  {#if error && error !== state?.blocker?.message}<p class="error" role="alert">{error}</p>{/if}
 </section>
 
 <style>

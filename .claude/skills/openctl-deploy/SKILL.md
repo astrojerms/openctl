@@ -261,6 +261,13 @@ as an accepted operation. Diagnostics are transient and are not saved as
 readiness or authorization. Existing accepted work and uncertain request
 identities remain unchanged.
 
+For a blocked previously accepted prerequisite, inspect the displayed
+API/kind/name and reason code. Health checks are shown only after identity and
+the accepted baseline match; unavailable reads and unverifiable operations are
+not evidence of health. Use **Inspect blocking resource**, repair explicitly,
+then **Recheck prerequisites** and renew consent. Rechecking never resubmits
+accepted work. Treat provider-supplied health messages as sensitive.
+
 For unresolved references, inspect `fieldErrors[].path`, `code` and the declared
 target/output. Missing resources/outputs differ from TLS, authentication,
 permission, network and provider-service failures. Follow the safe repair hint;

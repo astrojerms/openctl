@@ -1,7 +1,10 @@
-import { ApiError, operations, ping, resources, schemas, session, type ApplyRequest, type DryRunApplyResponse, type GetResourceResponse, type Operation, type RequestOptions, type Resource } from './api';
+import { ApiError, operations, ping, resources, schemas, session, UnauthorizedError, type ApplyRequest, type DryRunApplyResponse, type GetResourceResponse, type Operation, type RequestOptions, type Resource } from './api';
 import { APP_API, VM_API, type DeploymentStep } from './jellyfin';
 import { withoutRequestConsent } from './retry';
 import { watchOperations, type OperationEvent } from './watch';
+import { applicationChecks } from './detailState';
+import type { AppCheck } from './detailState';
+import type { ResourceRef } from './api';
 
 export const REVIEW_KEY = 'openctl.jellyfinReview';
 export const MAX_REVIEW_BYTES = 128 * 1024;
@@ -20,11 +23,19 @@ export interface SavedReview {
   cursor: number;
   steps: (DeploymentStep & { attempt?: Attempt })[];
 }
+export interface ReviewBlocker {
+  target: ResourceRef;
+  code: 'operation_unverified' | 'observation_unavailable' | 'baseline_changed' | 'readiness_unproven';
+  message: string;
+  detail: string;
+  checks: AppCheck[];
+}
 export interface ReviewState {
   saved: SavedReview;
   operation: Operation | null;
   preview: DryRunApplyResponse | null;
   observed: Resource | null;
+  blocker: ReviewBlocker | null;
   verified: boolean;
 }
 export interface ReviewConsent {
@@ -75,7 +86,13 @@ function desired(resource: Resource): Resource {
   return { apiVersion: clean.apiVersion, kind: clean.kind, metadata: clean.metadata, spec: clean.spec ?? {} };
 }
 function signature(value: unknown): string { return JSON.stringify(ordered(value)); }
-function sameDesired(a: Resource, b: Resource): boolean { return signature(desired(a)) === signature(desired(b)); }
+function desiredSignature(resource: Resource): string {
+  const clean = desired(resource);
+  // Protobuf JSON emits these empty collections even when authored intent omits them.
+  clean.metadata = { ...clean.metadata, labels: clean.metadata.labels ?? {}, annotations: clean.metadata.annotations ?? {}, ownerRefs: clean.metadata.ownerRefs ?? [] };
+  return signature(clean);
+}
+function sameDesired(a: Resource, b: Resource): boolean { return desiredSignature(a) === desiredSignature(b); }
 function sameTarget(a: Resource, b: Resource): boolean {
   return a.apiVersion === b.apiVersion && a.kind === b.kind && a.metadata.name === b.metadata.name;
 }
@@ -191,7 +208,7 @@ export class DeploymentReview {
   constructor(private storage: ReviewStorage, saved: SavedReview, private options: {
     canApply: () => boolean; changed?: (state: ReviewState) => void; api?: ReviewAPI;
   }) {
-    this.state = { saved: validateSaved(saved, saved.binding), operation: null, preview: null, observed: null, verified: false };
+    this.state = { saved: validateSaved(saved, saved.binding), operation: null, preview: null, observed: null, blocker: null, verified: false };
   }
   private get api(): ReviewAPI { return this.options.api ?? defaultAPI; }
   private get step() { return this.state.saved.steps[this.state.saved.cursor]; }
@@ -200,6 +217,7 @@ export class DeploymentReview {
     this.planBaseline = null;
     this.state.preview = null;
     this.state.observed = null;
+    this.state.blocker = null;
     this.state.verified = false;
     this.emit();
   }
@@ -272,12 +290,29 @@ export class DeploymentReview {
       throw new Error('The managed baseline is absent, changed, or owned elsewhere. Inspect the resource and recover through its editor; this guided review will not overwrite it.');
     }
   }
+  private blockDependency(resource: Resource, code: ReviewBlocker['code'], message: string, observed?: Resource): never {
+    this.planBaseline = null;
+    this.state.verified = false;
+    this.state.preview = null;
+    this.state.blocker = {
+      target: { apiVersion: resource.apiVersion, kind: resource.kind, name: resource.metadata.name },
+      code, message,
+      detail: typeof observed?.status?.message === 'string' ? observed.status.message : '',
+      checks: applicationChecks(observed?.status),
+    };
+    this.emit();
+    throw new Error(message);
+  }
   private async verifyPrevious(): Promise<void> {
     const latest = new Map<string, Resource>();
     for (let i = 0; i < this.state.saved.cursor; i += 1) {
-      const op = await this.lookup(i);
-      if (!op || op.status !== 'succeeded') throw new Error('A previous deployment step has no authoritative successful operation. Inspect its request before proceeding.');
       const resource = this.state.saved.steps[i].resource;
+      let op: Operation | null;
+      try { op = await this.lookup(i); } catch (error) {
+        if (error instanceof UnauthorizedError) throw error;
+        this.blockDependency(resource, 'operation_unverified', 'A prerequisite has no verifiable successful operation. Inspect its original request before proceeding; no replacement work was submitted.');
+      }
+      if (!op || op.status !== 'succeeded') this.blockDependency(resource, 'operation_unverified', 'A prerequisite has no authoritative successful operation. Inspect its original request before proceeding; no replacement work was submitted.');
       latest.set(`${resource.apiVersion}/${resource.kind}/${resource.metadata.name}`, resource);
     }
     if (this.state.operation?.status === 'succeeded') {
@@ -285,12 +320,18 @@ export class DeploymentReview {
       latest.set(`${resource.apiVersion}/${resource.kind}/${resource.metadata.name}`, resource);
     }
     for (const resource of latest.values()) {
-      const result = await this.baseline(resource);
+      let result: GetResourceResponse | null;
+      try { result = await this.baseline(resource); } catch (error) {
+        if (error instanceof UnauthorizedError) throw error;
+        this.blockDependency(resource, 'observation_unavailable', 'A prerequisite cannot be observed or its identity could not be verified. Inspect that resource and restore read access before proceeding.');
+      }
       const expected = failedReviewOperation(this.state.operation) && sameTarget(resource, this.step.resource)
         && result?.applied && sameDesired(result.applied, this.step.resource) ? this.step.resource : resource;
-      this.assertBaseline(result, expected);
+      try { this.assertBaseline(result, expected); } catch {
+        this.blockDependency(resource, 'baseline_changed', 'A prerequisite baseline is missing, changed or owned elsewhere. Inspect it before proceeding; this review will not overwrite or recreate it.');
+      }
       if (resource.apiVersion === APP_API && !sameTarget(resource, this.step.resource) && result!.resource.status?.ready !== true) {
-        throw new Error('The previously accepted application is not currently ready. Refresh and repair application health before proceeding or publishing.');
+        this.blockDependency(resource, 'readiness_unproven', 'The previously accepted application has not established current readiness. Inspect its checks and repair it before proceeding or publishing.', result!.resource);
       }
     }
   }

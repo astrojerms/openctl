@@ -1192,6 +1192,16 @@ Preview diagnostics are transient inspection data, not saved recovery evidence.
 Reloading restores only the declaration and existing request identity; a fresh
 review must fetch current diagnostics and authority again.
 
+When previously accepted work blocks a later step, the review identifies its
+exact API/kind/name and a reason code. Matching, unchanged application baselines
+also show current readiness checks; unreadable resources, changed baselines and
+unverified operations do not invent health evidence. **Inspect blocking resource**
+opens its detail page. After repair, **Recheck prerequisites** obtains a fresh
+preview and requires renewed consent, without replacing accepted requests or
+submitting work. These diagnostics are not saved across reload. Raw read errors
+are not repeated in the blocker; provider health messages remain sensitive
+inspection output.
+
 For CLI/GitOps, use `examples/jellyfin/vm.cue` and
 `examples/jellyfin/application.cue` with private CUE values:
 

@@ -267,3 +267,79 @@ describe('recovered application readiness evidence', () => {
     expect(resources.apply).not.toHaveBeenCalled();
   });
 });
+
+describe('blocking deployment prerequisites', () => {
+  const app: ControllerAPI.Resource = { apiVersion: 'apps.openctl.io/v1', kind: 'Jellyfin', metadata: { name: 'media' }, spec: {} };
+  function saveAtPublication() {
+    window.sessionStorage.setItem(REVIEW_KEY, JSON.stringify({
+      version: 1, binding: { controllerId: 'controller', userId: 'operator' }, cursor: 1,
+      steps: [
+        { title: 'Install Jellyfin', resource: app, createOnly: true, attempt: { requestId: 'accepted-app', operationId: 'app-op', createOnly: true, allowDestructive: false, iKnowThisBreaksTheCluster: false } },
+        { title: 'Route public hostname', resource: { apiVersion: 'cloudflare.openctl.io/v1', kind: 'TunnelRoute', metadata: { name: 'media-route' }, spec: {} }, createOnly: true },
+        { title: 'Publish DNS', resource: { apiVersion: 'cloudflare.openctl.io/v1', kind: 'DNSRecord', metadata: { name: 'media-dns' }, spec: {} }, createOnly: true },
+        { title: 'Verify public health', resource: { ...app, spec: { publicEndpoint: 'https://media.example.invalid/System/Info/Public' } }, createOnly: false },
+      ],
+    }));
+    vi.mocked(operations.get).mockResolvedValue({ id: 'app-op', type: 'apply', requestId: 'accepted-app', status: 'succeeded', apiVersion: app.apiVersion, kind: app.kind, resourceName: app.metadata.name, manifestJson: JSON.stringify(app) });
+  }
+
+  it('shows prerequisite checks and inspection without publication, then rechecks repair with fresh consent', async () => {
+    saveAtPublication();
+    let healthy = false;
+    vi.mocked(resources.get).mockImplementation(async (av) => {
+      if (av !== app.apiVersion) throw new ApiError(404, 'not found');
+      return { applied: app, resource: { ...app, status: {
+        ready: healthy, message: healthy ? 'Repaired' : 'Operator-controlled reboot required',
+        checks: { gpu: { state: healthy ? 'ready' : 'not_ready', message: '<img src=x onerror=alert(1)>' }, http: { state: healthy ? 'ready' : 'unknown' }, publicEndpoint: { state: 'not_configured' } },
+      } } };
+    });
+    await open(); button('Resume saved review').click(); await settle();
+    const blocker = host.querySelector('[aria-label="Blocking deployment resource"]')!;
+    expect(blocker.textContent).toContain('Jellyfin/media');
+    expect(blocker.textContent).toContain('apps.openctl.io/v1');
+    expect(blocker.textContent).toContain('gpu: Not ready');
+    expect(blocker.textContent).toContain('http: Unknown');
+    expect(blocker.textContent).toContain('publicEndpoint: Not configured');
+    expect(blocker.textContent).toContain('Operator-controlled reboot required');
+    expect(blocker.querySelector('img')).toBeNull();
+    expect(blocker.querySelector('a')?.getAttribute('href')).toBe('#/k/apps.openctl.io/v1/Jellyfin/media');
+    expect(button('Apply reviewed step').disabled).toBe(true);
+    expect(resources.apply).not.toHaveBeenCalled();
+    expect(window.sessionStorage.getItem(REVIEW_KEY)).not.toContain('Operator-controlled reboot');
+    expect(window.sessionStorage.getItem(REVIEW_KEY)).not.toContain('<img');
+
+    healthy = true;
+    button('Recheck prerequisites').click(); await settle();
+    await vi.waitFor(() => expect(button('Refresh preview').disabled).toBe(false));
+    expect(host.querySelector('[aria-label="Blocking deployment resource"]')).toBeNull();
+    expect(button('Apply reviewed step').disabled).toBe(true);
+    expect((control('I confirm this dedicated guest') as HTMLInputElement).checked).toBe(false);
+    expect((control('I verified this guest') as HTMLInputElement).checked).toBe(false);
+    expect((control('I freshly authorize') as HTMLInputElement).checked).toBe(false);
+    expect(JSON.parse(window.sessionStorage.getItem(REVIEW_KEY)!).steps[1].attempt).toBeUndefined();
+    expect(resources.apply).not.toHaveBeenCalled();
+
+    await unmount(component!); component = undefined;
+    healthy = false;
+    await open();
+    expect(host.querySelector('[aria-label="Blocking deployment resource"]')).toBeNull();
+    expect(host.textContent).not.toContain('Operator-controlled reboot required');
+    button('Resume saved review').click(); await settle();
+    expect(host.querySelector('[aria-label="Blocking deployment resource"]')?.textContent).toContain('Operator-controlled reboot required');
+    expect(resources.apply).not.toHaveBeenCalled();
+  });
+
+  it('identifies an unreadable prerequisite without forwarding private provider errors or inventing checks', async () => {
+    saveAtPublication();
+    vi.mocked(resources.get).mockRejectedValue(new ApiError(503, 'PRIVATE-PROVIDER https://user:password@private.invalid/'));
+    await open(); button('Resume saved review').click(); await settle();
+    const blocker = host.querySelector('[aria-label="Blocking deployment resource"]')!;
+    expect(blocker.textContent).toContain('Jellyfin/media');
+    expect(blocker.textContent).toContain('observation_unavailable');
+    expect(host.textContent).not.toContain('PRIVATE-PROVIDER');
+    expect(host.textContent).not.toContain('private.invalid');
+    expect(blocker.querySelector('[aria-label="Dependency readiness checks"]')).toBeNull();
+    expect(button('Apply reviewed step').disabled).toBe(true);
+    expect(resources.apply).not.toHaveBeenCalled();
+  });
+});

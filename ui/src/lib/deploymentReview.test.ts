@@ -375,9 +375,25 @@ describe('full guided sequence recovery', () => {
     nasServer: 'nas', nasShare: 'media', nasMediaPath: '', secretProvider: 'file', nasSecret: 'nas', adminUser: 'admin', adminSecret: 'admin',
     viewerUser: 'viewer', viewerSecret: 'viewer', expose: true, hostname: 'media.example.com', tunnel: 'tunnel', accountId: '', zoneId: '',
   };
+  async function publicReview() {
+    const steps = jellyfinDeployment(inputs);
+    const h = harness(steps); h.engine.save();
+    for (let i = 0; i < 2; i += 1) {
+      await h.engine.review(); await h.engine.submit(consent);
+      h.accept(`request-${i + 1}`, 'succeeded', steps[i].resource);
+      await h.engine.next();
+    }
+    return { ...h, app: steps[1].resource };
+  }
   it('keeps every VM/app/exposure stage resumable, while refreshing prior operations and readiness before publishing', async () => {
     const steps = jellyfinDeployment(inputs);
     const h = harness(steps); h.engine.save();
+    const getResource = h.api.getResource.getMockImplementation()!;
+    h.api.getResource.mockImplementation(async (av, kind, name) => {
+      const result = await getResource(av, kind, name);
+      const serialized = (resource: Resource): Resource => ({ ...resource, metadata: { ...resource.metadata, labels: resource.metadata.labels ?? {}, annotations: resource.metadata.annotations ?? {}, ownerRefs: resource.metadata.ownerRefs ?? [] } });
+      return { ...result, resource: serialized(result.resource), applied: result.applied && serialized(result.applied) };
+    });
     let engine = h.engine;
     for (let i = 0; i < steps.length; i += 1) {
       await engine.review();
@@ -394,21 +410,89 @@ describe('full guided sequence recovery', () => {
     expect(engine.state.observed?.status?.ready).toBe(true);
   });
 
+  it.each([
+    { labels: { owner: 'different' } },
+    { annotations: { note: 'different' } },
+    { ownerRefs: [{ apiVersion: 'apps.openctl.io/v1', kind: 'ComposeApplication', name: 'different' }] },
+  ])('keeps changed nonempty prerequisite metadata blocking: %j', async (metadata) => {
+    const h = await publicReview();
+    const changed = { ...h.app, metadata: { ...h.app.metadata, ...metadata } };
+    h.live.set(h.app.metadata.name, { applied: changed, resource: { ...changed, status: { ready: true } } });
+    await expect(h.engine.review()).rejects.toThrow();
+    expect(h.engine.state.blocker?.code).toBe('baseline_changed');
+    expect(h.engine.state.verified).toBe(false);
+    expect(h.engine.state.preview).toBeNull();
+    expect(h.api.apply).toHaveBeenCalledTimes(2);
+    expect(h.api.requestId).toHaveBeenCalledTimes(2);
+  });
+
   it('rechecks earlier application readiness before publishing instead of trusting the saved cursor', async () => {
-    const steps = jellyfinDeployment(inputs);
-    const h = harness(steps); h.engine.save();
-    for (let i = 0; i < 2; i += 1) {
-      await h.engine.review(); await h.engine.submit(consent);
-      h.accept(`request-${i + 1}`, 'succeeded', steps[i].resource);
-      await h.engine.next();
-    }
-    const app = steps[1].resource;
-    h.live.set(app.metadata.name, { applied: app, resource: { ...app, status: { ready: false } } });
+    const h = await publicReview();
+    const app = h.app;
+    h.live.set(app.metadata.name, { applied: app, resource: { ...app, spec: { password: 'PRIVATE-OBSERVED-SPEC' }, status: {
+      ready: false, message: 'Operator reboot required', credentials: 'PRIVATE-STATUS',
+      checks: { gpu: { state: 'not_ready', message: 'Driver unavailable' }, publicEndpoint: { state: 'not_configured' } },
+    } } });
     const resumed = h.restore();
-    await expect(resumed.resume()).rejects.toThrow(/not currently ready/);
-    await expect(resumed.review()).rejects.toThrow(/not currently ready/);
+    await expect(resumed.resume()).rejects.toThrow();
+    await expect(resumed.review()).rejects.toThrow();
+    expect(resumed.state.blocker).toEqual({
+      target: { apiVersion: app.apiVersion, kind: app.kind, name: app.metadata.name },
+      code: 'readiness_unproven',
+      message: expect.any(String), detail: 'Operator reboot required',
+      checks: [{ name: 'gpu', state: 'not_ready', message: 'Driver unavailable' }, { name: 'publicEndpoint', state: 'not_configured', message: '' }],
+    });
+    expect(JSON.stringify(resumed.state.blocker)).not.toContain('PRIVATE-');
+    expect(JSON.stringify(readSavedReview(h.storage, binding))).not.toContain('Driver unavailable');
+    expect(h.restore().state.blocker).toBeNull();
     expect(resumed.state.preview).toBeNull();
     expect(h.api.apply).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears stale dependency diagnostics during a recheck and requires fresh consent after repair', async () => {
+    const h = await publicReview();
+    h.live.set(h.app.metadata.name, { applied: h.app, resource: { ...h.app, status: { ready: false } } });
+    await expect(h.engine.review()).rejects.toThrow();
+    expect(h.engine.state.blocker?.code).toBe('readiness_unproven');
+    const pending = Promise.withResolvers<GetResourceResponse>();
+    const original = h.api.getResource.getMockImplementation()!;
+    h.api.getResource.mockImplementation((av, kind, name) => name === h.app.metadata.name ? pending.promise : original(av, kind, name));
+    const recheck = h.engine.review();
+    expect(h.engine.state.blocker).toBeNull();
+    expect(h.engine.state.verified).toBe(false);
+    pending.resolve({ applied: h.app, resource: { ...h.app, status: { ready: true } } });
+    await recheck;
+    expect(h.engine.state.blocker).toBeNull();
+    expect(h.engine.state.verified).toBe(true);
+    expect(h.engine.state.preview?.operation).toBe('create');
+    expect(h.api.apply).toHaveBeenCalledTimes(2);
+    expect(h.api.requestId).toHaveBeenCalledTimes(2);
+    await expect(h.engine.submit({ ...consent, publicExposure: false })).rejects.toThrow();
+    expect(h.api.apply).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['unavailable', 'different-identity', 'baseline-changed', 'operation-unverified'])('attributes %s to the requested prerequisite without retaining private evidence or resubmitting', async (failure) => {
+    const h = await publicReview();
+    let target = h.app;
+    if (failure === 'unavailable') h.api.getResource.mockRejectedValue(new ApiError(503, 'PRIVATE-ERROR https://user:secret@private.invalid/'));
+    if (failure === 'different-identity') h.live.set(h.app.metadata.name, { applied: h.app, resource: { ...h.app, metadata: { name: 'PRIVATE-DIFFERENT-RESOURCE' } } });
+    if (failure === 'baseline-changed') h.live.set(h.app.metadata.name, { applied: { ...h.app, spec: { changed: true } }, resource: { ...h.app, status: { message: 'PRIVATE-STATUS', checks: { gpu: { state: 'ready', message: 'PRIVATE-CHECK' } } } } });
+    if (failure === 'operation-unverified') {
+      const op = h.ops.get('request-2')!;
+      h.ops.set('request-2', { ...op, status: 'failed', error: 'PRIVATE-OPERATION-ERROR' });
+    }
+    // An unreadable first prerequisite is the VM, before the application is read.
+    if (failure === 'unavailable') target = h.engine.state.saved.steps[0].resource;
+    await expect(h.engine.review()).rejects.toThrow();
+    expect(h.engine.state.blocker?.target).toEqual({ apiVersion: target.apiVersion, kind: target.kind, name: target.metadata.name });
+    expect(h.engine.state.blocker?.code).toBe(failure === 'operation-unverified' ? 'operation_unverified' : failure === 'baseline-changed' ? 'baseline_changed' : 'observation_unavailable');
+    expect(h.engine.state.blocker?.checks).toEqual([]);
+    expect(h.engine.state.blocker?.detail).toBe('');
+    expect(JSON.stringify(h.engine.state.blocker)).not.toContain('PRIVATE-');
+    expect(h.engine.state.preview).toBeNull();
+    expect(h.engine.state.verified).toBe(false);
+    expect(h.api.apply).toHaveBeenCalledTimes(2);
+    expect(h.api.requestId).toHaveBeenCalledTimes(2);
   });
 
   it('can explicitly retry a failed final health stage whose matching declaration was already recorded', async () => {

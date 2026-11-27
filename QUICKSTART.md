@@ -161,6 +161,11 @@ Reference failures identify the destination spec path and a safe failure code:
 distinguish an absent output from provider authentication, trust or availability
 problems. Raw upstream error details are not forwarded by reference resolution.
 
+Previously accepted prerequisites have an exact-resource blocker with an
+inspection link and, when the baseline matches, current readiness checks.
+Repair that resource, then choose **Recheck prerequisites** for a fresh preview
+and renewed consent. This does not resubmit accepted work or publish anything.
+
 Apply and Delete print request IDs before submission;
 `openctl ctl op get --request-id ID` recovers a lost acknowledgement without
 submitting again. Console Apply and Delete attempts survive reload in the same

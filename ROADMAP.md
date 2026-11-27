@@ -414,6 +414,29 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
   operations and no guest command execution or live homelab mutation. No hardware,
   GPU, media or playback acceptance.
 
+**Actionable guided prerequisite blockers (2026-11-27):**
+
+- [x] Later deployment steps identify the exact prerequisite and distinguish
+  unverified operations, unavailable observations, changed baselines and unproven
+  application readiness. Matching application baselines expose normalized live
+  checks, not specs or unrelated status. Private read failures are not repeated.
+- [x] Direct resource inspection and explicit prerequisite recheck support repair
+  without resubmitting accepted work. Diagnostics are transient; rechecks clear
+  stale evidence and consent before obtaining a fresh preview. Publication remains
+  blocked until readiness, unchanged intent and fresh authorization are established.
+- [x] Guided baseline comparisons normalize protobuf-empty metadata collections,
+  fixing recovery of real controller responses without ignoring nonempty label,
+  annotation or ownership changes.
+- Verification: focused engine/mounted-wizard regressions, frontend typecheck and
+  production build passed. The actual console used the real SQLite controller,
+  durable admission, dispatcher, refs, secrets and auth with isolated simulated
+  providers. Its original successful application request survived reload and
+  inspection; a post-preview GPU failure blocked the final publication submission.
+  Unavailable reads exposed no private upstream text or invented checks. Repair
+  restored a fresh preview with all three consent controls unchecked. SQLite and
+  provider audit retained one successful application Apply, no route/DNS operation
+  and no replacement request. No live homelab mutation or hardware acceptance.
+
 The next product acceptance gate is the complete operator journey on real
 hardware, including recovery, media playback and any approved public endpoint.
 See [direction](docs/direction.md). Provider breadth is downstream of that gate.
