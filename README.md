@@ -1203,6 +1203,14 @@ These bounds are not a capacity check or reservation: verify host/storage
 capacity, workload requirements and a disk at least as large as the template's
 existing disk. Selecting an existing guest does not resize it.
 
+Native Proxmox publishes `status.ip` only when the guest agent reports one
+usable IPv4 address on NICs matching the hypervisor-configured MACs. Docker
+bridges and other unmatched interfaces are not SSH targets. Missing MAC evidence,
+no usable IPv4 or multiple distinct matching addresses leave `status.ip` absent;
+dependent references block instead of guessing. Inspect guest networking, or
+declare the application's `spec.target.host` explicitly for an intentionally
+multi-address VM. Verify controller reachability and SSH host keys independently.
+
 Blocked guided previews retain schema, field and dependency diagnostics inline,
 including a failure discovered by the final preview immediately before Apply.
 Field paths take precedence over duplicate plain-text messages; unrelated

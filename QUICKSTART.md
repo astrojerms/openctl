@@ -144,6 +144,11 @@ to 4 / 4096 / 32. Chosen sizes survive review, reload and manifest downloads.
 Verify workload/host capacity and the template's existing disk size yourself;
 preview does not reserve capacity. Existing guests are not resized.
 
+Guest IP discovery matches Proxmox-configured NIC MACs, not interface order.
+Missing or ambiguous matching IPv4 leaves `status.ip` unknown and blocks dependent
+references. For intentionally multi-address guests, explicitly declare the
+application's `spec.target.host`; verify reachability and SSH trust separately.
+
 The wizard's staged ZIP contains one numbered YAML file per resource stage;
 the current stage can also be downloaded alone. Preview/apply files individually
 in order, not as a bulk directory: public deployments have initial and final

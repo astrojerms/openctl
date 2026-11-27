@@ -80,7 +80,7 @@ func observeVM(ctx context.Context, h *pmhandler.Handler, contextName string, vm
 	}
 	var ip string
 	if vm.Status == "running" {
-		ip, _ = h.Client().GetVMIPAddress(ctx, vm.Node, vm.VMID)
+		ip, _ = h.Client().GetVMIPAddress(ctx, vm.Node, vm.VMID, cfg)
 	}
 	res := pmresources.VMToResourceWithIP(vm, cfg, ip)
 	res.Spec["context"] = contextName

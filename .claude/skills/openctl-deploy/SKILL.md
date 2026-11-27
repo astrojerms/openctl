@@ -345,9 +345,13 @@ do not forward raw provider errors, response bodies, URLs or certificate fields.
   not only the manifest or operation message. For Proxmox updates, compare the
   node/VMID before/after and read authoritative VM config for configured memory
   and disks; running-VM live memory can lag configuration until reboot.
-- Check requested readiness separately: guest-agent IP can be absent or select
-  the wrong interface; verify the intended reachable address, SSH/service health,
-  and cloud-init completion (`cloud-init status --wait`) when applicable. For
+- Check requested readiness separately: native Proxmox publishes `status.ip`
+  only for a unique usable IPv4 on guest-agent NICs matching configured MACs.
+  Missing MAC evidence or multiple matching addresses leave the output absent;
+  never fall back to a Docker bridge or first interface. Inspect networking or
+  explicitly declare the application's `spec.target.host` for a multi-address
+  guest. Independently verify controller reachability, SSH host keys/service
+  health, and cloud-init completion (`cloud-init status --wait`). For
   k3s, inspect node readiness using the produced kubeconfig securely. Do not
   claim an application ready merely because a VM exists or an Apply succeeded.
 - For standalone applications, inspect each `status.checks.<name>.state`:

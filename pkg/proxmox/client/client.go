@@ -13,6 +13,7 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"sort"
@@ -1149,8 +1150,32 @@ type AgentIPAddress struct {
 	Prefix  int    `json:"prefix"`
 }
 
-// GetVMIPAddress gets the IP address of a VM using the QEMU guest agent
-func (c *Client) GetVMIPAddress(ctx context.Context, node string, vmid int) (string, error) {
+// GetVMIPAddress returns the unique usable IPv4 address on a NIC whose MAC
+// matches the authoritative VM config. Missing or ambiguous evidence is an error.
+func (c *Client) GetVMIPAddress(ctx context.Context, node string, vmid int, config *VMConfig) (string, error) {
+	if config == nil {
+		return "", errors.New("VM configuration is required for guest address selection")
+	}
+	configuredMACs := make(map[[6]byte]struct{})
+	for key, value := range config.Raw {
+		index, ok := strings.CutPrefix(key, "net")
+		if !ok || index == "" {
+			continue
+		}
+		if _, err := strconv.ParseUint(index, 10, 32); err != nil {
+			continue
+		}
+		network, _ := value.(string)
+		model, _, _ := strings.Cut(network, ",")
+		_, address, _ := strings.Cut(model, "=")
+		mac, err := net.ParseMAC(address)
+		if err == nil && len(mac) == 6 {
+			configuredMACs[[6]byte(mac)] = struct{}{}
+		}
+	}
+	if len(configuredMACs) == 0 {
+		return "", errors.New("no configured VM NIC MAC addresses available")
+	}
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/agent/network-get-interfaces", node, vmid)
 	resp, err := c.get(ctx, path)
 	if err != nil {
@@ -1166,23 +1191,41 @@ func (c *Client) GetVMIPAddress(ctx context.Context, node string, vmid int) (str
 		return "", fmt.Errorf("failed to parse agent response: %w", err)
 	}
 
-	// Find the first non-loopback IPv4 address
+	var candidate netip.Addr
 	for _, iface := range result.Data.Result {
-		if iface.Name == "lo" {
+		mac, err := net.ParseMAC(iface.HWAddr)
+		if err != nil || len(mac) != 6 {
+			continue
+		}
+		if _, configured := configuredMACs[[6]byte(mac)]; !configured {
 			continue
 		}
 		for _, addr := range iface.IPAddresses {
-			if addr.Type == "ipv4" && !strings.HasPrefix(addr.Address, "127.") {
-				return addr.Address, nil
+			if addr.Type != "ipv4" {
+				continue
 			}
+			ip, err := netip.ParseAddr(addr.Address)
+			if err != nil || !ip.Is4() || !ip.IsGlobalUnicast() || ip.IsLinkLocalUnicast() {
+				continue
+			}
+			if candidate.IsValid() && candidate != ip {
+				return "", errors.New("multiple usable IPv4 addresses on configured VM NICs; select an explicit target host")
+			}
+			candidate = ip
 		}
 	}
-
-	return "", fmt.Errorf("no IPv4 address found")
+	if !candidate.IsValid() {
+		return "", errors.New("no usable IPv4 address on a configured VM NIC")
+	}
+	return candidate.String(), nil
 }
 
 // WaitForVMIP waits for a VM to get an IP address
 func (c *Client) WaitForVMIP(ctx context.Context, node string, vmid int, timeout time.Duration) (string, error) {
+	config, err := c.GetVMConfig(ctx, node, vmid)
+	if err != nil {
+		return "", fmt.Errorf("read VM config for guest address selection: %w", err)
+	}
 	deadline := time.Now().Add(timeout)
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -1192,7 +1235,7 @@ func (c *Client) WaitForVMIP(ctx context.Context, node string, vmid int, timeout
 			return "", fmt.Errorf("timeout waiting for VM IP")
 		}
 
-		ip, err := c.GetVMIPAddress(ctx, node, vmid)
+		ip, err := c.GetVMIPAddress(ctx, node, vmid, config)
 		if err == nil && ip != "" {
 			return ip, nil
 		}

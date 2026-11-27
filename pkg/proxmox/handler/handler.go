@@ -253,7 +253,7 @@ func (h *Handler) getVM(ctx context.Context, name string) (*protocol.Response, e
 	// Try to get IP if VM is running (non-blocking)
 	var ip string
 	if vm.Status == "running" {
-		ip, _ = h.client.GetVMIPAddress(ctx, vm.Node, vm.VMID)
+		ip, _ = h.client.GetVMIPAddress(ctx, vm.Node, vm.VMID, config)
 	}
 
 	return &protocol.Response{

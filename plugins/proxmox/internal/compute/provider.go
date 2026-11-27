@@ -416,8 +416,11 @@ func (p *ProxmoxProvider) GetSSHAccess(ctx context.Context, id string) (*compute
 		return nil, err
 	}
 
-	// Get IP from QEMU agent
-	ip, err := p.client.GetVMIPAddress(ctx, vm.Node, vm.VMID)
+	config, err := p.client.GetVMConfig(ctx, vm.Node, vm.VMID)
+	if err != nil {
+		return nil, fmt.Errorf("read VM config for SSH access: %w", err)
+	}
+	ip, err := p.client.GetVMIPAddress(ctx, vm.Node, vm.VMID, config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get VM IP: %w", err)
 	}

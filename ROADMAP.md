@@ -537,6 +537,25 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
   All Proxmox requests were GET; zero durable operations or saved tracking
   records. No live provisioning, resizing or hardware/capacity acceptance.
 
+### Reliable guest address selection (2026-11-27)
+
+- [x] Guest-agent IPv4 selection matches authoritative Proxmox NIC MACs,
+  excluding unrelated Docker/virtual interfaces and unusable addresses.
+  Multiple distinct matching IPv4 addresses fail closed instead of depending
+  on interface order; missing evidence leaves `status.ip` absent.
+- [x] Native and legacy observation reuse the already-read VM configuration.
+  Address waiting and plugin SSH access use the same selection contract.
+  Multi-address application hosts require an explicit declaration and fresh
+  reachability/SSH-trust verification; no automatic network repair occurs.
+- Verification: reproduced the native provider returning Docker's `172.17.0.1`
+  before the fix. Affected client, handler and native provider packages passed,
+  including 18 selection cases and native/legacy consumer regressions; the
+  separate plugin compute package compiled. Actual authenticated CLI Get against
+  an isolated native TLS controller/provider selected `10.0.0.8` despite Docker
+  being reported first, omitted IP under ambiguity, and recovered on a fresh read.
+  All 12 Proxmox requests were GET; zero durable operations or saved tracking
+  records. Simulated guest-agent responses only; no live guest/SSH acceptance.
+
 The next product acceptance gate is the complete operator journey on real
 hardware, including recovery, media playback and any approved public endpoint.
 See [direction](docs/direction.md). Provider breadth is downstream of that gate.
