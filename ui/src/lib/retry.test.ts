@@ -153,13 +153,21 @@ describe('inherited request consent', () => {
     expect(withoutRequestConsent(manifest)).toBe(manifest);
   });
 
-  it.each([true, false])('strips inherited consent from ordinary Edit applied/observed baseline (applied=%s)', async (hasApplied) => {
+  it.each([
+    { hasApplied: true, ownership: ownerRefs },
+    { hasApplied: false, ownership: ownerRefs },
+    { hasApplied: true, ownership: [] },
+    { hasApplied: false, ownership: [] },
+  ])('keeps ownership guards separate from desired YAML and clears consent (%j)', async ({ hasApplied, ownership }) => {
+    const resource = { ...saved, metadata: { ...saved.metadata, ownerRefs: ownership } };
     const loaded = await loadEditIntent(target, storage(), async () => operation, async () => ({
-      resource: saved, ...(hasApplied ? { applied: saved } : {}),
+      resource, ...(hasApplied ? { applied: resource } : {}),
     }));
-    expect(parseYAML(loaded.text).doc).toEqual(expected);
+    expect(parseYAML(loaded.text).doc).toEqual({
+      ...manifest, metadata: { ...manifest.metadata, annotations: { purpose: 'keep' } },
+    });
     expect(loaded.baseline).toBe(loaded.text);
-    expect(loaded.ownerRefs).toEqual(ownerRefs);
+    expect(loaded.ownerRefs).toEqual(ownership);
     expect(saved.metadata.annotations?.['openctl.io/allow-destructive']).toBe('true');
   });
 });

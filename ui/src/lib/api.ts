@@ -231,6 +231,8 @@ export interface DryRunChildAction {
 export interface DryRunApplyResponse {
   operation?: 'create' | 'update' | 'no-op';
   diff?: DriftEntry[];
+  // Paths relative to metadata; desired = stored, observed = submitted.
+  metadataDiff?: DriftEntry[];
   liveDrift?: DriftEntry[];
   children?: DryRunChildAction[];
   requiredGates?: string[];

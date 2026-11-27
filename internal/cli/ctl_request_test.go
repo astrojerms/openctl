@@ -63,6 +63,15 @@ func (s *requestRecoveryRPC) GetOperationByRequest(_ context.Context, req *apiv1
 
 func configureRequestRecoveryRPC(t *testing.T, handler *requestRecoveryRPC) {
 	t.Helper()
+	configureControllerRPC(t, func(server *grpc.Server) {
+		apiv1.RegisterPingServiceServer(server, handler)
+		apiv1.RegisterResourceServiceServer(server, handler)
+		apiv1.RegisterOperationServiceServer(server, handler)
+	})
+}
+
+func configureControllerRPC(t *testing.T, register func(*grpc.Server)) {
+	t.Helper()
 	state := t.TempDir()
 	material, err := controllertls.EnsureMaterial(filepath.Join(state, "tls"), "localhost", []net.IP{net.ParseIP("127.0.0.1")})
 	if err != nil {
@@ -81,9 +90,7 @@ func configureRequestRecoveryRPC(t *testing.T, handler *requestRecoveryRPC) {
 		t.Fatal(err)
 	}
 	server := grpc.NewServer(grpc.Creds(credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}})))
-	apiv1.RegisterPingServiceServer(server, handler)
-	apiv1.RegisterResourceServiceServer(server, handler)
-	apiv1.RegisterOperationServiceServer(server, handler)
+	register(server)
 	t.Cleanup(server.Stop)
 	go func() { _ = server.Serve(listener) }()
 	previous := globalConfig

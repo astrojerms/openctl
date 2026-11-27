@@ -365,6 +365,20 @@ openctl ctl get VirtualMachine web-01 --api-version proxmox.openctl.io/v1
 openctl ctl get Cluster dev --api-version k3s.openctl.io/v1
 ```
 
+Preview one resource against the live controller before applying:
+
+```bash
+openctl ctl preview -f vm.yaml
+openctl ctl preview -f vm.cue --values homelab.cue -o json
+```
+
+Preview reports explicit create/update/no-op, stored-spec edits, desired metadata
+edits, independent live drift, child actions and required gates. It uses controller
+validation and performs no Apply, operation submission or automatic approval.
+Invalid intent prints diagnostics (including usable JSON/YAML with `-o`) and exits
+nonzero. It is not an existence reservation, an authorization to mutate, or the
+offline graph `plan`; use matching CLI/controller versions.
+
 Apply a manifest and wait for the operation:
 
 ```bash
@@ -407,6 +421,31 @@ cannot be resubmitted under its old key. A new attempt after known terminal
 failure needs fresh inspection/review and a **new** key, not automatic retries.
 Upgrade CLI and controller together: keyed Apply refuses controllers without
 durable request support. Request IDs are metadata, not credentials; prefer UUIDs.
+
+Inspect controller runtime actions and retrieve application logs:
+
+```bash
+openctl ctl action list Jellyfin --api-version apps.openctl.io/v1
+openctl ctl action run Jellyfin media logs --api-version apps.openctl.io/v1 --download ./media.log
+```
+
+Action listings include parameter types, requirements and defaults. Invocation
+requires editor/admin access and an explicit API version. Non-sensitive arguments
+use repeatable `--param key=value`; use `--params-file PATH` (or `-` for stdin)
+for a single JSON object of string values, particularly credentials. Duplicate
+keys and non-string values are rejected without echoing them.
+
+Downloads go only to an explicitly selected, new `0600` file; existing files and
+symlinks are refused before invocation. Server-provided filenames are not paths.
+`--download -` explicitly streams raw content, which can include credentials.
+Returned payloads are never printed implicitly, including in JSON/YAML: omitting
+`--download` can fail output handling **after the action request succeeded**.
+Links are displayed, never opened automatically, and can also be sensitive.
+
+Runtime actions do not change desired intent or use durable Apply request IDs.
+They are never automatically retried. A successful request may only have queued
+a provider task: inspect task completion and independent readiness. After a
+timeout, disconnection or output failure, inspect before deciding to repeat.
 
 Delete a resource:
 
@@ -892,6 +931,10 @@ Past flags identify the original request, not renewed approval. Resolved secrets
 cached readiness and checked consent are not restored. Earlier successful steps
 are reverified before dependent work proceeds. Closing the tab may lose this
 browser record; leaving or discarding it does not cancel work or delete resources.
+
+Previews show label/annotation changes separately from spec edits and live drift.
+Desired YAML excludes controller-owned ownership references; ownership remains a
+separate edit guard, not a field the form can overwrite.
 
 ## Drift And Reconciliation
 

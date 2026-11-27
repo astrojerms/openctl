@@ -147,6 +147,42 @@ first-class field. On each successful delete it SHALL remove that row.
 - **THEN** the raw manifest (markers intact) is upserted keyed by
   `(apiVersion, kind, name)` and its `source` column records who applied it
 
+### Requirement: Per-resource previews distinguish all desired intent
+
+Read-only controller previews SHALL distinguish create, update and no-op and
+keep stored-spec edits, desired label/annotation changes and live drift separate.
+
+#### Scenario: Only desired metadata changes
+
+- **WHEN** labels or annotations are added, changed or cleared
+- **THEN** the preview reports update and metadata-relative differences, even
+  when the provider plan has no work; absent and empty maps are equivalent
+- **AND** the console and CLI show stored versus submitted values without
+  confusing them with desired versus live provider observation
+- **AND** desired YAML excludes observed ownership references without removing
+  the separate ownership edit guard
+
+#### Scenario: CLI preflight rejects invalid intent
+
+- **WHEN** `ctl preview` receives controller validation errors
+- **THEN** it emits diagnostics in the selected output format and exits nonzero
+  without Apply, operation admission, gate approval or an existence reservation
+
+### Requirement: Runtime inspection is explicit and protects downloads
+
+Controller-backed CLI runtime actions SHALL remain distinct from desired-state
+Apply and SHALL NOT automatically retry uncertain requests or open returned URLs.
+
+#### Scenario: An action returns file content
+
+- **WHEN** an operator requests a download to a path
+- **THEN** the CLI reserves a new private file before invoking the action and
+  never uses a server-provided filename as the destination
+- **AND** an existing file or symlink prevents invocation; failed cleanup never
+  removes another writer's replacement
+- **AND** payloads are not printed without an explicit raw-stdout request;
+  output failure distinguishes a successful action request from task readiness
+
 ### Requirement: Continuous drift reconciliation
 
 The system SHALL periodically re-check every managed resource against its

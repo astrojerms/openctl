@@ -82,6 +82,24 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
   and controller restart; a schema-14 archive boots at schema 15 with its actual
   persisted identity. No live guest deployment, playback or public exposure.
 
+**2026-11-27 — native operator preflight and runtime inspection**
+
+- [x] `ctl preview` uses live controller validation and reports explicit intent,
+  metadata changes, live drift, child actions and unapproved gates; invalid
+  previews retain machine-readable diagnostics and exit nonzero.
+- [x] `ctl action list/run` exposes typed runtime actions and protected downloads,
+  with explicit provider selection, secret-safe parameter files, no implicit
+  payload printing, no overwrite-before-invoke and no automatic retry.
+- [x] Metadata-only edits/clears are updates in controller, CLI and console
+  previews; desired YAML omits observed ownership references while edit guards
+  remain intact. Failed export cleanup cannot remove another writer's file.
+- Verification: focused CLI/controller Go checks, frontend suite and targeted
+  ownership regressions, clean Svelte diagnostics and successful UI build.
+  Actual binaries exercised YAML/CUE preflight, validation failure, action
+  discovery and private/raw download safety against an authenticated isolated
+  controller. Actual browser form edits showed metadata-only review with no
+  Apply/Delete or persisted intent changes. No live homelab mutation.
+
 The next product acceptance gate is the complete operator journey on real
 hardware, including recovery, media playback and any approved public endpoint.
 See [direction](docs/direction.md). Provider breadth is downstream of that gate.

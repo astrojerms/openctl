@@ -1,15 +1,12 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
-	"gopkg.in/yaml.v3"
 
 	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 )
@@ -44,22 +41,7 @@ func newCtlDiscoverCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("controller discovery: %w", err)
 			}
-			if outputFormat == "json" || outputFormat == "yaml" {
-				data, err := (protojson.MarshalOptions{Indent: "  "}).Marshal(result)
-				if err != nil {
-					return err
-				}
-				if outputFormat == "yaml" {
-					var value any
-					if err := json.Unmarshal(data, &value); err != nil {
-						return err
-					}
-					data, err = yaml.Marshal(value)
-					if err != nil {
-						return err
-					}
-				}
-				_, err = fmt.Fprintln(cmd.OutOrStdout(), string(data))
+			if handled, err := printControllerStructured(cmd.OutOrStdout(), result); handled {
 				return err
 			}
 			out := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)

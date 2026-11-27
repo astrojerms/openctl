@@ -360,7 +360,8 @@ message DryRunApplyRequest {
 message DryRunApplyResponse {
   // Spec-level differences between the submitted manifest and the
   // currently-applied manifest, or empty when this would be the first
-  // apply. Same shape as Resource.drift.
+  // apply. desired is the stored value; observed is the submitted value.
+  // This orientation differs from live_drift (desired versus live observation).
   repeated DriftEntry diff = 1;
   // Per-child actions for composite resources (e.g. Cluster → VMs).
   // Empty for atomics. Verbs: "create" | "destroy" | "respec" | "no-op".
@@ -386,6 +387,13 @@ message DryRunApplyResponse {
   // Submitted intent versus live provider observation, separate from edits
   // against the last stored manifest.
   repeated DriftEntry live_drift = 8;
+  // Desired labels/annotations replaced by Apply, separate from spec and
+  // live drift. Paths are relative to metadata (e.g. "labels.env").
+  // desired is the stored value; observed is the submitted value.
+  // Missing and empty maps are equivalent; removed keys remain visible.
+  // Excludes the lookup name and controller-owned metadata such as source.
+  // Empty on first apply.
+  repeated DriftEntry metadata_diff = 9;
 }
 
 // FieldError attributes a single schema violation to a dotted path

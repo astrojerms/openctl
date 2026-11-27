@@ -128,14 +128,21 @@ VM CPU/memory fields into Cluster fields by analogy.
 
 ## 4. Validate and preview before mutation
 
-1. For CUE, `openctl --config "$CONFIG" validate -f "$MANIFEST"` checks concrete
-   CUE evaluation and any imported constraints. This is **not** a generic YAML
-   validator or proof of live-controller/provider compatibility.
-2. Validate the concrete resource through `/v1/schemas:validate`, then preview
-   it through `/v1/resources:dryRunApply` using the reference. Use the same
-   desired intent you will apply; never send a YAML string as the JSON resource.
-   Resolve validation errors before proceeding. If preflight cannot be reached,
-   fix access rather than substituting a real Apply as a validation probe.
+1. For concrete CUE, `openctl --config "$CONFIG" validate -f "$MANIFEST"` checks
+   evaluation and imported constraints, not generic YAML or provider access.
+   If values files are required, use native preview below with those values;
+   do not treat an unbound template as a concrete deployment.
+2. Run live controller validation/preview on the exact file you will apply:
+
+   ```bash
+   openctl --config "$CONFIG" ctl preview -f "$MANIFEST" -o json
+   ```
+
+   CUE values use the same repeatable `--values FILE` options as Apply. Invalid
+   previews retain structured diagnostics and exit nonzero. Resolve errors before
+   proceeding; if preflight cannot be reached, fix access rather than substituting
+   Apply as a probe. The API reference remains useful for schema discovery and
+   direct API clients; never send a YAML string as the JSON resource.
 3. For multiple resources, run the offline graph planner:
 
    ```bash
@@ -147,11 +154,12 @@ VM CPU/memory fields into Cluster fields by analogy.
    Review missing external `$ref` targets and use `explain`/Get to check outputs.
    Stage missing dependencies in graph order; rerun dependent preflight after
    outputs become available. Do not invent temporary `$ref` values.
-4. Review `validationErrors`, `operation`, `diff`, `liveDrift`, `children`, and
-   `requiredGates`. `operation` distinguishes create/update/no-op, `diff` shows
-   edits to stored intent, and `liveDrift` shows observable provider differences.
-   A first apply is `create` even with an empty old-spec diff. A preview cannot
-   reserve existence or authorize overwriting an unmanaged VM; inspect discovery.
+4. Review `validationErrors`, `operation`, `diff`, `metadataDiff`, `liveDrift`,
+   `children` and `requiredGates`. `operation` distinguishes create/update/no-op;
+   `diff` and `metadataDiff` show stored-to-submitted intent edits, while
+   `liveDrift` compares desired intent with actual observation. Metadata-only
+   changes are updates; empty old-spec diffs do not imply no-op on first creation.
+   Preview never reserves existence or authorizes unmanaged overwrite or gates.
 5. Summarize the target, desired change, storage/network impact, existing data,
    and any required destructive approval. Proceed with already-authorized
    non-destructive work; stop for newly-discovered destructive consequences.
@@ -202,6 +210,21 @@ success; neither a saved browser review nor past consent authorizes new work.
   ```bash
   openctl --config "$CONFIG" ctl get "$KIND" "$NAME" --api-version "$API_VERSION" -o json
   ```
+
+- For controller-side runtime inspection, list actions before selecting one:
+
+  ```bash
+  openctl --config "$CONFIG" ctl action list "$KIND" --api-version "$API_VERSION"
+  openctl --config "$CONFIG" ctl action run "$KIND" "$NAME" logs --api-version "$API_VERSION" --download "$NEW_PRIVATE_LOG_FILE"
+  ```
+
+  Invoke only actions actually listed. Runtime requests require editor/admin,
+  do not change desired state and are not durable Apply operations. Never
+  automatically retry them or infer readiness from request success. Downloads
+  require an explicit new path (0600, no overwrite); server filenames are ignored.
+  Use `--params-file` for string-valued JSON parameters containing credentials,
+  not argv. `--download -` and returned links may expose credentials. If output
+  handling fails after invocation, inspect before deciding whether to repeat.
 
 - Check the actual provider identity and intended CPU/memory/storage/network,
   not only the manifest or operation message. For Proxmox updates, compare the

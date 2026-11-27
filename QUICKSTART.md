@@ -115,9 +115,13 @@ dedicated Ubuntu 24.04 NVIDIA VM, supply NAS and secret references, review each
 resource, and inspect independent health. Prepared reviews survive reload in the
 same tab; explicitly resume to observe accepted work, then refresh previews and
 confirmations before any new attempt. Its GPU driver reboot is explicit; there
-is no automatic VM recreation. CLI Apply prints a request ID before submission;
+is no automatic VM recreation. Use `openctl ctl preview -f resource.yaml` before
+CLI Apply; previews distinguish metadata edits from spec edits and live drift.
+Apply prints a request ID before submission;
 `openctl ctl op get --request-id ID` recovers a lost acknowledgement without
-reapplying. See [managed Jellyfin](README.md#managed-jellyfin-on-proxmox).
+reapplying. For CLI application logs and typed runtime actions, see
+[controller commands](README.md#common-commands). See also
+[managed Jellyfin](README.md#managed-jellyfin-on-proxmox).
 
 ## Configure
 

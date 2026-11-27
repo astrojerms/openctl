@@ -266,7 +266,11 @@
       {#if preview}
         <p><strong>{preview.operation}</strong> — {preview.summary}</p>
         {#if preview.validationErrors?.length}<ul class="error">{#each preview.validationErrors as problem}<li>{problem}</li>{/each}</ul>{/if}
-        {#if preview.diff?.length}<ul>{#each preview.diff as change}<li><code>{change.path}</code>: {change.observed} → {change.desired}</li>{/each}</ul>{/if}
+        {#if preview.diff?.length}<ul>{#each preview.diff as change}<li><code>{change.path}</code>: stored {change.desired} → submitted {change.observed}</li>{/each}</ul>{/if}
+        {#if preview.metadataDiff?.length}
+          <h4>Desired metadata changes</h4>
+          <ul>{#each preview.metadataDiff as change}<li><code>{change.path}</code>: stored {change.desired} → submitted {change.observed}</li>{/each}</ul>
+        {/if}
         {#each preview.requiredGates ?? [] as gate}<label class="check"><input type="checkbox" bind:checked={checkedGates[gate]} disabled={busy} /> Explicitly allow {gate}</label>{/each}
         <label class="check"><input type="checkbox" bind:checked={dedicated} disabled={busy} /> I confirm this dedicated guest and authorize the reviewed guest configuration.</label>
         <label class="check"><input type="checkbox" bind:checked={trustedKey} disabled={busy} /> I verified this guest’s SSH host key in the controller’s known_hosts.</label>

@@ -361,9 +361,9 @@ func attachRelationships(reg *providers.Registry, out *apiv1.Resource) {
 // DryRunApply previews what an Apply would do without enqueuing an op or
 // touching any provider state. Runs the same schema validation the Apply
 // path runs (errors surface in the response, NOT as an RPC error — the
-// editor wants to see them inline), computes spec-level drift against
-// the currently-applied manifest, and asks any DryRunner-capable provider
-// for the per-child action list + required-gate set.
+// editor wants to see them inline), computes desired spec and metadata edits
+// against the currently-applied manifest, and asks any DryRunner-capable
+// provider for the per-child action list + required-gate set.
 func (h *resourceHandler) DryRunApply(ctx context.Context, req *apiv1.DryRunApplyRequest) (*apiv1.DryRunApplyResponse, error) {
 	if err := authorize(ctx, auth.RoleViewer); err != nil {
 		return nil, err
@@ -437,6 +437,7 @@ func (h *resourceHandler) DryRunApply(ctx context.Context, req *apiv1.DryRunAppl
 	}
 	if saved != nil {
 		resp.Diff = computeDrift(saved.Spec, submittedSpec)
+		resp.MetadataDiff = computeMetadataDiff(saved.Metadata, manifest.Metadata)
 		resp.Operation = "no-op"
 		observed, getErr := p.Get(ctx, manifest.Kind, manifest.Metadata.Name)
 		if getErr != nil && !isNotFound(getErr) {
@@ -449,13 +450,13 @@ func (h *resourceHandler) DryRunApply(ctx context.Context, req *apiv1.DryRunAppl
 			desiredSpec, observedSpec := providers.DriftSpecs(p, manifest.Kind, manifest.Spec, observed.Spec)
 			resp.LiveDrift = computeDrift(desiredSpec, observedSpec)
 		}
-		if len(resp.Diff) != 0 || len(resp.LiveDrift) != 0 {
+		if len(resp.Diff) != 0 || len(resp.MetadataDiff) != 0 || len(resp.LiveDrift) != 0 {
 			resp.Operation = "update"
 		}
 	}
 
 	// Provider-side plan for composites. Atomic providers don't implement
-	// DryRunner; the spec-diff above is all the editor gets.
+	// DryRunner; they receive desired-intent diffs and live drift only.
 	if dr, ok := p.(providers.DryRunner); ok {
 		plan, derr := dr.DryRun(ctx, manifest)
 		if derr != nil {
@@ -482,11 +483,60 @@ func (h *resourceHandler) DryRunApply(ctx context.Context, req *apiv1.DryRunAppl
 		}
 	}
 
-	if resp.Summary == "" {
+	if len(resp.MetadataDiff) > 0 {
+		metadataSummary := fmt.Sprintf("would update %d metadata field(s)", len(resp.MetadataDiff))
+		if resp.Summary != "" {
+			// A composite's summary only describes its provider plan, not
+			// metadata that Apply persists even on a provider cache hit.
+			resp.Summary = metadataSummary + "; provider plan: " + resp.Summary
+		} else {
+			resp.Summary = metadataSummary
+			if len(resp.Diff) > 0 || len(resp.LiveDrift) > 0 {
+				resp.Summary += "; " + summarizeDryRun(resp)
+			}
+		}
+	} else if resp.Summary == "" {
 		resp.Summary = summarizeDryRun(resp)
 	}
 
 	return resp, nil
+}
+
+// computeMetadataDiff compares whole desired maps: Apply replaces rather than
+// merges labels and annotations, so both additions and removals are changes.
+// Only user-controlled metadata is considered; name is the lookup identity.
+func computeMetadataDiff(stored, submitted protocol.ResourceMetadata) []*apiv1.DriftEntry {
+	var out []*apiv1.DriftEntry
+	for _, field := range [...]struct {
+		path              string
+		stored, submitted map[string]string
+	}{
+		{"labels", stored.Labels, submitted.Labels},
+		{"annotations", stored.Annotations, submitted.Annotations},
+	} {
+		for key, before := range field.stored {
+			after, present := field.submitted[key]
+			if present && before == after {
+				continue
+			}
+			afterValue := renderValue(nil)
+			if present {
+				afterValue = after
+			}
+			out = append(out, &apiv1.DriftEntry{
+				Path: field.path + "." + key, Desired: before, Observed: afterValue,
+			})
+		}
+		for key, after := range field.submitted {
+			if _, present := field.stored[key]; !present {
+				out = append(out, &apiv1.DriftEntry{
+					Path: field.path + "." + key, Desired: renderValue(nil), Observed: after,
+				})
+			}
+		}
+	}
+	slices.SortFunc(out, func(a, b *apiv1.DriftEntry) int { return strings.Compare(a.Path, b.Path) })
+	return out
 }
 
 // ListActions returns the runtime action names the responsible provider

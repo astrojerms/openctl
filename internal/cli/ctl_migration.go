@@ -204,39 +204,23 @@ func loadMigrationAdoption(path string) (*apiv1.AdoptResourceRequest, error) {
 	return &apiv1.AdoptResourceRequest{Resource: wire}, nil
 }
 
-func writeMigrationExport(path string, export func() (*apiv1.MigrationBundle, error), completed func() error) (err error) {
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if err != nil {
-		return fmt.Errorf("cannot create export file: %w", err)
-	}
-	committed := false
-	defer func() {
-		_ = file.Close()
-		if !committed {
-			_ = os.Remove(path)
+func writeMigrationExport(path string, export func() (*apiv1.MigrationBundle, error), completed func() error) error {
+	return writePrivateExport(path, func(out io.Writer) error {
+		bundle, err := export()
+		if err != nil {
+			return err
 		}
-	}()
-	bundle, err := export()
-	if err != nil {
+		if err := validateMigrationBundle(bundle); err != nil {
+			return err
+		}
+		data, err := (protojson.MarshalOptions{Indent: "  "}).Marshal(bundle)
+		if err != nil {
+			return fmt.Errorf("cannot encode migration bundle")
+		}
+		if _, err := out.Write(data); err != nil {
+			return fmt.Errorf("cannot write export file: %w", err)
+		}
+		_, err = io.WriteString(out, "\n")
 		return err
-	}
-	if err := validateMigrationBundle(bundle); err != nil {
-		return err
-	}
-	data, err := (protojson.MarshalOptions{Indent: "  "}).Marshal(bundle)
-	if err != nil {
-		return fmt.Errorf("cannot encode migration bundle")
-	}
-	data = append(data, '\n')
-	if _, err := file.Write(data); err != nil {
-		return fmt.Errorf("cannot write export file: %w", err)
-	}
-	if err := file.Sync(); err != nil {
-		return fmt.Errorf("cannot sync export file: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("cannot close export file: %w", err)
-	}
-	committed = true
-	return completed()
+	}, completed)
 }

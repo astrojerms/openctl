@@ -31,6 +31,8 @@ the persistent controller. In Phase 6 these graduate to top-level commands
 and the exec-plugin paths are removed.`,
 	}
 	cmd.AddCommand(newCtlApplyCommand())
+	cmd.AddCommand(newCtlPreviewCommand())
+	cmd.AddCommand(newCtlActionCommand())
 	cmd.AddCommand(newCtlGetCommand())
 	cmd.AddCommand(newCtlDeleteCommand())
 	cmd.AddCommand(newCtlOpCommand())

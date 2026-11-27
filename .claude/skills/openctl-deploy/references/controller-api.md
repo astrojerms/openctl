@@ -1,9 +1,13 @@
 # Controller API discovery and preflight
 
-Use these read-only HTTP endpoints (or the equivalent SchemaService and
-ResourceService RPCs). The CLI currently has no `schema` subcommand and no
-`ctl apply --dry-run` flag. Do not invent them or confuse offline `plan` with
-provider preview.
+For ordinary file-based preflight, use `openctl ctl preview -f MANIFEST -o json`
+(with the same `--values` files as Apply for CUE). It validates through the
+controller and exits nonzero on validation errors while retaining structured
+diagnostics. Use matching CLI/controller versions.
+
+Use these read-only HTTP endpoints (or equivalent SchemaService/ResourceService
+RPCs) for schema discovery or direct API clients. There is no `schema` subcommand
+or `ctl apply --dry-run` flag; offline `plan` is not provider preview.
 
 ## Connect to the correct gateway
 
@@ -103,16 +107,18 @@ The example client deliberately stops on errors and has no Apply/Delete method.
 | `GET /v1/schemas` | None | `schemas[]`: API version, kind, provider, advanced/owner hints |
 | `POST /v1/schemas:get` | `{"apiVersion":"proxmox.openctl.io/v1","kind":"VirtualMachine"}` | `cueSource`: current supported fields and constraints |
 | `POST /v1/schemas:validate` | `{"resource": RESOURCE_OBJECT}` | Empty/absent `errors`; HTTP 200 alone is not validation success |
-| `POST /v1/resources:dryRunApply` | `{"resource": RESOURCE_OBJECT}` | Empty/absent `validationErrors`, then `operation`, `diff`, `liveDrift`, `children`, `requiredGates`, `summary` |
+| `POST /v1/resources:dryRunApply` | `{"resource": RESOURCE_OBJECT}` | Empty/absent `validationErrors`, then `operation`, `diff`, `metadataDiff`, `liveDrift`, `children`, `requiredGates`, `summary` |
 
 - Proto JSON fields use lower camel case (`validationErrors`, `requiredGates`).
 - Missing reference outputs can prevent preview. Create only approved upstream
   dependencies first, verify their outputs, then preview the dependent resource.
 - `operation` explicitly distinguishes `create`, `update`, and `no-op`.
-  `diff` compares submitted intent with stored intent; `liveDrift` compares
-  observable declared fields with the live provider. A first atomic apply
-  is `create` even without an old spec to diff. A preview is not an existence
-  reservation or permission to overwrite an unmanaged resource.
+  `diff` and `metadataDiff` compare stored intent (`desired`) with submitted
+  intent (`observed`); metadata paths are relative to metadata, e.g. `labels.env`.
+  `liveDrift` instead compares desired declared values (`desired`) with actual
+  provider observation (`observed`). A first atomic Apply is `create` even without
+  an old spec to diff. Labels/annotations are replaced, not merged, so clearing
+  them is an update. Preview is not an existence reservation or mutation approval.
 - Preview cannot guarantee future API access, quotas, capacity, cloud-init
   success, or absence of concurrent changes. Verify those independently.
 - Review nonempty `requiredGates`; never translate them into automatic destructive
@@ -147,7 +153,8 @@ selected endpoint. Guest SSH keys, when needed, belong under `spec.cloudInit`.
 JSON is a YAML subset. To avoid a YAML-parser dependency, the **same concrete
 JSON object** can be saved with a `.yaml` filename: use that file as
 `OPENCTL_RESOURCE_JSON` during preflight and as `ctl apply -f` input afterward.
-For ordinary YAML or CUE, produce a faithful concrete JSON representation for
-preflight using available parsing/evaluation tools; do not hand-change fields
-between validation, preview, and apply. CUE imports/values must be resolved, not
-sent as CUE source in a JSON string. If the intent changes, repeat preflight.
+Ordinary YAML and CUE can be previewed directly with `ctl preview -f`; hand
+conversion is unnecessary. Direct API clients must send a faithful concrete
+resource JSON object with imports/values resolved, not CUE source in a JSON
+string. Do not change intent between validation, preview and Apply. If it changes,
+repeat preflight.

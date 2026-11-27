@@ -844,6 +844,24 @@
           </table>
         {/if}
 
+        {#if (plan.metadataDiff?.length ?? 0) > 0}
+          <h4>Desired metadata changes</h4>
+          <table class="diff">
+            <thead>
+              <tr><th>Metadata path</th><th>Stored intent</th><th>Submitted intent</th></tr>
+            </thead>
+            <tbody>
+              {#each plan.metadataDiff ?? [] as d}
+                <tr>
+                  <td class="mono">{d.path}</td>
+                  <td class="mono">{d.desired}</td>
+                  <td class="mono">{d.observed}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        {/if}
+
         {#if (plan.liveDrift?.length ?? 0) > 0}
           <h4>Live infrastructure drift</h4>
           <table class="diff">
