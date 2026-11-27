@@ -347,7 +347,12 @@ do not forward raw provider errors, response bodies, URLs or certificate fields.
   and disks; running-VM live memory can lag configuration until reboot.
 - Check requested readiness separately: native Proxmox publishes `status.ip`
   only for a unique usable IPv4 on guest-agent NICs matching configured MACs.
-  Missing MAC evidence or multiple matching addresses leave the output absent;
+  Missing MAC evidence or multiple matching addresses leave the output absent.
+  Inspect `status.ipObservation.state`, `code` and `message` on a fresh named
+  Get, or **Guest address** in VM details, to distinguish power/NIC, agent read,
+  response, missing-address and ambiguity blockers. Messages are static repair
+  guidance, not raw provider errors. List does not inspect guest agents.
+  Missing, malformed or unfamiliar diagnostics are unknown, never readiness;
   never fall back to a Docker bridge or first interface. Inspect networking or
   explicitly declare the application's `spec.target.host` for a multi-address
   guest. Independently verify controller reachability, SSH host keys/service

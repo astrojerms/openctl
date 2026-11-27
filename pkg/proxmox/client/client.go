@@ -1154,7 +1154,7 @@ type AgentIPAddress struct {
 // matches the authoritative VM config. Missing or ambiguous evidence is an error.
 func (c *Client) GetVMIPAddress(ctx context.Context, node string, vmid int, config *VMConfig) (string, error) {
 	if config == nil {
-		return "", errors.New("VM configuration is required for guest address selection")
+		return "", guestIPFailure("vm_nic_unavailable", nil)
 	}
 	configuredMACs := make(map[[6]byte]struct{})
 	for key, value := range config.Raw {
@@ -1174,12 +1174,12 @@ func (c *Client) GetVMIPAddress(ctx context.Context, node string, vmid int, conf
 		}
 	}
 	if len(configuredMACs) == 0 {
-		return "", errors.New("no configured VM NIC MAC addresses available")
+		return "", guestIPFailure("vm_nic_unavailable", nil)
 	}
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/agent/network-get-interfaces", node, vmid)
 	resp, err := c.get(ctx, path)
 	if err != nil {
-		return "", fmt.Errorf("failed to get network interfaces from agent: %w", err)
+		return "", guestIPFailure("guest_agent_unavailable", err)
 	}
 
 	var result struct {
@@ -1188,7 +1188,7 @@ func (c *Client) GetVMIPAddress(ctx context.Context, node string, vmid int, conf
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(resp, &result); err != nil {
-		return "", fmt.Errorf("failed to parse agent response: %w", err)
+		return "", guestIPFailure("guest_agent_invalid_response", err)
 	}
 
 	var candidate netip.Addr
@@ -1209,13 +1209,13 @@ func (c *Client) GetVMIPAddress(ctx context.Context, node string, vmid int, conf
 				continue
 			}
 			if candidate.IsValid() && candidate != ip {
-				return "", errors.New("multiple usable IPv4 addresses on configured VM NICs; select an explicit target host")
+				return "", guestIPFailure("guest_ip_ambiguous", nil)
 			}
 			candidate = ip
 		}
 	}
 	if !candidate.IsValid() {
-		return "", errors.New("no usable IPv4 address on a configured VM NIC")
+		return "", guestIPFailure("guest_ip_unavailable", nil)
 	}
 	return candidate.String(), nil
 }

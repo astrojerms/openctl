@@ -556,6 +556,28 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
   All 12 Proxmox requests were GET; zero durable operations or saved tracking
   records. Simulated guest-agent responses only; no live guest/SSH acceptance.
 
+### Actionable VM address diagnostics (2026-11-27)
+
+- [x] Fresh native/legacy named VM reads expose `status.ipObservation` with
+  available/unavailable state, stable reason code and static safe repair guidance.
+  Stopped VMs, unavailable NIC evidence, agent read/decode failures, no usable IP
+  and ambiguity are distinguishable without exposing upstream bodies or causes.
+  Missing addresses remain absent; List adds no agent probes or observation claims.
+- [x] VM details render address blockers and explicit reachability/SSH/service
+  caveats. Missing, malformed, unfamiliar and stale evidence stays unknown.
+  Observation failure, navigation and sign-out invalidate old address authority;
+  recovery requires a fresh Get, never automatic network repair.
+- Verification: affected Go client/resources/handler/native provider packages
+  passed; the separate plugin compute package compiled. All 52 detail tests,
+  warning-free frontend typecheck and production build passed. The actual
+  authenticated console and CLI used an isolated SQLite/TLS controller/native
+  provider and simulated verified-TLS Proxmox guest-agent responses. Ambiguity
+  and a poisoned agent failure produced distinct safe guidance; provider outage
+  cleared stale evidence and a fresh unique-address read restored only address
+  evidence. All Proxmox requests were GET; no Apply/Delete/runtime request or
+  durable operation, and the single seeded fixture intent count was unchanged.
+  No live guest networking, SSH or playback acceptance.
+
 The next product acceptance gate is the complete operator journey on real
 hardware, including recovery, media playback and any approved public endpoint.
 See [direction](docs/direction.md). Provider breadth is downstream of that gate.

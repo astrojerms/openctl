@@ -1211,6 +1211,16 @@ dependent references block instead of guessing. Inspect guest networking, or
 declare the application's `spec.target.host` explicitly for an intentionally
 multi-address VM. Verify controller reachability and SSH host keys independently.
 
+Named VM reads also return `status.ipObservation` with `state` (`available` or
+`unavailable`), a reason `code` and safe repair `message`. **Guest address** in VM
+details distinguishes a stopped VM, missing configured NIC evidence, unavailable
+or invalid guest-agent responses, no usable address and address ambiguity.
+Unavailable addresses remain absent from `status.ip`; raw upstream errors are
+not diagnostic messages. List does not probe guest agents or publish this evidence.
+The console clears stale evidence during observation failures and treats missing,
+malformed or unfamiliar evidence as unknown. An observed address is not proof of
+controller reachability, SSH trust or application readiness.
+
 Blocked guided previews retain schema, field and dependency diagnostics inline,
 including a failure discovered by the final preview immediately before Apply.
 Field paths take precedence over duplicate plain-text messages; unrelated

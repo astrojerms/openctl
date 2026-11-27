@@ -63,6 +63,9 @@
   let childController: AbortController | null = null;
   let childStates: Record<string, ChildState | null> = {};
   const unsubscribeDeleteAuth = auth.subscribe((state) => {
+    if (watching && state.kind === 'signed-out') {
+      inspection.invalidate(new Error('Sign in and refresh to inspect the resource again'));
+    }
     if (watching) void deletion.open(
       { apiVersion, kind, name: resourceName },
       state.kind === 'signed-in' ? state.me : null,
@@ -220,6 +223,36 @@
 
   $: displayState = data ? statusBadge(data.resource) : null;
   $: appChecks = apiVersion === 'apps.openctl.io/v1' ? applicationChecks(data?.resource.status) : [];
+  const guestAddressFailures = new Set([
+    'vm_not_running', 'vm_nic_unavailable', 'guest_agent_unavailable',
+    'guest_agent_invalid_response', 'guest_ip_unavailable', 'guest_ip_ambiguous',
+  ]);
+
+  function guestAddressObservation(status: Resource['status']) {
+    const diagnostic = status?.ipObservation;
+    const unknown = { state: 'unknown', code: '', message: '', ip: '' };
+    if (!diagnostic || typeof diagnostic !== 'object' || Array.isArray(diagnostic)) return unknown;
+    const { state, code, message } = diagnostic as Record<string, unknown>;
+    const safeCode = typeof code === 'string' && /^[a-z][a-z0-9_]{0,79}$/.test(code) ? code : '';
+    if (!safeCode || typeof message !== 'string' || !message.trim()) return unknown;
+    if (state === 'available' && safeCode === 'guest_ip_available'
+      && status?.state === 'running' && typeof status.ip === 'string' && status.ip.trim()) {
+      return { state, code: safeCode, message, ip: status.ip.trim() };
+    }
+    if (state === 'unavailable' && guestAddressFailures.has(safeCode)) {
+      return { state, code: safeCode, message, ip: '' };
+    }
+    return { ...unknown, code: safeCode };
+  }
+
+  $: guestAddress = fresh && $auth.kind === 'signed-in'
+    ? guestAddressObservation(data?.resource.status) : null;
+  // Address evidence has one conservative presentation, not a conflicting raw
+  // status.ip fallback from older controllers.
+  $: observedStatus = apiVersion === 'proxmox.openctl.io/v1' && kind === 'VirtualMachine'
+    ? Object.fromEntries(Object.entries(data?.resource.status ?? {})
+      .filter(([key]) => key !== 'ip' && key !== 'ipObservation'))
+    : data?.resource.status;
   $: standaloneVM = apiVersion === 'proxmox.openctl.io/v1' && kind === 'VirtualMachine'
     && !!data?.applied && !data.resource.metadata.ownerRefs?.length && !data.resource.children?.length;
 
@@ -674,6 +707,26 @@
       {/if}
     </article>
 
+    {#if apiVersion === 'proxmox.openctl.io/v1' && kind === 'VirtualMachine'}
+      <article class="card" aria-label="Guest address">
+        <div class="card-head">
+          <h3>Guest address</h3>
+          <span class="state state-unknown">{guestAddress?.state === 'available'
+            ? 'Address observed' : guestAddress?.state === 'unavailable'
+              ? 'Address unavailable' : 'Address observation unknown'}</span>
+        </div>
+        {#if guestAddress?.state === 'available'}
+          <p>Observed address: <code>{guestAddress.ip}</code></p>
+        {:else if guestAddress?.state === 'unavailable'}
+          <p><code>{guestAddress.code}</code> — {guestAddress.message}</p>
+        {:else}
+          {#if guestAddress?.code}<p>Reason code: <code>{guestAddress.code}</code></p>{/if}
+          <p class="muted">No current guest address evidence. Inspect VM power, configured networking and guest-agent support, then retry the provider observation.</p>
+        {/if}
+        <p class="muted small">Reachability unverified. An observed address does not prove SSH access or service readiness. IP-dependent application setup needs address evidence and separate access checks.</p>
+      </article>
+    {/if}
+
     {#if saved}
       <article class="card">
         <div class="card-head">
@@ -819,7 +872,7 @@
 
       <article class="card">
         <h3>Observed state</h3>
-        <pre>{pretty(data.resource.status)}</pre>
+        <pre>{pretty(observedStatus)}</pre>
       </article>
     </div>
 

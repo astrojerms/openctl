@@ -298,6 +298,144 @@ describe('saved-only detail inspection', () => {
   });
 });
 
+describe('guest address observation', () => {
+  const available = { state: 'available', code: 'guest_ip_available', message: 'A unique guest address was observed.' };
+  const unavailable = { state: 'unavailable', code: 'guest_agent_unavailable', message: 'Inspect guest-agent installation and Proxmox guest-agent support.' };
+  const ip = '192.0.2.42';
+
+  function withStatus(status: Record<string, unknown>): GetResourceResponse {
+    return { ...observed, resource: { ...observed.resource, status } };
+  }
+
+  function addressCard() {
+    return target.querySelector<HTMLElement>('article[aria-label="Guest address"]');
+  }
+
+  it('shows fresh address evidence without implying reachability or performing mutations', async () => {
+    const live = vi.spyOn(resources, 'get').mockResolvedValue(withStatus({ state: 'running', ip, ipObservation: available }));
+    const apply = vi.spyOn(resources, 'apply');
+    const invoke = vi.spyOn(resources, 'invokeAction');
+    const remove = vi.spyOn(resources, 'delete');
+    component = mount(Detail, { target, props });
+    await settle();
+    expect(addressCard()?.textContent).toContain('Address observed');
+    expect(addressCard()?.textContent).toContain(ip);
+    expect(addressCard()?.textContent).toContain('Reachability unverified');
+    expect(addressCard()?.textContent).toContain('does not prove SSH access or service readiness');
+    expect(addressCard()?.textContent).not.toMatch(/Ready|healthy/);
+    expect(live).toHaveBeenCalledTimes(1);
+    expect(apply).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('shows the safe blocker and repair guidance, not a contradictory retained address', async () => {
+    vi.spyOn(resources, 'get').mockResolvedValue(withStatus({ state: 'running', ip, ipObservation: unavailable }));
+    component = mount(Detail, { target, props });
+    await settle();
+    expect(addressCard()?.textContent).toContain('Address unavailable');
+    expect(addressCard()?.textContent).toContain(unavailable.code);
+    expect(addressCard()?.textContent).toContain(unavailable.message);
+    expect(target.textContent).not.toContain(ip);
+  });
+
+  it.each([
+    { state: 'running', ip },
+    { state: 'running', ip, ipObservation: null },
+    { state: 'running', ip, ipObservation: [] },
+    { state: 'running', ip, ipObservation: 'available' },
+    { state: 'running', ip, ipObservation: { ...available, message: null } },
+    { state: 'running', ip, ipObservation: { ...available, code: undefined } },
+    { state: 'running', ip, ipObservation: { ...available, state: 'future-state' } },
+    { state: 'running', ip, ipObservation: { ...available, code: 'future_code' } },
+    { state: 'running', ip, ipObservation: { ...unavailable, code: 'future_code' } },
+    { state: 'stopped', ip, ipObservation: available },
+    { state: 'running', ip: '  ', ipObservation: available },
+    { state: 'running', ip: 42, ipObservation: available },
+  ])('keeps malformed, legacy or unknown evidence unknown: %j', async (status) => {
+    vi.spyOn(resources, 'get').mockResolvedValue(withStatus(status));
+    component = mount(Detail, { target, props });
+    await settle();
+    expect(addressCard()?.textContent).toContain('Address observation unknown');
+    expect(addressCard()?.textContent).toContain('Inspect VM power, configured networking and guest-agent support');
+    expect(target.textContent).not.toContain(ip);
+    expect(addressCard()?.textContent).not.toContain('Address observed');
+  });
+
+  it.each([
+    { apiVersion: 'apps.openctl.io/v1', kind: 'VirtualMachine' },
+    { apiVersion: props.apiVersion, kind: 'OtherResource' },
+  ])('excludes other resource types: %j', async (type) => {
+    vi.spyOn(resources, 'get').mockResolvedValue(withStatus({ state: 'running', ip, ipObservation: available }));
+    component = mount(Detail, { target, props: { ...props, ...type } });
+    await settle();
+    expect(addressCard()).toBeNull();
+  });
+
+  it.each([available, unavailable])('invalidates retained evidence on outage and recovers only after a fresh Get: %j', async (diagnostic) => {
+    const recovery = Promise.withResolvers<GetResourceResponse>();
+    vi.spyOn(resources, 'get')
+      .mockResolvedValueOnce(withStatus({ state: 'running', ip, ipObservation: diagnostic }))
+      .mockRejectedValueOnce(new Error('provider offline'))
+      .mockReturnValueOnce(recovery.promise);
+    component = mount(Detail, { target, props });
+    await settle();
+    expect(addressCard()?.textContent).toContain(diagnostic === available ? 'Address observed' : diagnostic.message);
+    notify();
+    await settle();
+    expect(addressCard()?.textContent).toContain('Address observation unknown');
+    expect(addressCard()?.textContent).not.toContain(ip);
+    expect(addressCard()?.textContent).not.toContain(diagnostic.message);
+    button('Retry observation').click();
+    await settle();
+    expect(addressCard()?.textContent).toContain('Address observation unknown');
+    recovery.resolve(withStatus({ state: 'running', ip: '192.0.2.43', ipObservation: available }));
+    await settle();
+    expect(addressCard()?.textContent).toContain('Address observed');
+    expect(addressCard()?.textContent).toContain('192.0.2.43');
+    expect(addressCard()?.textContent).not.toContain(ip);
+  });
+
+  it('does not display retained evidence after sign-out', async () => {
+    vi.spyOn(resources, 'get').mockResolvedValue(withStatus({ state: 'running', ip, ipObservation: available }));
+    component = mount(Detail, { target, props });
+    await settle();
+    expect(addressCard()?.textContent).toContain(ip);
+    auth.set({ kind: 'signed-out' });
+    await settle();
+    expect(target.textContent).not.toContain(ip);
+    expect(addressCard()?.textContent).not.toContain('Address observed');
+    auth.set({ kind: 'signed-in', me: { role: 'admin', userId: 'admin', sessionId: 'new-session' } });
+    await settle();
+    expect(addressCard()?.textContent).toContain('Address observation unknown');
+    expect(target.textContent).not.toContain(ip);
+  });
+
+  it('clears the previous route address while the next VM inspection is pending', async () => {
+    const next = Promise.withResolvers<GetResourceResponse>();
+    vi.spyOn(resources, 'get')
+      .mockResolvedValueOnce(withStatus({ state: 'running', ip, ipObservation: available }))
+      .mockReturnValueOnce(next.promise);
+    const route = writable({ ...props });
+    const current = fromStore(route);
+    component = mount(Detail, { target, props: {
+      get apiVersion() { return current.current.apiVersion; },
+      get kind() { return current.current.kind; },
+      get resourceName() { return current.current.resourceName; },
+    } });
+    await settle();
+    expect(addressCard()?.textContent).toContain(ip);
+    route.set({ ...props, resourceName: 'next-vm' });
+    await settle();
+    expect(addressCard()?.textContent).toContain('Address observation unknown');
+    expect(addressCard()?.textContent).not.toContain(ip);
+    next.resolve(withStatus({ state: 'running', ipObservation: unavailable }));
+    await settle();
+    expect(addressCard()?.textContent).toContain(unavailable.message);
+    expect(addressCard()?.textContent).not.toContain(ip);
+  });
+});
+
 describe('runtime action review', () => {
   function reviewForm() {
     const form = target.querySelector<HTMLFormElement>('form[aria-label="Review runtime action"]');

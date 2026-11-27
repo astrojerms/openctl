@@ -79,10 +79,11 @@ func observeVM(ctx context.Context, h *pmhandler.Handler, contextName string, vm
 		return nil, err
 	}
 	var ip string
+	var observationErr error
 	if vm.Status == "running" {
-		ip, _ = h.Client().GetVMIPAddress(ctx, vm.Node, vm.VMID, cfg)
+		ip, observationErr = h.Client().GetVMIPAddress(ctx, vm.Node, vm.VMID, cfg)
 	}
-	res := pmresources.VMToResourceWithIP(vm, cfg, ip)
+	res := pmresources.VMToResourceWithIP(vm, cfg, ip, observationErr)
 	res.Spec["context"] = contextName
 	return res, nil
 }

@@ -148,6 +148,10 @@ Guest IP discovery matches Proxmox-configured NIC MACs, not interface order.
 Missing or ambiguous matching IPv4 leaves `status.ip` unknown and blocks dependent
 references. For intentionally multi-address guests, explicitly declare the
 application's `spec.target.host`; verify reachability and SSH trust separately.
+Open the VM's **Guest address** section for a safe reason code and repair guidance.
+Fresh named CLI/API reads expose the same `status.ipObservation`; List does not
+probe agents. Address observation is not SSH/service readiness, and stale or
+missing evidence remains unknown.
 
 The wizard's staged ZIP contains one numbered YAML file per resource stage;
 the current stage can also be downloaded alone. Preview/apply files individually
