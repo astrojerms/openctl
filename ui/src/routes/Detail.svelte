@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { resources, ownership, UnauthorizedError, type GetResourceResponse, type Resource, type ResourceRef, type ActionSpec, type MigrationBundle } from '../lib/api';
-  import { auth, canMutate } from '../lib/auth';
+  import { canMutate } from '../lib/auth';
+  import { canEditDesired, canManageOwnership, desiredMutationHint } from '../lib/authority';
+  import { withoutRequestConsent } from '../lib/retry';
   import { applicationChecks, childHealth, type ChildState } from '../lib/detailState';
 
   // Shown on disabled mutation controls for a read-only (viewer) session.
@@ -33,7 +35,6 @@
   // populate this for composite resources (parent has children). Each
   // entry is one extra Get RPC at mount — fine for the homelab fanout
   // (a Cluster has ≤ ~10 children in practice).
-  $: isAdmin = $auth.kind === 'signed-in' && (!$auth.me.role || $auth.me.role === 'admin');
   let childStates: Record<string, ChildState | null> = {};
 
   function childKey(ref: ResourceRef): string {
@@ -170,7 +171,7 @@
   let released = false;
 
   async function exportBundle() {
-    if (!isAdmin || !standaloneVM || !secretAcknowledged || migrating) return;
+    if (!$canManageOwnership || !standaloneVM || !secretAcknowledged || migrating) return;
     migrating = true;
     migrationError = '';
     migrationMessage = '';
@@ -195,7 +196,7 @@
   }
 
   async function forgetVM() {
-    if (!isAdmin || !exportedBundle || !secretAcknowledged || migrating || activeOp) return;
+    if (!$canManageOwnership || !exportedBundle || !secretAcknowledged || migrating || activeOp) return;
     const typed = prompt(`Release controller tracking for ${resourceName}?\n\nThis is NOT Delete. The VM stays intact and its power state is unchanged. This controller stops managing it; destination adoption has not been proven. Keep the exported bundle safely saved.\n\nType the resource name to confirm:`);
     if (typed === null) return;
     if (typed !== resourceName) {
@@ -225,18 +226,18 @@
   let reconcileErr = '';
 
   async function doReconcile() {
-    if (reconciling || !data?.applied) return;
+    if (reconciling || !data?.applied || !$canEditDesired) return;
     reconciling = true;
     reconcileMsg = '';
     reconcileErr = '';
     try {
       const resp = await resources.apply({
-        resource: {
+        resource: withoutRequestConsent({
           apiVersion: data.applied.apiVersion,
           kind: data.applied.kind,
-          metadata: { name: data.applied.metadata?.name ?? resourceName },
+          metadata: { ...data.applied.metadata, name: data.applied.metadata?.name ?? resourceName },
           spec: data.applied.spec as Record<string, unknown> | undefined,
-        },
+        }),
       });
       reconcileMsg = resp.operationId
         ? `Reconcile submitted (operation ${resp.operationId})`
@@ -397,7 +398,7 @@
   let deleting = false;
   let deleteErr = '';
   async function doDelete() {
-    if (deleting) return;
+    if (deleting || !$canEditDesired) return;
     const typed = prompt(`Delete ${kind} ${resourceName}?\n\nType the name to confirm:`);
     if (typed === null) return;
     if (typed !== resourceName) {
@@ -529,9 +530,9 @@
       <button
         type="button"
         class="reconcile-btn"
-        disabled={reconciling || !data?.applied || !$canMutate}
-        title={!$canMutate
-          ? readOnlyTitle
+        disabled={reconciling || !data?.applied || !$canEditDesired}
+        title={!$canEditDesired
+          ? $desiredMutationHint
           : data?.applied
             ? 'Re-apply the stored manifest to push desired state over observed'
             : 'No applied manifest on file — nothing to reconcile from'}
@@ -539,7 +540,7 @@
       >
         {reconciling ? 'Reconciling…' : 'Reconcile'}
       </button>
-      {#if $canMutate}
+      {#if $canEditDesired}
         <a class="edit-btn" href={routeHref({ name: 'edit', apiVersion, kind, resourceName })}>Edit</a>
         <button
           type="button"
@@ -646,7 +647,7 @@
         <h3>Export and release tracking</h3>
         <p>Export preserves ownership. Release tracking is <strong>not Delete</strong>: it keeps the provider VM intact but stops this controller managing it. Neither action proves adoption at a destination controller.</p>
         <p class="muted small">Requires an admin, an idle controller, and manifest GitOps watch/pull disabled. Owned VMs, managed references, or opaque provider state may block migration; the server enforces all safeguards.</p>
-        {#if isAdmin}
+        {#if $canManageOwnership}
           <label class="migration-confirm"><input type="checkbox" bind:checked={secretAcknowledged} disabled={migrating} /> I understand the downloaded bundle may contain literal cloud-init credentials and other secrets; I will store and transfer it securely.</label>
           <div class="card-actions">
             <button class="action-btn" disabled={migrating || !secretAcknowledged || !!activeOp} on:click={exportBundle}>{migrating ? 'Working…' : 'Export bundle'}</button>
@@ -654,7 +655,7 @@
           </div>
           {#if migrationMessage}<p class="muted small" role="status">{migrationMessage}</p>{/if}
           {#if migrationError}<p class="err small" role="alert">{migrationError}</p>{/if}
-        {:else}<p class="muted">Only an admin can export or release ownership.</p>{/if}
+        {:else}<p class="muted">Export/release requires admin access and controller-owned intent with GitOps disabled.</p>{/if}
       </article>
     {/if}
 

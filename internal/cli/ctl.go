@@ -315,14 +315,29 @@ func ctlDelete(ctx context.Context, apiVersion, kind, name string, wait bool, wa
 // state on stdout. Errors out if the timeout fires or the op terminates
 // with a non-success status.
 func waitForOp(ctx context.Context, conn *grpc.ClientConn, opID string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
 	client := apiv1.NewOperationServiceClient(conn)
+	lastStatus := "unknown"
+	waitError := func() error {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("stopped waiting for operation %s; the operation may still be running: %w", opID, err)
+		}
+		return fmt.Errorf("operation %s did not finish within %s (still %s — poll with `openctl ctl op get %s`)",
+			opID, timeout, lastStatus, opID)
+	}
 	for {
-		op, err := client.GetOperation(ctx, &apiv1.GetOperationRequest{Id: opID})
+		op, err := client.GetOperation(waitCtx, &apiv1.GetOperationRequest{Id: opID})
 		if err != nil {
+			if waitCtx.Err() != nil {
+				return waitError()
+			}
 			return fmt.Errorf("get op %s: %w", opID, err)
 		}
-		switch op.GetStatus() {
+		lastStatus = op.GetStatus()
+		switch lastStatus {
 		case "succeeded":
 			fmt.Fprintf(os.Stderr, "operation %s succeeded\n", opID)
 			if op.GetResult() != nil {
@@ -333,12 +348,14 @@ func waitForOp(ctx context.Context, conn *grpc.ClientConn, opID string, timeout 
 			return fmt.Errorf("operation %s failed: %s", opID, op.GetError())
 		case "interrupted":
 			return fmt.Errorf("operation %s interrupted: %s", opID, op.GetError())
+		case "canceled":
+			return fmt.Errorf("operation %s canceled: %s", opID, op.GetError())
 		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("operation %s did not finish within %s (still %s — poll with `openctl ctl op get %s`)",
-				opID, timeout, op.GetStatus(), opID)
+		select {
+		case <-waitCtx.Done():
+			return waitError()
+		case <-ticker.C:
 		}
-		time.Sleep(500 * time.Millisecond)
 	}
 }
 

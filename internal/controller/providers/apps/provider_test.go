@@ -101,6 +101,9 @@ func TestResolvedSecretsNeverPersistOrEnterCommandsOrErrors(t *testing.T) {
 		if strings.Contains(string(input), secret) {
 			sawInput = true
 		}
+		if strings.Contains(command, "--no-env-resolution") {
+			return `{"services":{"web":{"image":"test"}}}`, nil
+		}
 		if strings.Contains(command, " config --quiet") {
 			return "", errors.New(secret)
 		}

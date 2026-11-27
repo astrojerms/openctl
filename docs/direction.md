@@ -124,8 +124,12 @@ of application health; a passed fake-provider test is not hardware validation.
 
 - Verify the full operator journey on real hardware, including interrupted
   operations, guest reboots, unavailable dependencies, and actual playback.
-- Keep controller recovery procedures and external credential dependencies
-  explicit. Manifest git history is not a complete controller/data backup.
+- Offline controller backup/restore now preserves selected configuration/state
+  roots, including identities, opaque provider state and credentials. Practice
+  recovery before depending on automation; review retained absolute paths and
+  queued operations before starting a restored controller. External credential
+  dependencies and guest/NAS data require separate backups. Manifest git history
+  is not a complete controller/data backup.
 - Widen providers and multi-user features when the existing homelab workflow
   is dependable. Terraform hosting is a long-tail adapter, not the product UX.
 - General-purpose cloud PaaS remains out of scope.

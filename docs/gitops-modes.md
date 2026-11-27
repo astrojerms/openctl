@@ -138,12 +138,18 @@ manifests:
   `gitops` uses the manifest store without disk projection, prepares the
   upstream working tree, performs initial sync, and starts only input
   automation. Config validation errors stop startup.
-- Repo RPCs/UI permit push only in `mirror` and pull only in `gitops`.
-  Direct resource Apply/Delete/runtime actions are rejected when the upstream
-  repo owns intent. Observation and operation history remain available.
-- SQLite retains applied intent and operational state in both modes. Secrets,
-  provider opaque state, ownership identities, and application data require
-  their own backup handling; a manifest repo is not a full backup.
+- Repo RPCs/UI permit editor/admin push only in `mirror` and pull only in
+  `gitops`. Direct Apply/Delete and ownership transfers are rejected when the
+  upstream repo owns intent. Runtime actions remain available to editor/admin
+  sessions; they do not author desired intent.
+- The console reads the running mode from ConfigService even when no optional
+  mirror repository is enabled. Pending config edits cannot enable UI writes;
+  unknown authority fails closed.
+- SQLite retains applied intent and operational state in both modes.
+  [Offline controller backup/restore](../README.md#back-up-and-recover-the-controller)
+  preserves selected root/state files, including provider state and credentials.
+  External secrets, keys and application data still require separate backups;
+  a manifest repository is not a full backup.
 
 The original conflict regressions use real local git repositories: GitOps
 apply does not auto-commit, subsequent fast-forward pulls succeed, and

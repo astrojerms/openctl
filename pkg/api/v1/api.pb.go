@@ -3498,8 +3498,10 @@ type GetControllerConfigResponse struct {
 	// Always true today: every tunable in ControllerConfig is read once at
 	// startup, so the UI should tell the user changes apply after a restart.
 	RestartRequired bool `protobuf:"varint,2,opt,name=restart_required,json=restartRequired,proto3" json:"restart_required,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Running authority, not a pending edit to config.yaml. Read-only.
+	ManifestMode  string `protobuf:"bytes,3,opt,name=manifest_mode,json=manifestMode,proto3" json:"manifest_mode,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetControllerConfigResponse) Reset() {
@@ -3544,6 +3546,13 @@ func (x *GetControllerConfigResponse) GetRestartRequired() bool {
 		return x.RestartRequired
 	}
 	return false
+}
+
+func (x *GetControllerConfigResponse) GetManifestMode() string {
+	if x != nil {
+		return x.ManifestMode
+	}
+	return ""
 }
 
 type UpdateControllerConfigRequest struct {
@@ -6358,10 +6367,11 @@ const file_api_proto_rawDesc = "" +
 	"\x12reconciler_enabled\x18\x01 \x01(\bR\x11reconcilerEnabled\x12/\n" +
 	"\x13reconciler_interval\x18\x02 \x01(\tR\x12reconcilerInterval\x123\n" +
 	"\x16op_retain_per_resource\x18\x03 \x01(\x05R\x13opRetainPerResource\"\x1c\n" +
-	"\x1aGetControllerConfigRequest\"~\n" +
+	"\x1aGetControllerConfigRequest\"\xa3\x01\n" +
 	"\x1bGetControllerConfigResponse\x124\n" +
 	"\x06config\x18\x01 \x01(\v2\x1c.openctl.v1.ControllerConfigR\x06config\x12)\n" +
-	"\x10restart_required\x18\x02 \x01(\bR\x0frestartRequired\"U\n" +
+	"\x10restart_required\x18\x02 \x01(\bR\x0frestartRequired\x12#\n" +
+	"\rmanifest_mode\x18\x03 \x01(\tR\fmanifestMode\"U\n" +
 	"\x1dUpdateControllerConfigRequest\x124\n" +
 	"\x06config\x18\x01 \x01(\v2\x1c.openctl.v1.ControllerConfigR\x06config\"\x81\x01\n" +
 	"\x1eUpdateControllerConfigResponse\x124\n" +

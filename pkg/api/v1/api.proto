@@ -641,6 +641,8 @@ message GetControllerConfigResponse {
   // Always true today: every tunable in ControllerConfig is read once at
   // startup, so the UI should tell the user changes apply after a restart.
   bool restart_required = 2;
+  // Running authority, not a pending edit to config.yaml. Read-only.
+  string manifest_mode = 3;
 }
 
 message UpdateControllerConfigRequest {

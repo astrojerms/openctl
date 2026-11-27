@@ -3,6 +3,7 @@
   import type { PingResponse, WhoAmIResponse } from '../lib/api';
   import { ping } from '../lib/api';
   import { logout } from '../lib/auth';
+  import { manifestAuthority, refreshAuthority, resetAuthority } from '../lib/authority';
   import { route } from '../lib/router';
   import {
     catalogue, catalogueError, refreshCatalogue, stopCatalogue,
@@ -45,6 +46,7 @@
 
   onMount(() => {
     void refreshCatalogue();
+    void refreshAuthority();
     startOpsWatcher();
     void ping.ping().then((p) => (pong = p)).catch(() => { /* ignore */ });
   });
@@ -52,6 +54,7 @@
   onDestroy(() => {
     stopOpsWatcher();
     stopCatalogue();
+    resetAuthority();
   });
 
   async function doLogout() {
@@ -150,6 +153,11 @@
   </aside>
 
   <main>
+    {#if $manifestAuthority.mode === 'gitops'}
+      <p class="authority-banner" role="status">GitOps owns desired intent. Edit the upstream repository to apply or delete resources. Runtime controls remain subject to your role.</p>
+    {:else if $manifestAuthority.error}
+      <p class="authority-banner" role="alert">Cannot verify running manifest authority: {$manifestAuthority.error} <button on:click={refreshAuthority}>Refresh authority</button></p>
+    {/if}
     {#if $route.name === 'home'}
       <HomePane />
     {:else if $route.name === 'templates'}
@@ -195,6 +203,11 @@
 <OpsDrawer />
 
 <style>
+  .authority-banner {
+    border-left: 3px solid currentColor;
+    padding: 0.75rem 1rem;
+    margin: 0 0 1rem;
+  }
   header {
     display: flex;
     align-items: center;

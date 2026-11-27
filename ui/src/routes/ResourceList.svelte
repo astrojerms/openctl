@@ -4,7 +4,7 @@
   import { watchResources } from '../lib/watch';
   import { statusBadge } from '../lib/format';
   import { routeHref } from '../lib/router';
-  import { canMutate } from '../lib/auth';
+  import { canEditDesired } from '../lib/authority';
 
   export let apiVersion: string;
   export let kind: string;
@@ -195,7 +195,7 @@
       title="View the CUE schema for this kind">
       {showSchema ? 'Hide schema' : 'Schema'}
     </button>
-    {#if $canMutate}
+    {#if $canEditDesired}
       <a class="new-btn" href={routeHref({ name: 'create', apiVersion, kind })}>+ New {kind}</a>
     {/if}
   </header>

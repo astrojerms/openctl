@@ -291,8 +291,51 @@ Restart the controller after editing startup-read settings:
 ./bin/openctl-controller install --local
 ```
 
-You can also edit provider credentials and controller settings from the UI.
-Settings that are read at startup show a restart-required banner.
+Admins can edit provider credentials and controller settings from the UI.
+Startup-read settings show a restart-required banner. The console uses the
+running authority mode, not an unapplied edit to configuration.
+
+## Back Up And Recover The Controller
+
+Stop the controller and other processes writing the selected roots first.
+Use its service manager (or stop the foreground daemon). Run recovery as its OS
+user and use the actual configuration root and state directory; the examples
+assume the local defaults.
+
+```bash
+./bin/openctl-controller backup \
+  --root "$HOME/.openctl" --output "$HOME/openctl-backup.tar"
+
+# Restore into NEW destinations; only their parents should already exist.
+mkdir -p "$HOME/openctl-recovered"
+./bin/openctl-controller restore \
+  --input "$HOME/openctl-backup.tar" \
+  --root "$HOME/openctl-recovered/.openctl"
+```
+
+Use `--dir` on backup for a separate daemon state directory such as
+`/var/lib/openctl/controller`; use it on restore to choose a separate new state
+destination. Otherwise restore preserves the archived root-relative state path,
+or uses `NEW_ROOT/controller` when the archived state was external.
+
+The archive includes SQLite (including uncheckpointed WAL data), provider opaque
+state and identities, operation history, configuration, credentials, TLS material,
+and files under the selected roots. It is **plaintext sensitive material**:
+created mode `0600`, never overwritten; encrypt offsite copies separately.
+External SSH keys, external manifest/secret directories, VM disks and guest/NAS
+application data are **not** backed up by this command.
+
+Restore validates format, checksums, paths and the controller's exact SQLite
+schema before publishing private files. Destinations must not exist, even if
+empty; parents must exist. Symlinks/special files are refused, and path ancestors
+must be symlink-free. Limits: 16 GiB/file, 32 GiB total, 100,000 entries.
+
+Restore does not rewrite absolute paths, start the daemon, or change infrastructure.
+Review archived configuration and external dependencies before pointing the
+daemon's `HOME`/`--dir` at the restored locations: startup may resume queued
+operations or reconciliation against the original lab. **Never run both copies.**
+The daemon and backup share an exclusive state lock; older binaries do not
+honor it and must also be stopped.
 
 ## Common Commands
 
@@ -737,8 +780,9 @@ Restart the controller:
 
 Commit desired manifests to the upstream repository. Initial startup sync and
 subsequent pulls submit operations tagged `source=gitops`. Direct console/CLI
-Apply, Delete and runtime actions are rejected in this mode: edit the repo
-instead. The console remains available for observation and operation history.
+Apply and Delete are rejected in this mode: edit the repo instead. The console
+disables desired-state mutations but retains observation, operation history,
+and runtime actions for editor/admin sessions.
 
 Enable `deleteOnRemove` or pull `prune` only after authorizing their deletion
 semantics. Legacy configs mixing `manifests.git` output commits with
@@ -806,6 +850,11 @@ Useful areas:
 - Settings: edit controller behavior such as reconciler interval and retained
   operations.
 
+Retry restores the failed Apply's submitted intent even when a first deployment
+has no managed resource yet. Secret markers and desired metadata are preserved;
+inherited destructive approvals are cleared for fresh review. A failed Get caused
+by authentication or connectivity is not treated as an absent resource.
+
 ## Drift And Reconciliation
 
 The reconciler runs by default every 5 minutes. It detects differences between
@@ -833,6 +882,25 @@ metadata:
   annotations:
     openctl.io/autoReconcile: "true"
 ```
+
+## Standalone Compose Applications
+
+Choose `apps.openctl.io/v1` / `ComposeApplication` in the console or declare it
+directly. Supply the SSH `target`, `compose`, `environment` (literal or `$secret`
+marker), and `probe.url`. Use a current Docker Compose plugin supporting
+`config --no-env-resolution --format json` on the guest.
+
+Candidate Compose and environment files are staged privately and validated,
+including required service env files, before replacing installed configuration.
+Relative paths retain the original project directory. Validation failure leaves
+installed files intact; a subsequent pull/rollout failure may leave a partial
+deployment and does **not** claim container rollback. Inspect that operation
+before retrying. Delete preserves volumes and guest data.
+
+An initial SSH failure proven to precede the first command releases the fresh
+locator so target/key settings can be corrected. Once a command might have run,
+or an existing binding was present, placement remains bound: inspect the original
+guest and retry with the same host/project/directory rather than orphaning it.
 
 ## Managed Jellyfin On Proxmox
 

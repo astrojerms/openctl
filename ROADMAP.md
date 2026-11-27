@@ -43,6 +43,27 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
   controller/Proxmox simulator. No live homelab deployment or GPU playback
   verification was performed. A passing simulator is not hardware acceptance.
 
+**2026-11-27 — operator recovery and authority hardening**
+
+- [x] Offline sensitive backup/restore, WAL snapshots, identity/provider-state
+  preservation, bounded/checksummed extraction, exclusive publication, and
+  daemon/recovery state locking.
+- [x] Failed first-Apply retry without a managed baseline; preserve secret
+  markers and ownership guards, clear inherited destructive consent, and keep
+  metadata on reconciliation.
+- [x] Release fresh application placement only for proven pre-command SSH
+  failures; stage/full-validate Compose and service env files before publication.
+- [x] Admin-only credential/global-policy writes, editor/admin repository
+  mutations, loopback-only unauthenticated listeners, and bounded/cancel-aware
+  CLI waits.
+- [x] Console mutation gates follow running manifest authority, including when
+  the optional mirror repository is disabled.
+- Verification: affected Go packages, Darwin recovery compilation, 111 frontend
+  tests, warning-free Svelte check and successful UI build; actual console retry and
+  live GitOps mutation gating; offline CLI restore booted with preserved TLS,
+  identity and history. Real Compose 5.8 configuration passes validated staged
+  env files and literal-dollar paths; no container rollout or live lab mutation.
+
 The next product acceptance gate is the complete operator journey on real
 hardware, including recovery, media playback and any approved public endpoint.
 See [direction](docs/direction.md). Provider breadth is downstream of that gate.

@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/openctl/openctl/internal/controller/auth"
 	"github.com/openctl/openctl/internal/controller/manifests"
 	apiv1 "github.com/openctl/openctl/pkg/api/v1"
 )
@@ -75,6 +76,9 @@ func (h *repoHandler) GetStatus(ctx context.Context, _ *apiv1.GetRepoStatusReque
 }
 
 func (h *repoHandler) Push(ctx context.Context, _ *apiv1.PushRepoRequest) (*apiv1.PushRepoResponse, error) {
+	if err := authorize(ctx, auth.RoleEditor); err != nil {
+		return nil, err
+	}
 	if h.mode == "gitops" {
 		return nil, status.Error(codes.FailedPrecondition, "gitops mode is authored upstream; push changes from your source repository, not the controller")
 	}
@@ -93,6 +97,9 @@ func (h *repoHandler) Push(ctx context.Context, _ *apiv1.PushRepoRequest) (*apiv
 }
 
 func (h *repoHandler) Pull(ctx context.Context, _ *apiv1.PullRepoRequest) (*apiv1.PullRepoResponse, error) {
+	if err := authorize(ctx, auth.RoleEditor); err != nil {
+		return nil, err
+	}
 	if h.mode != "gitops" {
 		return nil, status.Error(codes.FailedPrecondition, "mirror mode never pulls desired state; set manifests.mode: gitops and manifests.gitops.remote to use repository authority")
 	}

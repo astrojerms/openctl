@@ -446,6 +446,7 @@ export interface ControllerConfig {
 export interface ControllerConfigResponse {
   config?: ControllerConfig;
   restartRequired?: boolean;
+  manifestMode?: 'mirror' | 'gitops';
 }
 
 export const controllerConfigApi = {

@@ -158,7 +158,11 @@ func New(opts Options) (*Server, error) {
 		tmpls = templates.NewRegistry()
 	}
 	apiv1.RegisterTemplateServiceServer(g, newTemplateHandler(tmpls))
-	apiv1.RegisterConfigServiceServer(g, newConfigHandler())
+	configHandler := newConfigHandler()
+	if opts.ManifestMode != "" {
+		configHandler.manifestMode = opts.ManifestMode
+	}
+	apiv1.RegisterConfigServiceServer(g, configHandler)
 
 	reflection.Register(g)
 

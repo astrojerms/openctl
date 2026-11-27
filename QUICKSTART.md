@@ -84,6 +84,15 @@ under `~/.openctl/controller/tls/` and a random API token at
 them automatically from the same default paths; override via the
 `controller:` section in `~/.openctl/config.yaml`.
 
+Only one daemon may open a state directory. Development `--no-auth` requires
+loopback gRPC **and** HTTP listeners; use normal authentication for any remote
+listener. Provider credentials and global settings require an admin role.
+
+Before relying on the controller, practice
+[offline backup and restore](README.md#back-up-and-recover-the-controller).
+Stop the daemon first; protect the archive like a private key. Restore into new
+paths and review external dependencies before restarting automation.
+
 ## Connect And Adopt Before Rebuilding
 
 After configuring Proxmox, restart the controller and open **Discover

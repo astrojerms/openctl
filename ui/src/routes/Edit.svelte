@@ -2,16 +2,17 @@
   import { onDestroy, setContext } from 'svelte';
   import { writable } from 'svelte/store';
   import {
-    resources, schemas, operations as opsApi, UnauthorizedError,
+    resources, schemas, UnauthorizedError,
     type DryRunApplyResponse, type Resource,
   } from '../lib/api';
   import { parseYAML, resourceToYAML } from '../lib/yaml';
   import { advancedKind } from '../lib/catalogue';
-  import { canMutate } from '../lib/auth';
+  import { canEditDesired, desiredMutationHint } from '../lib/authority';
   import { ops as opsStore } from '../lib/ops';
   import type { OperationRow } from '../lib/watch';
   import { routeHref, navigate } from '../lib/router';
   import { extraKeys, fromManifest, initialValue, scrubEmpty, type FormField as FF } from '../lib/formSchema';
+  import { loadEditIntent, retryRevision } from '../lib/retry';
   import MonacoEditor from '../components/MonacoEditor.svelte';
   import MonacoDiffEditor from '../components/MonacoDiffEditor.svelte';
   import FormField from '../components/FormField.svelte';
@@ -35,8 +36,6 @@
   setContext('resourceAPIVersionStore', apiVersionCtx);
   $: apiVersionCtx.set(apiVersion);
 
-  // Shown on the disabled Apply button for a read-only (viewer) session.
-  const readOnlyTitle = 'Read-only session — requires editor or admin role';
 
   // Publish per-path validation errors so nested FormField instances
   // can highlight themselves without threading errors through props.
@@ -108,7 +107,6 @@
   // (and isn't surprised when the diff shows their changes vs the
   // applied baseline).
   let retryFromOpId = '';
-  const RETRY_KEY = 'openctl.retryFromOp';
 
   // View toggle: 'form' is the typed-form view (U5.2), 'edit' is the
   // Monaco editor (default), 'diff' is the read-only side-by-side diff.
@@ -146,13 +144,26 @@
   // typing).
   let formDriving = false;
 
-  $: void load(apiVersion, kind, resourceName);
+  $: void load(apiVersion, kind, resourceName, $retryRevision);
+  let loadRevision = 0;
 
-  async function load(av: string, k: string, n: string) {
+  async function load(av: string, k: string, n: string, _retryRevision: number) {
     loading = true;
+    const revision = ++loadRevision;
     loadError = '';
     ownerRefs = [];
+    liveOpId = '';
+    applyError = '';
     retryFromOpId = '';
+    liveChildren = [];
+    baseline = '';
+    text = '';
+    if (timer !== undefined) clearTimeout(timer);
+    previewRevision++;
+    plan = null;
+    reviewedResource = null;
+    reviewedText = '';
+    checkedGates = {};
     createdName = '';
     try {
       if (n === '') {
@@ -168,53 +179,20 @@
         void loadExistingNames(av, k);
         return;
       }
-      const r = await resources.get(av, k, n);
-      const applied = r.applied;
-      if (applied) {
-        baseline = resourceToYAML(applied);
-      } else {
-        baseline = resourceToYAML({
-          apiVersion: av,
-          kind: k,
-          metadata: r.resource.metadata,
-          spec: r.resource.spec ?? {},
-        });
-      }
-      // U6: stash ownerRefs so the edit gate + banner can react to them.
-      // We prefer ownerRefs off the observed resource (live state) so a
-      // brand-new but already-owned resource still surfaces correctly.
-      ownerRefs = r.resource.metadata?.ownerRefs ?? applied?.metadata?.ownerRefs ?? [];
-      liveChildren = r.resource.children ?? [];
-      text = baseline;
-      // U7 retry handoff: if the user clicked Retry on an op in the
-      // drawer, sessionStorage carries the op id. Pull the original
-      // manifest and seed `text` with it instead of the applied
-      // baseline — otherwise the retry would silently re-submit the
-      // last successful state, not what failed.
-      try {
-        const opId = sessionStorage.getItem(RETRY_KEY);
-        if (opId) {
-          sessionStorage.removeItem(RETRY_KEY);
-          const op = await opsApi.get(opId);
-          if (op.manifestJson && op.kind === k && op.resourceName === n) {
-            const parsed = JSON.parse(op.manifestJson);
-            text = resourceToYAML(parsed);
-            retryFromOpId = opId;
-          }
-        }
-      } catch (e) {
-        // Best-effort: a missing/expired op or sessionStorage failure
-        // just falls through to the applied baseline.
-        // eslint-disable-next-line no-console
-        console.warn('retry-from-op handoff failed', e);
-      }
+      const intent = await loadEditIntent({ apiVersion: av, kind: k, name: n }, sessionStorage);
+      if (revision !== loadRevision) return;
+      baseline = intent.baseline;
+      text = intent.text;
+      ownerRefs = intent.ownerRefs;
+      liveChildren = intent.children;
+      retryFromOpId = intent.retryFromOpId;
       schedulePreview();
       void loadFormSchema(av, k);
     } catch (err) {
-      if (err instanceof UnauthorizedError) return;
+      if (revision !== loadRevision || err instanceof UnauthorizedError) return;
       loadError = err instanceof Error ? err.message : String(err);
     } finally {
-      loading = false;
+      if (revision === loadRevision) loading = false;
     }
   }
 
@@ -427,7 +405,7 @@
   }
 
   async function doApply() {
-    if (applyBlocked || !$canMutate || !plan || !reviewedResource || reviewedText !== text) return;
+    if (applyBlocked || !$canEditDesired || !plan || !reviewedResource || reviewedText !== text) return;
     const resource = reviewedResource;
     const submittedText = reviewedText;
 
@@ -472,6 +450,7 @@
   onDestroy(() => {
     if (timer !== undefined) clearTimeout(timer);
     previewRevision++;
+    loadRevision++;
   });
 
   function discard() {
@@ -684,9 +663,9 @@
       <button on:click={back} disabled={applying}>{isCreate ? 'Cancel' : 'Back'}</button>
       <button
         class="primary"
-        disabled={applyBlocked || !$canMutate}
+        disabled={applyBlocked || !$canEditDesired}
         on:click={doApply}
-        title={!$canMutate ? readOnlyTitle : (applyBlocked && plan ? applyBlockReason() : '')}
+        title={!$canEditDesired ? $desiredMutationHint : (applyBlocked && plan ? applyBlockReason() : '')}
       >
         {applying ? 'Submitting…' : isCreate ? 'Create' : 'Apply'}
       </button>

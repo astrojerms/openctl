@@ -5,6 +5,7 @@
   import { operations as opsApi } from '../lib/api';
   import type { OperationRow } from '../lib/watch';
   import { operationStatusBadge } from '../lib/format';
+  import { canRetryOperation, saveRetry } from '../lib/retry';
 
   // Persisted across re-renders inside the shell. Collapsed by default
   // so it doesn't eat screen real estate on first visit.
@@ -15,6 +16,7 @@
   // RPC is in flight and surface a row-level error.
   let cancelling: Record<string, boolean> = {};
   let cancelError: Record<string, string> = {};
+  let retryError: Record<string, string> = {};
 
   // U7 filter controls — applied client-side against the in-memory stream.
   let filterStatus = '';
@@ -95,10 +97,6 @@
     return s === 'pending' || s === 'running';
   }
 
-  function isReapplicable(s: string): boolean {
-    return s === 'failed' || s === 'interrupted' || s === 'canceled';
-  }
-
   async function doCancel(id: string) {
     cancelling = { ...cancelling, [id]: true };
     cancelError = { ...cancelError, [id]: '' };
@@ -113,15 +111,16 @@
     }
   }
 
-  // Retry uses sessionStorage as a handoff between drawer and editor —
-  // the editor reads the marker on mount, calls operations.get(id) to
-  // fetch the original manifest, and pre-fills `text` so the user
-  // re-submits exactly what failed instead of the last-successful
-  // applied state.
-  const RETRY_KEY = 'openctl.retryFromOp';
+  // Navigation is allowed only after a fully identity-bound handoff is saved.
   function doRetry(op: OperationRow) {
-    if (!op.apiVersion || !op.kind || !op.resourceName) return;
-    try { sessionStorage.setItem(RETRY_KEY, op.id); } catch { /* private mode */ }
+    retryError = { ...retryError, [op.id]: '' };
+    if (!canRetryOperation(op)) return;
+    try {
+      saveRetry(sessionStorage, op);
+    } catch (err) {
+      retryError = { ...retryError, [op.id]: err instanceof Error ? err.message : String(err) };
+      return;
+    }
     navigate({ name: 'edit', apiVersion: op.apiVersion, kind: op.kind, resourceName: op.resourceName });
   }
 
@@ -333,8 +332,11 @@
                     {#if cancelError[op.id]}
                       <span class="err small" title={cancelError[op.id]}>!</span>
                     {/if}
-                  {:else if isReapplicable(op.status) && op.apiVersion && op.kind && op.resourceName}
+                  {:else if canRetryOperation(op)}
                     <button class="row-btn retry" on:click={() => doRetry(op)}>retry</button>
+                    {#if retryError[op.id]}
+                      <span class="err small">{retryError[op.id]}</span>
+                    {/if}
                   {/if}
                 </td>
               </tr>

@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { stringify } from 'yaml';
   import { canMutate } from '../lib/auth';
+  import { canEditDesired, desiredMutationHint } from '../lib/authority';
   import { discovery, resources, schemas, type DiscoveryContext, type DryRunApplyResponse, type Operation, type Resource } from '../lib/api';
   import { jellyfinDeployment, APP_API, VM_API, type DeploymentStep, type JellyfinInputs } from '../lib/jellyfin';
   import { routeHref } from '../lib/router';
@@ -49,6 +50,7 @@
   $: allDone = steps.length > 0 && index === steps.length - 1 && stepDone;
   $: gatesSatisfied = (preview?.requiredGates ?? []).every((gate) => checkedGates[gate]);
   $: validPreview = !!preview && (preview.validationErrors?.length ?? 0) === 0 && gatesSatisfied;
+  $: monitorOnly = !!operation && ['pending', 'running'].includes(operation.status);
   $: applicationReady = current?.resource.apiVersion !== APP_API || observed?.status?.ready === true;
   $: checks = Object.entries((observed?.status?.checks ?? {}) as Record<string, { ready?: boolean; message?: string }>);
 
@@ -114,7 +116,7 @@
   }
 
   async function apply() {
-    if (!current || !validPreview || !$canMutate || busy || stepDone) return;
+    if (!current || busy || stepDone || (!monitorOnly && (!validPreview || !$canEditDesired))) return;
     busy = true; error = '';
     try {
       if (operation && ['pending', 'running'].includes(operation.status)) {
@@ -237,13 +239,13 @@
       {#if !stepDone}
         <div class="actions">
           <button on:click={review} disabled={busy || !!operation}>Refresh preview</button>
-          <button class="primary" on:click={apply} disabled={busy || !validPreview || !$canMutate}>{busy ? 'Working…' : operation && ['pending', 'running'].includes(operation.status) ? 'Observe existing operation' : operation ? 'Retry reviewed step' : 'Apply reviewed step'}</button>
+          <button class="primary" on:click={apply} disabled={busy || (!monitorOnly && (!validPreview || !$canEditDesired))} title={!monitorOnly && !$canEditDesired ? $desiredMutationHint : ''}>{busy ? 'Working…' : monitorOnly ? 'Observe existing operation' : operation ? 'Retry reviewed step' : 'Apply reviewed step'}</button>
         </div>
       {:else if !applicationReady}
         <p class="notice">The configuration operation succeeded, but application readiness has not been proven. Resolve the reported checks before publishing or proceeding.</p>
         <div class="actions">
           <button on:click={refreshHealth} disabled={busy}>Refresh health</button>
-          <button on:click={() => { stepDone = false; void apply(); }} disabled={busy || !$canMutate}>Reapply reviewed configuration</button>
+          <button on:click={() => { stepDone = false; void apply(); }} disabled={busy || !$canEditDesired} title={!$canEditDesired ? $desiredMutationHint : ''}>Reapply reviewed configuration</button>
         </div>
       {:else if !allDone}
         <button class="primary" on:click={next} disabled={busy}>Preview next resource</button>

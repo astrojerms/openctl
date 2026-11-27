@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { discovery, ownership, type DiscoveryContext, type DiscoveredResource, type MigrationBundle } from '../lib/api';
-  import { auth } from '../lib/auth';
+  import { canManageOwnership } from '../lib/authority';
   import { navigate, routeHref } from '../lib/router';
   import { observedDesired, parseMigrationBundle } from '../lib/discovery';
   import { resourceToYAML } from '../lib/yaml';
@@ -23,7 +23,6 @@
   let adopting = false;
   let identityMessage = '';
 
-  $: isAdmin = $auth.kind === 'signed-in' && (!$auth.me.role || $auth.me.role === 'admin');
   $: desired = reviewed ? observedDesired(reviewed.resource) : null;
   $: bundlePreview = bundle ? { ...bundle.resource, spec: { ...bundle.resource.spec, context: bundleContext } } : null;
   $: bundleVM = inventory.find((item) => item.context === bundleContext && item.identity === bundle?.identity);
@@ -106,7 +105,7 @@
   }
 
   async function adopt(fromBundle = false) {
-    if (!isAdmin || adopting || busy) return;
+    if (!$canManageOwnership || adopting || busy) return;
     if (fromBundle
       ? !bundle || !bundleConfirmed || !states[bundleContext]?.connected || !bundleVM?.adoptable || bundleVM.managed || bundleVM.identityConfirmationRequired
       : !reviewed?.adoptable || reviewed.managed || reviewed.identityConfirmationRequired || !desired || !confirmed) return;
@@ -122,7 +121,7 @@
   }
 
   async function confirmTrackedIdentity() {
-    if (!isAdmin || adopting || busy || !confirmed || !reviewed?.identityConfirmationRequired || !reviewed.identity) return;
+    if (!$canManageOwnership || adopting || busy || !confirmed || !reviewed?.identityConfirmationRequired || !reviewed.identity) return;
     const item = reviewed;
     adopting = true;
     adoptionError = '';
@@ -215,17 +214,17 @@
           <p>This VM is already tracked, but its immutable live identity has not been bound. Verify the context, node, VMID, and fingerprint above against the intended VM before confirming.</p>
           <p class="notice">Confirmation binds tracking only. It does not Apply, change the VM, alter saved desired intent, or transfer ownership. Existing composite ownership remains intact; this is not adoption.</p>
           <p class="muted">Requires an admin, an idle controller, and manifest GitOps watch/pull disabled. The server checks saved placement and the expected live fingerprint before binding identity.</p>
-          {#if isAdmin}
+          {#if $canManageOwnership}
             <label class="confirmation"><input type="checkbox" bind:checked={confirmed} disabled={adopting} /> I independently verified that this context, node, VMID, and live fingerprint identify the real VM already tracked by this resource.</label>
             <button class="primary" disabled={adopting || busy || !confirmed || !reviewed.identity} on:click={confirmTrackedIdentity}>{adopting ? 'Confirming…' : 'Confirm tracked VM identity'}</button>
-          {:else}<p class="muted">Only an admin can confirm tracked VM identity.</p>{/if}
+          {:else}<p class="muted">Identity confirmation requires admin access and controller-owned intent with GitOps disabled.</p>{/if}
         {:else}
           <p class="muted">This manifest reflects observed configuration, not unobservable original intent. Review it before taking responsibility for future reconciliation.</p>
           <pre>{resourceToYAML(desired)}</pre>
-          {#if isAdmin}
+          {#if $canManageOwnership}
             <label class="confirmation"><input type="checkbox" bind:checked={confirmed} disabled={adopting} /> I reviewed this desired intent and want this controller to track the existing VM.</label>
             <button class="primary" disabled={adopting || busy || !confirmed || !reviewed.adoptable || reviewed.managed} on:click={() => adopt()}>{adopting ? 'Adopting…' : 'Adopt existing VM'}</button>
-          {:else}<p class="muted">Only an admin can adopt. You can review discovery results read-only.</p>{/if}
+          {:else}<p class="muted">Adoption requires admin access and controller-owned intent with GitOps disabled. Discovery remains read-only.</p>{/if}
         {/if}
       </article>
     {/if}
@@ -252,10 +251,10 @@
       <p class="muted">The destination context overrides the source context; the bundle itself is kept unchanged so its digest remains verifiable. Test this destination connection above before adoption. The server validates schema, digest, live identity, and ownership.</p>
       <pre>{resourceToYAML(bundlePreview)}</pre>
       <p class="muted">Test and discover the destination above to review the matching VM and its adoptability before adopting.</p>
-      {#if isAdmin}
+      {#if $canManageOwnership}
         <label class="confirmation"><input type="checkbox" bind:checked={bundleConfirmed} disabled={adopting} /> I reviewed this desired manifest and destination context.</label>
         <button class="primary" disabled={adopting || busy || !bundleConfirmed || !bundleContext || !states[bundleContext]?.connected || !bundleVM?.adoptable || bundleVM.managed || bundleVM.identityConfirmationRequired} on:click={() => adopt(true)}>{adopting ? 'Adopting…' : 'Adopt bundle at destination'}</button>
-      {:else}<p class="muted">Only an admin can adopt a bundle.</p>{/if}
+      {:else}<p class="muted">Bundle adoption requires admin access and controller-owned intent with GitOps disabled.</p>{/if}
     {/if}
   </article>
   {#if adoptionError}<p class="err" role="alert">{adoptionError}</p>{/if}

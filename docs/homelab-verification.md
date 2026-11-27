@@ -70,7 +70,9 @@ This mirrors the safest onboarding order — narrow blast radius first:
 2. VM lifecycle. This validates the core apply → reconcile → observe → delete
    loop on your metal before any composite complexity.
 3. `--cluster` once the VM path is solid.
-4. Snapshot `~/.openctl` before and after until you trust the state layer.
+4. Practice [offline controller backup/restore](../README.md#back-up-and-recover-the-controller)
+   before relying on automation. Stop the daemon and use the actual config/state
+   roots; a live filesystem copy or manifest git history is not a complete backup.
 
 ## Reading the in-place resize check
 

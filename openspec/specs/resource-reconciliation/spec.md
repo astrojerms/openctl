@@ -210,7 +210,8 @@ contradictory automation configuration.
 
 - **WHEN** mode is `gitops`
 - **THEN** upstream authored manifests own intent; no auto-commit, push, startup
-  file revival, or direct console/CLI resource mutation competes with that repo
+  file revival, or direct console/CLI Apply/Delete competes with that repo
+  (runtime controls remain available to editor/admin sessions)
 
 ### Requirement: Standalone application lifecycle is independent of VM lifecycle
 

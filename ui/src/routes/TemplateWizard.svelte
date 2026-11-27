@@ -24,7 +24,7 @@
   import { ensureOptions, optionsStore } from '../lib/options';
   import { routeHref, navigate } from '../lib/router';
   import { resourceToYAML } from '../lib/yaml';
-  import { canMutate } from '../lib/auth';
+  import { canEditDesired, desiredMutationHint } from '../lib/authority';
 
   export let template: string;
 
@@ -136,7 +136,7 @@
   }
 
   async function submit() {
-    if (!info || applyBlocked || !$canMutate || !reviewedResource || reviewedParams !== JSON.stringify(params)) return;
+    if (!info || applyBlocked || !$canEditDesired || !reviewedResource || reviewedParams !== JSON.stringify(params)) return;
     const resource = reviewedResource;
     submitError = '';
     submitting = true;
@@ -307,8 +307,8 @@
           </article>
         {/if}
         <div class="actions">
-          <button class="primary" disabled={applyBlocked || !$canMutate} on:click={submit}
-            title={!$canMutate ? 'Read-only session — requires editor or admin role' : ''}>
+          <button class="primary" disabled={applyBlocked || !$canEditDesired} on:click={submit}
+            title={!$canEditDesired ? $desiredMutationHint : ''}>
             {submitting ? 'Creating…' : 'Create'}
           </button>
           {#if previewing}

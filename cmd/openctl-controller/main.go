@@ -20,6 +20,7 @@ import (
 
 	"github.com/openctl/openctl/internal/config"
 	"github.com/openctl/openctl/internal/controller/auth"
+	"github.com/openctl/openctl/internal/controller/instance"
 	"github.com/openctl/openctl/internal/controller/manifests"
 	"github.com/openctl/openctl/internal/controller/operations"
 	"github.com/openctl/openctl/internal/controller/provideridentity"
@@ -139,6 +140,10 @@ func run() error {
 		return runInstall(os.Args[2:])
 	case "uninstall":
 		return runUninstall(os.Args[2:])
+	case "backup":
+		return runBackup(os.Args[2:])
+	case "restore":
+		return runRestore(os.Args[2:])
 	case "version":
 		fmt.Printf("%s (commit=%s built=%s)\n",
 			server.ServerVersion, server.GitCommit, server.BuildTime)
@@ -159,6 +164,8 @@ Subcommands:
   serve      Run the controller in the foreground
   install    Install locally (macOS/Linux) or remotely (--target ssh:// or proxmox://)
   uninstall  Remove the per-user service install
+  backup     Back up stopped controller/configuration data to a protected archive
+  restore    Restore a verified archive into new, nonexisting locations
   version    Print the controller version
   help       Show this message
 
@@ -174,6 +181,11 @@ func runServe(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if *noAuth {
+		if err := validateUnauthenticatedListeners(*listen, *httpListen); err != nil {
+			return err
+		}
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load controller config: %w", err)
@@ -182,6 +194,11 @@ func runServe(args []string) error {
 	if err := os.MkdirAll(*dir, 0o700); err != nil {
 		return fmt.Errorf("create state dir: %w", err)
 	}
+	lock, err := instance.Acquire(*dir)
+	if err != nil {
+		return fmt.Errorf("lock controller state: %w", err)
+	}
+	defer func() { _ = lock.Close() }()
 
 	tokenPath := filepath.Join(*dir, "token")
 	token, err := auth.LoadOrCreateToken(tokenPath)

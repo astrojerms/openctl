@@ -3,6 +3,7 @@ package apps
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -111,34 +112,30 @@ func (p *Provider) Apply(ctx context.Context, r *protocol.Resource) (*protocol.R
 			return nil, err
 		}
 	}
-	// Persist before touching the guest: failed or cancelled initial applies can
-	// be retried or explicitly deleted using exactly the original placement.
+	// Persist before touching the guest. Only a fresh locator whose very first
+	// claim provably submitted no command can be released after a failure.
 	if err := p.save(ctx, r.Kind, r.Metadata.Name, l); err != nil {
 		return nil, err
 	}
-	if err := p.claim(ctx, r.Kind, r.Metadata.Name, l); err != nil {
-		return nil, err
+	if err := p.claimDirectory(ctx, r.Kind, r.Metadata.Name, l); err != nil {
+		var before *preCommandError
+		if old == nil && errors.As(err, &before) {
+			if cleanupErr := p.store.DeleteState(context.WithoutCancel(ctx), APIVersion, r.Kind, r.Metadata.Name); cleanupErr != nil {
+				return nil, fmt.Errorf("%w; no SSH command was submitted, but removing the fresh locator failed; original placement remains bound: %w", err, cleanupErr)
+			}
+			return nil, fmt.Errorf("%w; no SSH command was submitted; fresh locator removed, correct target/SSH settings and retry", err)
+		}
+		return nil, fmt.Errorf("%w; locator retained: an existing binding or uncertain remote execution requires inspecting the original guest before retrying", err)
+	}
+	if err := p.claimProject(ctx, l, owner(p.controllerID, r.Kind, r.Metadata.Name), true); err != nil {
+		return nil, fmt.Errorf("%w; application directory claim already executed; locator retained, inspect the original guest and retry with the same placement", err)
 	}
 	if r.Kind == "Jellyfin" {
 		if err := p.applyJellyfin(ctx, l, s, owner(p.controllerID, r.Kind, r.Metadata.Name)); err != nil {
 			return nil, err
 		}
 	} else {
-		if err := p.upload(ctx, l, l.Directory+"/compose.yaml", []byte(s.Compose)); err != nil {
-			return nil, err
-		}
-		if err := p.upload(ctx, l, l.Directory+"/.env", []byte(s.Environment)); err != nil {
-			return nil, err
-		}
-		_, err := p.run(ctx, l, "validate Compose configuration", compose(l)+" config --quiet", nil)
-		if err != nil {
-			return nil, err
-		}
-		if _, err := p.run(ctx, l, "pull application images respecting build-only services", compose(l)+" pull --ignore-buildable --policy always", nil); err != nil {
-			return nil, err
-		}
-		_, err = p.run(ctx, l, "roll out Compose application", compose(l)+" up -d --build --remove-orphans", nil)
-		if err != nil {
+		if err := p.applyCompose(ctx, l, s); err != nil {
 			return nil, err
 		}
 	}
@@ -158,20 +155,24 @@ func (p *Provider) ownership(kind, name string, l locator) string {
 	return "(test ! -L " + quote(l.Directory) + " && test ! -L " + quote(l.Directory+"/.openctl-owner") + " && test \"$(cat " + quote(l.Directory+"/.openctl-owner") + ")\" = " + quote(owner(p.controllerID, kind, name)) + ")"
 }
 func (p *Provider) claim(ctx context.Context, kind, name string, l locator) error {
+	if err := p.claimDirectory(ctx, kind, name, l); err != nil {
+		return err
+	}
+	return p.claimProject(ctx, l, owner(p.controllerID, kind, name), true)
+}
+
+func (p *Provider) claimDirectory(ctx context.Context, kind, name string, l locator) error {
 	if err := p.requireIdentity(); err != nil {
 		return err
 	}
 	command := "set -eu; umask 077; test ! -L " + quote(l.Directory) + "; mkdir -p -- " + quote(l.Directory) + "; test \"$(realpath -- " + quote(l.Directory) + ")\" = " + quote(l.Directory) + "; " +
 		"if test -e " + quote(l.Directory+"/.openctl-owner") + "; then " + p.ownership(kind, name, l) + "; else test ! -e " + quote(l.Directory+"/compose.yaml") + "; (set -C; printf '%s' " + quote(owner(p.controllerID, kind, name)) + " > " + quote(l.Directory+"/.openctl-owner") + ") || " + p.ownership(kind, name, l) + "; fi"
 	_, err := p.run(ctx, l, "claim application directory (existing unmanaged Compose files or another resource owner are not adopted implicitly)", command, nil)
-	if err != nil {
-		return err
-	}
-	return p.claimProject(ctx, l, owner(p.controllerID, kind, name), true)
+	return err
 }
 
 func compose(l locator) string {
-	return "docker compose --project-name " + quote(l.Project) + " --project-directory " + quote(l.Directory) + " --env-file " + quote(l.Directory+"/.env") + " -f " + quote(l.Directory+"/compose.yaml")
+	return composeBase(l) + " --env-file " + quote(l.Directory+"/.env") + " -f " + quote(l.Directory+"/compose.yaml")
 }
 
 func (p *Provider) Get(ctx context.Context, kind, name string) (*protocol.Resource, error) {

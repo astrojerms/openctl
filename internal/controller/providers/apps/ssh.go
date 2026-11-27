@@ -3,6 +3,7 @@ package apps
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -22,6 +23,14 @@ type commandRunner interface {
 
 type sshRunner struct{}
 
+// preCommandError is evidence that this invocation never submitted an SSH exec
+// request. Errors from Run/Start are deliberately outside this boundary: even a
+// lost response can mean the command executed remotely.
+type preCommandError struct{ err error }
+
+func (e *preCommandError) Error() string { return e.err.Error() }
+func (e *preCommandError) Unwrap() error { return e.err }
+
 func expandHome(p string) (string, error) {
 	if strings.HasPrefix(p, "~/") {
 		home, err := os.UserHomeDir()
@@ -35,7 +44,13 @@ func expandHome(p string) (string, error) {
 
 // Run follows the existing x/crypto SSH machinery, but never trusts unknown keys
 // and closes the transport on cancellation (including during the handshake).
-func (sshRunner) Run(ctx context.Context, t Target, command string, input []byte) (string, error) {
+func (sshRunner) Run(ctx context.Context, t Target, command string, input []byte) (out string, err error) {
+	commandRequested := false
+	defer func() {
+		if err != nil && !commandRequested {
+			err = &preCommandError{err: err}
+		}
+	}()
 	keyPath, err := expandHome(t.PrivateKeyFile)
 	if err != nil {
 		return "", fmt.Errorf("apps: cannot resolve SSH key path")
@@ -88,6 +103,7 @@ func (sshRunner) Run(ctx context.Context, t Target, command string, input []byte
 	} else {
 		command = "bash -c " + quote(command)
 	}
+	commandRequested = true
 	err = session.Run(command)
 	if ctx.Err() != nil {
 		return "", ctx.Err()
@@ -125,16 +141,24 @@ func quote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'")
 func (p *Provider) run(ctx context.Context, l locator, stage, command string, input []byte) (string, error) {
 	out, err := p.runner.Run(ctx, l.Target, command, input)
 	if err != nil {
-		if ctx.Err() != nil {
-			return "", ctx.Err()
-		}
-		// Never interpolate remote output or errors: neither is a trusted,
-		// secret-free diagnostic channel. Transport diagnostics are safe only
-		// for the real runner, which sanitizes remote command errors itself.
+		var before *preCommandError
+		noCommand := errors.As(err, &before)
+		// Never interpolate remote output or arbitrary runner errors: neither is
+		// a trusted, secret-free diagnostic channel. Preserve typed boundary
+		// evidence even when cancellation also explains the transport failure.
+		var diagnostic error
 		if _, ok := p.runner.(sshRunner); ok {
-			return "", fmt.Errorf("apps: %s: %w", stage, err)
+			diagnostic = fmt.Errorf("apps: %s: %w", stage, err)
+		} else {
+			diagnostic = fmt.Errorf("apps: %s failed", stage)
 		}
-		return "", fmt.Errorf("apps: %s failed", stage)
+		if ctx.Err() != nil {
+			diagnostic = fmt.Errorf("apps: %s: %w", stage, ctx.Err())
+		}
+		if noCommand {
+			return "", &preCommandError{err: diagnostic}
+		}
+		return "", diagnostic
 	}
 	return out, nil
 }
