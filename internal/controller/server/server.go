@@ -125,8 +125,8 @@ func New(opts Options) (*Server, error) {
 
 	g := grpc.NewServer(srvOpts...)
 	apiv1.RegisterPingServiceServer(g, &pingHandler{
-		controllerID:    opts.ControllerID,
-		idempotentApply: opts.Operations != nil && opts.Dispatcher != nil,
+		controllerID:      opts.ControllerID,
+		durableOperations: opts.Operations != nil && opts.Dispatcher != nil,
 	})
 	apiv1.RegisterOverviewServiceServer(g, newOverviewHandler(opts.Overview))
 	apiv1.RegisterInventoryServiceServer(g, newInventoryHandler(opts.Manifests))
@@ -227,17 +227,18 @@ func (s *Server) StopWithTimeout(d time.Duration) {
 // TLS, auth, and the gRPC pipeline end-to-end.
 type pingHandler struct {
 	apiv1.UnimplementedPingServiceServer
-	controllerID    string
-	idempotentApply bool
+	controllerID      string
+	durableOperations bool
 }
 
 func (h *pingHandler) Ping(_ context.Context, req *apiv1.PingRequest) (*apiv1.PingResponse, error) {
 	return &apiv1.PingResponse{
-		Echo:                    req.GetMessage(),
-		ServerVersion:           ServerVersion,
-		GitCommit:               GitCommit,
-		BuildTime:               BuildTime,
-		ControllerId:            h.controllerID,
-		SupportsIdempotentApply: h.idempotentApply,
+		Echo:                     req.GetMessage(),
+		ServerVersion:            ServerVersion,
+		GitCommit:                GitCommit,
+		BuildTime:                BuildTime,
+		ControllerId:             h.controllerID,
+		SupportsIdempotentApply:  h.durableOperations,
+		SupportsIdempotentDelete: h.durableOperations,
 	}, nil
 }

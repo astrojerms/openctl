@@ -12,7 +12,7 @@ import (
 	"github.com/openctl/openctl/pkg/protocol"
 )
 
-// RequestBinding identifies the caller and original, unresolved Apply intent.
+// RequestBinding identifies the caller and original Apply or Delete intent.
 // Only this digest, actor, and operation ID are retained beyond operation GC.
 type RequestBinding struct {
 	ID         string
@@ -59,15 +59,37 @@ func NewApplyRequest(id, actor string, desired *protocol.Resource, createOnly, a
 	return RequestBinding{ID: id, Actor: actor, IntentHash: hex.EncodeToString(digest[:])}, nil
 }
 
+// NewDeleteRequest hashes the target identity in a separate action domain from
+// Apply without changing fingerprints already accepted for Apply requests.
+func NewDeleteRequest(id, actor, apiVersion, kind, name string) (RequestBinding, error) {
+	if err := ValidateRequestID(id); err != nil {
+		return RequestBinding{}, err
+	}
+	if id == "" || actor == "" || apiVersion == "" || kind == "" || name == "" {
+		return RequestBinding{}, fmt.Errorf("request ID, actor, apiVersion, kind, and name are required")
+	}
+	body, err := json.Marshal(struct {
+		Action     string `json:"action"`
+		APIVersion string `json:"apiVersion"`
+		Kind       string `json:"kind"`
+		Name       string `json:"name"`
+	}{TypeDelete, apiVersion, kind, name})
+	if err != nil {
+		return RequestBinding{}, fmt.Errorf("encode request intent: %w", err)
+	}
+	digest := sha256.Sum256(body)
+	return RequestBinding{ID: id, Actor: actor, IntentHash: hex.EncodeToString(digest[:])}, nil
+}
+
 // RequestConflictError refuses reuse of an accepted key by another actor or
-// with different desired intent/flags. Neither original payload nor actor leaks.
+// with different action or intent. Neither original payload nor actor leaks.
 type RequestConflictError struct {
 	RequestID   string
 	OperationID string
 }
 
 func (e *RequestConflictError) Error() string {
-	return fmt.Sprintf("request_id is already bound to operation %s with a different actor or apply intent", e.OperationID)
+	return fmt.Sprintf("request_id is already bound to operation %s with a different actor or request intent", e.OperationID)
 }
 
 // RequestPrunedError is a durable tombstone, not an invented operation status.
@@ -138,7 +160,7 @@ func (s *Store) GetByRequest(ctx context.Context, id string) (*Operation, error)
 	return getAcceptedOperation(ctx, s.db, operationID)
 }
 
-// SubmitRequest atomically binds an Apply request to its admitted operation.
+// SubmitRequest atomically binds an Apply or Delete request to its admitted operation.
 // admitted is false on replay. An accepted key is checked before all resource
 // fences, and is never rebound, even if the original operation was pruned.
 func (s *Store) SubmitRequest(ctx context.Context, op *Operation, request RequestBinding) (*Operation, bool, error) {
@@ -148,8 +170,8 @@ func (s *Store) SubmitRequest(ctx context.Context, op *Operation, request Reques
 	if request.ID == "" || request.Actor == "" || request.IntentHash == "" {
 		return nil, false, fmt.Errorf("request ID, actor, and intent hash are required")
 	}
-	if op.Type != TypeApply || op.ParentID != "" {
-		return nil, false, fmt.Errorf("request bindings are only valid for top-level apply operations")
+	if (op.Type != TypeApply && op.Type != TypeDelete) || op.ParentID != "" {
+		return nil, false, fmt.Errorf("request bindings are only valid for top-level apply or delete operations")
 	}
 	accepted, err := s.submit(ctx, op, &request)
 	// Fresh admission returns the caller's operation; replay loads the original.

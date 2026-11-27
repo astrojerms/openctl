@@ -320,6 +320,37 @@ secrets in the request ledger.
 - **AND** changed intent or a different actor conflicts without new work
 - **AND** request lookup is read-only and accepts opaque printable request IDs
 
+### Requirement: Durable Delete identity cannot target replacement infrastructure
+
+An accepted keyed Delete SHALL atomically bind its action, canonical actor and
+fully qualified target to one root operation in the same request namespace as
+Apply. It SHALL retain all fresh ownership, identity, dependency and manifest
+authority guards; accepted replay SHALL observe the original operation without
+reapplying those mutable checks or calling providers.
+
+#### Scenario: Delete acknowledgement is lost or its target is replaced
+
+- **WHEN** a keyed Delete is replayed concurrently, after restart, after removal
+  of tracking/provider configuration, or after a same-name replacement
+- **THEN** it returns its original operation without admitting another deletion
+- **AND** changed target, action or actor conflicts; pruned history retains the
+  reserved binding and cannot authorize new work
+- **AND** CLI and console require advertised durable Delete capability and a
+  matching acknowledged request ID and nonempty operation ID
+- **AND** errors preserve the original request identity for read-only recovery,
+  without automatically submitting again or choosing a fresh key
+
+#### Scenario: The console restores an uncertain deletion
+
+- **WHEN** the tab reloads or observation disappears after submission
+- **THEN** persisted attempt metadata is inspected only after validating the
+  controller/principal/target binding, without restoring consent or readiness
+- **AND** explicit recovery reads the original operation even without a live
+  resource; unknown lookup never proves that pending admission is impossible
+- **AND** deletion success requires terminal operation evidence, not NotFound
+- **AND** known failed/interrupted/canceled attempts require fresh inspection,
+  typed confirmation and a new request identity before any new mutation
+
 ### Requirement: A saved review is not execution authority
 
 Prepared reviews SHALL be bound to the controller and principal and require

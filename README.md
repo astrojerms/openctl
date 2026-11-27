@@ -339,7 +339,7 @@ operations or reconciliation against the original lab. **Never run both copies.*
 The daemon and backup share an exclusive state lock; older binaries do not
 honor it and must also be stopped.
 
-Restoring an older backup also rolls back accepted Apply request history. Inspect
+Restoring an older backup also rolls back accepted Apply/Delete request history. Inspect
 provider work submitted after that backup and discard stale browser reviews before
 resubmitting: a snapshot cannot deduplicate requests it never recorded.
 
@@ -438,8 +438,8 @@ openctl ctl op list --api-version k3s.openctl.io/v1 --kind Cluster --name dev
 openctl ctl op get OPERATION_ID
 ```
 
-Each Apply prints a generated UUID **before** submission. Keep it if the response
-or connection is lost; recover read-only, even if no operation ID was received:
+Each Apply or Delete prints a generated UUID **before** submission. Keep it if
+the response or connection is lost; recover read-only without an operation ID:
 
 ```bash
 openctl ctl op get --request-id REQUEST_ID
@@ -447,13 +447,14 @@ openctl ctl op get --request-id REQUEST_ID
 openctl ctl apply -f vm.yaml --create-only --request-id YOUR_UUID
 ```
 
-The same key, canonical actor, desired resource and flags return the original
-operation, including its failure; changed intent or another actor conflicts.
+The same key, canonical actor, action and intent return the original operation,
+including its failure; changed intent, target, action or another actor conflicts.
 The binding survives normal restarts and operation-history pruning. Pruned work
 cannot be resubmitted under its old key. A new attempt after known terminal
 failure needs fresh inspection/review and a **new** key, not automatic retries.
-Upgrade CLI and controller together: keyed Apply refuses controllers without
-durable request support. Request IDs are metadata, not credentials; prefer UUIDs.
+Upgrade CLI and controller together: keyed Apply/Delete refuse controllers
+without their durable capability. Request IDs are metadata, not credentials;
+prefer UUIDs.
 
 Inspect controller runtime actions and retrieve application logs:
 
@@ -475,7 +476,7 @@ Returned payloads are never printed implicitly, including in JSON/YAML: omitting
 `--download` can fail output handling **after the action request succeeded**.
 Links are displayed, never opened automatically, and can also be sensitive.
 
-Runtime actions do not change desired intent or use durable Apply request IDs.
+Runtime actions do not change desired intent or use durable admission request IDs.
 They are never automatically retried. A successful request may only have queued
 a provider task: inspect task completion and independent readiness. After a
 timeout, disconnection or output failure, inspect before deciding to repeat.
@@ -486,6 +487,25 @@ Delete a resource:
 openctl ctl delete VirtualMachine web-01 --api-version proxmox.openctl.io/v1
 openctl ctl delete Cluster dev --api-version k3s.openctl.io/v1
 ```
+
+Delete uses the same durable request ledger as Apply, with a distinct action and
+target fingerprint. An explicit `--request-id YOUR_UUID` replays that exact
+admission; it cannot delete a new resource that later occupies the same name.
+After a timeout, first use `ctl op get --request-id REQUEST_ID`; do not mint a
+new request identity automatically. Known failed/interrupted/canceled operations
+need fresh inspection and explicit authorization before a newly keyed attempt.
+Saved intent disappearing or a provider returning NotFound is not proof of
+successful deletion: inspect the terminal operation.
+
+The console persists delete-attempt metadata in the current tab, bound to the
+controller, principal and resource. Reload restores inspection, not consent or
+submission. **Recover request** only reads the original operation, even
+when the resource or its provider is gone. A failed acknowledgement never
+silently navigates away, resubmits or authorizes deleting a replacement.
+After **Recover request** establishes a terminal outcome, **Review new delete
+attempt** refetches live state and requires new typed confirmation and a fresh
+key. After success, this is available only for a currently tracked resource;
+it never turns a missing resource or cached outcome into new deletion authority.
 
 ## Connect And Adopt An Existing Lab
 

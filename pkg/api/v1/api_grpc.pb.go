@@ -1403,7 +1403,7 @@ const (
 // until terminal status (succeeded, failed, interrupted).
 type OperationServiceClient interface {
 	GetOperation(ctx context.Context, in *GetOperationRequest, opts ...grpc.CallOption) (*Operation, error)
-	// Read-only recovery when an Apply acknowledgement was lost.
+	// Read-only recovery when an Apply or Delete acknowledgement was lost.
 	GetOperationByRequest(ctx context.Context, in *GetOperationByRequestRequest, opts ...grpc.CallOption) (*Operation, error)
 	ListOperations(ctx context.Context, in *ListOperationsRequest, opts ...grpc.CallOption) (*ListOperationsResponse, error)
 	// WatchOperations streams op state transitions. Same poll-based v1 as
@@ -1494,7 +1494,7 @@ func (c *operationServiceClient) CancelOperation(ctx context.Context, in *Cancel
 // until terminal status (succeeded, failed, interrupted).
 type OperationServiceServer interface {
 	GetOperation(context.Context, *GetOperationRequest) (*Operation, error)
-	// Read-only recovery when an Apply acknowledgement was lost.
+	// Read-only recovery when an Apply or Delete acknowledgement was lost.
 	GetOperationByRequest(context.Context, *GetOperationByRequestRequest) (*Operation, error)
 	ListOperations(context.Context, *ListOperationsRequest) (*ListOperationsResponse, error)
 	// WatchOperations streams op state transitions. Same poll-based v1 as

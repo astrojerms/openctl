@@ -52,7 +52,7 @@ func sourceFromContext(ctx context.Context) string {
 // insert ops into the operations Store and notify the Dispatcher; Get/List
 // remain synchronous (read-only).
 //
-// If ops or dispatcher are nil (test mode), Apply/Delete fall back to
+// If ops or dispatcher are nil (test mode), unkeyed Apply/Delete fall back to
 // calling the Provider synchronously and return a synthetic operation_id.
 type resourceHandler struct {
 	apiv1.UnimplementedResourceServiceServer
@@ -177,7 +177,7 @@ func (h *resourceHandler) Apply(ctx context.Context, req *apiv1.ApplyRequest) (*
 		op, err = h.ops.Submit(ctx, candidate)
 	}
 	if err != nil {
-		return nil, applyOperationError(err)
+		return nil, operationSubmissionError(err)
 	}
 	if admitted {
 		h.dispatcher.Notify()
@@ -215,7 +215,7 @@ func (h *resourceHandler) checkApplyAdmission(ctx context.Context, manifest *pro
 func (h *resourceHandler) replayApplyRequest(ctx context.Context, request operations.RequestBinding) (*apiv1.ApplyResponse, error) {
 	op, err := h.ops.ReplayRequest(ctx, request)
 	if err != nil {
-		return nil, applyOperationError(err)
+		return nil, operationSubmissionError(err)
 	}
 	if op == nil {
 		return nil, nil
@@ -231,7 +231,7 @@ func applyOperationResponse(op *operations.Operation) *apiv1.ApplyResponse {
 	}
 }
 
-func applyOperationError(err error) error {
+func operationSubmissionError(err error) error {
 	var forgotten *manifests.ForgottenError
 	if errors.As(err, &forgotten) {
 		return status.Error(codes.FailedPrecondition, forgotten.Error())
@@ -1039,24 +1039,46 @@ func (h *resourceHandler) Delete(ctx context.Context, req *apiv1.DeleteRequest) 
 	if err := authorize(ctx, auth.RoleEditor); err != nil {
 		return nil, err
 	}
-	h.managementMu.RLock()
-	defer h.managementMu.RUnlock()
-	if err := h.checkManifestAuthority(); err != nil {
-		return nil, err
-	}
-	if _, err := h.registry.For(req.GetApiVersion()); err != nil {
+	if err := operations.ValidateRequestID(req.GetRequestId()); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	if err := h.checkNotForgotten(ctx, req.GetApiVersion(), req.GetKind(), req.GetName()); err != nil {
-		return nil, err
+	if req.GetApiVersion() == "" || req.GetKind() == "" || req.GetName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "api_version, kind, and name are required")
+	}
+	if req.GetRequestId() != "" && (h.ops == nil || h.dispatcher == nil) {
+		return nil, status.Error(codes.FailedPrecondition, "request_id requires durable operations and an active dispatcher")
+	}
+	var request *operations.RequestBinding
+	if req.GetRequestId() != "" {
+		actor := auth.DefaultUserID
+		if principal, ok := auth.PrincipalFromContext(ctx); ok {
+			actor = principal.ActorID()
+		}
+		binding, err := operations.NewDeleteRequest(req.GetRequestId(), actor, req.GetApiVersion(), req.GetKind(), req.GetName())
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "request binding: %v", err)
+		}
+		request = &binding
+		if replay, err := h.replayDeleteRequest(ctx, binding); err != nil || replay != nil {
+			return replay, err
+		}
 	}
 
-	if err := h.CheckDelete(ctx, req.GetApiVersion(), req.GetKind(), req.GetName()); err != nil {
+	h.managementMu.RLock()
+	defer h.managementMu.RUnlock()
+	if err := h.checkDeleteAdmission(ctx, req.GetApiVersion(), req.GetKind(), req.GetName()); err != nil {
+		// An identical request can finish after the first lookup and remove its
+		// tracking before these mutable checks return. Its binding wins.
+		if request != nil {
+			if replay, replayErr := h.replayDeleteRequest(ctx, *request); replayErr != nil || replay != nil {
+				return replay, replayErr
+			}
+		}
 		return nil, err
 	}
 
 	if h.ops == nil || h.dispatcher == nil {
-		// Phase 2 sync fallback — used by tests.
+		// Legacy unkeyed sync fallback — used by tests.
 		p, err := h.registry.For(req.GetApiVersion())
 		if err != nil {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -1069,30 +1091,60 @@ func (h *resourceHandler) Delete(ctx context.Context, req *apiv1.DeleteRequest) 
 		}, nil
 	}
 
-	op, err := h.ops.Submit(ctx, &operations.Operation{
+	candidate := &operations.Operation{
 		Type:         operations.TypeDelete,
 		APIVersion:   req.GetApiVersion(),
 		Kind:         req.GetKind(),
 		ResourceName: req.GetName(),
 		Source:       sourceFromContext(ctx),
-	})
-	if err != nil {
-		var forgotten *manifests.ForgottenError
-		if errors.As(err, &forgotten) {
-			return nil, status.Error(codes.FailedPrecondition, forgotten.Error())
-		}
-		var conflict *operations.ConflictError
-		if errors.As(err, &conflict) {
-			return nil, status.Error(codes.AlreadyExists, conflict.Error())
-		}
-		return nil, status.Errorf(codes.Internal, "submit op: %v", err)
 	}
-	h.dispatcher.Notify()
+	var op *operations.Operation
+	var err error
+	admitted := true
+	if request != nil {
+		op, admitted, err = h.ops.SubmitRequest(ctx, candidate, *request)
+	} else {
+		op, err = h.ops.Submit(ctx, candidate)
+	}
+	if err != nil {
+		return nil, operationSubmissionError(err)
+	}
+	if admitted {
+		h.dispatcher.Notify()
+	}
+	return deleteOperationResponse(op), nil
+}
 
+func (h *resourceHandler) checkDeleteAdmission(ctx context.Context, apiVersion, kind, name string) error {
+	if err := h.checkManifestAuthority(); err != nil {
+		return err
+	}
+	if _, err := h.registry.For(apiVersion); err != nil {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	if err := h.checkNotForgotten(ctx, apiVersion, kind, name); err != nil {
+		return err
+	}
+	return h.CheckDelete(ctx, apiVersion, kind, name)
+}
+
+func (h *resourceHandler) replayDeleteRequest(ctx context.Context, request operations.RequestBinding) (*apiv1.DeleteResponse, error) {
+	op, err := h.ops.ReplayRequest(ctx, request)
+	if err != nil {
+		return nil, operationSubmissionError(err)
+	}
+	if op == nil {
+		return nil, nil
+	}
+	return deleteOperationResponse(op), nil
+}
+
+func deleteOperationResponse(op *operations.Operation) *apiv1.DeleteResponse {
 	return &apiv1.DeleteResponse{
 		OperationId: op.ID,
-		Message:     fmt.Sprintf("%s %q delete submitted as %s", req.GetKind(), req.GetName(), op.ID),
-	}, nil
+		RequestId:   op.RequestID,
+		Message:     fmt.Sprintf("%s %q delete submitted as %s", op.Kind, op.ResourceName, op.ID),
+	}
 }
 
 // protoToResource converts the wire form into the in-process Resource type

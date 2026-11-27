@@ -115,7 +115,7 @@ export const session = {
       { bearer: rootToken },
     ),
   logout: () => api.post<Record<string, never>>('/v1/session/logout'),
-  whoami: () => api.get<WhoAmIResponse>('/v1/session/whoami'),
+  whoami: (opts?: RequestOptions) => api.get<WhoAmIResponse>('/v1/session/whoami', opts),
 };
 
 export interface PingResponse {
@@ -127,6 +127,7 @@ export interface PingResponse {
   buildTime?: string;
   controllerId?: string;
   supportsIdempotentApply?: boolean;
+  supportsIdempotentDelete?: boolean;
 }
 
 export const ping = {
@@ -362,9 +363,17 @@ export interface InvokeActionResponse {
   downloadFilename?: string;
 }
 
+export interface DeleteResourceRequest {
+  apiVersion: string;
+  kind: string;
+  name: string;
+  requestId: string;
+}
+
 export interface DeleteResourceResponse {
   operationId?: string;
   message?: string;
+  requestId?: string;
 }
 
 export interface TemplateSummary {
@@ -530,10 +539,8 @@ export const resources = {
       apiVersion, kind, resourceName, action,
       ...(parameters && Object.keys(parameters).length > 0 ? { parameters } : {}),
     }, opts),
-  delete: (apiVersion: string, kind: string, name: string, opts?: RequestOptions) =>
-    api.post<DeleteResourceResponse>('/v1/resources:delete', {
-      apiVersion, kind, name,
-    }, opts),
+  delete: (req: DeleteResourceRequest, opts?: RequestOptions) =>
+    api.post<DeleteResourceResponse>('/v1/resources:delete', req, opts),
 };
 
 // --- Operations ----------------------------------------------------------
@@ -580,8 +587,8 @@ export interface CancelOperationResponse {
 export const operations = {
   get: (id: string, includeChildren = false, opts?: RequestOptions) =>
     api.get<Operation>(`/v1/operations/${encodeURIComponent(id)}${includeChildren ? '?include_children=true' : ''}`, opts),
-  byRequest: (requestId: string, includeChildren = false) =>
-    api.post<Operation>('/v1/operations:byRequest', { requestId, includeChildren }),
+  byRequest: (requestId: string, includeChildren = false, opts?: RequestOptions) =>
+    api.post<Operation>('/v1/operations:byRequest', { requestId, includeChildren }, opts),
   list: (req: ListOperationsRequest = {}, opts?: RequestOptions) =>
     api.post<ListOperationsResponse>('/v1/operations:list', req, opts),
   cancel: (id: string) =>

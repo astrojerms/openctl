@@ -168,6 +168,60 @@ describe('independent saved intent and strict observation', () => {
     expect(inspection.canAct()).toBe(false);
   });
 
+  it('removes a previously saved declaration after authoritative deletion instead of exporting old intent', async () => {
+    vi.spyOn(inventoryApi, 'get').mockResolvedValueOnce(saved).mockRejectedValueOnce(new ApiError(404, 'saved declaration removed'));
+    vi.spyOn(resources, 'get').mockResolvedValueOnce(observed).mockRejectedValueOnce(new ApiError(404, 'instance removed'));
+    const { inspection } = create();
+    inspection.open(target);
+    await settle();
+    expect(get(inspection).saved).toEqual(saved);
+    await inspection.refresh();
+    await settle();
+    const state = get(inspection);
+    expect(state.saved).toBeNull();
+    expect(state.savedLoading).toBe(false);
+    expect(detailManifestYAML(state.saved, state.data)).toBe('');
+    expect(state.observation).toBe('not-found');
+  });
+
+  it('coalesces saved refreshes and never republishes intent superseded by a newer resource event', async () => {
+    const old = Promise.withResolvers<GetSavedResourceResponse>();
+    const current = Promise.withResolvers<GetSavedResourceResponse>();
+    const read = vi.spyOn(inventoryApi, 'get').mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
+    vi.spyOn(resources, 'get').mockResolvedValue(observed);
+    const { inspection } = create();
+    inspection.open(target);
+    await settle();
+    void inspection.refresh();
+    void inspection.refresh();
+    expect(read).toHaveBeenCalledTimes(1);
+    old.resolve(saved);
+    await settle();
+    expect(get(inspection).saved).toBeNull();
+    const updated = { ...saved, source: 'gitops', resource: { ...saved.resource, spec: { generation: 'new' } } };
+    current.resolve(updated);
+    await settle();
+    expect(get(inspection).saved).toEqual(updated);
+    expect(get(inspection).savedLoading).toBe(false);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps intent reads independent of observation invalidation', async () => {
+    const pending = Promise.withResolvers<GetSavedResourceResponse>();
+    vi.spyOn(inventoryApi, 'get').mockReturnValue(pending.promise);
+    vi.spyOn(resources, 'get').mockResolvedValue(observed);
+    const { inspection } = create();
+    inspection.open(target);
+    await settle();
+    inspection.invalidate(new Error('observation stream disconnected'));
+    pending.resolve(saved);
+    await settle();
+    expect(get(inspection).saved).toEqual(saved);
+    expect(get(inspection).savedLoading).toBe(false);
+    expect(get(inspection).data).toBeNull();
+    expect(inspection.canAct()).toBe(false);
+  });
+
   it('exports exact desired markers and metadata without observed status, drift, children or ownership', () => {
     const intent = { ...saved, resource: { ...saved.resource, metadata: { ...saved.resource.metadata, ownerRefs: [{ ...target }] }, status: { ready: true }, drift: [{ path: 'spec', desired: 'a', observed: 'b' }], children: [{ ...target }] } };
     const before = structuredClone(intent);

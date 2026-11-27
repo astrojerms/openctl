@@ -105,6 +105,8 @@ of application health; a passed fake-provider test is not hardware validation.
 - A cache hit requires live observable agreement, not just unchanged input.
 - Operation success requires durable desired-state bookkeeping. If provider
   mutation succeeds but persistence fails, report partial success explicitly.
+- Accepted Apply/Delete requests have durable per-actor identities and read-only
+  lost-acknowledgement recovery; exact deletion replay cannot target a replacement.
 - Bind VM operations to immutable placement and identity. Fail closed on
   ambiguous names, unreadable ownership, or unsafe dependent deletion.
 - One desired-state authority: controller-owned `mirror`, or upstream-owned

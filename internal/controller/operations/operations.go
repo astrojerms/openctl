@@ -80,7 +80,7 @@ type Operation struct {
 	// CreateOnly rejects an existing managed or live resource instead of
 	// updating it. Persisted so a restart cannot turn creation into upsert.
 	CreateOnly bool
-	// RequestID is the durable Apply request key, when one was supplied.
+	// RequestID is the durable Apply or Delete request key, when supplied.
 	RequestID string
 }
 

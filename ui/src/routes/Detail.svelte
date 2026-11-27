@@ -1,16 +1,19 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
+  import { get } from 'svelte/store';
   import { resources, ownership, operations, UnauthorizedError, type Operation, type Resource, type ResourceRef, type ActionSpec, type MigrationBundle } from '../lib/api';
   import { auth, canMutate } from '../lib/auth';
   import { canEditDesired, canManageOwnership, desiredMutationHint } from '../lib/authority';
   import { withoutRequestConsent } from '../lib/retry';
   import { applicationChecks, childHealth, type ChildState } from '../lib/detailState';
   import { createDetailInspection, detailManifestYAML, type DetailLease } from '../lib/detailInspection';
+  import { createDeleteAttempt } from '../lib/deletionAttempt';
+  import { focusOpsDrawer } from '../lib/opsDrawer';
   // Shown on disabled mutation controls for a read-only (viewer) session.
   const readOnlyTitle = 'Read-only session — requires editor or admin role';
   import { watchResources } from '../lib/watch';
   import { statusBadge } from '../lib/format';
-  import { routeHref, navigate } from '../lib/router';
+  import { routeHref } from '../lib/router';
   import { ops as opsStore } from '../lib/ops';
   import HistoryDiff from '../components/HistoryDiff.svelte';
   import DagView from '../components/DagView.svelte';
@@ -31,11 +34,23 @@
     reconcileErr = '';
     migrationMessage = '';
     migrationError = '';
-    deleteErr = '';
     copyMsg = '';
     exportedBundle = null;
     cancelParamForm();
     auth.set({ kind: 'signed-out' });
+  });
+  // Uncertain Delete admission stays recovery-only. A missing resource or
+  // declaration never establishes success or authorizes a new request identity.
+  const deletion = createDeleteAttempt({
+    storage: () => sessionStorage,
+    canDelete: () => inspection.canAct() && get(canEditDesired),
+    canReviewNew: (operation) => inspection.canAct() && get(canEditDesired)
+      && (operation.status !== 'succeeded' || !!get(inspection).data?.applied),
+    refreshAfterTerminal: () => inspection.refresh(),
+    confirm: (target, newAttempt) => prompt(newAttempt
+      ? `Review a NEW deletion of ${target.kind} ${target.name}?\n\nThis deletes the currently observed resource with a fresh request ID. It is NOT a replay of the previous Delete.\n\nType the name to confirm this NEW deletion:`
+      : `Delete ${target.kind} ${target.name}?\n\nType the name to confirm:`),
+    onUnauthorized: () => inspection.unauthorized(),
   });
   $: data = $inspection.data;
   $: saved = $inspection.saved;
@@ -47,10 +62,18 @@
   let watching = '';
   let childController: AbortController | null = null;
   let childStates: Record<string, ChildState | null> = {};
+  const unsubscribeDeleteAuth = auth.subscribe((state) => {
+    if (watching) void deletion.open(
+      { apiVersion, kind, name: resourceName },
+      state.kind === 'signed-in' ? state.me : null,
+    );
+  });
 
   function childKey(ref: ResourceRef): string {
     return `${ref.apiVersion}/${ref.kind}/${ref.name}`;
   }
+
+  $: for (const operation of $opsStore) deletion.observe(operation);
 
   $: switchTo(apiVersion, kind, resourceName);
 
@@ -73,8 +96,6 @@
     actionInflight = '';
     actionMsg = '';
     actionErr = '';
-    deleting = false;
-    deleteErr = '';
     copyMsg = '';
     operationHistory = null;
     historyLoading = false;
@@ -83,6 +104,8 @@
     cancelParamForm();
     released = false;
     inspection.open({ apiVersion: av, kind: k, name: n });
+    const session = get(auth);
+    void deletion.open({ apiVersion: av, kind: k, name: n }, session.kind === 'signed-in' ? session.me : null);
     const lease = inspection.capture();
     if (lease) {
       void subscribe(av, k, n, lease);
@@ -168,6 +191,8 @@
   onDestroy(() => {
     childController?.abort();
     inspection.stop();
+    unsubscribeDeleteAuth();
+    deletion.close();
   });
 
   // Pretty-print JSON for the desired/observed panes. The proto wire
@@ -444,38 +469,10 @@
     await doAction(spec.name);
   }
 
-  // U8.14: destructive delete flow. Requires the user to type the
-  // resource name back to confirm — same guard shape kubectl and the
-  // AWS console use for destructive actions. Success navigates to
-  // the list (the resource is gone; there's nothing to render here).
-  let deleting = false;
-  let deleteErr = '';
-  async function doDelete() {
-    if (!inspection.canAct() || deleting || !$canEditDesired) return;
-    const lease = inspection.capture();
-    if (!lease) return;
-    const typed = prompt(`Delete ${kind} ${resourceName}?\n\nType the name to confirm:`);
-    if (typed === null) return;
-    if (typed !== resourceName) {
-      deleteErr = 'Name did not match; delete cancelled.';
-      return;
-    }
-    if (!inspection.current(lease, true) || !$canEditDesired) return;
-    deleting = true;
-    deleteErr = '';
-    try {
-      await resources.delete(apiVersion, kind, resourceName, { signal: lease.signal });
-      if (!inspection.current(lease, true)) return;
-      // Immediately navigate back — the delete is submitted and the
-      // resource will disappear from the list on the next Watch tick.
-      navigate({ name: 'list', apiVersion, kind });
-    } catch (err) {
-      if (!inspection.current(lease)) return;
-      if (err instanceof UnauthorizedError) { inspection.unauthorized(); return; }
-      if (inspection.current(lease, true)) deleteErr = err instanceof Error ? err.message : String(err);
-    } finally {
-      if (inspection.current(lease)) deleting = false;
-    }
+  function inspectDeleteOperation() {
+    const attempt = $deletion.attempt;
+    if (!attempt?.operationId) return;
+    focusOpsDrawer({ apiVersion, kind, resourceName, opId: attempt.operationId });
   }
 
   // U8.17: live progress on the detail page. Subscribe to the global
@@ -483,11 +480,11 @@
   // an inline banner. When the op completes, we auto-refetch to catch
   // up before the reconciler tick and then drop the banner. Composite
   // resources also match children whose ops are still running.
-  $: activeOp = $opsStore.find((o) => {
+  $: activeOp = $auth.kind === 'signed-in' && $inspection.observation !== 'unauthorized' ? $opsStore.find((o) => {
     if (o.apiVersion !== apiVersion || o.kind !== kind) return false;
     if (o.resourceName !== resourceName) return false;
     return o.status === 'pending' || o.status === 'running';
-  }) ?? null;
+  }) ?? null : null;
 
   // When the active op transitions to terminal (out of pending/running),
   // refetch once so status catches up promptly.
@@ -622,17 +619,57 @@
         <button
           type="button"
           class="delete-btn"
-          disabled={!fresh || deleting}
-          title={fresh ? 'Delete this resource' : 'Requires fresh provider observation'}
-          on:click={doDelete}
-        >{deleting ? 'Deleting…' : 'Delete'}</button>
+          disabled={!fresh || !$deletion.ready || !!$deletion.busy || !!$deletion.attempt}
+          title={!fresh ? 'Requires fresh provider observation' : $deletion.attempt ? 'Recover the existing request; another Delete is blocked' : 'Delete this resource with durable request recovery'}
+          on:click={() => deletion.submit()}
+        >{$deletion.busy === 'submitting' ? 'Submitting delete…' : 'Delete'}</button>
       {/if}
       {/if}
     </div>
   </header>
 
-  {#if deleteErr}
-    <p class="err small">{deleteErr}</p>
+  {#if $deletion.error}
+    <p class="err small" role="alert">{$deletion.error}</p>
+  {/if}
+  {#if $auth.kind === 'signed-in'}
+    {#if $deletion.attempt}
+      <article class="card">
+        <div class="card-head">
+          <h3>Delete request</h3>
+          <div class="card-actions">
+            <button type="button" class="mini-btn" disabled={!!$deletion.busy || !$deletion.ready} on:click={() => deletion.recover()}>
+              {$deletion.busy === 'recovering' ? 'Recovering…' : 'Recover request'}
+            </button>
+            {#if $deletion.attempt.operationId}
+              <button type="button" class="mini-btn" on:click={inspectDeleteOperation}>Inspect delete operation</button>
+            {/if}
+            {#if $deletion.reviewable && $canEditDesired}
+              <button type="button" class="mini-btn" disabled={!!$deletion.busy || !fresh || ($deletion.operation?.status === 'succeeded' && !data?.applied)} on:click={() => deletion.reviewNew()}>Review new delete attempt</button>
+            {/if}
+          </div>
+        </div>
+        <p class="small">Request ID: <code>{$deletion.attempt.requestId}</code></p>
+        {#if $deletion.attempt.operationId}
+          <p class="small">Operation ID: <code>{$deletion.attempt.operationId}</code></p>
+        {/if}
+        {#if $deletion.operation}
+          <p role="status">Delete operation: <strong>{$deletion.operation.status}</strong></p>
+          {#if $deletion.operation.error}<p class="err">{$deletion.operation.error}</p>{/if}
+          {#if $deletion.operation.status === 'succeeded'}
+            <p class="muted small">The Delete operation succeeded. A missing resource alone is not proof of success.</p>
+          {:else if ['failed', 'interrupted', 'canceled'].includes($deletion.operation.status)}
+            <p class="muted small">This Delete did not succeed. Inspect its operation and current resource before considering any new deletion.</p>
+          {/if}
+        {:else}
+          <p class="muted small">{$deletion.attempt.operationId ? 'Delete acknowledged; operation outcome not yet observed.' : 'Delete admission is uncertain or not yet acknowledged.'}</p>
+        {/if}
+        <p class="muted small">Recovery is read-only and works without a live resource or saved declaration. Unknown or active attempts never resubmit Delete. A new deletion requires confirmed terminal recovery, a fresh provider observation and new typed consent; a succeeded attempt also requires a currently tracked declaration. Leaving this page does not cancel accepted work.</p>
+      </article>
+    {:else if !$deletion.ready}
+      <button type="button" class="mini-btn" disabled={!!$deletion.busy} on:click={() => deletion.verify()}>
+        {$deletion.busy === 'binding' ? 'Verifying delete recovery…' : 'Verify delete recovery'}
+      </button>
+    {/if}
   {/if}
 
   {#if activeOp}

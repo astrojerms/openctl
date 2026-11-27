@@ -137,8 +137,10 @@ type PingResponse struct {
 	ControllerId string `protobuf:"bytes,5,opt,name=controller_id,json=controllerId,proto3" json:"controller_id,omitempty"`
 	// Keyed Apply is durably deduplicated and recoverable by request ID.
 	SupportsIdempotentApply bool `protobuf:"varint,6,opt,name=supports_idempotent_apply,json=supportsIdempotentApply,proto3" json:"supports_idempotent_apply,omitempty"`
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	// Keyed Delete is durably deduplicated and recoverable by request ID.
+	SupportsIdempotentDelete bool `protobuf:"varint,7,opt,name=supports_idempotent_delete,json=supportsIdempotentDelete,proto3" json:"supports_idempotent_delete,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
 }
 
 func (x *PingResponse) Reset() {
@@ -209,6 +211,13 @@ func (x *PingResponse) GetControllerId() string {
 func (x *PingResponse) GetSupportsIdempotentApply() bool {
 	if x != nil {
 		return x.SupportsIdempotentApply
+	}
+	return false
+}
+
+func (x *PingResponse) GetSupportsIdempotentDelete() bool {
+	if x != nil {
+		return x.SupportsIdempotentDelete
 	}
 	return false
 }
@@ -2854,10 +2863,13 @@ func (x *ListResponse) GetResources() []*Resource {
 }
 
 type DeleteRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ApiVersion    string                 `protobuf:"bytes,1,opt,name=api_version,json=apiVersion,proto3" json:"api_version,omitempty"`
-	Kind          string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`
-	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	ApiVersion string                 `protobuf:"bytes,1,opt,name=api_version,json=apiVersion,proto3" json:"api_version,omitempty"`
+	Kind       string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`
+	Name       string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	// Optional durable admission key, shared with Apply's request namespace.
+	// Exact replay returns the original operation, never a second deletion.
+	RequestId     string `protobuf:"bytes,4,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2913,11 +2925,19 @@ func (x *DeleteRequest) GetName() string {
 	return ""
 }
 
+func (x *DeleteRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 type DeleteResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// operation_id identifies the async operation; poll via OperationService.
 	OperationId   string `protobuf:"bytes,1,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
 	Message       string `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	RequestId     string `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2962,6 +2982,13 @@ func (x *DeleteResponse) GetOperationId() string {
 func (x *DeleteResponse) GetMessage() string {
 	if x != nil {
 		return x.Message
+	}
+	return ""
+}
+
+func (x *DeleteResponse) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
 	}
 	return ""
 }
@@ -6634,7 +6661,7 @@ const file_api_proto_rawDesc = "" +
 	"\tapi.proto\x12\n" +
 	"openctl.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1cgoogle/api/annotations.proto\"'\n" +
 	"\vPingRequest\x12\x18\n" +
-	"\amessage\x18\x01 \x01(\tR\amessage\"\xe8\x01\n" +
+	"\amessage\x18\x01 \x01(\tR\amessage\"\xa6\x02\n" +
 	"\fPingResponse\x12\x12\n" +
 	"\x04echo\x18\x01 \x01(\tR\x04echo\x12%\n" +
 	"\x0eserver_version\x18\x02 \x01(\tR\rserverVersion\x12\x1d\n" +
@@ -6643,7 +6670,8 @@ const file_api_proto_rawDesc = "" +
 	"\n" +
 	"build_time\x18\x04 \x01(\tR\tbuildTime\x12#\n" +
 	"\rcontroller_id\x18\x05 \x01(\tR\fcontrollerId\x12:\n" +
-	"\x19supports_idempotent_apply\x18\x06 \x01(\bR\x17supportsIdempotentApply\"\xb0\x01\n" +
+	"\x19supports_idempotent_apply\x18\x06 \x01(\bR\x17supportsIdempotentApply\x12<\n" +
+	"\x1asupports_idempotent_delete\x18\a \x01(\bR\x18supportsIdempotentDelete\"\xb0\x01\n" +
 	"\x1eConfirmResourceIdentityRequest\x12\x1f\n" +
 	"\vapi_version\x18\x01 \x01(\tR\n" +
 	"apiVersion\x12\x12\n" +
@@ -6851,15 +6879,19 @@ const file_api_proto_rawDesc = "" +
 	"apiVersion\x12\x12\n" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\"B\n" +
 	"\fListResponse\x122\n" +
-	"\tresources\x18\x01 \x03(\v2\x14.openctl.v1.ResourceR\tresources\"X\n" +
+	"\tresources\x18\x01 \x03(\v2\x14.openctl.v1.ResourceR\tresources\"w\n" +
 	"\rDeleteRequest\x12\x1f\n" +
 	"\vapi_version\x18\x01 \x01(\tR\n" +
 	"apiVersion\x12\x12\n" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x12\n" +
-	"\x04name\x18\x03 \x01(\tR\x04name\"M\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x04 \x01(\tR\trequestId\"l\n" +
 	"\x0eDeleteResponse\x12!\n" +
 	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"W\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x03 \x01(\tR\trequestId\"W\n" +
 	"\fWatchRequest\x12\x1f\n" +
 	"\vapi_version\x18\x01 \x01(\tR\n" +
 	"apiVersion\x12\x12\n" +

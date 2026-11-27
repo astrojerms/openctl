@@ -134,21 +134,23 @@ func newCtlGetCommand() *cobra.Command {
 func newCtlDeleteCommand() *cobra.Command {
 	var (
 		apiVersion  string
+		requestID   string
 		noWait      bool
 		waitTimeout time.Duration
 	)
 	cmd := &cobra.Command{
 		Use:   "delete <kind> <name>",
-		Short: "Delete a resource via the controller (idempotent)",
+		Short: "Delete a resource via the controller with durable request recovery",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if apiVersion == "" {
 				return fmt.Errorf("--api-version is required (e.g. proxmox.openctl.io/v1)")
 			}
-			return ctlDelete(cmd.Context(), apiVersion, args[0], args[1], !noWait, waitTimeout)
+			return ctlDelete(cmd.Context(), &apiv1.DeleteRequest{ApiVersion: apiVersion, Kind: args[0], Name: args[1], RequestId: requestID}, !noWait, waitTimeout)
 		},
 	}
 	cmd.Flags().StringVar(&apiVersion, "api-version", "", "resource apiVersion (e.g. proxmox.openctl.io/v1)")
+	cmd.Flags().StringVar(&requestID, "request-id", "", "durable Delete request identity (generated if omitted); reuse it to recover an uncertain submission")
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "return immediately after submission instead of polling for completion")
 	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 30*time.Minute, "max time to wait for completion when not --no-wait (the op keeps running server-side if this fires)")
 	return cmd
@@ -204,7 +206,7 @@ func newCtlOpGetCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&noChildren, "no-children", false, "skip fetching child operations")
-	cmd.Flags().StringVar(&requestID, "request-id", "", "recover an Apply operation by its durable request identity, without submitting work")
+	cmd.Flags().StringVar(&requestID, "request-id", "", "recover an Apply/Delete operation by its durable request identity, without submitting work")
 	return cmd
 }
 
@@ -338,27 +340,44 @@ func ctlList(ctx context.Context, apiVersion, kind string) error {
 	return nil
 }
 
-func ctlDelete(ctx context.Context, apiVersion, kind, name string, wait bool, waitTimeout time.Duration) error {
+func ctlDelete(ctx context.Context, req *apiv1.DeleteRequest, wait bool, waitTimeout time.Duration) error {
+	if err := prepareDeleteRequest(req); err != nil {
+		return err
+	}
 	conn, token, err := dialController()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = conn.Close() }()
 	ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
-	resp, err := apiv1.NewResourceServiceClient(conn).Delete(ctx, &apiv1.DeleteRequest{
-		ApiVersion: apiVersion,
-		Kind:       kind,
-		Name:       name,
-	})
+	capabilities, err := apiv1.NewPingServiceClient(conn).Ping(ctx, &apiv1.PingRequest{})
 	if err != nil {
-		return fmt.Errorf("delete: %w", err)
+		return fmt.Errorf("check controller Delete recovery support: %w", err)
+	}
+	if !capabilities.GetSupportsIdempotentDelete() {
+		return fmt.Errorf("controller does not support durable Delete request recovery; upgrade it before submitting")
+	}
+	fmt.Fprintf(os.Stderr, "Delete request: %s\n", req.GetRequestId())
+	const recovery = "recover with 'openctl ctl op get --request-id <request-id>' using the request ID above before choosing a new request ID"
+	resp, err := apiv1.NewResourceServiceClient(conn).Delete(ctx, req)
+	if err != nil {
+		return fmt.Errorf("delete request %s: %w; %s", req.GetRequestId(), err, recovery)
+	}
+	if resp.GetRequestId() != req.GetRequestId() {
+		return fmt.Errorf("controller did not acknowledge Delete request %s; %s", req.GetRequestId(), recovery)
+	}
+	if resp.GetOperationId() == "" {
+		return fmt.Errorf("controller did not return an operation ID for Delete request %s; %s", req.GetRequestId(), recovery)
 	}
 	fmt.Fprintln(os.Stderr, resp.GetMessage())
 	if !wait {
 		fmt.Println(resp.GetOperationId())
 		return nil
 	}
-	return waitForOp(ctx, conn, resp.GetOperationId(), waitTimeout)
+	if err := waitForOp(ctx, conn, resp.GetOperationId(), waitTimeout); err != nil {
+		return fmt.Errorf("delete request %s: %w; %s", req.GetRequestId(), err, recovery)
+	}
+	return nil
 }
 
 // waitForOp polls the controller for op completion. Prints the final op

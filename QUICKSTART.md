@@ -126,9 +126,11 @@ same tab; explicitly resume to observe accepted work, then refresh previews and
 confirmations before any new attempt. Its GPU driver reboot is explicit; there
 is no automatic VM recreation. Use `openctl ctl preview -f resource.yaml` before
 CLI Apply; previews distinguish metadata edits from spec edits and live drift.
-Apply prints a request ID before submission;
+Apply and Delete print request IDs before submission;
 `openctl ctl op get --request-id ID` recovers a lost acknowledgement without
-reapplying. For CLI application logs and typed runtime actions, see
+submitting again. Console delete attempts survive reload in the same tab;
+explicit recovery observes the original operation, never a replacement resource.
+For CLI application logs and typed runtime actions, see
 [controller commands](README.md#common-commands). See also
 [managed Jellyfin](README.md#managed-jellyfin-on-proxmox).
 

@@ -28,6 +28,9 @@ interface Scope {
   version: number;
   request: Promise<void> | null;
   queued: boolean;
+  savedRequest: Promise<void> | null;
+  savedQueued: boolean;
+  savedVersion: number;
 }
 
 export interface DetailLease {
@@ -65,16 +68,20 @@ export function createDetailInspection(onUnauthorized: () => void): DetailInspec
   }
 
   async function loadSaved(s: Scope) {
-    try {
-      const saved = await inventoryApi.get(s.target.apiVersion, s.target.kind, s.target.name, { signal: s.controller.signal });
-      if (owns(s)) publish({ ...state, saved, savedLoading: false, savedError: '' });
-    } catch (err) {
-      if (!owns(s)) return;
-      if (err instanceof UnauthorizedError) { unauthorized(); return; }
-      publish({ ...state, saved: null, savedLoading: false, savedError: err instanceof ApiError && err.status === 404
-        ? 'No saved declaration on file.'
-        : `Saved intent unavailable: ${err instanceof Error ? err.message : String(err)}` });
-    }
+    do {
+      s.savedQueued = false;
+      const version = s.savedVersion;
+      try {
+        const saved = await inventoryApi.get(s.target.apiVersion, s.target.kind, s.target.name, { signal: s.controller.signal });
+        if (owns(s) && version === s.savedVersion) publish({ ...state, saved, savedLoading: false, savedError: '' });
+      } catch (err) {
+        if (!owns(s)) return;
+        if (err instanceof UnauthorizedError) { unauthorized(); return; }
+        if (version === s.savedVersion) publish({ ...state, saved: null, savedLoading: false, savedError: err instanceof ApiError && err.status === 404
+          ? 'No saved declaration on file.'
+          : `Saved intent unavailable: ${err instanceof Error ? err.message : String(err)}` });
+      }
+    } while (owns(s) && s.savedQueued);
   }
 
   async function observe(s: Scope) {
@@ -102,7 +109,10 @@ export function createDetailInspection(onUnauthorized: () => void): DetailInspec
     const s = scope;
     if (!s || !owns(s)) return Promise.resolve();
     s.version += 1;
-    publish({ ...state, data: null, loading: true, error: '', observation: 'loading' });
+    s.savedVersion += 1;
+    publish({ ...state, data: null, loading: true, savedLoading: true, error: '', observation: 'loading' });
+    if (s.savedRequest) s.savedQueued = true;
+    else s.savedRequest = loadSaved(s).finally(() => { s.savedRequest = null; });
     if (s.request) { s.queued = true; return s.request; }
     s.request = observe(s).finally(() => { s.request = null; });
     return s.request;
@@ -110,9 +120,8 @@ export function createDetailInspection(onUnauthorized: () => void): DetailInspec
 
   function open(target: DetailTarget) {
     scope?.controller.abort();
-    scope = { target: { ...target }, controller: new AbortController(), version: 0, request: null, queued: false };
+    scope = { target: { ...target }, controller: new AbortController(), version: 0, request: null, queued: false, savedRequest: null, savedQueued: false, savedVersion: 0 };
     publish(emptyState());
-    void loadSaved(scope);
     void refresh();
   }
 

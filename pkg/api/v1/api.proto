@@ -38,6 +38,8 @@ message PingResponse {
   string controller_id = 5;
   // Keyed Apply is durably deduplicated and recoverable by request ID.
   bool supports_idempotent_apply = 6;
+  // Keyed Delete is durably deduplicated and recoverable by request ID.
+  bool supports_idempotent_delete = 7;
 }
 
 // ResourceService manages desired state and observed infrastructure. Apply
@@ -523,12 +525,16 @@ message DeleteRequest {
   string api_version = 1;
   string kind = 2;
   string name = 3;
+  // Optional durable admission key, shared with Apply's request namespace.
+  // Exact replay returns the original operation, never a second deletion.
+  string request_id = 4;
 }
 
 message DeleteResponse {
   // operation_id identifies the async operation; poll via OperationService.
   string operation_id = 1;
   string message = 2;
+  string request_id = 3;
 }
 
 // WatchRequest configures a resource Watch stream. api_version + kind are
@@ -749,7 +755,7 @@ service OperationService {
   rpc GetOperation(GetOperationRequest) returns (Operation) {
     option (google.api.http) = { get: "/v1/operations/{id}" };
   }
-  // Read-only recovery when an Apply acknowledgement was lost.
+  // Read-only recovery when an Apply or Delete acknowledgement was lost.
   rpc GetOperationByRequest(GetOperationByRequestRequest) returns (Operation) {
     // Opaque request IDs may contain reserved URL characters or dot segments.
     option (google.api.http) = { post: "/v1/operations:byRequest" body: "*" };

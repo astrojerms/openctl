@@ -19,6 +19,18 @@ func prepareApplyRequest(req *apiv1.ApplyRequest) error {
 	return nil
 }
 
+func prepareDeleteRequest(req *apiv1.DeleteRequest) error {
+	if req.GetRequestId() != "" {
+		return validateOperationRequestID(req.GetRequestId())
+	}
+	id, err := uuid.NewRandom()
+	if err != nil {
+		return fmt.Errorf("generate Delete request identity: %w", err)
+	}
+	req.RequestId = id.String()
+	return nil
+}
+
 func validateOperationRequestID(id string) error {
 	if len(id) < 1 || len(id) > 128 {
 		return fmt.Errorf("request ID must contain 1-128 printable ASCII characters")

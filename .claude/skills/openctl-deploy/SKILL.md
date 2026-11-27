@@ -270,3 +270,13 @@ SQLite copy. Migration requires admin access, idle controllers, disabled GitOps
 watch/pull automation with restart, and verified standalone Proxmox VM identity;
 it is not an implicit fallback for a failed deployment. Consult the installed
 commands' help and current migration documentation before a requested handoff.
+
+Delete also prints a durable request ID before submission and supports the same
+read-only `ctl op get --request-id "$REQUEST_ID"` recovery. Keep the original key
+on uncertainty; never mint a new one automatically. Apply/Delete share the key
+namespace, but changed action, target or actor conflicts. Exact Delete replay
+returns the original operation after deletion or replacement, not a new mutation.
+Require a successful terminal delete operation; NotFound or a missing saved row
+alone is insufficient. A failed/interrupted/canceled deletion requires fresh
+inspection and explicitly authorized review before using a new key. Upgrade
+CLI/controller together rather than falling back to an unkeyed destructive call.

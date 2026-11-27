@@ -138,6 +138,29 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
   and disabled stale mutation controls. Three desired records remained intact,
   with zero operations or provider mutations. No live homelab changes.
 
+**2026-11-27 — durable deletion and explicit recovery**
+
+- [x] Delete shares Apply's atomic request ledger with an action-separated target
+  fingerprint and canonical actor. Exact replay returns its original operation
+  before mutable admission checks, including after deletion, replacement,
+  controller restart or provider removal. Pruned bindings remain reserved.
+- [x] CLI Delete generates/accepts request IDs, requires advertised support,
+  checks acknowledgements and exposes read-only lost-response recovery. It never
+  silently falls back to unkeyed deletion or automatically chooses another key.
+- [x] Console delete-attempt metadata survives tab reload, bound to controller,
+  principal and target. Recovery works without saved/live state; failures stay
+  visible. Explicit new attempts reverify terminal outcomes and fresh observation,
+  require new typed consent and persist a new identity before mutation.
+- [x] Detail refreshes coalesced saved intent independently of observation, so
+  successful deletion removes the old declaration instead of exporting stale YAML.
+- Verification: focused operations/server/CLI Go checks, frontend regressions
+  (including corrected isolated storage-failure cases), clean Svelte diagnostics
+  and production build. Actual authenticated CLI/browser proofs covered tracked
+  replacement replay, restart, viewer lookup, a genuinely dropped Delete response,
+  reload without resubmission, terminal recovery, canceled/newly confirmed retry
+  and principal isolation. All provider work was isolated fixture state; no live
+  homelab infrastructure changed.
+
 The next product acceptance gate is the complete operator journey on real
 hardware, including recovery, media playback and any approved public endpoint.
 See [direction](docs/direction.md). Provider breadth is downstream of that gate.
