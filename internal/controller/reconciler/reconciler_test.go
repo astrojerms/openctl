@@ -299,7 +299,7 @@ func TestSpecsEqualNormalizesNumberTypes(t *testing.T) {
 	// must compare equal.
 	desired := map[string]any{"cpus": 2, "memory": int64(4096)}
 	observed := map[string]any{"cpus": 2.0, "memory": 4096.0}
-	if !specsEqual(desired, observed) {
+	if !SpecsEqual(desired, observed) {
 		t.Error("specsEqual should normalize int/float for numeric fields")
 	}
 }
@@ -309,7 +309,7 @@ func TestSpecsEqualIgnoresUnmanagedKeysInObserved(t *testing.T) {
 	// defaults that don't appear in the manifest must not register as drift.
 	desired := map[string]any{"cpus": 2}
 	observed := map[string]any{"cpus": 2, "providerSetDefault": "yes"}
-	if !specsEqual(desired, observed) {
+	if !SpecsEqual(desired, observed) {
 		t.Error("extra observed keys should not register as drift")
 	}
 }
@@ -317,7 +317,7 @@ func TestSpecsEqualIgnoresUnmanagedKeysInObserved(t *testing.T) {
 func TestSpecsEqualDetectsNestedDifference(t *testing.T) {
 	desired := map[string]any{"net": map[string]any{"bridge": "vmbr0"}}
 	observed := map[string]any{"net": map[string]any{"bridge": "vmbr1"}}
-	if specsEqual(desired, observed) {
+	if SpecsEqual(desired, observed) {
 		t.Error("nested mismatch should register as drift")
 	}
 }

@@ -6,6 +6,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 credentials = json.load(sys.stdin)
+allow_remote_access = credentials.get("allowRemoteAccess", False) is True
 base = "http://127.0.0.1:8096"
 headers = {
     "Content-Type": "application/json",
@@ -30,20 +31,24 @@ if not api("/System/Info/Public")["StartupWizardCompleted"]:
     # Jellyfin creates its initial account when the wizard requests FirstUser.
     api("/Startup/FirstUser")
     api("/Startup/Configuration", {
-        "ServerName": "Synology Media",
+        "ServerName": "Media Library",
         "UICulture": "en-US",
         "MetadataCountryCode": "US",
         "PreferredMetadataLanguage": "en",
     })
     api("/Startup/User", {"Name": admin["username"], "Password": admin["password"]})
-    api("/Startup/RemoteAccess", {"EnableRemoteAccess": False})
+    api("/Startup/RemoteAccess", {"EnableRemoteAccess": allow_remote_access, "EnableAutomaticPortMapping": False})
     api("/Startup/Complete", method="POST")
 
 login = api("/Users/AuthenticateByName", {"Username": admin["username"], "Pw": admin["password"]})
 headers["Authorization"] += ', Token="' + login["AccessToken"] + '"'
 try:
+    network = api("/System/Configuration/network")
+    network["EnableRemoteAccess"] = allow_remote_access
+    api("/System/Configuration/network", network)
     admin_policy = login["User"]["Policy"]
     admin_policy["IsHidden"] = True
+    admin_policy["EnableRemoteAccess"] = allow_remote_access
     api("/Users/" + login["User"]["Id"] + "/Policy", admin_policy)
 
     viewer = credentials["roku"]
@@ -51,11 +56,13 @@ try:
     roku = next((user for user in users if user["Name"] == viewer["username"]), None)
     if roku is None:
         roku = api("/Users/New", {"Name": viewer["username"], "Password": viewer["password"]})
+    else:
+        api("/Users/" + roku["Id"] + "/Password", {"NewPw": viewer["password"]})
     policy = roku["Policy"]
     policy.update({
         "IsAdministrator": False,
         "IsHidden": False,
-        "EnableRemoteAccess": False,
+        "EnableRemoteAccess": allow_remote_access,
         "EnableContentDeletion": False,
         "EnableAllFolders": True,
         "EnableAudioPlaybackTranscoding": True,
@@ -80,7 +87,7 @@ try:
 
     folders = api("/Library/VirtualFolders")
     if not any("/media" in folder.get("Locations", []) for folder in folders):
-        query = urlencode({"name": "Synology Videos", "collectionType": "mixed", "paths": "/media", "refreshLibrary": "true"})
+        query = urlencode({"name": "Media Library", "collectionType": "mixed", "paths": "/media", "refreshLibrary": "true"})
         api("/Library/VirtualFolders?" + query, {"LibraryOptions": {
             "Enabled": True,
             "PathInfos": [{"Path": "/media"}],
@@ -89,9 +96,6 @@ try:
             "EnableChapterImageExtraction": False,
             "EnableTrickplayImageExtraction": False,
         }})
-    else:
-        api("/Library/Refresh", method="POST")
-    print("Admin and non-admin Roku accounts configured; remote access disabled.")
-    print("NVENC/NVDEC and CUDA tone mapping enabled; Synology Videos scan requested.")
+    print("Admin and non-admin viewer policies, explicit remote-access policy, hardware transcoding and read-only media library configured.")
 finally:
     api("/Sessions/Logout", method="POST")

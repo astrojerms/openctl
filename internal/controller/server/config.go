@@ -78,6 +78,11 @@ func (h *configHandler) UpsertProvider(_ context.Context, req *apiv1.UpsertProvi
 	if p.Contexts[ctxName] == nil {
 		p.Contexts[ctxName] = &config.Context{Credentials: credName}
 	}
+	if p.Contexts[ctxName].Credentials != "" {
+		credName = p.Contexts[ctxName].Credentials
+	} else {
+		p.Contexts[ctxName].Credentials = credName
+	}
 	p.Contexts[ctxName].Endpoint = req.GetEndpoint()
 	if p.Credentials[credName] == nil {
 		p.Credentials[credName] = &config.Credential{}

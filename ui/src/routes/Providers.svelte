@@ -1,9 +1,5 @@
 <script lang="ts">
-  // Providers: list + add + edit + delete for provider credentials in
-  // ~/.openctl/config.yaml. Scope covers the single-context/single-
-  // credential-per-provider common case; multi-context configs are
-  // still editable by hand-editing the file (this UI would clobber
-  // them on save — worth flagging in the readme when we add one).
+  // Edits affect the on-disk configuration only; live providers are startup-bound.
 
   import { onMount } from 'svelte';
   import {
@@ -11,6 +7,10 @@
     UnauthorizedError,
     type ProviderEntry,
   } from '../lib/api';
+  import { auth } from '../lib/auth';
+  import { routeHref } from '../lib/router';
+
+  $: isAdmin = $auth.kind === 'signed-in' && (!$auth.me.role || $auth.me.role === 'admin');
 
   let entries: ProviderEntry[] = [];
   let loading = true;
@@ -22,6 +22,7 @@
   let form = { name: '', endpoint: '', tokenId: '', tokenSecret: '' };
   let saveError = '';
   let saving = false;
+  let restartMessage = '';
 
   async function refresh() {
     loading = true;
@@ -62,6 +63,7 @@
   }
 
   async function save() {
+    if (!isAdmin || saving) return;
     if (!form.name) {
       saveError = 'Name is required.';
       return;
@@ -75,6 +77,7 @@
         tokenId: form.tokenId,
         tokenSecret: form.tokenSecret,
       });
+      restartMessage = 'Provider configuration saved. Restart the controller before testing or discovering with these credentials.';
       await refresh();
       editing = '';
     } catch (err) {
@@ -86,9 +89,11 @@
   }
 
   async function del(name: string) {
+    if (!isAdmin) return;
     if (!confirm(`Delete provider ${name} from config.yaml?`)) return;
     try {
       await providersApi.delete(name);
+      restartMessage = 'Provider configuration removed. Restart the controller to update its active providers.';
       await refresh();
     } catch (err) {
       if (err instanceof UnauthorizedError) return;
@@ -103,8 +108,13 @@
       <h2>Provider Credentials</h2>
       <p class="lede">Edit provider endpoints and API tokens in <code>~/.openctl/config.yaml</code>.</p>
     </div>
-    <button class="primary" on:click={openNew}>+ Add provider</button>
+    {#if isAdmin}<button class="primary" on:click={openNew}>+ Add provider</button>{/if}
   </header>
+
+  <p class="muted">Configuration changes require a controller restart. Credential hot reload is intentionally disabled because changing live provider identities is unsafe. Discovery uses the currently running configuration.</p>
+  <p><a class="link" href={routeHref({ name: 'discover' })}>Test connections and discover Proxmox VMs →</a></p>
+  {#if restartMessage}<p role="status">{restartMessage}</p>{/if}
+  {#if !isAdmin}<p class="muted">Provider configuration requires an admin role.</p>{/if}
 
   {#if loading}
     <p class="muted">Loading…</p>
@@ -143,8 +153,10 @@
                 {/if}
               </td>
               <td class="right">
-                <button class="link" on:click={() => openEdit(e)}>Edit</button>
-                <button class="link danger" on:click={() => del(e.name)}>Delete</button>
+                {#if isAdmin}
+                  <button class="link" on:click={() => openEdit(e)}>Edit</button>
+                  <button class="link danger" on:click={() => del(e.name)}>Delete</button>
+                {/if}
               </td>
             </tr>
           {/each}
@@ -153,7 +165,7 @@
       </div>
     {/if}
 
-    {#if editing}
+    {#if editing && isAdmin}
       <article class="form-card">
         <h3>{editing === '__new__' ? 'Add provider' : `Edit ${editing}`}</h3>
         <div class="row">

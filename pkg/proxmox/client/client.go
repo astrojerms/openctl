@@ -318,14 +318,12 @@ func (c *Client) ListVMs(ctx context.Context) ([]*VM, error) {
 	var allVMs []*VM
 	for _, node := range nodes {
 		debugf("ListVMs: fetching VMs from node %s", node)
-		vms, err := c.listNodeVMs(ctx, node)
+		vms, err := c.ListNodeVMs(ctx, node)
 		if err != nil {
-			debugf("ListVMs: failed to list VMs on node %s: %v", node, err)
-			continue
+			return nil, fmt.Errorf("list VMs on node %q: %w", node, err)
 		}
 		debugf("ListVMs: found %d VMs on node %s", len(vms), node)
 		for _, vm := range vms {
-			vm.Node = node
 			debugf("ListVMs: VM vmid=%d name=%s template=%d status=%s", vm.VMID, vm.Name, vm.Template, vm.Status)
 			allVMs = append(allVMs, vm)
 		}
@@ -942,7 +940,9 @@ func (c *Client) listNodes(ctx context.Context) ([]string, error) {
 	return names, nil
 }
 
-func (c *Client) listNodeVMs(ctx context.Context, node string) ([]*VM, error) {
+// ListNodeVMs reads one node without coupling known-instance operations to
+// inventory availability on unrelated nodes.
+func (c *Client) ListNodeVMs(ctx context.Context, node string) ([]*VM, error) {
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu", node)
 	resp, err := c.get(ctx, path)
 	if err != nil {
@@ -956,6 +956,9 @@ func (c *Client) listNodeVMs(ctx context.Context, node string) ([]*VM, error) {
 		return nil, fmt.Errorf("failed to parse VMs: %w", err)
 	}
 
+	for _, vm := range result.Data {
+		vm.Node = node
+	}
 	return result.Data, nil
 }
 

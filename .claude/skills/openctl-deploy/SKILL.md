@@ -87,11 +87,12 @@ openctl --config "$CONFIG" explain "$API_VERSION" "$KIND"
 
 Interpret NotFound separately from authentication, connectivity, and provider
 failures. Controller listings do not constitute a complete unmanaged inventory.
-Use the provider's read-only inventory/API when needed to detect name collisions.
-For Proxmox, `openctl --config "$CONFIG" --context "$PROVIDER_CONTEXT" proxmox get vms`
-and `... proxmox get templates` are legacy **read-only** inventory commands;
-they use the CLI machine's provider configuration, which may differ from the
-controller's. Do not use legacy Apply/Delete paths for controller deployments.
+Use controller-side discovery to detect unmanaged resources and name collisions:
+`ctl discover --contexts`, then `ctl discover --provider-context NAME`.
+Discovery is read-only; adoption and tracked-identity confirmation are explicit
+admin operations, never automatic fallbacks. Older CLI versions may offer only
+legacy read-only provider inventory; its local configuration can differ from
+the controller. Never use legacy Apply/Delete paths for controller deployments.
 
 For a VM, establish the endpoint/context, actual node, template or image,
 storage, bridge/VLAN, available capacity, CPU, memory in MiB, disk sizes,
@@ -146,11 +147,11 @@ VM CPU/memory fields into Cluster fields by analogy.
    Review missing external `$ref` targets and use `explain`/Get to check outputs.
    Stage missing dependencies in graph order; rerun dependent preflight after
    outputs become available. Do not invent temporary `$ref` values.
-4. Review preview `validationErrors`, `diff`, `children`, and `requiredGates`.
-   A preview with empty diff or summary `no-op` does **not** prove an atomic
-   resource exists or matches physical infrastructure. Atomic previews compare
-   saved desired specs, not authoritative live VM configuration; the first
-   apply can also have an empty diff. Independently check provider inventory.
+4. Review `validationErrors`, `operation`, `diff`, `liveDrift`, `children`, and
+   `requiredGates`. `operation` distinguishes create/update/no-op, `diff` shows
+   edits to stored intent, and `liveDrift` shows observable provider differences.
+   A first apply is `create` even with an empty old-spec diff. A preview cannot
+   reserve existence or authorize overwriting an unmanaged VM; inspect discovery.
 5. Summarize the target, desired change, storage/network impact, existing data,
    and any required destructive approval. Proceed with already-authorized
    non-destructive work; stop for newly-discovered destructive consequences.

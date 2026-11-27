@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { createEventDispatcher, getContext } from 'svelte';
+  import { createEventDispatcher, getContext, onDestroy } from 'svelte';
   import type { FormField } from '../lib/formSchema';
-  import { initialValue } from '../lib/formSchema';
+  import { initialValue, isStructuredReference, parseFreeform } from '../lib/formSchema';
   import { ensureOptions, ensureDependentOptions, dependentKey, optionsStore } from '../lib/options';
   import Self from './FormField.svelte';
 
@@ -9,7 +9,7 @@
   // apiVersion resolves against the containing resource's provider.
   // Empty when the context isn't set — cross-provider refs must then
   // include apiVersion in the CUE attribute.
-  import type { Readable } from 'svelte/store';
+  import type { Readable, Writable } from 'svelte/store';
   const apiVersionCtx = getContext<Readable<string> | undefined>('resourceAPIVersionStore');
   // Per-path field errors published by Edit.runPreview. Parent object
   // rows look this up for each child to decide whether to add the
@@ -18,6 +18,7 @@
   // The whole manifest, published by Edit, so a `dependsOn` option field can
   // read the value it depends on (e.g. spec.node for a disk storage dropdown).
   const manifestCtx = getContext<Readable<unknown> | undefined>('resourceManifestStore');
+  const formErrorsCtx = getContext<Writable<Record<string, string>> | undefined>('resourceFormErrorsStore');
 
   // The field schema and its current value. Value is `unknown` here
   // because every Field can carry a different shape; downstream the
@@ -38,6 +39,49 @@
     value = v;
     dispatch('change', v);
   }
+
+  let freeformText = '';
+  let freeformError = '';
+  let freeformValue: unknown;
+  $: if (value !== freeformValue) {
+    freeformValue = value;
+    freeformText = value === undefined ? '' : JSON.stringify(value, null, 2) ?? '';
+    freeformError = '';
+    publishFormError('');
+  }
+  $: freeform = field.type === 'any'
+    || (field.type === 'object' && !field.fields?.length)
+    || (isStructuredReference(value) && (!field.secret || !('$secret' in value)))
+    || (!field.secret && value !== undefined && value !== null && (
+      ((field.type === 'object' || field.type === 'map') && (typeof value !== 'object' || Array.isArray(value)))
+      || (field.type === 'array' && !Array.isArray(value))
+      || (field.type === 'string' && typeof value !== 'string')
+      || ((field.type === 'int' || field.type === 'number') && typeof value !== 'number')
+      || (field.type === 'bool' && typeof value !== 'boolean')
+    ));
+
+  function publishFormError(error: string) {
+    formErrorsCtx?.update((errors) => {
+      const next = { ...errors };
+      if (error) next[path] = error;
+      else delete next[path];
+      return next;
+    });
+  }
+
+  function setFreeform(raw: string) {
+    freeformText = raw;
+    const parsed = parseFreeform(raw);
+    freeformError = parsed.error;
+    publishFormError(parsed.error);
+    if (!parsed.error) {
+      // Keep the draft's formatting while emitting the parsed JSON/YAML value.
+      freeformValue = parsed.value;
+      set(parsed.value);
+    }
+  }
+
+  onDestroy(() => publishFormError(''));
 
   // --- Secret-reference control (@secret fields) ---------------------------
   // Parse the current value into a {source, key} pair for the control, and
@@ -273,7 +317,16 @@
   }
 </script>
 
-{#if field.type === 'object'}
+{#if freeform}
+  <textarea
+    rows="3"
+    placeholder="freeform (JSON / YAML)"
+    value={freeformText}
+    aria-invalid={freeformError !== ''}
+    on:input={(e) => setFreeform((e.currentTarget as HTMLTextAreaElement).value)}
+  ></textarea>
+  {#if freeformError}<p class="field-err">{freeformError}</p>{/if}
+{:else if field.type === 'object'}
   <div class="object" style="--depth: {depth}">
     {#if field.description}
       <p class="desc">{field.description}</p>
@@ -543,13 +596,6 @@
     />
     <span>{!!value ? 'true' : 'false'}</span>
   </label>
-{:else if field.type === 'any'}
-  <textarea
-    rows="3"
-    placeholder="freeform (JSON / YAML)"
-    value={value === null || value === undefined ? '' : typeof value === 'string' ? value : JSON.stringify(value)}
-    on:input={(e) => set((e.currentTarget as HTMLTextAreaElement).value)}
-  ></textarea>
 {:else}
   <!-- type === 'unsupported' -->
   <div class="unsupported" title={field.reason ?? ''}>

@@ -135,10 +135,6 @@ func TestGetRoutesToOwningEndpoint(t *testing.T) {
 	if res.Metadata.Name != "cache-01" {
 		t.Errorf("got %q, want cache-01", res.Metadata.Name)
 	}
-	// The scan should have cached the owning context for later reads.
-	if v, ok := p.index.Load("cache-01"); !ok || v.(string) != "siteB" {
-		t.Errorf("index[cache-01] = %v (ok=%v), want siteB", v, ok)
-	}
 }
 
 // TestGetNotFoundAcrossAllEndpoints: absent from every endpoint maps to the

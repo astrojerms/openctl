@@ -1,7 +1,8 @@
 # openctl Quickstart
 
-A practical walkthrough for getting a k3s cluster up and managing it. For
-architecture and design rationale, see [DESIGN.md](DESIGN.md).
+A practical walkthrough for connecting an existing homelab and managing
+infrastructure and applications. Kubernetes is optional. For architecture and
+design rationale, see [DESIGN.md](DESIGN.md).
 
 ## Prerequisites
 
@@ -37,18 +38,27 @@ CLI's `openctl ctl ...` commands route through it. The legacy exec-plugin
 commands still work for transition, and graduate to top-level after
 Phase 6.
 
-### Install as a per-user LaunchAgent (macOS, recommended)
+### Install as a local service (macOS or Linux)
 
 ```sh
 make build
 ./bin/openctl-controller install --local
 ```
 
-This copies the controller into `~/Library/Application Support/openctl/bin/`,
-writes a LaunchAgent plist at `~/Library/LaunchAgents/io.openctl.controller.plist`,
-loads it (RunAtLoad + KeepAlive), verifies the controller comes up, and
-seeds `~/.openctl/config.yaml` with a controller section if missing. Logs
-land at `~/Library/Logs/openctl/controller.{out,err}.log`.
+macOS uses a per-user LaunchAgent; Linux uses a user systemd service. Both
+verify the listener and seed CLI config only when it is missing. For a
+remote Linux host, build the matching controller and use:
+
+```sh
+make build-controller-linux
+./bin/openctl-controller install --target ssh://user@controller --ssh-key ~/.ssh/controller
+```
+
+The SSH user needs passwordless sudo. Provider credentials, guest keys and
+verified host keys must be installed on the **controller host**. Copy its
+controller CA/token securely and point your local CLI config at that controller.
+Proxmox controller-VM bootstrap is also supported; see
+`openctl-controller install --help`.
 
 To remove:
 
@@ -73,6 +83,28 @@ under `~/.openctl/controller/tls/` and a random API token at
 `~/.openctl/controller/token`. Both persist across restarts. The CLI reads
 them automatically from the same default paths; override via the
 `controller:` section in `~/.openctl/config.yaml`.
+
+## Connect And Adopt Before Rebuilding
+
+After configuring Proxmox, restart the controller and open **Discover
+infrastructure** in the console. Test the connection, review physical
+context/node/VMID/UUID evidence and the observed manifest, then adopt an existing
+standalone VM. This records intent without changing the VM. Admin access, an
+idle controller and disabled GitOps are required.
+
+```sh
+openctl ctl discover --contexts
+openctl ctl discover --provider-context homelab
+```
+
+Existing tracked VMs from name-only controller versions require explicit
+identity confirmation before mutation. Discovery exposes this recovery action;
+it preserves desired intent and composite ownership.
+
+For a standalone application, open **Deploy Jellyfin**: select/provision a
+dedicated Ubuntu 24.04 NVIDIA VM, supply NAS and secret references, review each
+resource, and inspect independent health. Its GPU driver reboot is explicit;
+there is no automatic VM recreation. See [managed Jellyfin](README.md#managed-jellyfin-on-proxmox).
 
 ## Configure
 

@@ -1,14 +1,14 @@
 package reconciler
 
-import "fmt"
+import (
+	"math"
+	"reflect"
+)
 
-// specsEqual reports whether two spec trees are structurally equivalent.
-// Mirrors the loose-comparison rules used by server/drift.computeDrift —
-// only fields present in `desired` are compared, so provider-set defaults
-// in `observed` don't read as drift; numeric types are unified so int(2)
-// matches float64(2.0). Kept here as a yes/no helper so the reconciler
-// doesn't depend on the server package (and its proto types).
-func specsEqual(desired, observed map[string]any) bool {
+// SpecsEqual compares declared fields against live configuration. Extra live
+// fields are ignored, but absent declared fields and differing scalar types
+// are not equal. Numeric representations may differ without changing value.
+func SpecsEqual(desired, observed map[string]any) bool {
 	return compareNode(desired, observed)
 }
 
@@ -20,7 +20,8 @@ func compareNode(desired, observed any) bool {
 			return false
 		}
 		for k, v := range d {
-			if !compareNode(v, o[k]) {
+			live, present := o[k]
+			if !present || !compareNode(v, live) {
 				return false
 			}
 		}
@@ -42,37 +43,46 @@ func compareNode(desired, observed any) bool {
 }
 
 func scalarEqual(a, b any) bool {
-	if a == nil && b == nil {
-		return true
+	av, bv := reflect.ValueOf(a), reflect.ValueOf(b)
+	if !av.IsValid() || !bv.IsValid() {
+		return !av.IsValid() && !bv.IsValid()
 	}
-	if af, aok := toFloat(a); aok {
-		if bf, bok := toFloat(b); bok {
-			return af == bf
+	switch av.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		switch bv.Kind() {
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			return av.Int() == bv.Int()
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			return av.Int() >= 0 && uint64(av.Int()) == bv.Uint()
+		case reflect.Float32, reflect.Float64:
+			return floatEqualsInt(bv.Float(), av.Int())
+		}
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		switch bv.Kind() {
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			return bv.Int() >= 0 && av.Uint() == uint64(bv.Int())
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			return av.Uint() == bv.Uint()
+		case reflect.Float32, reflect.Float64:
+			return floatEqualsUint(bv.Float(), av.Uint())
+		}
+	case reflect.Float32, reflect.Float64:
+		switch bv.Kind() {
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			return floatEqualsInt(av.Float(), bv.Int())
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			return floatEqualsUint(av.Float(), bv.Uint())
+		case reflect.Float32, reflect.Float64:
+			return av.Float() == bv.Float()
 		}
 	}
-	// Fall back to string-formatted comparison for unknown types; cheaper
-	// than reflect.DeepEqual and good enough for spec scalars.
-	return fmt.Sprintf("%v", a) == fmt.Sprintf("%v", b)
+	return reflect.DeepEqual(a, b)
 }
 
-func toFloat(v any) (float64, bool) {
-	switch n := v.(type) {
-	case float64:
-		return n, true
-	case float32:
-		return float64(n), true
-	case int:
-		return float64(n), true
-	case int32:
-		return float64(n), true
-	case int64:
-		return float64(n), true
-	case uint:
-		return float64(n), true
-	case uint32:
-		return float64(n), true
-	case uint64:
-		return float64(n), true
-	}
-	return 0, false
+func floatEqualsInt(f float64, n int64) bool {
+	return !math.IsNaN(f) && f >= -0x1p63 && f < 0x1p63 && int64(f) == n && float64(n) == f
+}
+
+func floatEqualsUint(f float64, n uint64) bool {
+	return !math.IsNaN(f) && f >= 0 && f < 0x1p64 && uint64(f) == n && float64(n) == f
 }

@@ -9,7 +9,8 @@ of truth.
 - **Target architecture:** [docs/target-architecture.html](docs/target-architecture.html)
   — speculative Phase 7–10 (verifying-trace cache, K3sNode, typed task
   IR, DAG scheduler). Sketch, not committed plan.
-- **UI rollout:** [UI.md](UI.md) — Phases U1–U7. Not started.
+- **UI rollout:** [UI.md](UI.md) — shipped resource editing and inspection;
+  current homelab workflow delivery is recorded below.
 - **Strategic direction:** [docs/direction.md](docs/direction.md) — the
   wedge, audience, scope decisions, and priority tiers the next epics
   serve. [docs/plugin-architecture.md](docs/plugin-architecture.md) is
@@ -22,28 +23,29 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
-- No active roadmap branch. `main` is clean. The dispatcher refactor
-  shipped and was homelab-validated with the `validate-3`
-  single-control-plane k3s apply path. **k3s multi-endpoint placement**
-  (#64/#65) and the **composite-apply dependency DAG** (#66) shipped on
-  top; cross-op dependency scheduling is the next natural lift (see
-  Followups).
+**2026-11-27 — homelab control-plane delivery**
 
-The whole `no route to host` / connection-resilience thread is now
-closed: watch-release-on-outage (#14), macOS code signing (#15),
-HTTP/2 gateway (#16), and Proxmox context threading + not-found
-hardening (#17) all shipped. **Retire `applyExisting`** is now complete
-too — the imperative convergence executors are deleted and the
-Plan/dispatcher path is the sole existing-cluster converge path,
-validated on homelab (3-CP embedded-etcd HA create + full control-plane
-respec). The **UI DAG view** (Phase U9) and the **UI for controller
-config** (Settings page + GetControllerConfig/UpdateControllerConfig
-RPCs) have both shipped. With the feature build-out essentially
-complete, direction now shifts to **breadth + reach**: the external
-plugin protocol → Terraform/OpenTofu host → run-anywhere Linux daemon
-(Tier 1 in [docs/direction.md](docs/direction.md)). Multi-user auth
-(OIDC slice) and CUE-WASM validation are parked behind that. (Mobile
-layout has since shipped.)
+- [x] Console first-create previews, exact reviewed submissions, metadata and
+  structured secret/reference preservation.
+- [x] Live-observation cache checks, visible persistence failures, and opted-in
+  missing-resource remediation.
+- [x] Immutable Proxmox VM identity binding, managed/owned/dependent deletion
+  guards, transactional in-flight reference fencing, and fail-closed inventory.
+- [x] Controller-side discovery and connection tests, console/CLI adoption,
+  export/release, and explicit legacy tracked-identity confirmation.
+- [x] Exclusive `mirror`/`gitops` desired-state authority (K2).
+- [x] Standalone `apps.ComposeApplication` and `apps.Jellyfin` lifecycle:
+  strict SSH, controller-specific ownership, data-preserving removal, pinned
+  Jellyfin rollout, protected onboarding, and independent readiness checks.
+- [x] Guided Jellyfin VM/application/storage/GPU/optional-domain manifests.
+- Verification: affected Go packages and frontend tests/check/build; actual
+  console discovery/adoption and first-create previews against an isolated
+  controller/Proxmox simulator. No live homelab deployment or GPU playback
+  verification was performed. A passing simulator is not hardware acceptance.
+
+The next product acceptance gate is the complete operator journey on real
+hardware, including recovery, media playback and any approved public endpoint.
+See [direction](docs/direction.md). Provider breadth is downstream of that gate.
 
 **Proxmox VM observation correction (2026-10-08):** Get/List now decode numeric
 configuration strings and observe native managed settings instead of partial
@@ -282,7 +284,7 @@ these are the corners where drift would start if it starts anywhere.
       helper). Switch the operative create onto the Plan path (the long-intended
       unification) so there's one source of VM shape. **Known unpaid debt.**
 
-- [~] **K2 — One GitOps source-of-truth model.** git-as-source (B1–B3) was
+- [x] **K2 — One GitOps source-of-truth model.** git-as-source (B1–B3) was
       layered on top of git-as-sink (disk mirror + push), leaving overlapping
       machinery — disk mirror, push, pull, watcher, prune, drift reconciler,
       webhook — with subtle interactions (startup reconcile *re-materializes*
@@ -299,11 +301,11 @@ these are the corners where drift would start if it starts anywhere.
         mirror|gitops` config + contradictory-combo rejection, back-compat
         (default `mirror`), a per-component code-reconciliation checklist, and a
         test plan. The two known conflicts are resolved by the invariants.
-      - [ ] **Code reconciliation.** Implement the doc's checklist (add
-        `Manifests.Mode` + validation; branch the main.go wiring; gate
-        startup-revive + auto-commit to mirror mode; construct pull/prune/webhook
-        only in gitops mode). Best paired with real homelab validation of both
-        modes. Uses K3's `source=git` (shipped).
+      - [x] **Code reconciliation.** Explicit validated mode, upstream remote,
+        startup-mode branching, no gitops output commits/revival, mirror-only
+        push and gitops-only pull, and repo-authority mutation guards. Real-git
+        regression tests exercise pull/prune/restart without reviving files or
+        creating commits that block fast-forward pulls.
 
 - [x] **K3 — Make provenance explicit.** `applied_manifests` now carries a
       first-class `source` column (migration 0011). The dispatcher already

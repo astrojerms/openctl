@@ -19,10 +19,12 @@
     type GetTemplateResponse,
     type TemplateParameter,
     type DryRunApplyResponse,
+    type Resource,
   } from '../lib/api';
   import { ensureOptions, optionsStore } from '../lib/options';
   import { routeHref, navigate } from '../lib/router';
   import { resourceToYAML } from '../lib/yaml';
+  import { canMutate } from '../lib/auth';
 
   export let template: string;
 
@@ -43,6 +45,10 @@
   let dryRun: DryRunApplyResponse | null = null;
   let dryRunError = '';
   let previewing = false;
+  let previewRevision = 0;
+  let reviewedParams = '';
+  let reviewedResource: Resource | null = null;
+  let checkedGates: Record<string, boolean> = {};
 
   // Apply state.
   let submitting = false;
@@ -78,6 +84,7 @@
 
   onDestroy(() => {
     if (previewTimer !== undefined) clearTimeout(previewTimer);
+    previewRevision++;
   });
 
   function setParam(name: string, value: unknown) {
@@ -87,51 +94,68 @@
 
   function schedulePreview() {
     if (previewTimer !== undefined) clearTimeout(previewTimer);
+    previewRevision++;
+    dryRun = null;
+    reviewedResource = null;
+    reviewedParams = '';
+    checkedGates = {};
+    renderedYAML = '';
+    renderError = '';
+    dryRunError = '';
+    previewing = true;
     previewTimer = setTimeout(runPreview, PREVIEW_DEBOUNCE_MS) as unknown as number;
   }
 
   async function runPreview() {
     if (!info) return;
-    renderError = '';
-    dryRunError = '';
-    dryRun = null;
-    previewing = true;
+    const revision = previewRevision;
+    const paramsKey = JSON.stringify(params);
+    const previewParams = { ...params };
     try {
-      const rendered = await templatesApi.render(template, params);
+      const rendered = await templatesApi.render(template, previewParams);
+      if (revision !== previewRevision) return;
       renderedYAML = resourceToYAML(rendered.resource);
       try {
-        dryRun = await resources.dryRunApply(rendered.resource);
+        const plan = await resources.dryRunApply(rendered.resource);
+        if (revision !== previewRevision) return;
+        dryRun = plan;
+        reviewedResource = rendered.resource;
+        reviewedParams = paramsKey;
+        checkedGates = Object.fromEntries((plan.requiredGates ?? []).map((g) => [g, false]));
       } catch (err) {
-        if (err instanceof UnauthorizedError) return;
+        if (revision !== previewRevision || err instanceof UnauthorizedError) return;
         dryRunError = err instanceof Error ? err.message : String(err);
       }
     } catch (err) {
-      if (err instanceof UnauthorizedError) return;
+      if (revision !== previewRevision || err instanceof UnauthorizedError) return;
       renderError = err instanceof Error ? err.message : String(err);
       renderedYAML = '';
     } finally {
-      previewing = false;
+      if (revision === previewRevision) previewing = false;
     }
   }
 
   async function submit() {
-    if (!info || submitting) return;
+    if (!info || applyBlocked || !$canMutate || !reviewedResource || reviewedParams !== JSON.stringify(params)) return;
+    const resource = reviewedResource;
     submitError = '';
     submitting = true;
     try {
-      // Render one more time so the applied manifest matches the last
-      // preview even if params changed mid-preview.
-      const rendered = await templatesApi.render(template, params);
-      const resp = await resources.apply({ resource: rendered.resource });
+      const resp = await resources.apply({
+        resource,
+        createOnly: true,
+        allowDestructive: checkedGates['allow_destructive'] ?? false,
+        iKnowThisBreaksTheCluster: checkedGates['i_know_this_breaks_the_cluster'] ?? false,
+      });
       if (resp.operationId) {
         // Navigate to the new resource's detail page — the op will tail
         // in the drawer + the detail's inline op banner.
-        const name = rendered.resource.metadata?.name ?? '';
+        const name = resource.metadata?.name ?? '';
         if (name && info.summary.apiVersion && info.summary.kind) {
           navigate({
             name: 'detail',
-            apiVersion: info.summary.apiVersion,
-            kind: info.summary.kind,
+            apiVersion: resource.apiVersion,
+            kind: resource.kind,
             resourceName: name,
           });
         }
@@ -160,12 +184,21 @@
     return $optionsStore.data[`${info.summary.apiVersion}/${p.optionsKind}`] ?? null;
   }
 
-  $: hasChange = !!dryRun && (
-    (dryRun.diff?.length ?? 0) > 0 ||
-    (dryRun.children ?? []).some((c) => c.verb !== 'no-op')
-  );
-  $: applyBlocked = submitting || !!renderError || !!dryRunError || !dryRun || !hasChange
-    || (dryRun.validationErrors?.length ?? 0) > 0;
+  function gateLabel(g: string): string {
+    switch (g) {
+      case 'allow_destructive': return 'Allow destructive changes';
+      case 'i_know_this_breaks_the_cluster': return 'I know this breaks the cluster';
+      default: return g;
+    }
+  }
+
+  $: gatesSatisfied = (dryRun?.requiredGates ?? []).every((g) =>
+    (g === 'allow_destructive' || g === 'i_know_this_breaks_the_cluster') && checkedGates[g]);
+  $: nameCollision = !!dryRun && dryRun.operation !== 'create';
+  $: applyBlocked = submitting || previewing || !!renderError || !!dryRunError || !dryRun
+    || !reviewedResource || reviewedParams !== JSON.stringify(params)
+    || nameCollision || !gatesSatisfied || (dryRun.validationErrors?.length ?? 0) > 0
+    || (dryRun.fieldErrors?.length ?? 0) > 0;
 </script>
 
 <section>
@@ -256,8 +289,26 @@
           </div>
         {/each}
 
+        {#if nameCollision}
+          <article class="diag">
+            <h4>Name already in use</h4>
+            <p class="err small">This template would overwrite an existing resource. Choose a different name to create a new one.</p>
+          </article>
+        {/if}
+        {#if (dryRun?.requiredGates?.length ?? 0) > 0}
+          <article class="diag">
+            <h4>Destructive change — confirm before creating:</h4>
+            {#each dryRun?.requiredGates ?? [] as g}
+              <label class="bool">
+                <input type="checkbox" bind:checked={checkedGates[g]} />
+                <span>{gateLabel(g)}</span>
+              </label>
+            {/each}
+          </article>
+        {/if}
         <div class="actions">
-          <button class="primary" disabled={applyBlocked} on:click={submit}>
+          <button class="primary" disabled={applyBlocked || !$canMutate} on:click={submit}
+            title={!$canMutate ? 'Read-only session — requires editor or admin role' : ''}>
             {submitting ? 'Creating…' : 'Create'}
           </button>
           {#if previewing}
@@ -292,6 +343,23 @@
         {/if}
         {#if dryRun?.summary}
           <p class="muted small preview-summary">{dryRun.summary}</p>
+        {/if}
+        {#if (dryRun?.liveDrift?.length ?? 0) > 0}
+          <h4>Live infrastructure drift</h4>
+          <table class="drift">
+            <thead>
+              <tr><th>Path</th><th>Desired</th><th>Observed</th></tr>
+            </thead>
+            <tbody>
+              {#each dryRun?.liveDrift ?? [] as d}
+                <tr>
+                  <td class="mono">{d.path}</td>
+                  <td class="mono">{d.desired}</td>
+                  <td class="mono">{d.observed}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
         {/if}
       </div>
     </div>
@@ -429,6 +497,22 @@
   .preview-summary {
     margin-top: 0.5rem;
     color: #6ea8ff;
+  }
+  .drift {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+  }
+  .drift th, .drift td {
+    text-align: left;
+    padding: 0.35rem 0.6rem;
+    border-bottom: 1px solid rgba(127, 127, 127, 0.15);
+  }
+  .drift th {
+    font-size: 0.7rem;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
   }
   .muted {
     color: #888;

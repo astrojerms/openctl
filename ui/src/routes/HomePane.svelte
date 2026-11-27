@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { ping, type PingResponse } from '../lib/api';
   import { catalogue } from '../lib/catalogue';
+  import { routeHref } from '../lib/router';
 
   let pong: PingResponse | null = null;
   let error = '';
@@ -24,11 +25,16 @@
 <section>
   <h2>Welcome</h2>
   <p class="lede">
-    Pick a kind in the sidebar to drill in. Detail and ops views ship in
-    U3.3 and U3.4.
+    Connect infrastructure, review existing VMs, or deploy an application.
   </p>
 
   <div class="grid">
+    <div class="card">
+      <h3>Get started</h3>
+      <p><a href={routeHref({ name: 'providers' })}>Connect a provider</a></p>
+      <p><a href={routeHref({ name: 'discover' })}>Discover and adopt existing VMs</a></p>
+      <p><a href={routeHref({ name: 'jellyfin' })}>Deploy Jellyfin</a></p>
+    </div>
     <div class="card">
       <h3>Controller</h3>
       {#if error}
@@ -109,4 +115,5 @@
   .err {
     color: #f57171;
   }
+  a { color: #6ea8ff; }
 </style>

@@ -56,8 +56,8 @@ service ResourceService {
     option (google.api.http) = { post: "/v1/resources:list" body: "*" };
   }
 
-  // Delete removes a resource. Idempotent: delete on a missing resource
-  // returns success, not NotFound.
+  // Delete removes a tracked resource after ownership/dependency checks.
+  // An untracked name is not deletion authority, even if the provider is absent.
   rpc Delete(DeleteRequest) returns (DeleteResponse) {
     option (google.api.http) = { post: "/v1/resources:delete" body: "*" };
   }
@@ -126,6 +126,81 @@ service ResourceService {
   rpc ForgetResource(ForgetResourceRequest) returns (ForgetResourceResponse) {
     option (google.api.http) = { post: "/v1/resources:forget" body: "*" };
   }
+
+  // Confirm the physical identity of an already-tracked VM after upgrading
+  // from name-only tracking. Never adopts, applies, or changes infrastructure.
+  rpc ConfirmResourceIdentity(ConfirmResourceIdentityRequest) returns (ConfirmResourceIdentityResponse) {
+    option (google.api.http) = { post: "/v1/resources:confirmIdentity" body: "*" };
+  }
+
+  // Discovery observes configured infrastructure without adopting or changing it.
+  rpc ListDiscoveryContexts(ListDiscoveryContextsRequest) returns (ListDiscoveryContextsResponse) {
+    option (google.api.http) = { get: "/v1/discovery/contexts" };
+  }
+  rpc DiscoverResources(DiscoverResourcesRequest) returns (DiscoverResourcesResponse) {
+    option (google.api.http) = { post: "/v1/discovery/resources" body: "*" };
+  }
+  rpc TestDiscoveryConnection(TestDiscoveryConnectionRequest) returns (TestDiscoveryConnectionResponse) {
+    option (google.api.http) = { post: "/v1/discovery:testConnection" body: "*" };
+  }
+}
+message ConfirmResourceIdentityRequest {
+  string api_version = 1;
+  string kind = 2;
+  string name = 3;
+  string identity = 4;
+  string provider_context = 5;
+}
+
+message ConfirmResourceIdentityResponse {
+  Resource resource = 1;
+  string message = 2;
+}
+
+
+message ListDiscoveryContextsRequest {
+  string api_version = 1;
+}
+
+message DiscoveryContext {
+  string name = 1;
+  string endpoint = 2;
+  bool default_context = 3;
+}
+
+message ListDiscoveryContextsResponse {
+  repeated DiscoveryContext contexts = 1;
+}
+
+message DiscoverResourcesRequest {
+  string api_version = 1;
+  string context = 2;
+}
+
+message DiscoveredResource {
+  string context = 1;
+  string node = 2;
+  int64 vmid = 3;
+  string identity = 4;
+  Resource resource = 5;
+  bool managed = 6;
+  bool adoptable = 7;
+  string reason = 8;
+  bool identity_confirmation_required = 9;
+}
+
+message DiscoverResourcesResponse {
+  repeated DiscoveredResource resources = 1;
+}
+
+message TestDiscoveryConnectionRequest {
+  string api_version = 1;
+  string context = 2;
+}
+
+message TestDiscoveryConnectionResponse {
+  bool connected = 1;
+  string message = 2;
 }
 
 // MigrationBundle contains desired intent, not observed state. Treat it as
@@ -301,6 +376,12 @@ message DryRunApplyResponse {
   // of dumping them all in a bottom panel. Empty for schema-less kinds
   // or when validation passed.
   repeated FieldError field_errors = 6;
+  // Explicit intent: create, update, or no-op. A new atomic resource is
+  // create even when it has no previous spec to diff against.
+  string operation = 7;
+  // Submitted intent versus live provider observation, separate from edits
+  // against the last stored manifest.
+  repeated DriftEntry live_drift = 8;
 }
 
 // FieldError attributes a single schema violation to a dotted path
@@ -378,6 +459,8 @@ message ApplyRequest {
   // --allow-destructive and --i-know-this-breaks-the-cluster.
   bool allow_destructive = 2;
   bool i_know_this_breaks_the_cluster = 3;
+  // Refuse to overwrite an existing managed or provider resource.
+  bool create_only = 4;
 }
 
 message ApplyResponse {
@@ -942,6 +1025,8 @@ message GetRepoStatusResponse {
   int32 ahead = 8;
   int32 behind = 9;
   string push_mode = 10;   // "onCommit" | "periodic" | "manual"
+  // Exactly one desired-state authority: mirror (controller) or gitops (repo).
+  string mode = 11;
 }
 
 message PushRepoRequest {}

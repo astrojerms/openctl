@@ -37,6 +37,8 @@ and the exec-plugin paths are removed.`,
 	cmd.AddCommand(newCtlExportCommand())
 	cmd.AddCommand(newCtlAdoptCommand())
 	cmd.AddCommand(newCtlForgetCommand())
+	cmd.AddCommand(newCtlDiscoverCommand())
+	cmd.AddCommand(newCtlConfirmIdentityCommand())
 	return cmd
 }
 

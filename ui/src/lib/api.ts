@@ -225,7 +225,9 @@ export interface DryRunChildAction {
 }
 
 export interface DryRunApplyResponse {
+  operation?: 'create' | 'update' | 'no-op';
   diff?: DriftEntry[];
+  liveDrift?: DriftEntry[];
   children?: DryRunChildAction[];
   requiredGates?: string[];
   validationErrors?: string[];
@@ -281,6 +283,7 @@ export interface ApplyRequest {
   resource: Resource | Partial<Resource>;
   allowDestructive?: boolean;
   iKnowThisBreaksTheCluster?: boolean;
+  createOnly?: boolean;
 }
 
 export interface ApplyResponse {
@@ -382,6 +385,54 @@ export const providersApi = {
     api.post<{ provider: ProviderEntry }>('/v1/config/providers', req),
   delete: (name: string) =>
     api.delete<Record<string, never>>('/v1/config/providers/' + encodeURIComponent(name)),
+};
+
+export interface DiscoveryContext {
+  name: string;
+  endpoint?: string;
+  defaultContext?: boolean;
+}
+
+export interface DiscoveredResource {
+  context: string;
+  node: string;
+  vmid: string;
+  identity: string;
+  resource: Resource;
+  managed?: boolean;
+  adoptable?: boolean;
+  reason?: string;
+  identityConfirmationRequired?: boolean;
+}
+
+export interface MigrationBundle {
+  version: number;
+  resource: Resource;
+  controllerId: string;
+  manifestDigest: string;
+  identity: string;
+}
+
+export const discovery = {
+  contexts: (apiVersion = 'proxmox.openctl.io/v1') =>
+    api.get<{ contexts?: DiscoveryContext[] }>('/v1/discovery/contexts?api_version=' + encodeURIComponent(apiVersion)),
+  inventory: (context: string, apiVersion = 'proxmox.openctl.io/v1') =>
+    api.post<{ resources?: DiscoveredResource[] }>('/v1/discovery/resources', { apiVersion, context }),
+  test: (context: string, apiVersion = 'proxmox.openctl.io/v1') =>
+    api.post<{ connected: boolean; message?: string }>('/v1/discovery:testConnection', { apiVersion, context }),
+};
+
+export const ownership = {
+  confirmIdentity: (apiVersion: string, kind: string, name: string, identity: string, providerContext: string) =>
+    api.post<{ resource: Resource; message?: string }>('/v1/resources:confirmIdentity', { apiVersion, kind, name, identity, providerContext }),
+  adopt: (resource: Resource, providerContext: string) =>
+    api.post<{ resource: Resource; message?: string }>('/v1/resources:adopt', { resource, providerContext }),
+  adoptBundle: (bundle: MigrationBundle, providerContext: string) =>
+    api.post<{ resource: Resource; message?: string }>('/v1/resources:adopt', { bundle, providerContext }),
+  export: (apiVersion: string, kind: string, name: string) =>
+    api.post<{ bundle: MigrationBundle }>('/v1/resources:export', { apiVersion, kind, name }),
+  forget: (bundle: MigrationBundle) =>
+    api.post<{ message?: string }>('/v1/resources:forget', { bundle }),
 };
 
 // Controller-behavior tunables (reconciler + operation retention). All are
@@ -496,6 +547,7 @@ export const operations = {
 // --- Repo (manifest dir / git) -------------------------------------------
 
 export interface RepoStatus {
+  mode?: 'mirror' | 'gitops';
   enabled?: boolean;
   dir?: string;
   branch?: string;

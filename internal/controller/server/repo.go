@@ -25,8 +25,10 @@ var hexSHA = regexp.MustCompile(`^[0-9a-fA-F]{4,64}$`)
 // dir + base fields; Push/Pull return FailedPrecondition.
 type repoHandler struct {
 	apiv1.UnimplementedRepoServiceServer
-	mirror *manifests.DiskMirror
-	repo   *manifests.Repo
+	mirror    *manifests.DiskMirror
+	repo      *manifests.Repo
+	mode      string
+	reconcile func(context.Context) error
 }
 
 func newRepoHandler(mirror *manifests.DiskMirror, repo *manifests.Repo) *repoHandler {
@@ -34,7 +36,11 @@ func newRepoHandler(mirror *manifests.DiskMirror, repo *manifests.Repo) *repoHan
 }
 
 func (h *repoHandler) GetStatus(ctx context.Context, _ *apiv1.GetRepoStatusRequest) (*apiv1.GetRepoStatusResponse, error) {
-	resp := &apiv1.GetRepoStatusResponse{}
+	mode := h.mode
+	if mode == "" {
+		mode = "mirror"
+	}
+	resp := &apiv1.GetRepoStatusResponse{Mode: mode}
 	if h.mirror != nil {
 		resp.Dir = h.mirror.Root()
 	}
@@ -69,6 +75,9 @@ func (h *repoHandler) GetStatus(ctx context.Context, _ *apiv1.GetRepoStatusReque
 }
 
 func (h *repoHandler) Push(ctx context.Context, _ *apiv1.PushRepoRequest) (*apiv1.PushRepoResponse, error) {
+	if h.mode == "gitops" {
+		return nil, status.Error(codes.FailedPrecondition, "gitops mode is authored upstream; push changes from your source repository, not the controller")
+	}
 	if h.repo == nil {
 		return nil, status.Error(codes.FailedPrecondition, "git tracking is disabled (set manifests.git.enabled in config)")
 	}
@@ -84,14 +93,22 @@ func (h *repoHandler) Push(ctx context.Context, _ *apiv1.PushRepoRequest) (*apiv
 }
 
 func (h *repoHandler) Pull(ctx context.Context, _ *apiv1.PullRepoRequest) (*apiv1.PullRepoResponse, error) {
+	if h.mode != "gitops" {
+		return nil, status.Error(codes.FailedPrecondition, "mirror mode never pulls desired state; set manifests.mode: gitops and manifests.gitops.remote to use repository authority")
+	}
 	if h.repo == nil {
-		return nil, status.Error(codes.FailedPrecondition, "git tracking is disabled (set manifests.git.enabled in config)")
+		return nil, status.Error(codes.FailedPrecondition, "source repository is unavailable (check manifests.gitops.remote)")
 	}
 	if h.repo.Remote() == "" {
-		return nil, status.Error(codes.FailedPrecondition, "no remote configured (set manifests.git.remote in config)")
+		return nil, status.Error(codes.FailedPrecondition, "no source remote configured (set manifests.gitops.remote in config)")
 	}
 	if err := h.repo.Pull(ctx); err != nil {
 		return nil, status.Errorf(codes.Internal, "git pull: %v", err)
+	}
+	if h.reconcile != nil {
+		if err := h.reconcile(ctx); err != nil {
+			return nil, status.Errorf(codes.Internal, "reconcile pulled manifests: %v", err)
+		}
 	}
 	return &apiv1.PullRepoResponse{
 		Message: fmt.Sprintf("pulled from %s", h.repo.Remote()),

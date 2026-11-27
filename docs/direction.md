@@ -1,15 +1,14 @@
 # openctl — Direction & Priorities
 
-This doc captures the strategic direction that came out of a
-direction-setting conversation (2026-07-04). It is the north star the
-roadmap serves: audience, the differentiating "wedge," scope decisions,
-and the priority ordering the next epics should follow. When a proposed
-feature and this doc disagree, this doc is the tiebreaker — or a reason
-to revisit it deliberately.
+This is the product direction the roadmap serves. Reaffirmed 2026-11-27:
+**an AWS-style console and declarative infrastructure manager for homelabs,
+without user-managed state files or whole-lab planning.** A working provider
+API is a building block, not evidence that the operator journey is complete.
+When a proposed feature conflicts with this direction, revisit it deliberately.
 
-Companion doc: [plugin-architecture.md](plugin-architecture.md) — the
-technical spine (one provider interface, many implementers, incl. the
-Terraform/OpenTofu host) that most of Tier 1 below flows through.
+Companion doc: [plugin-architecture.md](plugin-architecture.md) — the provider
+contract and long-tail Terraform/OpenTofu adapter. Breadth serves the operator
+journey; it does not replace it.
 
 ---
 
@@ -41,21 +40,20 @@ convenient.
 
 ## Audience & ambition
 
-A **general-purpose tool the author also uses** — built to manage real
-infra, for learning, and as a portfolio piece; adoption by others is an
-explicit goal, not just a nice-to-have. That raises the bar on polish,
-docs, provider-contract stability, and (eventually) multi-user.
+Homelab operators, starting with a single operator on Proxmox. Adoption by
+others is a goal: connecting an existing lab must not require recreating it,
+reading implementation code, or manually repairing controller state.
 
-Time is **not** the limiting factor (steady spare-time investment), so
-the architecturally ambitious path is on the table — and doubles as the
-best portfolio story.
+The product is a control plane, not Terraform with a GUI. The console, CLI,
+and declarations operate through the same resource ownership and operation
+contracts. Kubernetes is an optional deployment target, never a prerequisite.
 
 ## Scope decisions
 
-- **Wide, not deep.** Favor a generic, reusable plugin ecosystem that
-  can be extended to *any* infra provider over gold-plating Proxmox +
-  k3s. openctl should lay down an interoperable substrate; providers
-  plug into it.
+- **Homelab depth before provider breadth.** Make Proxmox discovery, adoption,
+  safe updates, application deployment, health, and recovery work together
+  before adding more providers. Keep the provider contract extensible, but
+  registry coverage is not the primary success metric.
 - **A bounded homelab PaaS** (re-baselined — K5, 2026-07). The original
   line was "infra, not workloads — stop at cluster-Ready, kubectl takes it
   from here." The deployment model (HelmRelease / Manifest / Platform /
@@ -79,62 +77,58 @@ best portfolio story.
   RBAC is a genuine future need, gated behind adoption + a shared
   deployment actually existing.
 
-## North-star demo (the 2-year check)
+## North-star operator journey
 
-Hybrid-cloud infra management: **log in, launch a system in Proxmox /
-AWS / GKE, see the result.** State is saved to flat files committed to
-git. Users either submit IaC to openctl or commit it to git and openctl
-brings the infra up; they log in, check status, and view resources
-linked together with their dependencies in graphs.
+1. Install a controller on a workstation, Linux host, or dedicated Proxmox VM.
+2. Connect Proxmox, test read access, discover existing infrastructure, and
+   adopt a VM without changing it.
+3. Provision a dedicated GPU VM or select a managed one; deploy Jellyfin with
+   read-only NAS media and protected account onboarding.
+4. Optionally publish a domain through an explicitly approved, connected
+   tunnel. Public exposure is never an implicit deployment side effect.
+5. Inspect dependencies, desired versus observed state, operation errors, and
+   independent guest/container/HTTP/media/GPU/public readiness checks.
+6. Update or recover a resource without replanning unrelated infrastructure.
+   Release tracking and delete infrastructure are distinct operations.
 
-Reality check: this loop is **~80% built for Proxmox + k3s already**
-(DiskMirror + `manifests.git` + two-way GitOps = flat-files-to-git;
-DryRun/Apply/reconciler = bring-it-up; DagView = dependency graphs;
-the whole UI = log-in-and-see-status). The gap is **breadth** (only two
-providers) and **reach** (only runs on the dev Mac) — which is exactly
-what the priority order below attacks.
+Every step must have reproducible desired manifests. A running VM is not proof
+of application health; a passed fake-provider test is not hardware validation.
 
 ---
 
 ## Priority order
 
-### Tier 1 — the spine (roughly in sequence)
+### Tier 1 — trustworthy resource contracts
 
-1. **External plugin protocol — designed deliberately.** The generic,
-   reusable provider interface (the "wide" ecosystem foundation) and the
-   thing contributors need. Ship it with **one** external example
-   provider to prove the ABI. Design the Terraform host (item 2) as an
-   explicit second consumer *now*, so the interface is shaped right the
-   first time. See [plugin-architecture.md](plugin-architecture.md).
-2. **Terraform / OpenTofu provider host** — a *second implementer* of
-   that same interface that delegates to any `terraform-provider-*`
-   binary. The breadth multiplier: one adapter unlocks the whole
-   provider registry (the AWS/GKE half of the demo). Details + honest
-   hard-parts analysis in [plugin-architecture.md](plugin-architecture.md).
-3. **Run-anywhere: portable Linux daemon + `install --target ssh://`.**
-   A systemd daemon, not just a Mac LaunchAgent. Unlocks real use beyond
-   the dev box and is the prerequisite for self-hosting. Largely
-   **independent** of items 1–2 — can proceed in parallel.
+- Create, update, and no-op previews are explicit; reviewed intent is exactly
+  what Apply submits. Form editing must preserve metadata and secret markers.
+- A cache hit requires live observable agreement, not just unchanged input.
+- Operation success requires durable desired-state bookkeeping. If provider
+  mutation succeeds but persistence fails, report partial success explicitly.
+- Bind VM operations to immutable placement and identity. Fail closed on
+  ambiguous names, unreadable ownership, or unsafe dependent deletion.
+- One desired-state authority: controller-owned `mirror`, or upstream-owned
+  `gitops`. Never combine automatic output commits with input pulls.
 
-### Tier 2 — natural follow-ons
+### Tier 2 — a complete homelab workflow
 
-4. **Self-hosting bootstrap** (`install --target proxmox://`) — deploy
-   openctl onto its own managed infra. Demo-able, fits "run anywhere";
-   needs the Linux daemon (item 3) first.
-5. **Multi-user auth (OIDC / RBAC)** — real but *downstream of
-   adoption*, which is downstream of breadth + reach. Revisit the moment
-   a shared deployment (item 3) creates an actual second user. Until
-   then root token + TLS + sessions is adequate.
+- Connect/test/discover/adopt in the console, with the same controller-side
+  inventory available to the CLI.
+- First-class standalone application lifecycle, including updates, logs,
+  explicit runtime actions, health, and data-preserving removal.
+- One integrated Jellyfin journey, including storage, GPU, optional domain,
+  and failure recovery. No manual guest-script staging.
+- Linux/SSH/Proxmox installation and accurate onboarding documentation.
 
-### Tier 3 — park with a clear conscience
+### Tier 3 — proof, then breadth
 
-6. **Client-side CUE WASM validation** — pure editor-latency polish, off
-   the critical path.
-7. **Mobile-friendly layout** — cosmetic.
-8. **General cloud PaaS** — still out of scope. The homelab-PaaS
-   re-baseline (K5) brought *homelab* workloads in scope, but competing
-   with Heroku/Cloud Foundry for general app hosting is not the goal. Bound
-   workload features to "what a home lab needs."
+- Verify the full operator journey on real hardware, including interrupted
+  operations, guest reboots, unavailable dependencies, and actual playback.
+- Keep controller recovery procedures and external credential dependencies
+  explicit. Manifest git history is not a complete controller/data backup.
+- Widen providers and multi-user features when the existing homelab workflow
+  is dependable. Terraform hosting is a long-tail adapter, not the product UX.
+- General-purpose cloud PaaS remains out of scope.
 
 ### Cross-cutting, ongoing
 

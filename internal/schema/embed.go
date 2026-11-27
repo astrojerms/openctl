@@ -59,6 +59,18 @@ func Registry() []Info {
 			Provider:   "k3s",
 			FileName:   "k3s/agentinstall.cue",
 		},
+		{
+			APIVersion: "apps.openctl.io/v1",
+			Kind:       "ComposeApplication",
+			Provider:   "apps",
+			FileName:   "apps/compose.cue",
+		},
+		{
+			APIVersion: "apps.openctl.io/v1",
+			Kind:       "Jellyfin",
+			Provider:   "apps",
+			FileName:   "apps/jellyfin.cue",
+		},
 	}
 	return append(infos, externalInfos()...)
 }

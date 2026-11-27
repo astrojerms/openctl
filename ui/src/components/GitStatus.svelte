@@ -98,13 +98,12 @@
   // a friendly "nothing to push" message.
   $: showPush =
     !!status?.enabled &&
+    status?.mode !== 'gitops' &&
     !!status?.remote &&
     ((status?.ahead ?? 0) > 0 || status?.pushMode === 'manual');
 
-  // "Pull" shows whenever a remote is configured — it's how an operator picks
-  // up out-of-band commits (another controller, a manual git push to the
-  // remote). Highlighted when the local is behind.
-  $: showPull = !!status?.enabled && !!status?.remote;
+  // Only the upstream-authored mode may import remote desired state.
+  $: showPull = status?.mode === 'gitops' && !!status?.enabled && !!status?.remote;
 </script>
 
 <span

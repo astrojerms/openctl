@@ -84,15 +84,16 @@ store, disk mirror, or git.
 
 ### Requirement: Verifying-trace cache keyed on intent and upstream state
 
-The system SHALL skip a provider's Apply when a resource is unchanged, using a
-two-dimensional cache: `input_hash` over the raw manifest (user intent) and
-`refs_hash` over the resolved `$ref` values (upstream state). A cache hit SHALL
-require BOTH hashes to match the last successful apply.
+The system SHALL skip a provider's Apply only when raw `input_hash` and resolved
+`refs_hash` match the last successful apply AND live provider observation matches
+the declared observable fields under provider-specific comparison semantics.
+Missing observation, read errors, empty projections, and secret markers without
+an observable revision SHALL NOT establish a cache hit.
 
 #### Scenario: Unchanged intent and unchanged upstream → cache hit
 
-- **WHEN** a resource is re-applied with a byte-identical raw manifest and all
-  its `$ref` targets resolve to the same values as the last success
+- **WHEN** a resource is re-applied with identical raw intent, unchanged `$ref`
+  values, and matching live observable configuration
 - **THEN** the provider's Apply is skipped and the operation is marked cached
 
 #### Scenario: Upstream drift invalidates the cache despite identical intent
@@ -100,6 +101,16 @@ require BOTH hashes to match the last successful apply.
 - **WHEN** a resource's raw manifest is byte-identical but a `$ref` target's
   value has changed since the last apply
 - **THEN** the cache misses and the provider's Apply runs
+
+#### Scenario: Live drift invalidates unchanged intent
+
+- **WHEN** intent and references are unchanged but a managed live setting differs
+- **THEN** Apply runs rather than returning a cached success
+
+#### Scenario: Metadata-only intent remains durable
+
+- **WHEN** only annotations change and live configuration is unchanged
+- **THEN** the updated metadata is persisted even if provider Apply is skipped
 
 ### Requirement: Cross-operation dependency scheduling
 
@@ -149,3 +160,77 @@ which enqueues an Apply of the stored manifest when drift is detected.
   state has drifted from its stored desired manifest
 - **THEN** the drift is logged and no Apply is enqueued unless the resource
   carries `openctl.io/autoReconcile: "true"`
+
+### Requirement: Success includes durable desired-state bookkeeping
+
+The system SHALL require durable desired-state bookkeeping before reporting
+operation success and SHALL distinguish partial provider success from rollback.
+
+#### Scenario: Mutation succeeds but intent persistence fails
+
+- **WHEN** provider mutation succeeds but saving or removing desired intent fails
+- **THEN** the operation fails with an explicit partial-success diagnostic,
+  without claiming the provider mutation was rolled back
+
+### Requirement: Immutable VM identity and safe ownership boundaries
+
+The system SHALL verify managed VM identity and fail closed on ambiguous
+placement, ownership or dependency evidence.
+
+#### Scenario: An ordinary operation verifies physical identity
+
+- **WHEN** a managed Proxmox VM is read or mutated
+- **THEN** recorded context, endpoint, node, VMID and UUID are checked, and an
+  ambiguous name, changed identity, or unreadable ownership fails closed
+
+#### Scenario: A legacy tracked VM needs identity evidence
+
+- **WHEN** an existing tracked VM lacks identity evidence
+- **THEN** an administrator can confirm its observed identity against canonical
+  saved placement without adopting, applying, or changing the physical VM
+
+#### Scenario: Deletion crosses an ownership or dependency boundary
+
+- **WHEN** a top-level Delete targets an unmanaged, owned, or referenced resource
+- **THEN** it is refused; in-flight Apply references and Delete admission fence
+  each other transactionally
+
+### Requirement: One desired-state authority
+
+The system SHALL select exactly one desired-state authority and reject
+contradictory automation configuration.
+
+#### Scenario: The controller owns desired intent
+
+- **WHEN** mode is `mirror`
+- **THEN** the controller owns desired intent and may write/push an audit mirror,
+  but never watches or pulls it as an input
+
+#### Scenario: The upstream repository owns desired intent
+
+- **WHEN** mode is `gitops`
+- **THEN** upstream authored manifests own intent; no auto-commit, push, startup
+  file revival, or direct console/CLI resource mutation competes with that repo
+
+### Requirement: Standalone application lifecycle is independent of VM lifecycle
+
+The system SHALL manage standalone applications with verified ownership,
+protected credentials, data retention and independently observed readiness.
+
+#### Scenario: An application is applied or updated
+
+- **WHEN** an application is applied or updated
+- **THEN** verified SSH, controller-specific ownership, immutable placement,
+  protected secret delivery and live application observation govern the rollout
+
+#### Scenario: Application containers are removed
+
+- **WHEN** application containers are removed
+- **THEN** configuration, volumes and media remain; VM deletion is a separate task
+
+#### Scenario: Application health is inspected
+
+- **WHEN** application readiness is shown
+- **THEN** guest, containers, HTTP and configured storage/GPU/public checks remain
+  distinct, and VM power state alone cannot establish application readiness
+

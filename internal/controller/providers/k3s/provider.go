@@ -215,30 +215,42 @@ func (p *Provider) DoAction(_ context.Context, kind, name, action string) (*prov
 // block Delete on owned resources (e.g. attempting to delete a proxmox VM
 // that's a member of a cluster).
 func (p *Provider) OwnerOf(kind, name string) (string, string, bool) {
+	ownerKind, ownerName, owned, _ := p.CheckedOwnerOf(context.Background(), kind, name)
+	return ownerKind, ownerName, owned
+}
+
+// CheckedOwnerOf refuses to authorize deletion when ownership state is unreadable.
+func (p *Provider) CheckedOwnerOf(ctx context.Context, kind, name string) (string, string, bool, error) {
 	dir, err := stateDir()
 	if err != nil {
-		return "", "", false
+		return "", "", false, err
 	}
 	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return "", "", false, nil
+	}
 	if err != nil {
-		return "", "", false
+		return "", "", false, fmt.Errorf("read cluster ownership state: %w", err)
 	}
 	for _, e := range entries {
+		if err := ctx.Err(); err != nil {
+			return "", "", false, err
+		}
 		if e.IsDir() || filepath.Ext(e.Name()) != ".yaml" {
 			continue
 		}
 		clusterName := strings.TrimSuffix(e.Name(), ".yaml")
 		children, err := readChildren(clusterName)
 		if err != nil {
-			continue
+			return "", "", false, fmt.Errorf("read ownership of cluster %q: %w", clusterName, err)
 		}
 		for _, c := range children {
 			if c.Kind == kind && c.Name == name {
-				return kindCluster, clusterName, true
+				return kindCluster, clusterName, true, nil
 			}
 		}
 	}
-	return "", "", false
+	return "", "", false, nil
 }
 
 // ChildrenOf implements providers.ChildrenLister: returns the VirtualMachine

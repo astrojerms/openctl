@@ -1,12 +1,13 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { resources, UnauthorizedError, type GetResourceResponse, type Resource, type ResourceRef, type ActionSpec } from '../lib/api';
-  import { canMutate } from '../lib/auth';
+  import { resources, ownership, UnauthorizedError, type GetResourceResponse, type Resource, type ResourceRef, type ActionSpec, type MigrationBundle } from '../lib/api';
+  import { auth, canMutate } from '../lib/auth';
+  import { applicationChecks, childHealth, type ChildState } from '../lib/detailState';
 
   // Shown on disabled mutation controls for a read-only (viewer) session.
   const readOnlyTitle = 'Read-only session — requires editor or admin role';
   import { watchResources } from '../lib/watch';
-  import { statusBadge, type StatusBadge } from '../lib/format';
+  import { statusBadge } from '../lib/format';
   import { routeHref, navigate } from '../lib/router';
   import { ops as opsStore } from '../lib/ops';
   import { resourceToYAML } from '../lib/yaml';
@@ -32,7 +33,7 @@
   // populate this for composite resources (parent has children). Each
   // entry is one extra Get RPC at mount — fine for the homelab fanout
   // (a Cluster has ≤ ~10 children in practice).
-  type ChildState = { badge: StatusBadge; driftCount: number; error?: string };
+  $: isAdmin = $auth.kind === 'signed-in' && (!$auth.me.role || $auth.me.role === 'admin');
   let childStates: Record<string, ChildState | null> = {};
 
   function childKey(ref: ResourceRef): string {
@@ -52,6 +53,11 @@
     loading = true;
     error = '';
     childStates = {};
+    exportedBundle = null;
+    secretAcknowledged = false;
+    migrationMessage = '';
+    migrationError = '';
+    released = false;
     await load(av, k, n);
     void subscribe(av, k, n, controller.signal);
   }
@@ -148,6 +154,67 @@
   }
 
   $: state = data ? statusBadge(data.resource.status) : null;
+  $: appChecks = apiVersion === 'apps.openctl.io/v1' ? applicationChecks(data?.resource.status) : [];
+  $: appReady = data?.resource.status?.ready;
+  $: displayState = apiVersion === 'apps.openctl.io/v1' && typeof appReady === 'boolean'
+    ? { label: String(data?.resource.status?.phase ?? (appReady ? 'ready' : 'not ready')), tone: appReady ? 'good' : state?.tone === 'bad' ? 'bad' : 'warn' }
+    : state;
+  $: standaloneVM = apiVersion === 'proxmox.openctl.io/v1' && kind === 'VirtualMachine'
+    && !!data?.applied && !data.resource.metadata.ownerRefs?.length && !data.resource.children?.length;
+
+  let exportedBundle: MigrationBundle | null = null;
+  let secretAcknowledged = false;
+  let migrating = false;
+  let migrationMessage = '';
+  let migrationError = '';
+  let released = false;
+
+  async function exportBundle() {
+    if (!isAdmin || !standaloneVM || !secretAcknowledged || migrating) return;
+    migrating = true;
+    migrationError = '';
+    migrationMessage = '';
+    exportedBundle = null;
+    try {
+      const target = watching;
+      const response = await ownership.export(apiVersion, kind, resourceName);
+      if (watching !== target) return;
+      const url = URL.createObjectURL(new Blob([JSON.stringify(response.bundle, null, 2)], { type: 'application/json' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${resourceName}-migration.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      exportedBundle = response.bundle;
+      migrationMessage = 'Bundle download requested. Verify it is safely saved before releasing tracking. Export did not change ownership or prove destination adoption.';
+    } catch (err) {
+      migrationError = err instanceof Error ? err.message : String(err);
+    } finally { migrating = false; }
+  }
+
+  async function forgetVM() {
+    if (!isAdmin || !exportedBundle || !secretAcknowledged || migrating || activeOp) return;
+    const typed = prompt(`Release controller tracking for ${resourceName}?\n\nThis is NOT Delete. The VM stays intact and its power state is unchanged. This controller stops managing it; destination adoption has not been proven. Keep the exported bundle safely saved.\n\nType the resource name to confirm:`);
+    if (typed === null) return;
+    if (typed !== resourceName) {
+      migrationError = 'Name did not match; release cancelled.';
+      return;
+    }
+    migrating = true;
+    migrationError = '';
+    try {
+      const target = watching;
+      const response = await ownership.forget(exportedBundle);
+      if (watching !== target) return;
+      controller?.abort();
+      released = true;
+      migrationMessage = response.message || 'Controller tracking released. The provider VM remains intact.';
+    } catch (err) {
+      migrationError = err instanceof Error ? err.message : String(err);
+    } finally { migrating = false; }
+  }
 
   // Manual reconcile: re-submit the stored manifest through the normal
   // Apply path so the dispatcher pushes desired state over observed. The
@@ -419,16 +486,8 @@
   // Current desired manifest YAML — the right-hand side of the History diff.
   $: appliedYamlStr = data ? manifestYAML() : '';
 
-  // U6 aggregations: count children we've heard back from that are
-  // drifted or in a non-good state. Reactive on childStates so the
-  // numbers tick up as the fanout completes.
   $: childTotal = data?.resource.children?.length ?? 0;
-  $: childDrifted = Object.values(childStates).filter(
-    (s): s is ChildState => s !== null && s.driftCount > 0,
-  ).length;
-  $: childUnhealthy = Object.values(childStates).filter(
-    (s): s is ChildState => s !== null && (s.badge.tone === 'bad' || s.badge.tone === 'warn'),
-  ).length;
+  $: childSummary = childHealth(data?.resource.children ?? [], childStates);
 </script>
 
 <section>
@@ -442,14 +501,16 @@
       <h2>{resourceName}</h2>
     </div>
     <div class="header-right">
-      {#if state}
-        <span class="state state-{state.tone}">{state.label}</span>
+      {#if !released}
+      {#if displayState}
+        <span class="state state-{displayState.tone}">{displayState.label}</span>
       {/if}
       {#if childTotal > 0}
-        <span class="state state-{childDrifted > 0 || childUnhealthy > 0 ? 'warn' : 'good'}" title="Aggregated child status">
+        <span class="state state-{childSummary.tone}" title="Aggregated child status; unknown or loading children are not healthy">
           {childTotal} {childTotal === 1 ? 'child' : 'children'}
-          {#if childDrifted > 0} · {childDrifted} drifted{/if}
-          {#if childUnhealthy > 0} · {childUnhealthy} unhealthy{/if}
+          {#if childSummary.drifted > 0} · {childSummary.drifted} drifted{/if}
+          {#if childSummary.unhealthy > 0} · {childSummary.unhealthy} unhealthy{/if}
+          {#if childSummary.unknown > 0} · {childSummary.unknown} unknown / loading{/if}
         </span>
       {/if}
       {#each actionSpecs as a}
@@ -487,6 +548,7 @@
           title="Delete this resource"
           on:click={doDelete}
         >{deleting ? 'Deleting…' : 'Delete'}</button>
+      {/if}
       {/if}
     </div>
   </header>
@@ -553,7 +615,14 @@
     <p class="err small">{actionErr}</p>
   {/if}
 
-  {#if loading}
+  {#if released}
+    <article class="card">
+      <h3>Tracking released — VM kept</h3>
+      <p role="status">{migrationMessage}</p>
+      <p>Release is not Delete. The VM remains at the provider; destination adoption has not been proven.</p>
+      <a href={routeHref({ name: 'discover' })}>Discover or import the bundle at a destination controller</a>
+    </article>
+  {:else if loading}
     <p class="muted">Loading…</p>
   {:else if error}
     <p class="err">{error}</p>
@@ -572,6 +641,40 @@
       </p>
     {/if}
 
+    {#if standaloneVM}
+      <article class="card">
+        <h3>Export and release tracking</h3>
+        <p>Export preserves ownership. Release tracking is <strong>not Delete</strong>: it keeps the provider VM intact but stops this controller managing it. Neither action proves adoption at a destination controller.</p>
+        <p class="muted small">Requires an admin, an idle controller, and manifest GitOps watch/pull disabled. Owned VMs, managed references, or opaque provider state may block migration; the server enforces all safeguards.</p>
+        {#if isAdmin}
+          <label class="migration-confirm"><input type="checkbox" bind:checked={secretAcknowledged} disabled={migrating} /> I understand the downloaded bundle may contain literal cloud-init credentials and other secrets; I will store and transfer it securely.</label>
+          <div class="card-actions">
+            <button class="action-btn" disabled={migrating || !secretAcknowledged || !!activeOp} on:click={exportBundle}>{migrating ? 'Working…' : 'Export bundle'}</button>
+            <button class="action-btn destructive" disabled={migrating || !secretAcknowledged || !exportedBundle || !!activeOp} on:click={forgetVM}>Release tracking (keep VM)</button>
+          </div>
+          {#if migrationMessage}<p class="muted small" role="status">{migrationMessage}</p>{/if}
+          {#if migrationError}<p class="err small" role="alert">{migrationError}</p>{/if}
+        {:else}<p class="muted">Only an admin can export or release ownership.</p>{/if}
+      </article>
+    {/if}
+
+    {#if appChecks.length > 0}
+      <article class="card">
+        <h3>Application checks</h3>
+        {#if typeof data.resource.status?.message === 'string'}<p>{data.resource.status.message}</p>{/if}
+        <p class="muted small">Checks show individual readiness, not just whether the VM is running. An unconfigured public endpoint does not imply the application itself is unhealthy.</p>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>Check</th><th>Readiness</th><th>Details</th></tr></thead>
+            <tbody>
+              {#each appChecks as check}
+                <tr><td>{check.name}</td><td><span class="state state-{check.ready === true ? 'good' : check.ready === false ? 'warn' : 'unknown'}">{check.ready === true ? 'Ready' : check.ready === false ? 'Not ready' : 'Unknown'}</span></td><td>{check.message || 'No details reported'}</td></tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      </article>
+    {/if}
     {#if drift.length > 0}
       <article class="card drift-card">
         <h3>Drift ({drift.length})</h3>
@@ -650,9 +753,9 @@
       </article>
     {/if}
 
-    {#if children.length > 0}
-      <DagView {apiVersion} {kind} {resourceName} version={graphVersion} />
+    <DagView {apiVersion} {kind} {resourceName} version={graphVersion} />
 
+    {#if children.length > 0}
       <article class="card">
         <h3>Children ({children.length})</h3>
         <p class="muted small">
@@ -666,8 +769,8 @@
               <a href={routeHref({ name: 'detail', apiVersion: child.apiVersion, kind: child.kind, resourceName: child.name })}>
                 <span class="ref-kind">{child.kind}</span>
                 <span class="ref-name">{child.name}</span>
-                {#if s === null}
-                  <span class="state state-unknown shimmer">loading…</span>
+                {#if s == null}
+                  <span class="state state-unknown shimmer">loading / unknown</span>
                 {:else if s?.error}
                   <span class="state state-bad" title={s.error}>error</span>
                 {:else if s}
@@ -731,6 +834,7 @@
     display: flex;
     align-items: center;
     gap: 0.75rem;
+    flex-wrap: wrap;
   }
   .edit-btn {
     background: #4a8ef0;
@@ -906,6 +1010,7 @@
     display: flex;
     align-items: center;
     gap: 0.4rem;
+    flex-wrap: wrap;
   }
   .mini-btn {
     background: transparent;
@@ -1035,6 +1140,12 @@
   .ref-list .state {
     font-size: 0.72rem;
     padding: 0.1em 0.55em;
+  }
+  .migration-confirm { display: flex; align-items: baseline; gap: 0.6rem; margin: 1rem 0; }
+  @media (max-width: 45rem) {
+    header { align-items: flex-start; flex-direction: column; }
+    .header-right { gap: 0.5rem; }
+    .card-head { flex-wrap: wrap; }
   }
   .shimmer {
     opacity: 0.55;

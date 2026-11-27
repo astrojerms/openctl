@@ -66,6 +66,7 @@ type Options struct {
 	// GitOpsEnabled reflects running manifest watch/pull automation. Migration
 	// requires it disabled to avoid projection changes racing local handoff.
 	GitOpsEnabled bool
+	ManifestMode  string
 	// DiskMirror is the on-disk projection of applied manifests (UI Phase
 	// U2.1). When set, the controller surfaces it via RepoService so the
 	// UI can show the directory + git status.
@@ -74,6 +75,8 @@ type Options struct {
 	// When set, RepoService.Push/Pull/GetStatus are fully functional; when
 	// nil, GetStatus still returns the dir but Push/Pull error.
 	Repo *manifests.Repo
+	// RepoReconcile applies/prunes the source tree after a manual pull.
+	RepoReconcile func(context.Context) error
 	// Templates is the parameterized-starter registry surfaced via
 	// TemplateService. May be nil — the service just returns empty
 	// lists in that case.
@@ -125,6 +128,10 @@ func New(opts Options) (*Server, error) {
 	resourceHandler := newResourceHandler(registry, opts.Operations, opts.Dispatcher, opts.Manifests)
 	resourceHandler.mirror = opts.DiskMirror
 	resourceHandler.gitopsEnabled = opts.GitOpsEnabled
+	resourceHandler.manifestMode = opts.ManifestMode
+	if opts.Dispatcher != nil {
+		opts.Dispatcher.SetDeleteGuard(resourceHandler.CheckDelete)
+	}
 	apiv1.RegisterResourceServiceServer(g, resourceHandler)
 	if opts.Operations != nil {
 		// Guard against a nil *Dispatcher becoming a non-nil interface (which
@@ -141,7 +148,10 @@ func New(opts Options) (*Server, error) {
 		apiv1.RegisterSessionServiceServer(g, newSessionHandler(opts.Sessions))
 	}
 	if opts.DiskMirror != nil {
-		apiv1.RegisterRepoServiceServer(g, newRepoHandler(opts.DiskMirror, opts.Repo))
+		repoHandler := newRepoHandler(opts.DiskMirror, opts.Repo)
+		repoHandler.mode = opts.ManifestMode
+		repoHandler.reconcile = opts.RepoReconcile
+		apiv1.RegisterRepoServiceServer(g, repoHandler)
 	}
 	tmpls := opts.Templates
 	if tmpls == nil {

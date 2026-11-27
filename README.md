@@ -1,10 +1,9 @@
 # OpenCtl
 
-OpenCtl is a local infrastructure controller and UI for managing homelab
-resources declaratively. Today it focuses on Proxmox-backed virtual machines
-and k3s clusters, with a controller that persists desired state, runs async
-operations, mirrors manifests to disk, detects drift, and shows what is
-happening in a browser UI.
+OpenCtl is a homelab control plane: a browser console and declarative resource
+manager sharing one persistent controller. Manage Proxmox infrastructure,
+optional k3s workloads, and standalone applications without user-managed state
+files or a whole-lab plan.
 
 The current happy path is controller-driven:
 
@@ -38,6 +37,8 @@ standard library and does not mutate infrastructure.
 ## What It Can Do
 
 - Create, update, resize, and delete Proxmox VMs.
+- Discover controller-side Proxmox inventory and adopt existing VMs without changing them.
+- Manage standalone Docker Compose applications and a GPU/NAS-backed Jellyfin recipe.
 - Create and converge k3s clusters on Proxmox.
 - Scale k3s worker pools up and down.
 - Destroy and recreate nodes one at a time when CPU or memory changes.
@@ -51,8 +52,9 @@ standard library and does not mutate infrastructure.
 
 ## Status
 
-OpenCtl is usable but still young. The macOS local controller install path is
-implemented. Linux and remote controller installs are roadmap items.
+OpenCtl is usable but still young. macOS and Linux local service installs,
+SSH deployment, and Proxmox controller-VM bootstrap are implemented. Hardware,
+guest and application readiness must be verified independently of provisioning.
 
 Implemented providers:
 
@@ -60,10 +62,11 @@ Implemented providers:
 | --- | --- | --- |
 | Proxmox | `proxmox.openctl.io/v1` | `VirtualMachine`, `ProxmoxNode` |
 | k3s | `k3s.openctl.io/v1` | `Cluster`, `K3sNode`, `AgentInstall` |
+| Standalone apps | `apps.openctl.io/v1` | `ComposeApplication`, `Jellyfin` |
 
 ## Requirements
 
-- macOS for `openctl-controller install --local`.
+- macOS or Linux for `openctl-controller install --local`.
 - Go and Node/npm for source builds.
 - A Proxmox VE API token.
 - A Proxmox bridge such as `vmbr0`.
@@ -83,7 +86,7 @@ make codesign-setup
 # Build CLI, controller, UI, plugins, and Linux k3s agent payloads.
 make build build-plugin-k3s-agent-linux
 
-# Install the controller as a per-user macOS LaunchAgent.
+# Install locally: LaunchAgent on macOS, user systemd service on Linux.
 ./bin/openctl-controller install --local
 
 # Verify CLI -> controller TLS/auth.
@@ -258,6 +261,7 @@ providers:
 # Omit the block to use ~/.openctl/manifests.
 manifests:
   dir: ~/.openctl/manifests
+  mode: mirror
   git:
     enabled: true
     branch: main
@@ -265,11 +269,6 @@ manifests:
     # onCommit | manual | periodic
     pushMode: manual
     pushInterval: 5m
-  gitops:
-    # When enabled, edits under manifests.dir submit Apply operations.
-    enabled: false
-    # When true, deleting a manifest file submits Delete.
-    deleteOnRemove: false
 
 # Background drift checker. Defaults to enabled every 5m.
 reconciler:
@@ -344,6 +343,38 @@ Delete a resource:
 openctl ctl delete VirtualMachine web-01 --api-version proxmox.openctl.io/v1
 openctl ctl delete Cluster dev --api-version k3s.openctl.io/v1
 ```
+
+## Connect And Adopt An Existing Lab
+
+In the console, open **Providers**, save the Proxmox credentials, and restart the
+controller. Configuration changes are startup-only. Open **Discover
+infrastructure**, test each connection, discover existing VMs, and review a VM's
+observed desired manifest before adopting it. Adoption is admin-only, requires
+an idle controller with GitOps disabled, and never applies or changes the VM.
+
+The same read-only inventory is available through the controller CLI:
+
+```bash
+openctl ctl discover --contexts
+openctl ctl discover --test --provider-context homelab
+openctl ctl discover --provider-context homelab -o json
+```
+
+VM operations bind to context, endpoint, node, VMID and SMBIOS UUID rather than
+trusting a name alone. After upgrading an older controller, Discovery offers
+**Confirm tracked VM identity** for already-managed VMs that lack this binding.
+Verify its displayed physical identity before confirming. This also supports
+legacy cluster children whose placement can be derived from the saved owner's
+plan; it does not adopt children independently or change infrastructure.
+
+```bash
+openctl ctl confirm-identity VirtualMachine web-01 \
+  --provider-context homelab --identity "$VERIFIED_DISCOVERY_FINGERPRINT"
+```
+
+Delete requires managed tracking and refuses owned resources or resources with
+managed/in-flight dependents. Use adoption for unmanaged VMs; never use Delete
+as a way to take ownership. Export/release are separate from deletion.
 
 ## Move VM Management Between Controllers
 
@@ -654,6 +685,7 @@ repo under `~/.openctl/manifests`. Remote push is optional.
 ```yaml
 manifests:
   dir: ~/.openctl/manifests
+  mode: mirror
   git:
     enabled: true
     branch: main
@@ -678,21 +710,23 @@ git status
 The UI History card can show prior committed manifests and diff them against
 current desired state.
 
-## Example: Enable Two-Way GitOps
+## Example: Enable Upstream-Authored GitOps
 
-GitOps watches `manifests.dir`. File edits submit Apply operations tagged
-`source=gitops`.
+Choose exactly one authority. In default `mirror` mode, SQLite owns intent;
+the controller writes an optional git audit mirror but never watches or pulls
+it. In `gitops` mode, the upstream repo owns intent; the controller never
+auto-commits, pushes, or revives removed manifest files at startup.
 
 ```yaml
 manifests:
-  dir: ~/.openctl/manifests
-  git:
-    enabled: true
-    branch: main
-    pushMode: manual
+  mode: gitops
+  dir: ~/.openctl/desired
   gitops:
-    enabled: true
+    remote: git@github.com:YOUR_USER/openctl-manifests.git
     deleteOnRemove: false
+    pull:
+      interval: 1m
+      prune: false
 ```
 
 Restart the controller:
@@ -701,15 +735,15 @@ Restart the controller:
 ./bin/openctl-controller install --local
 ```
 
-Edit an existing mirrored manifest:
+Commit desired manifests to the upstream repository. Initial startup sync and
+subsequent pulls submit operations tagged `source=gitops`. Direct console/CLI
+Apply, Delete and runtime actions are rejected in this mode: edit the repo
+instead. The console remains available for observation and operation history.
 
-```bash
-$EDITOR ~/.openctl/manifests/k3s.openctl.io/v1/Cluster/homelab.yaml
-openctl ctl op list --limit 5
-```
-
-Set `deleteOnRemove: true` only if you want file deletion to submit resource
-Delete operations.
+Enable `deleteOnRemove` or pull `prune` only after authorizing their deletion
+semantics. Legacy configs mixing `manifests.git` output commits with
+`manifests.gitops` input automation fail with migration guidance. See
+[manifest authority modes](docs/gitops-modes.md).
 
 ## Example: User-Authored Templates
 
@@ -800,45 +834,48 @@ metadata:
     openctl.io/autoReconcile: "true"
 ```
 
-## Containerized Jellyfin On Proxmox
+## Managed Jellyfin On Proxmox
 
-`examples/jellyfin/` provides a dedicated Ubuntu 24.04 VM template, NVIDIA GPU
-handoff script, Docker Compose service, guest installer, and local API onboarding.
-OpenCtl manages the VM; Compose/systemd manage the application inside it.
+Open **Deploy Jellyfin** in the console. Select an existing managed dedicated
+Ubuntu 24.04 amd64 NVIDIA guest, or provision one from a verified template.
+Configure its read-only SMB media share, optional media subdirectory, pinned
+official image, and controller-side `$secret` references for SMB/admin/viewer
+credentials. The wizard previews each resource and lets you download its
+reproducible manifests. Kubernetes is not required.
 
-- Configure the target Proxmox context and verified `snippetSSH` access first.
-  Enable VT-d in firmware and check IOMMU isolation. Create a named Proxmox PCI
-  mapping covering all functions of the GPU; API tokens cannot assign raw PCI
-  addresses. `prepare-gpu.sh DOMAIN:BUS:SLOT` runs **on Proxmox**, persists VFIO
-  binding, and hands over an idle card without rebooting. It disconnects the
-  host's physical GPU console; do not run it while that GPU or its USB ports
-  are in use.
-- Fill `vm.cue`'s abstract fields through a private CUE values file: context,
-  node, template VMID, storage, PCI mapping, bridge, network configuration, DNS,
-  and guest SSH public key. Keep local placement values and credentials out of git.
+For CLI/GitOps, use `examples/jellyfin/vm.cue` and
+`examples/jellyfin/application.cue` with private CUE values:
 
-  ```bash
-  openctl ctl apply -f examples/jellyfin/vm.cue --values /secure/jellyfin-values.cue
-  ```
+```bash
+openctl ctl apply -f examples/jellyfin/vm.cue --values /secure/jellyfin-vm.cue
+openctl ctl apply -f examples/jellyfin/application.cue --values /secure/jellyfin-app.cue
+```
 
-- Enable the VM's Proxmox start-at-boot option. Inside the guest, stage `install.sh`
-  beside `compose.yaml` and securely install `/etc/samba/synology.credentials`
-  as root-only `0600`. Run `sudo bash install.sh`, then reboot **the guest** to load
-  its NVIDIA driver. `NAS_SERVER` and `NAS_SHARE` default to `synology-space` and
-  `space`. No native Jellyfin package is installed.
-- Keep TCP 8096 blocked from the LAN during initial onboarding. Start
-  `jellyfin.service`, then run `onboard.py` locally inside the guest with private
-  JSON on stdin containing `admin` and `roku` objects with `username`/`password`
-  fields. It configures a non-admin Roku account, `/media` mixed-video library,
-  NVENC/NVDEC, CUDA HDR tone mapping, and LAN-only access. Unblock LAN access
-  after onboarding and connect the Roku Jellyfin app to the guest on port 8096.
+- Prepare host IOMMU/VFIO and a named Proxmox PCI mapping first.
+  `examples/jellyfin/prepare-gpu.sh` is an explicit **Proxmox-host** operation
+  that disconnects the selected physical GPU console; never run it implicitly.
+- Verify the guest SSH host key and install it in the controller's
+  `known_hosts`. Key and credential references are controller-side paths.
+- `bootstrap: true` installs Docker/NVIDIA/CIFS only in the explicitly
+  dedicated guest. The controller embeds its recipe; no script staging is
+  required. If drivers require a reboot, Apply fails with instructions:
+  explicitly reboot the guest and reapply the same manifest. It never reboots
+  or recreates the guest automatically.
+- Initial account onboarding runs behind guest loopback before enabling LAN
+  access. Remote access is off unless explicitly declared. Config/cache stay
+  on guest disk; NAS media is read-only.
+- Application details expose container, HTTP, onboarding, media and GPU checks,
+  logs, and start/stop/restart actions. Delete removes application containers
+  but preserves configuration, volumes and media; deleting the VM is separate.
+- Optional public exposure requires explicit consent and an existing connected
+  Cloudflare tunnel whose connector can reach the guest. Route/DNS resources
+  are previewed after local readiness; public HTTP is checked independently.
+  DNS success alone is not application readiness.
 
-The SMB mount and container media bind are read-only. Docker waits for the real
-NAS mount before restoring containers; config/cache stay on local guest disk.
-The first install pins the official image digest in `/opt/jellyfin/.env`.
-Installer reruns preserve that pin but stop/disable Jellyfin until explicitly
-started again. Test actual transcoded playback, including HDR if used, rather
-than treating `nvidia-smi` alone as proof.
+Changing the pinned image is an in-place application rollout. Target host,
+project/directory and NAS placement are immutable to prevent orphaning data.
+Test actual transcoded playback, including HDR if used: a healthy GPU probe
+does not prove your media/client combination works.
 
 ## Legacy Direct Plugin Commands
 

@@ -95,6 +95,7 @@ const tunnelSchema = `
 // without clobbering (the provider merges by hostname). Pair with a CNAME
 // DNSRecord that $refs the Tunnel's status.cnameTarget.
 const tunnelRouteSchema = `
+#ref: {"$ref": {apiVersion: string, kind: string, name: string, field?: string}}
 #TunnelRoute: {
 	apiVersion: "cloudflare.openctl.io/v1"
 	kind:       "TunnelRoute"
@@ -115,7 +116,7 @@ const tunnelRouteSchema = `
 		hostname: string
 		// service is the local origin the hostname maps to, e.g.
 		// "https://traefik.traefik.svc.cluster.local:443".
-		service: string
+		service: string | #ref
 		// path optionally scopes the rule to a URL path.
 		path?: string
 	}

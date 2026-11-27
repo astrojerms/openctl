@@ -21,6 +21,8 @@
   import TemplateWizard from './TemplateWizard.svelte';
   import Providers from './Providers.svelte';
   import Settings from './Settings.svelte';
+  import Discovery from './Discovery.svelte';
+  import JellyfinWizard from './JellyfinWizard.svelte';
 
   export let me: WhoAmIResponse;
 
@@ -118,6 +120,16 @@
   <aside class:open={sidebarOpen}>
     <a
       class="sidebar-link"
+      class:active={$route.name === 'discover'}
+      href={routeHref({ name: 'discover' })}
+    >Discover infrastructure</a>
+    <a
+      class="sidebar-link"
+      class:active={$route.name === 'jellyfin'}
+      href={routeHref({ name: 'jellyfin' })}
+    >Deploy Jellyfin</a>
+    <a
+      class="sidebar-link"
       class:active={$route.name === 'templates' || $route.name === 'template'}
       href={routeHref({ name: 'templates' })}
     >Templates</a>
@@ -146,6 +158,10 @@
       <TemplateWizard template={$route.template} />
     {:else if $route.name === 'providers'}
       <Providers />
+    {:else if $route.name === 'discover'}
+      <Discovery />
+    {:else if $route.name === 'jellyfin'}
+      <JellyfinWizard />
     {:else if $route.name === 'settings'}
       <Settings />
     {:else if $route.name === 'list'}

@@ -13,9 +13,12 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/openctl/openctl/internal/controller/provideridentity"
 	"github.com/openctl/openctl/internal/controller/providers"
 	"github.com/openctl/openctl/pkg/protocol"
+	pmclient "github.com/openctl/openctl/pkg/proxmox/client"
 	pmhandler "github.com/openctl/openctl/pkg/proxmox/handler"
 	pmresources "github.com/openctl/openctl/pkg/proxmox/resources"
 )
@@ -32,18 +35,14 @@ const (
 // (per-context credentials, etc).
 type Config = protocol.ProviderConfig
 
-// Provider implements providers.Provider for Proxmox. It can route resources
-// to one of several Proxmox endpoints ("contexts"): a resource's
-// spec.context selects the endpoint, and reads that arrive without a context
-// (Get/List/DoAction by name) resolve the owning endpoint by consulting an
-// in-process index populated on Apply/List, falling back to querying every
-// endpoint. With a single configured context this collapses to the original
-// single-endpoint behavior.
+// Provider routes managed VMs through durable immutable instance bindings.
+// Unbound read-only name lookups scan every endpoint and reject ambiguity.
 type Provider struct {
 	handlers   map[string]*pmhandler.Handler // context name -> handler
 	order      []string                      // context names, sorted, for stable read scans
 	defaultCtx string                        // context used when a manifest omits spec.context
-	index      sync.Map                      // VM name -> context name (read-routing cache)
+	identities IdentityStore
+	mutationMu sync.Mutex
 }
 
 // New constructs a single-context Provider from one endpoint configuration.
@@ -88,6 +87,13 @@ func (p *Provider) handlerForContext(name string) (*pmhandler.Handler, string, e
 // getFrom performs a single-endpoint Get, translating a not-found response
 // into (nil, nil) so callers can distinguish "absent here" from a real error.
 func getFrom(ctx context.Context, h *pmhandler.Handler, kind, name string) (*protocol.Resource, error) {
+	if kind == kindVM {
+		vm, err := uniqueVM(ctx, h, name)
+		if err != nil || vm == nil {
+			return nil, err
+		}
+		return observeVM(ctx, h, "", vm)
+	}
 	resp, err := h.Handle(ctx, &protocol.Request{
 		Version:      protocol.ProtocolVersion,
 		Action:       protocol.ActionGet,
@@ -106,38 +112,37 @@ func getFrom(ctx context.Context, h *pmhandler.Handler, kind, name string) (*pro
 	return resp.Resource, nil
 }
 
-// locate finds the endpoint owning a named resource: it tries the cached
-// context first, then scans every endpoint. Returns found=false (nil error)
-// when no endpoint has the resource. A per-endpoint error doesn't abort the
-// scan — a healthy endpoint can still resolve the resource — but is surfaced
-// if no endpoint ultimately has it.
+// locate uses immutable management bindings when available. Otherwise it scans
+// every endpoint, failing closed on errors or ambiguous names.
 func (p *Provider) locate(ctx context.Context, kind, name string) (h *pmhandler.Handler, res *protocol.Resource, found bool, err error) {
-	if v, ok := p.index.Load(name); ok {
-		cached := v.(string)
-		if hh, present := p.handlers[cached]; present {
-			r, gErr := getFrom(ctx, hh, kind, name)
-			if gErr == nil && r != nil {
-				return hh, r, true, nil
-			}
-			// Stale or transient — fall through to a full scan.
+	if kind == kindVM {
+		hh, vm, id, bindErr := p.boundVM(ctx, name)
+		if bindErr != nil {
+			return nil, nil, false, bindErr
+		}
+		if id != nil {
+			r, observeErr := observeVM(ctx, hh, id.Context, vm)
+			return hh, r, observeErr == nil, observeErr
 		}
 	}
-	var firstErr error
 	for _, c := range p.order {
 		hh := p.handlers[c]
 		r, gErr := getFrom(ctx, hh, kind, name)
 		if gErr != nil {
-			if firstErr == nil {
-				firstErr = gErr
-			}
+			return nil, nil, false, gErr
+		}
+		if r == nil {
 			continue
 		}
-		if r != nil {
-			p.index.Store(name, c)
-			return hh, r, true, nil
+		if found {
+			return nil, nil, false, fmt.Errorf("%s name %q is ambiguous across contexts", kind, name)
 		}
+		if r.Spec != nil {
+			r.Spec["context"] = c
+		}
+		h, res, found = hh, r, true
 	}
-	return nil, nil, false, firstErr
+	return h, res, found, nil
 }
 
 func (p *Provider) Name() string    { return providerName }
@@ -176,16 +181,26 @@ func (p *Provider) DoAction(ctx context.Context, kind, name, action string) (*pr
 	if kind != kindVM {
 		return nil, fmt.Errorf("no actions for kind %q", kind)
 	}
-	h, _, found, err := p.locate(ctx, kindVM, name)
+	h, vm, id, err := p.boundVM(ctx, name)
 	if err != nil {
-		return nil, fmt.Errorf("locate VM %q: %w", name, err)
+		return nil, err
 	}
-	if !found {
-		return nil, fmt.Errorf("get VM %q: %w", name, providers.NotFound(kindVM, name))
-	}
-	vm, err := h.Client().GetVM(ctx, name)
-	if err != nil {
-		return nil, fmt.Errorf("get VM %q: %w", name, err)
+	if id == nil {
+		if p.identities != nil {
+			return nil, fmt.Errorf("VM %q has no recorded management identity; adopt it first", name)
+		}
+		var found bool
+		h, _, found, err = p.locate(ctx, kindVM, name)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return nil, providers.NotFound(kindVM, name)
+		}
+		vm, err = uniqueVM(ctx, h, name)
+		if err != nil {
+			return nil, err
+		}
 	}
 	client := h.Client()
 	switch action {
@@ -234,18 +249,49 @@ func (p *Provider) Apply(ctx context.Context, manifest *protocol.Resource) (*pro
 	if err := requireKindVM(manifest.Kind); err != nil {
 		return nil, err
 	}
-	// spec.context selects the endpoint this VM lands on. Empty = default.
+	p.mutationMu.Lock()
+	defer p.mutationMu.Unlock()
 	ctxName, _ := manifest.Spec["context"].(string)
 	h, resolved, err := p.handlerForContext(ctxName)
 	if err != nil {
 		return nil, err
 	}
+	boundHandler, vm, id, err := p.boundVM(ctx, manifest.Metadata.Name)
+	if err != nil {
+		return nil, err
+	}
+	if id != nil {
+		node, _ := manifest.Spec["node"].(string)
+		if resolved != id.Context || (node != "" && node != id.Node) {
+			return nil, fmt.Errorf("VM placement is immutable; explicit migration is required")
+		}
+		if err := boundHandler.UpdateVM(ctx, vm, manifest); err != nil {
+			return nil, err
+		}
+		return observeVM(ctx, boundHandler, id.Context, vm)
+	}
+	vm, err = uniqueVM(ctx, h, manifest.Metadata.Name)
+	if err != nil {
+		return nil, err
+	}
+	if vm != nil {
+		if p.identities != nil {
+			return nil, fmt.Errorf("VM %q already exists without a recorded identity; use adoption, not Apply", manifest.Metadata.Name)
+		}
+		if err := h.UpdateVM(ctx, vm, manifest); err != nil {
+			return nil, err
+		}
+		return observeVM(ctx, h, resolved, vm)
+	}
+	if p.identities != nil {
+		if err := p.ensureNameAbsent(ctx, manifest.Metadata.Name, resolved, true); err != nil {
+			return nil, err
+		}
+	}
+	// Explicit create avoids a second name lookup turning creation into adoption.
 	resp, err := h.Handle(ctx, &protocol.Request{
-		Version:      protocol.ProtocolVersion,
-		Action:       protocol.ActionApply,
-		ResourceType: manifest.Kind,
-		ResourceName: manifest.Metadata.Name,
-		Manifest:     manifest,
+		Version: protocol.ProtocolVersion, Action: protocol.ActionCreate,
+		ResourceType: manifest.Kind, ResourceName: manifest.Metadata.Name, Manifest: manifest,
 	})
 	if err != nil {
 		return nil, err
@@ -253,27 +299,44 @@ func (p *Provider) Apply(ctx context.Context, manifest *protocol.Resource) (*pro
 	if resp.Status == protocol.StatusError {
 		return nil, fmt.Errorf("%s: %s", resp.Error.Code, resp.Error.Message)
 	}
-	// Remember where this VM lives so later reads route directly.
-	p.index.Store(manifest.Metadata.Name, resolved)
-
-	// The handler's create/apply paths report success without echoing the
-	// observed resource, but the Provider contract requires Apply to return
-	// observed state (interface doc: "Apply ... return the observed state").
-	// Read it back from the same endpoint. A transient read failure right
-	// after a successful apply must never turn that apply into a nil result,
-	// so fall back to the applied identity rather than propagating an error.
-	if observed, gerr := getFrom(ctx, h, kindVM, manifest.Metadata.Name); gerr == nil && observed != nil {
-		return observed, nil
+	if resp.Resource == nil {
+		return nil, fmt.Errorf("created VM response omitted its allocated identity")
 	}
-	if resp.Resource != nil {
-		return resp.Resource, nil
+	vmid, _ := resp.Resource.Status["vmid"].(int)
+	node, _ := resp.Resource.Spec["node"].(string)
+	if vmid <= 0 || node == "" {
+		return nil, fmt.Errorf("created VM response omitted node or VMID")
 	}
-	return &protocol.Resource{
-		APIVersion: manifest.APIVersion,
-		Kind:       kindVM,
-		Metadata:   protocol.ResourceMetadata{Name: manifest.Metadata.Name},
-		Spec:       manifest.Spec,
-	}, nil
+	vm = &pmclient.VM{Name: manifest.Metadata.Name, VMID: vmid, Node: node}
+	if p.identities != nil {
+		raw, err := h.Client().GetVMConfigRaw(ctx, node, vmid)
+		if err != nil {
+			return nil, fmt.Errorf("created VM identity could not be read: %w", err)
+		}
+		identity, err := vmIdentity(vm, raw)
+		if err != nil {
+			return nil, fmt.Errorf("created VM identity could not be verified: %w", err)
+		}
+		if err := p.identities.SaveIdentity(ctx, manifest.Metadata.Name, &provideridentity.Identity{Context: resolved, Endpoint: strings.TrimRight(h.Config().Endpoint, "/"), Node: node, VMID: vmid, Identity: identity}); err != nil {
+			return nil, err
+		}
+	}
+	// Read live status by the allocated node/VMID, never by the submitted name.
+	vms, err := h.Client().ListVMs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("created VM status could not be observed: %w", err)
+	}
+	vm = nil
+	for _, candidate := range vms {
+		if candidate.Node == node && candidate.VMID == vmid {
+			vm = candidate
+			break
+		}
+	}
+	if vm == nil || vm.Name != manifest.Metadata.Name {
+		return nil, fmt.Errorf("created VM identity could not be observed")
+	}
+	return observeVM(ctx, h, resolved, vm)
 }
 
 // Get returns the current observed state of a VM or ProxmoxNode. Returns
@@ -293,15 +356,14 @@ func (p *Provider) Get(ctx context.Context, kind, name string) (*protocol.Resour
 	return res, nil
 }
 
-// List returns all observed resources of the given kind across every
-// configured endpoint, merged. Listing is a completeness-sensitive query, so
-// a failing endpoint aborts the call rather than silently dropping its
-// resources. Each VM found also refreshes the read-routing index.
+// List returns observed resources across every endpoint, rejecting ambiguous
+// names and verifying managed bindings rather than substituting replacements.
 func (p *Provider) List(ctx context.Context, kind string) ([]*protocol.Resource, error) {
 	if err := requireKnownKind(kind); err != nil {
 		return nil, err
 	}
 	var out []*protocol.Resource
+	seen := make(map[string]bool)
 	for _, c := range p.order {
 		resp, err := p.handlers[c].Handle(ctx, &protocol.Request{
 			Version:      protocol.ProtocolVersion,
@@ -315,8 +377,22 @@ func (p *Provider) List(ctx context.Context, kind string) ([]*protocol.Resource,
 			return nil, fmt.Errorf("%s: %s", resp.Error.Code, resp.Error.Message)
 		}
 		for _, r := range resp.Resources {
-			if kind == kindVM && r != nil {
-				p.index.Store(r.Metadata.Name, c)
+			if r == nil {
+				continue
+			}
+			if seen[r.Metadata.Name] {
+				return nil, fmt.Errorf("%s name %q is ambiguous across contexts", kind, r.Metadata.Name)
+			}
+			seen[r.Metadata.Name] = true
+			r.Spec["context"] = c
+			if kind == kindVM && p.identities != nil {
+				_, _, id, err := p.boundVM(ctx, r.Metadata.Name)
+				if err != nil {
+					return nil, err
+				}
+				if id != nil && id.Context != c {
+					return nil, fmt.Errorf("VM %q inventory conflicts with its recorded context", r.Metadata.Name)
+				}
 			}
 			out = append(out, r)
 		}
@@ -333,30 +409,50 @@ func (p *Provider) Delete(ctx context.Context, kind, name string) error {
 	if err := requireKindVM(kind); err != nil {
 		return err
 	}
-	// Find which endpoint owns the VM, then delete there. Absent from every
-	// endpoint → nothing to do (idempotent).
-	h, _, found, err := p.locate(ctx, kindVM, name)
+	p.mutationMu.Lock()
+	defer p.mutationMu.Unlock()
+	h, vm, id, err := p.boundVM(ctx, name)
 	if err != nil {
-		return err
-	}
-	if !found {
-		return nil
-	}
-	resp, err := h.Handle(ctx, &protocol.Request{
-		Version:      protocol.ProtocolVersion,
-		Action:       protocol.ActionDelete,
-		ResourceType: kind,
-		ResourceName: name,
-	})
-	if err != nil {
-		return err
-	}
-	p.index.Delete(name)
-	if resp.Status == protocol.StatusError {
-		if resp.Error.Code == protocol.ErrorCodeNotFound {
-			return nil // idempotent
+		if !isMissingVM(err) || id == nil {
+			return err
 		}
-		return fmt.Errorf("%s: %s", resp.Error.Code, resp.Error.Message)
+		return p.ReleaseIdentity(ctx, name)
+	}
+	if id == nil {
+		if p.identities != nil {
+			// A retry after provider deletion and a failed manifest cleanup may
+			// have no binding. Only proven global absence is an idempotent success.
+			return p.ensureNameAbsent(ctx, name, "", false)
+		}
+		var found bool
+		h, _, found, err = p.locate(ctx, kindVM, name)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return nil
+		}
+		vm, err = uniqueVM(ctx, h, name)
+		if err != nil {
+			return err
+		}
+	}
+	if vm.Status == "running" {
+		upid, err := h.Client().StopVM(ctx, vm.Node, vm.VMID)
+		if err != nil {
+			return err
+		}
+		if upid != "" {
+			if err := h.Client().WaitForTask(ctx, vm.Node, upid, 5*time.Minute); err != nil {
+				return err
+			}
+		}
+	}
+	if err := h.Client().DeleteVM(ctx, vm.Node, vm.VMID); err != nil {
+		return err
+	}
+	if err := p.ReleaseIdentity(ctx, name); err != nil {
+		return err
 	}
 	return nil
 }

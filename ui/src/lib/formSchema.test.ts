@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extraKeys, fromManifest, initialValue, isEmpty, scrubEmpty, type FormField } from './formSchema';
+import { extraKeys, fromManifest, initialValue, isEmpty, parseFreeform, scrubEmpty, type FormField } from './formSchema';
 
 describe('isEmpty', () => {
   it('treats undefined and null as empty', () => {
@@ -145,11 +145,11 @@ describe('maps', () => {
     expect(initialValue({ type: 'map', valueType: { type: 'string' } })).toEqual({});
   });
 
-  it('scrubEmpty drops empty-string values and empty-key rows from maps', () => {
+  it('preserves named empty values and invalid entries for validation', () => {
     const v = scrubEmpty(labels, {
       labels: { keep: 'x', empty: '', '': 'orphan' },
     }) as Record<string, unknown>;
-    expect(v.labels).toEqual({ keep: 'x' });
+    expect(v.labels).toEqual({ keep: 'x', empty: '', '': 'orphan' });
   });
 });
 
@@ -238,5 +238,94 @@ describe('scrubEmpty', () => {
     };
     const v = scrubEmpty(f, { req: '' }) as Record<string, unknown>;
     expect(v).toEqual({ req: '' });
+  });
+});
+
+describe('manifest form roundtrips', () => {
+  const schema: FormField = {
+    type: 'object',
+    fields: [
+      {
+        name: 'metadata', type: 'object', fields: [
+          { name: 'name', type: 'string' },
+          { name: 'labels', type: 'map', optional: true, valueType: { type: 'string' } },
+          { name: 'annotations', type: 'map', optional: true, valueType: { type: 'string' } },
+        ],
+      },
+      {
+        name: 'spec', type: 'object', fields: [
+          { name: 'password', type: 'string', secret: true },
+          { name: 'node', type: 'string' },
+          { name: 'cpu', type: 'int' },
+          { name: 'settings', type: 'object', fields: [{ name: 'enabled', type: 'bool' }] },
+          { name: 'disks', type: 'array', items: { type: 'string' } },
+          { name: 'environment', type: 'map', valueType: { type: 'string' } },
+        ],
+      },
+    ],
+  };
+
+  it('keeps references opaque across scalar, object, array, and map schemas', () => {
+    const manifest = {
+      metadata: {
+        name: 'media',
+        labels: { category: '', environment: 'home' },
+        annotations: { description: '', 'openctl.io/example': 'retained' },
+      },
+      spec: {
+        password: { $secret: { provider: 'vault', key: 'media/password' } },
+        node: { $ref: 'ProxmoxNode/host.status.name' },
+        cpu: { $ref: { kind: 'VirtualMachine', name: 'source', path: 'spec.cpu' } },
+        settings: { $ref: 'Config/default.spec.settings' },
+        disks: [{ $ref: 'Volume/media.status.path' }],
+        environment: { TOKEN: { $secret: { env: 'MEDIA_TOKEN' } } },
+      },
+    };
+    expect(extraKeys(schema, manifest)).toEqual([]);
+    const form = fromManifest(schema, manifest) as typeof manifest;
+    form.metadata.name = 'media-renamed';
+    expect(scrubEmpty(schema, form)).toEqual({
+      ...manifest,
+      metadata: { ...manifest.metadata, name: 'media-renamed' },
+    });
+  });
+
+  it.each([
+    [{ type: 'string' }, 42],
+    [{ type: 'int' }, 'invalid'],
+    [{ type: 'bool' }, 'false'],
+    [{ type: 'array', items: { type: 'string' } }, { unexpected: true }],
+    [{ type: 'map', valueType: { type: 'string' } }, ['invalid']],
+    [{ type: 'object', fields: [{ name: 'enabled', type: 'bool' }] }, 'invalid'],
+  ] as Array<[FormField, unknown]>)('keeps invalid input for server validation (%j)', (field, data) => {
+    expect(scrubEmpty(field, fromManifest(field, data))).toEqual(data);
+  });
+
+  it('preserves freeform object fields without a child schema', () => {
+    const field: FormField = { type: 'object' };
+    const data = { arbitrary: { nested: [1, true, 'value'] } };
+    expect(extraKeys(field, data)).toEqual([]);
+    expect(scrubEmpty(field, fromManifest(field, data))).toEqual(data);
+  });
+});
+
+describe('freeform form input', () => {
+  it.each([
+    ['{"mounts":["/media"],"enabled":true}', { mounts: ['/media'], enabled: true }],
+    ['mounts:\n  - /media\nenabled: true\n', { mounts: ['/media'], enabled: true }],
+    ['false', false],
+    ['42', 42],
+    ['"false"', 'false'],
+    ['null', null],
+    ['', undefined],
+    ['$secret:\n  env: MEDIA_TOKEN', { $secret: { env: 'MEDIA_TOKEN' } }],
+  ])('parses JSON/YAML instead of storing textarea text (%s)', (text, value) => {
+    expect(parseFreeform(text as string)).toEqual({ value, error: '' });
+  });
+
+  it('returns syntax errors instead of dropping the input or emitting a string', () => {
+    const result = parseFreeform('mounts: [unterminated');
+    expect(result.error).not.toBe('');
+    expect(result).not.toHaveProperty('value');
   });
 });

@@ -1,7 +1,7 @@
 # GitOps: two source-of-truth modes (K2 design)
 
-**Status:** design (invariants agreed; code reconciliation is the follow-up).
-**Owner:** roadmap K2. Depends on K3 (provenance `source` column — shipped).
+**Status:** implemented. Configuration, startup, real-git pull/prune/restart,
+and RPC admission regressions cover the authority boundary.
 
 ## Problem
 
@@ -85,28 +85,29 @@ is the DriftlessAF loop.
 
 ## Config
 
-Add one switch; keep the existing sub-blocks but scope them to a mode.
+Choose one of these configurations, never both blocks:
 
 ```yaml
 manifests:
   dir: ~/.openctl/manifests
-  mode: mirror            # mirror (default) | gitops
-
-  # mirror-mode settings (ignored in gitops mode):
+  mode: mirror
   git:
-    enabled: true         # auto-commit the audit mirror
+    enabled: true
     remote: git@github.com:me/infra-audit.git
     pushMode: onCommit
+```
 
-  # gitops-mode settings (ignored in mirror mode):
+Or use upstream-authored intent:
+
+```yaml
+manifests:
+  dir: ~/.openctl/desired
+  mode: gitops
   gitops:
-    remote: git@github.com:me/infra.git   # the source repo
+    remote: git@github.com:me/infra.git
     pull:
       interval: 1m
-      prune: true
-      webhook:
-        enabled: true
-        secret: { $secret: { provider: env, key: WEBHOOK_SECRET } }
+      prune: false
 ```
 
 - `mode` defaults to **`mirror`** — the current default behavior, so existing
@@ -129,28 +130,24 @@ manifests:
   drop any `manifests.git` push settings). This is deliberate — that config was
   the ambiguous one this change exists to disambiguate.
 
-## Code reconciliation plan (the follow-up)
+## Implementation
 
-Small, mechanical once the invariants above are fixed. Per component:
+- `internal/config` validates one explicit mode and rejects contradictory
+  automation, invalid intervals, or a missing GitOps remote.
+- `cmd/openctl-controller` builds mirror persistence only in `mirror` mode.
+  `gitops` uses the manifest store without disk projection, prepares the
+  upstream working tree, performs initial sync, and starts only input
+  automation. Config validation errors stop startup.
+- Repo RPCs/UI permit push only in `mirror` and pull only in `gitops`.
+  Direct resource Apply/Delete/runtime actions are rejected when the upstream
+  repo owns intent. Observation and operation history remain available.
+- SQLite retains applied intent and operational state in both modes. Secrets,
+  provider opaque state, ownership identities, and application data require
+  their own backup handling; a manifest repo is not a full backup.
 
-1. **Config** (`internal/config`): add `Manifests.Mode` (default `mirror`); add
-   `validateManifestsMode()` rejecting the contradictory combos; move
-   `gitops.remote` alongside (today the remote lives on `manifests.git`).
-2. **Wiring** (`cmd/openctl-controller/main.go`): branch on `mode`. Wire the
-   disk-mirror auto-commit + push + startup-revive **only** in mirror mode; wire
-   the watcher + pull loop + pruner + webhook **only** in gitops mode. The
-   drift reconciler is wired unconditionally.
-3. **DiskMirror** (`internal/controller/manifests/disk.go`): gate the startup
-   re-materialize behind mirror mode (a constructor flag or a
-   `mode`-aware caller). In gitops mode the mirror dir is the *working tree*,
-   not a controller-owned output — so nothing re-materializes.
-4. **git hook** (`internal/controller/manifests/githook.go`): auto-commit only
-   in mirror mode.
-5. **Watcher / Repo / Pruner / Webhook**: unchanged internally; simply not
-   constructed in mirror mode. (They already exist and are individually tested.)
-6. **No change** to the dispatcher, drift reconciler, or `applied_manifests`
-   store — the store stays the desired-state cache in both modes; K3's `source`
-   column already distinguishes provenance.
+The original conflict regressions use real local git repositories: GitOps
+apply does not auto-commit, subsequent fast-forward pulls succeed, and
+prune/restart does not re-create a removed source file.
 
 ## Test plan
 

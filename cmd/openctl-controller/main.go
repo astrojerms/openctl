@@ -22,7 +22,9 @@ import (
 	"github.com/openctl/openctl/internal/controller/auth"
 	"github.com/openctl/openctl/internal/controller/manifests"
 	"github.com/openctl/openctl/internal/controller/operations"
+	"github.com/openctl/openctl/internal/controller/provideridentity"
 	"github.com/openctl/openctl/internal/controller/providers"
+	"github.com/openctl/openctl/internal/controller/providers/apps"
 	externalprovider "github.com/openctl/openctl/internal/controller/providers/external"
 	k3sprovider "github.com/openctl/openctl/internal/controller/providers/k3s"
 	pmprovider "github.com/openctl/openctl/internal/controller/providers/proxmox"
@@ -43,9 +45,8 @@ import (
 // falling back to config.DefaultRetainPerResource. Startup-only: the value is
 // baked into the operations store at construction, so editing it via the
 // ConfigService takes effect on the next controller start.
-func resolveRetainPerResource() int {
-	cfg, err := config.Load()
-	if err != nil || cfg == nil || cfg.Operations == nil || cfg.Operations.RetainPerResource <= 0 {
+func resolveRetainPerResource(cfg *config.Config) int {
+	if cfg == nil || cfg.Operations == nil || cfg.Operations.RetainPerResource <= 0 {
 		return config.DefaultRetainPerResource
 	}
 	return cfg.Operations.RetainPerResource
@@ -98,10 +99,9 @@ func registerConfiguredSecretProviders(reg *secrets.Registry, providers []config
 // oidcConfig reads config.auth.oidc, resolving the client secret from its file.
 // Returns (nil, nil) when OIDC is absent or disabled, (nil, err) when it's
 // enabled but the secret can't be read.
-func oidcConfig() (*auth.OIDCConfig, error) {
-	cfg, err := config.Load()
-	if err != nil || cfg == nil || cfg.Auth == nil || cfg.Auth.OIDC == nil || !cfg.Auth.OIDC.Enabled {
-		return nil, nil //nolint:nilerr // a missing/unreadable config just means "OIDC off"
+func oidcConfig(cfg *config.Config) (*auth.OIDCConfig, error) {
+	if cfg == nil || cfg.Auth == nil || cfg.Auth.OIDC == nil || !cfg.Auth.OIDC.Enabled {
+		return nil, nil
 	}
 	o := cfg.Auth.OIDC
 	secret, err := o.ResolveClientSecret()
@@ -157,8 +157,8 @@ func printUsage() {
 
 Subcommands:
   serve      Run the controller in the foreground
-  install    Install the controller as a per-user LaunchAgent (macOS)
-  uninstall  Remove the LaunchAgent install
+  install    Install locally (macOS/Linux) or remotely (--target ssh:// or proxmox://)
+  uninstall  Remove the per-user service install
   version    Print the controller version
   help       Show this message
 
@@ -173,6 +173,10 @@ func runServe(args []string) error {
 	noAuth := fs.Bool("no-auth", false, "disable token auth (only for localhost-only setups)")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("load controller config: %w", err)
 	}
 
 	if err := os.MkdirAll(*dir, 0o700); err != nil {
@@ -216,61 +220,41 @@ func runServe(args []string) error {
 		return err
 	}
 	defer func() { _ = db.Close() }()
+	manifestStore := manifests.New(db)
+	controllerID, err := manifestStore.ControllerIdentity(ctx)
+	if err != nil {
+		return fmt.Errorf("load durable controller identity: %w", err)
+	}
 
-	registry, registered, closePlugins, err := buildRegistry(ctx, providerstate.New(db))
+	registry, registered, closePlugins, err := buildRegistryFromConfig(ctx, providerstate.New(db), cfg)
 	if err != nil {
 		return err
 	}
 	defer closePlugins()
+	registry.Register(apps.New(providerstate.New(db), manifestStore, controllerID))
+	registered = append(registered, "apps")
+	if p, err := registry.For("proxmox.openctl.io/v1"); err == nil {
+		if pmp, ok := p.(*pmprovider.Provider); ok {
+			pmp.SetIdentityStore(provideridentity.New(db))
+		}
+	}
 
 	// Operations store + dispatcher. On startup, mark any ops that were
 	// running when the previous controller died as `interrupted` — this is
 	// the "no auto-resume" half of the operation-model decision.
-	opStore := operations.New(db, resolveRetainPerResource())
+	opStore := operations.New(db, resolveRetainPerResource(cfg))
 	if n, err := opStore.MarkRunningInterrupted(ctx); err != nil {
 		return fmt.Errorf("mark interrupted ops: %w", err)
 	} else if n > 0 {
 		log.Printf("marked %d previously-running operation(s) as interrupted", n)
 	}
-	manifestStore := manifests.New(db)
 
-	// UI Phase U2.1: optionally mirror the controller's desired-state to a
-	// directory on disk so users (and git) can see the applied config. The
-	// SQLite store is canonical; the disk tree is a materialized projection.
-	// `sink` becomes the dispatcher's ManifestSink — either the bare store
-	// or the DiskMirror wrapping it.
-	var sink operations.ManifestSink = manifestStore
-	var diskMirror *manifests.DiskMirror
-	var gitRepo *manifests.Repo
-	if cfg, err := config.Load(); err == nil {
-		mirror, mErr := buildDiskMirror(ctx, manifestStore, cfg)
-		if mErr != nil {
-			return fmt.Errorf("init disk mirror: %w", mErr)
-		}
-		if mirror != nil {
-			sink = mirror
-			diskMirror = mirror
-			log.Printf("  manifests:   %s", mirror.Root())
-
-			// UI Phase U2.2: optionally wire git tracking on top of the disk
-			// mirror. Each successful apply/delete commits to the local repo
-			// with a structured message; remote push is governed by the
-			// configured push mode. Hook is best-effort — git failures log
-			// but never bubble back into the dispatcher (apply ops never
-			// fail because of a flaky remote).
-			gitRepo, err = buildGitRepo(ctx, mirror, cfg)
-			if err != nil {
-				return fmt.Errorf("init git tracking: %w", err)
-			}
-			if gitRepo != nil {
-				log.Printf("  git:         %s (branch=%s pushMode=%s)",
-					gitRepo.Dir(), gitRepo.Branch(), gitRepo.PushMode())
-				if gitRepo.Remote() != "" {
-					log.Printf("  git remote:  %s", gitRepo.Remote())
-				}
-				gitRepo.StartPeriodicPush(ctx, log.Printf)
-			}
-		}
+	sink, diskMirror, gitRepo, err := buildManifestStorage(ctx, manifestStore, cfg)
+	if err != nil {
+		return err
+	}
+	if gitRepo != nil && cfg.ManifestMode() == "mirror" {
+		gitRepo.StartPeriodicPush(ctx, log.Printf)
 	}
 
 	dispatcher := operations.NewDispatcher(opStore, registry, sink, 0)
@@ -299,7 +283,7 @@ func runServe(args []string) error {
 	}))
 	secretProviderNames := []string{"file", "env", secrets.ActionProviderName}
 	// Tier 2: register configured backends (Vault, ...) from config.secrets.
-	if cfg, err := config.Load(); err == nil && cfg != nil && cfg.Secrets != nil {
+	if cfg.Secrets != nil {
 		names, err := registerConfiguredSecretProviders(secretsReg, cfg.Secrets.Providers)
 		if err != nil {
 			return fmt.Errorf("configure secret providers: %w", err)
@@ -309,23 +293,16 @@ func runServe(args []string) error {
 	dispatcher.SetSecrets(secretsReg)
 	log.Printf("  secrets:     %s (providers: %s)", secretsDir, strings.Join(secretProviderNames, ", "))
 
-	dispatcher.Start(ctx)
-	defer dispatcher.Stop()
-
 	// gitOpsWebhook, when the push-triggered reconcile is configured, is built
 	// in the GitOps block below and mounted on the HTTP gateway further down.
 	var gitOpsWebhook *server.GitOpsWebhook
+	var repoReconcile func(context.Context) error
 	gitOpsEnabled := false
 
-	// Two-way GitOps: fsnotify watcher on the mirror dir. File edits
-	// become Apply ops tagged source="gitops". Opt-in (config
-	// manifests.gitops.enabled: true) — default remains one-way
-	// mirror. Requires the disk mirror to be configured; without
-	// it there's no directory to watch.
+	// Repository authority exclusively enables file-to-apply synchronization.
 	if diskMirror != nil {
-		if cfg2, err := config.Load(); err == nil && cfg2 != nil &&
-			cfg2.Manifests != nil && cfg2.Manifests.GitOps != nil &&
-			cfg2.Manifests.GitOps.Enabled {
+		if cfg.ManifestMode() == "gitops" {
+			cfg2 := cfg
 			gitOpsEnabled = true
 			applyFn := func(ctx context.Context, r *protocol.Resource) error {
 				mJSON, err := json.Marshal(r)
@@ -365,18 +342,16 @@ func runServe(args []string) error {
 			}
 			gitOpsWatcher := manifests.NewWatcher(diskMirror.Root(), manifestStore, applyFn, deleteFn)
 			if err := gitOpsWatcher.Start(ctx); err != nil {
-				log.Printf("  gitops:      failed to start watcher: %v", err)
+				return fmt.Errorf("start GitOps watcher: %w", err)
 			} else {
 				defer gitOpsWatcher.Stop()
+				repoReconcile = gitOpsWatcher.Sync
 				log.Printf("  gitops:      enabled (deleteOnRemove=%v)", cfg2.Manifests.GitOps.DeleteOnRemove)
 
-				// Git-as-source: periodically pull the remote into the mirror
-				// and reconcile via the watcher's Sync, so committing to the
-				// remote brings the infra up. Requires a remote (from git
-				// tracking) and pull.enabled.
-				if pull := cfg2.Manifests.GitOps.Pull; pull != nil && pull.Enabled {
+				// The selected mode owns input synchronization; pull is opt-in.
+				if pull := cfg2.Manifests.GitOps.Pull; pull != nil {
 					if gitRepo == nil || gitRepo.Remote() == "" {
-						log.Printf("  gitops:      pull enabled but no git remote configured — skipping")
+						return fmt.Errorf("gitops pull requires a configured source repository")
 					} else {
 						interval := parseDurationDefault(pull.Interval, time.Minute)
 						onChange := gitOpsWatcher.Sync
@@ -408,6 +383,13 @@ func runServe(args []string) error {
 								return err
 							}
 						}
+						repoReconcile = onChange
+						if err := gitRepo.Pull(ctx); err != nil {
+							return fmt.Errorf("initial GitOps pull: %w", err)
+						}
+						if err := onChange(ctx); err != nil {
+							return fmt.Errorf("initial GitOps reconcile: %w", err)
+						}
 						gitRepo.StartPeriodicPull(ctx, interval, onChange, log.Printf)
 						log.Printf("  gitops:      git-as-source pull enabled (interval=%s, prune=%v)", interval, pull.Prune)
 
@@ -429,6 +411,8 @@ func runServe(args []string) error {
 							log.Printf("  gitops:      push webhook enabled (path=%s, signed=%v)", whPath, wh.Secret != "")
 						}
 					}
+				} else if err := gitOpsWatcher.Sync(ctx); err != nil {
+					return fmt.Errorf("initial GitOps sync: %w", err)
 				}
 			}
 		}
@@ -438,7 +422,7 @@ func runServe(args []string) error {
 	// sets `reconciler.enabled: false`. Default behavior: logs drift
 	// transitions; auto-remediate only fires on resources annotated with
 	// openctl.io/autoReconcile=true (opt-in per resource).
-	rec, recStarted := buildReconciler(registry, manifestStore)
+	rec, recStarted := buildReconciler(registry, manifestStore, cfg)
 	if rec != nil {
 		// Auto-apply hook: submit an Apply op the same way the
 		// resource handler does, tagged with source="auto-reconcile"
@@ -482,8 +466,10 @@ func runServe(args []string) error {
 		Sessions:      sessionStore,
 		DiskMirror:    diskMirror,
 		Repo:          gitRepo,
-		Templates:     buildTemplateRegistry(),
+		RepoReconcile: repoReconcile,
+		Templates:     buildTemplateRegistry(cfg),
 		GitOpsEnabled: gitOpsEnabled,
+		ManifestMode:  cfg.ManifestMode(),
 	}
 	if !*noAuth {
 		opts.Token = token
@@ -494,6 +480,10 @@ func runServe(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Install server-owned deletion guards before processing recovered or
+	// startup GitOps operations.
+	dispatcher.Start(ctx)
+	defer dispatcher.Stop()
 
 	log.Printf("openctl-controller %s listening on %s", server.ServerVersion, *listen)
 	log.Printf("  state dir:   %s", *dir)
@@ -530,7 +520,7 @@ func runServe(args []string) error {
 		// operator who enabled OIDC shouldn't silently get a controller with no
 		// SSO.
 		var oidcHandler *server.OIDCHandler
-		oc, err := oidcConfig()
+		oc, err := oidcConfig(cfg)
 		if err != nil {
 			return fmt.Errorf("oidc config: %w", err)
 		}
@@ -584,9 +574,8 @@ func defaultDir() string {
 // config.Reconciler. Defaults to enabled with the package default
 // interval when the block is omitted. Returns (nil, "") when the user
 // explicitly set `enabled: false` so main.go can log that state.
-func buildReconciler(reg *providers.Registry, mstore *manifests.Store) (*reconciler.Reconciler, time.Duration) {
-	cfg, err := config.Load()
-	if err != nil || cfg == nil || cfg.Reconciler == nil {
+func buildReconciler(reg *providers.Registry, mstore *manifests.Store, cfg *config.Config) (*reconciler.Reconciler, time.Duration) {
+	if cfg == nil || cfg.Reconciler == nil {
 		// No config block: defaults (enabled, DefaultInterval).
 		return reconciler.New(reg, mstore, 0), reconciler.DefaultInterval
 	}
@@ -620,12 +609,50 @@ func parseDurationDefault(s string, def time.Duration) time.Duration {
 	return d
 }
 
-// buildGitRepo initializes a git repo over the disk mirror when config has
-// `manifests.git.enabled: true`. Returns nil when disabled (the disk mirror
-// works fine without git). Attaches a post-write hook to the mirror so
+// buildManifestStorage selects one authority, including startup recovery and
+// post-apply persistence. GitOps exposes the tree for reading, never as a sink.
+func buildManifestStorage(ctx context.Context, store *manifests.Store, cfg *config.Config) (operations.ManifestSink, *manifests.DiskMirror, *manifests.Repo, error) {
+	mirror, err := buildDiskMirror(ctx, store, cfg)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("init manifest directory: %w", err)
+	}
+	repo, err := buildGitRepo(ctx, mirror, cfg)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("init manifest repository: %w", err)
+	}
+	if cfg.ManifestMode() == "gitops" {
+		return store, mirror, repo, nil
+	}
+	return mirror, mirror, repo, nil
+}
+
+// buildGitRepo initializes a git repo when `manifests.git.enabled: true`.
+// The mirror works without git. In mirror mode a post-write hook commits
 // every materialize/delete becomes a commit; periodic push (when
 // configured) is started by the caller via repo.StartPeriodicPush.
 func buildGitRepo(ctx context.Context, mirror *manifests.DiskMirror, cfg *config.Config) (*manifests.Repo, error) {
+	if cfg.ManifestMode() == "gitops" {
+		repo, err := manifests.NewRepo(manifests.RepoOptions{
+			Dir: mirror.Root(), Remote: cfg.Manifests.GitOps.Remote, PushMode: "manual",
+		})
+		if err != nil {
+			return nil, err
+		}
+		if _, err := os.Stat(filepath.Join(mirror.Root(), ".git")); os.IsNotExist(err) {
+			if out, err := exec.CommandContext(ctx, "git", "clone", "--", cfg.Manifests.GitOps.Remote, mirror.Root()).CombinedOutput(); err != nil {
+				return nil, fmt.Errorf("clone source repository: %w: %s", err, out)
+			}
+		} else if err != nil {
+			return nil, fmt.Errorf("inspect source repository: %w", err)
+		}
+		cmd := exec.CommandContext(ctx, "git", "remote", "get-url", "origin")
+		cmd.Dir = mirror.Root()
+		remote, err := cmd.Output()
+		if err != nil || strings.TrimSpace(string(remote)) != cfg.Manifests.GitOps.Remote {
+			return nil, fmt.Errorf("source repository origin must match manifests.gitops.remote %q; update origin or use a fresh manifests.dir", cfg.Manifests.GitOps.Remote)
+		}
+		return repo, nil
+	}
 	if cfg == nil || cfg.Manifests == nil || cfg.Manifests.Git == nil || !cfg.Manifests.Git.Enabled {
 		return nil, nil
 	}
@@ -679,6 +706,9 @@ func buildDiskMirror(ctx context.Context, store *manifests.Store, cfg *config.Co
 		return nil, fmt.Errorf("create manifest dir: %w", err)
 	}
 	mirror := manifests.NewDiskMirror(store, root)
+	if cfg.ManifestMode() == "gitops" {
+		return mirror, nil
+	}
 	report, err := mirror.Reconcile(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("reconcile manifest dir: %w", err)
@@ -734,9 +764,8 @@ func resolveTemplatesDir(cfg *config.Config) (string, error) {
 // buildTemplateRegistry returns the compiled-in starters merged with any
 // user-authored CUE templates under the templates dir. A missing dir or a
 // scan error degrades to just the built-ins (logged) — never fatal.
-func buildTemplateRegistry() *templates.Registry {
+func buildTemplateRegistry(cfg *config.Config) *templates.Registry {
 	base := templates.Default()
-	cfg, _ := config.Load() // best-effort; nil cfg falls back to the default dir
 	dir, err := resolveTemplatesDir(cfg)
 	if err != nil {
 		log.Printf("  templates:   cannot resolve dir, serving built-ins only: %v", err)
@@ -765,6 +794,14 @@ func buildTemplateRegistry() *templates.Registry {
 // still starts; resource RPCs will return errors pointing the user at the
 // missing config.
 func buildRegistry(ctx context.Context, stateStore externalprovider.StateStore) (*providers.Registry, []string, func(), error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, nil, func() {}, fmt.Errorf("load controller config: %w", err)
+	}
+	return buildRegistryFromConfig(ctx, stateStore, cfg)
+}
+
+func buildRegistryFromConfig(ctx context.Context, stateStore externalprovider.StateStore, cfg *config.Config) (*providers.Registry, []string, func(), error) {
 	registry := providers.NewRegistry()
 	var names []string
 	var clients []*pluginproto.Client
@@ -780,12 +817,6 @@ func buildRegistry(ctx context.Context, stateStore externalprovider.StateStore) 
 		for _, c := range tfClients {
 			c.Close()
 		}
-	}
-
-	cfg, err := config.Load()
-	if err != nil {
-		// Missing config file is acceptable — controller starts empty.
-		return registry, nil, cleanup, nil
 	}
 
 	var pmp *pmprovider.Provider
@@ -829,6 +860,10 @@ func buildRegistry(ctx context.Context, stateStore externalprovider.StateStore) 
 		registered[n] = true
 	}
 	for name, pc := range cfg.Providers {
+		if name == "apps" && (pc.Command != "" || pc.Terraform != nil) {
+			cleanup()
+			return nil, nil, func() {}, fmt.Errorf("providers.apps is reserved for the built-in application provider; rename the external provider and its apiVersion")
+		}
 		if registered[name] {
 			continue
 		}
@@ -841,6 +876,11 @@ func buildRegistry(ctx context.Context, stateStore externalprovider.StateStore) 
 			if err != nil {
 				log.Printf("  terraform provider %q: load failed, skipping: %v", name, err)
 				continue
+			}
+			if prov.Name() == "apps" {
+				client.Close()
+				cleanup()
+				return nil, nil, func() {}, fmt.Errorf("external provider %q uses reserved built-in name apps; rename the provider", name)
 			}
 			registry.Register(prov)
 			tfClients = append(tfClients, client)
@@ -856,6 +896,11 @@ func buildRegistry(ctx context.Context, stateStore externalprovider.StateStore) 
 		if err != nil {
 			log.Printf("  plugin %q: load failed, skipping: %v", name, err)
 			continue
+		}
+		if prov.Name() == "apps" {
+			clients = append(clients, client)
+			cleanup()
+			return nil, nil, func() {}, fmt.Errorf("plugin %q reports reserved built-in name apps; change its handshake provider name", name)
 		}
 		if prov.Name() != name {
 			log.Printf("  plugin %q: handshake reported name %q; registering under %q",

@@ -19,6 +19,7 @@ const TONE_BY_LABEL: Record<string, StatusTone> = {
   // Cluster phase (k3s)
   ready: 'good',
   applying: 'warn',
+  'reboot-required': 'warn',
   degraded: 'bad',
   failed: 'bad',
   unknown: 'unknown',

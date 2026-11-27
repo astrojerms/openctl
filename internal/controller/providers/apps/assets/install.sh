@@ -50,7 +50,7 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y ca-certificates curl gnupg cifs-utils pciutils ubuntu-drivers-common linux-headers-generic
+apt-get install -y ca-certificates curl gnupg cifs-utils pciutils ubuntu-drivers-common linux-headers-generic python3 util-linux
 lspci -Dn -d 10de: | grep -Eq ' (0300|0302): ' || fail 'No NVIDIA display/compute GPU is passed through to this guest.'
 # Ubuntu selects its current hardware-compatible branch, including Turing support.
 # Use the complete driver metapackage so NVENC/NVDEC libraries are installed too.
@@ -94,7 +94,7 @@ cat > /etc/systemd/system/docker.service.d/jellyfin-media.conf <<'EOF'
 RequiresMountsFor=/mnt/synology
 
 [Service]
-ExecStartPre=/usr/bin/test -d /mnt/synology/video
+ExecStartPre=/usr/bin/findmnt --noheadings --target /mnt/synology --types cifs --options ro
 EOF
 cat > /etc/systemd/system/jellyfin.service <<'EOF'
 [Unit]
@@ -110,7 +110,7 @@ Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=/opt/jellyfin
 ExecStartPre=/usr/bin/nvidia-smi
-ExecStartPre=/usr/bin/test -d /mnt/synology/video
+ExecStartPre=/usr/bin/findmnt --noheadings --target /mnt/synology --types cifs --options ro
 ExecStart=/usr/bin/docker compose --env-file /opt/jellyfin/.env -f /opt/jellyfin/compose.yaml up -d --pull never
 ExecStop=/usr/bin/docker compose --env-file /opt/jellyfin/.env -f /opt/jellyfin/compose.yaml down
 TimeoutStartSec=120
@@ -148,19 +148,12 @@ systemctl daemon-reload
 systemctl enable docker.service
 systemctl restart docker.service
 
-# Resolve latest only on first installation. Never replace an existing pin, and
-# never source .env as shell code. Pulling a saved digest also repairs image loss.
-if [[ -e /opt/jellyfin/.env ]]; then
-    image_setting=$(cat /opt/jellyfin/.env)
-    [[ $image_setting =~ ^JELLYFIN_IMAGE=(docker\.io/)?jellyfin/jellyfin@sha256:[a-f0-9]{64}$ ]] || fail '/opt/jellyfin/.env must contain only JELLYFIN_IMAGE=<official image>@sha256:<digest>.'
-    docker pull "${image_setting#JELLYFIN_IMAGE=}"
-else
-    docker pull docker.io/jellyfin/jellyfin:latest
-    image=$(docker image inspect docker.io/jellyfin/jellyfin:latest --format '{{index .RepoDigests 0}}')
-    [[ $image =~ ^(docker\.io/)?jellyfin/jellyfin@sha256:[a-f0-9]{64}$ ]] || fail 'Docker did not return an official Jellyfin repository digest.'
-    printf 'JELLYFIN_IMAGE=%s\n' "$image" > "$workdir/jellyfin.env"
-    install -o root -g root -m 0600 "$workdir/jellyfin.env" /opt/jellyfin/.env
-fi
+# The controller stages an explicit official digest before bootstrap. Never
+# resolve a mutable tag or source dotenv data as executable shell code.
+[[ -f /opt/jellyfin/.env ]] || fail 'The controller must provide an explicit pinned Jellyfin image.'
+image_setting=$(grep '^JELLYFIN_IMAGE=' /opt/jellyfin/.env)
+[[ $image_setting =~ ^JELLYFIN_IMAGE=(docker\.io/)?jellyfin/jellyfin@sha256:[a-f0-9]{64}$ ]] || fail '/opt/jellyfin/.env must contain exactly one pinned JELLYFIN_IMAGE=<official image>@sha256:<digest>.'
+docker pull "${image_setting#JELLYFIN_IMAGE=}"
 chown root:root /opt/jellyfin/.env
 chmod 0600 /opt/jellyfin/.env
 

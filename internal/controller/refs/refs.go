@@ -145,8 +145,12 @@ func extractRef(m map[string]any) (*Ref, bool, error) {
 	if v, ok := obj["name"].(string); ok {
 		ref.Name = v
 	}
-	if v, ok := obj["field"].(string); ok {
-		ref.Field = v
+	if value, present := obj["field"]; present {
+		field, ok := value.(string)
+		if !ok {
+			return nil, true, fmt.Errorf("ref: field must be a string (got %T)", value)
+		}
+		ref.Field = field
 	}
 	if ref.APIVersion == "" || ref.Kind == "" || ref.Name == "" {
 		return nil, true, fmt.Errorf("ref: apiVersion, kind, and name are required (got %+v)", ref)
@@ -163,28 +167,50 @@ func extractRef(m map[string]any) (*Ref, bool, error) {
 // order regardless of Go's map-iteration randomness. Returns nil for a nil
 // or ref-free spec.
 func Collect(spec map[string]any) []Ref {
+	collected, _ := collect(spec, false)
+	return collected
+}
+
+// CollectStrict collects references without resolving them, rejecting malformed
+// markers rather than silently dropping dependency edges during admission.
+func CollectStrict(spec map[string]any) ([]Ref, error) {
+	return collect(spec, true)
+}
+
+func collect(spec map[string]any, strict bool) ([]Ref, error) {
 	if spec == nil {
-		return nil
+		return nil, nil
 	}
 	var out []Ref
-	var visit func(v any)
-	visit = func(v any) {
+	var visit func(v any) error
+	visit = func(v any) error {
 		switch x := v.(type) {
 		case map[string]any:
-			if ref, isRef, err := extractRef(x); err == nil && isRef {
+			ref, isRef, err := extractRef(x)
+			if err != nil && strict {
+				return err
+			}
+			if err == nil && isRef {
 				out = append(out, *ref)
-				return
+				return nil
 			}
 			for _, v2 := range x {
-				visit(v2)
+				if err := visit(v2); err != nil {
+					return err
+				}
 			}
 		case []any:
 			for _, item := range x {
-				visit(item)
+				if err := visit(item); err != nil {
+					return err
+				}
 			}
 		}
+		return nil
 	}
-	visit(spec)
+	if err := visit(spec); err != nil {
+		return nil, err
+	}
 	slices.SortFunc(out, func(a, b Ref) int {
 		if c := strings.Compare(a.Kind, b.Kind); c != 0 {
 			return c
@@ -197,7 +223,7 @@ func Collect(spec map[string]any) []Ref {
 		}
 		return strings.Compare(a.APIVersion, b.APIVersion)
 	})
-	return out
+	return out, nil
 }
 
 // resolveRef calls Get on the referenced resource and, if field is

@@ -30,7 +30,7 @@ services:
         bind:
           create_host_path: false
       - type: bind
-        source: /mnt/synology/video
+        source: ${JELLYFIN_MEDIA_PATH:?Set JELLYFIN_MEDIA_PATH to the declared mounted NAS media directory}
         target: /media
         read_only: true
         bind:

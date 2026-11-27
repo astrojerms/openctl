@@ -417,7 +417,11 @@ func (f *fakeDryRunner) DryRun(_ context.Context, _ *protocol.Resource) (*provid
 func TestResourceServiceDryRunApplyComputesDriftWhenManifestExists(t *testing.T) {
 	// Atomic provider (no DryRunner) — handler returns just the spec
 	// diff against the persisted applied manifest.
-	fake := &fakeProvider{}
+	fake := &fakeProvider{getReturn: &protocol.Resource{
+		APIVersion: "fake.openctl.io/v1", Kind: "FakeKind",
+		Metadata: protocol.ResourceMetadata{Name: "preview"},
+		Spec:     map[string]any{"cpus": 2.0, "memory": "2Gi"},
+	}}
 	reg := providers.NewRegistry()
 	reg.Register(fake)
 	addr, mat, mstore := startTestServerWithManifests(t, reg)
@@ -640,7 +644,10 @@ func TestResourceServiceDeleteEnqueuesAndDispatches(t *testing.T) {
 	reg := providers.NewRegistry()
 	reg.Register(fake)
 
-	addr, mat := startTestServer(t, reg)
+	addr, mat, tracked := startTestServerWithManifests(t, reg)
+	if err := tracked.Save(context.Background(), safetyManifest("x", 1)); err != nil {
+		t.Fatal(err)
+	}
 	conn := dialTestServer(t, addr, mat.CACertPath)
 	defer func() { _ = conn.Close() }()
 
@@ -702,7 +709,10 @@ func TestResourceServiceDeleteBlockedWhenOwned(t *testing.T) {
 	reg.Register(target) // name "fake"
 	reg.Register(owner)  // name "owner"
 
-	addr, mat := startTestServer(t, reg)
+	addr, mat, tracked := startTestServerWithManifests(t, reg)
+	if err := tracked.Save(context.Background(), safetyManifest("locked", 1)); err != nil {
+		t.Fatal(err)
+	}
 	conn := dialTestServer(t, addr, mat.CACertPath)
 	defer func() { _ = conn.Close() }()
 

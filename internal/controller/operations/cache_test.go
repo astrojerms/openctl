@@ -35,6 +35,7 @@ func TestVerifyingTraceCacheHitSkipsApply(t *testing.T) {
 		APIVersion: "fake.openctl.io/v1",
 		Kind:       "FakeKind",
 		Metadata:   protocol.ResourceMetadata{Name: "x"},
+		Spec:       map[string]any{"cores": 2},
 		Status:     map[string]any{"cached": true},
 	}
 	p := &fakeProvider{

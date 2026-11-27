@@ -12,6 +12,7 @@ import (
 
 	"github.com/openctl/openctl/internal/controller/manifests"
 	"github.com/openctl/openctl/internal/controller/providers"
+	"github.com/openctl/openctl/internal/controller/reconciler"
 	"github.com/openctl/openctl/internal/controller/refs"
 	"github.com/openctl/openctl/internal/controller/secrets"
 	"github.com/openctl/openctl/pkg/protocol"
@@ -56,6 +57,9 @@ type Dispatcher struct {
 	manifests    ManifestSink
 	secrets      *secrets.Registry
 	pollInterval time.Duration
+	// deleteGuard rechecks top-level deletion admission immediately before
+	// provider mutation. Child deletion is governed by its owning composite.
+	deleteGuard func(context.Context, string, string, string) error
 
 	notify  chan struct{}
 	done    chan struct{}
@@ -97,6 +101,12 @@ func NewDispatcher(store *Store, registry *providers.Registry, manifests Manifes
 // an unresolved marker.
 func (d *Dispatcher) SetSecrets(reg *secrets.Registry) {
 	d.secrets = reg
+}
+
+// SetDeleteGuard installs the server's managed-state, ownership, and dependency
+// admission checks. Configure it before Start; child dispatch does not call it.
+func (d *Dispatcher) SetDeleteGuard(guard func(context.Context, string, string, string) error) {
+	d.deleteGuard = guard
 }
 
 // CancelRunning aborts the context of an in-flight op, if one with this id is
@@ -279,6 +289,9 @@ func (d *Dispatcher) drainScheduled(ctx context.Context) {
 //     (upstream ref targets haven't updated their status.*)
 //
 // Additional miss conditions:
+//   - secrets have no safe revision token, so rotations require real Apply
+//   - observed-only kinds or empty observable projections cannot prove convergence
+//   - live declared fields must still match after provider-specific projection
 //   - manifests sink not configured (tests)
 //   - no prior apply recorded for this resource
 //   - manifest carries the i-know-this-breaks-the-cluster annotation
@@ -300,6 +313,10 @@ func (d *Dispatcher) tryCacheHitInline(ctx context.Context, p providers.Provider
 	if raw.Metadata.Annotations["openctl.io/i-know-this-breaks-the-cluster"] == "true" {
 		return nil, false
 	}
+	if secrets.HasSecrets(raw.Spec) || secrets.HasSecrets(resolved.Spec) ||
+		d.registry.IsObservedOnly(raw.APIVersion, raw.Kind) {
+		return nil, false
+	}
 	storedInput, storedRefs, err := d.manifests.LoadHashes(ctx, raw.APIVersion, raw.Kind, raw.Metadata.Name)
 	if err != nil || storedInput == "" {
 		return nil, false
@@ -312,6 +329,10 @@ func (d *Dispatcher) tryCacheHitInline(ctx context.Context, p providers.Provider
 	}
 	result, err := p.Get(ctx, resolved.Kind, resolved.Metadata.Name)
 	if err != nil || result == nil {
+		return nil, false
+	}
+	desiredSpec, observedSpec := providers.DriftSpecs(p, resolved.Kind, resolved.Spec, result.Spec)
+	if len(desiredSpec) == 0 || !reconciler.SpecsEqual(desiredSpec, observedSpec) {
 		return nil, false
 	}
 	return result, true
@@ -334,21 +355,31 @@ func (d *Dispatcher) tryCacheHitInline(ctx context.Context, p providers.Provider
 //   - provider.Apply failure → returned unwrapped so callers see the
 //     underlying error
 func (d *Dispatcher) ApplyManifest(ctx context.Context, raw *protocol.Resource) (*protocol.Resource, error) {
+	result, _, err := d.applyManifest(ctx, raw)
+	return result, err
+}
+
+func (d *Dispatcher) applyManifest(ctx context.Context, raw *protocol.Resource) (*protocol.Resource, bool, error) {
 	p, err := d.registry.For(raw.APIVersion)
 	if err != nil {
-		return nil, fmt.Errorf("no provider for apiVersion %q: %w", raw.APIVersion, err)
+		return nil, false, fmt.Errorf("no provider for apiVersion %q: %w", raw.APIVersion, err)
 	}
 	resolved := *raw
 	if resolver := refs.New(d.registry); raw.Spec != nil {
 		resolvedSpec, err := resolver.Resolve(ctx, raw.Spec)
 		if err != nil {
-			return nil, fmt.Errorf("resolve refs: %w", err)
+			return nil, false, fmt.Errorf("resolve refs: %w", err)
 		}
 		resolved.Spec = resolvedSpec
 	}
-	if cached, hit := d.tryCacheHitInline(ctx, p, raw, &resolved); hit {
-		// Cache hit: nothing changed, so the secret is never even read.
-		return cached, nil
+	result, cached := d.tryCacheHitInline(ctx, p, raw, &resolved)
+	if cached {
+		// Annotations are not cache keys, but metadata-only intent changes
+		// (such as opting into auto-reconcile) must still be persisted.
+		if err := d.saveIntent(ctx, raw, &resolved, "live configuration verified"); err != nil {
+			return result, true, err
+		}
+		return result, true, nil
 	}
 
 	// Resolve $secret markers into a further copy handed ONLY to provider.Apply.
@@ -364,25 +395,40 @@ func (d *Dispatcher) ApplyManifest(ctx context.Context, raw *protocol.Resource) 
 	// to the provider — the irreducible minimum (the provider must configure the
 	// real infrastructure with it).
 	applyManifest := resolved
-	if d.secrets != nil && resolved.Spec != nil && secrets.HasSecrets(resolved.Spec) {
+	if secrets.HasSecrets(resolved.Spec) {
 		resolvedSpec, err := secrets.New(d.secrets).Resolve(ctx, resolved.Spec)
 		if err != nil {
-			return nil, fmt.Errorf("resolve secrets: %w", err)
+			return nil, false, fmt.Errorf("resolve secrets: %w", err)
 		}
 		applyManifest.Spec = resolvedSpec
 	}
 
-	result, err := p.Apply(ctx, &applyManifest)
+	result, err = p.Apply(ctx, &applyManifest)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
+	if err := d.saveIntent(ctx, raw, &resolved, "provider apply succeeded"); err != nil {
+		return result, false, err
+	}
+	return result, false, nil
+}
+
+// partialSuccessError prevents cancellation from hiding a desired-state write
+// failure after the provider has already changed infrastructure.
+type partialSuccessError struct {
+	err error
+}
+
+func (e *partialSuccessError) Error() string { return e.err.Error() }
+func (e *partialSuccessError) Unwrap() error { return e.err }
+
+func (d *Dispatcher) saveIntent(ctx context.Context, raw, resolved *protocol.Resource, outcome string) error {
 	if d.manifests != nil {
-		refsHash := d.manifests.Hash(&resolved)
-		if err := d.manifests.SaveWithRefsHash(ctx, raw, refsHash); err != nil {
-			log.Printf("dispatcher: save manifest for %s %q: %v", raw.Kind, raw.Metadata.Name, err)
+		if err := d.manifests.SaveWithRefsHash(ctx, raw, d.manifests.Hash(resolved)); err != nil {
+			return &partialSuccessError{err: fmt.Errorf("%s for %s %q, but saving desired state failed: %w; no infrastructure rollback was attempted; restore desired-state storage and re-apply to record intent", outcome, raw.Kind, raw.Metadata.Name, err)}
 		}
 	}
-	return result, nil
+	return nil
 }
 
 // DeleteManifest routes a single manifest through provider.Delete and
@@ -396,10 +442,8 @@ func (d *Dispatcher) ApplyManifest(ctx context.Context, raw *protocol.Resource) 
 //
 // Idempotent to the extent the provider's Delete is — providers return
 // nil for an already-absent resource — so deleting a child twice is safe.
-// A manifest-store removal failure is logged, not returned, matching the
-// top-level TypeDelete path: the resource is already gone from the
-// provider, so a lingering manifest row is a soft error, not a reason to
-// fail the caller.
+// A desired-state removal failure is returned as partial success: the provider
+// resource is gone, but its retained manifest can still trigger remediation.
 func (d *Dispatcher) DeleteManifest(ctx context.Context, raw *protocol.Resource) error {
 	p, err := d.registry.For(raw.APIVersion)
 	if err != nil {
@@ -410,7 +454,7 @@ func (d *Dispatcher) DeleteManifest(ctx context.Context, raw *protocol.Resource)
 	}
 	if d.manifests != nil {
 		if err := d.manifests.Delete(ctx, raw.APIVersion, raw.Kind, raw.Metadata.Name); err != nil {
-			log.Printf("dispatcher: delete manifest for %s %q: %v", raw.Kind, raw.Metadata.Name, err)
+			return &partialSuccessError{err: fmt.Errorf("provider delete succeeded for %s %q, but deleting desired state failed: %w; no infrastructure rollback was attempted; restore desired-state storage and retry delete to prevent recreation", raw.Kind, raw.Metadata.Name, err)}
 		}
 	}
 	return nil
@@ -421,6 +465,10 @@ func (d *Dispatcher) DeleteManifest(ctx context.Context, raw *protocol.Resource)
 // a user while running (its context was aborted), else StatusFailed with the
 // underlying error.
 func (d *Dispatcher) terminalOutcome(id string, err error) (status, message string) {
+	var partial *partialSuccessError
+	if errors.As(err, &partial) {
+		return StatusFailed, err.Error()
+	}
 	d.runMu.Lock()
 	canceled := d.userCancelled[id]
 	d.runMu.Unlock()
@@ -478,45 +526,54 @@ func (d *Dispatcher) execute(ctx context.Context, op *Operation) {
 		if d.manifests != nil {
 			applyCtx = manifests.WithSource(applyCtx, op.Source)
 		}
-		// Cache-hit path needs to touch op.Label before the shared
-		// ApplyManifest helper serves the cached result.
-		if d.manifests != nil {
-			resolved := rawManifest
-			if resolver := refs.New(d.registry); rawManifest.Spec != nil {
-				if resolvedSpec, err := resolver.Resolve(applyCtx, rawManifest.Spec); err == nil {
-					resolved.Spec = resolvedSpec
-					if cached, hit := d.tryCacheHitInline(applyCtx, p, &rawManifest, &resolved); hit {
-						_ = d.store.SetLabel(applyCtx, op.ID, "cached: input+refs hashes unchanged since last apply")
-						cachedJSON, _ := json.Marshal(cached)
-						_ = d.store.Complete(completeCtx, op.ID, StatusSucceeded, "", string(cachedJSON))
-						return
-					}
+		if op.CreateOnly {
+			observed, getErr := p.Get(applyCtx, op.Kind, op.ResourceName)
+			var nf *providers.NotFoundError
+			if getErr == nil || !errors.As(getErr, &nf) {
+				message := fmt.Sprintf("create-only %s %q: cannot establish resource absence", op.Kind, op.ResourceName)
+				if getErr != nil {
+					message += ": " + getErr.Error()
+				} else if observed != nil {
+					message = fmt.Sprintf("create-only %s %q: resource already exists; adopt it explicitly or use update", op.Kind, op.ResourceName)
 				}
+				_ = d.store.Complete(completeCtx, op.ID, StatusFailed, message, "")
+				return
 			}
 		}
-		result, err := d.ApplyManifest(applyCtx, &rawManifest)
+		result, cached, err := d.applyManifest(applyCtx, &rawManifest)
 		if err != nil {
 			st, msg := d.terminalOutcome(op.ID, err)
 			_ = d.store.Complete(completeCtx, op.ID, st, msg, "")
 			return
 		}
+		if cached {
+			_ = d.store.SetLabel(completeCtx, op.ID, "cached: intent unchanged and live declared fields match")
+		}
 		var resultJSON []byte
-		if result != nil {
+		// Providers may echo resolved secrets anywhere in their result. Do not
+		// persist that result without a provider-independent redaction contract.
+		if result != nil && !secrets.HasSecrets(rawManifest.Spec) {
 			resultJSON, _ = json.Marshal(result)
 		}
 		_ = d.store.Complete(completeCtx, op.ID, StatusSucceeded, "", string(resultJSON))
 
 	case TypeDelete:
-		if err := p.Delete(ctx, op.Kind, op.ResourceName); err != nil {
+		if d.deleteGuard != nil {
+			if err := d.deleteGuard(ctx, op.APIVersion, op.Kind, op.ResourceName); err != nil {
+				st, msg := d.terminalOutcome(op.ID, err)
+				_ = d.store.Complete(completeCtx, op.ID, st, msg, "")
+				return
+			}
+		}
+		sinkCtx := manifests.WithSource(ctx, op.Source)
+		if err := d.DeleteManifest(sinkCtx, &protocol.Resource{
+			APIVersion: op.APIVersion,
+			Kind:       op.Kind,
+			Metadata:   protocol.ResourceMetadata{Name: op.ResourceName},
+		}); err != nil {
 			st, msg := d.terminalOutcome(op.ID, err)
 			_ = d.store.Complete(completeCtx, op.ID, st, msg, "")
 			return
-		}
-		if d.manifests != nil {
-			sinkCtx := manifests.WithSource(ctx, op.Source)
-			if err := d.manifests.Delete(sinkCtx, op.APIVersion, op.Kind, op.ResourceName); err != nil {
-				log.Printf("dispatcher: delete manifest for %s %q: %v", op.Kind, op.ResourceName, err)
-			}
 		}
 		_ = d.store.Complete(completeCtx, op.ID, StatusSucceeded, "", "")
 

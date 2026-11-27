@@ -103,14 +103,16 @@ The example client deliberately stops on errors and has no Apply/Delete method.
 | `GET /v1/schemas` | None | `schemas[]`: API version, kind, provider, advanced/owner hints |
 | `POST /v1/schemas:get` | `{"apiVersion":"proxmox.openctl.io/v1","kind":"VirtualMachine"}` | `cueSource`: current supported fields and constraints |
 | `POST /v1/schemas:validate` | `{"resource": RESOURCE_OBJECT}` | Empty/absent `errors`; HTTP 200 alone is not validation success |
-| `POST /v1/resources:dryRunApply` | `{"resource": RESOURCE_OBJECT}` | Empty/absent `validationErrors`, then `diff`, `children`, `requiredGates`, `summary` |
+| `POST /v1/resources:dryRunApply` | `{"resource": RESOURCE_OBJECT}` | Empty/absent `validationErrors`, then `operation`, `diff`, `liveDrift`, `children`, `requiredGates`, `summary` |
 
 - Proto JSON fields use lower camel case (`validationErrors`, `requiredGates`).
 - Missing reference outputs can prevent preview. Create only approved upstream
   dependencies first, verify their outputs, then preview the dependent resource.
-- An empty atomic diff, including a `no-op` summary on first apply, is not proof
-  of physical existence, no live drift, or a safe replacement. Preview compares
-  saved desired specs; composite providers can additionally return child plans.
+- `operation` explicitly distinguishes `create`, `update`, and `no-op`.
+  `diff` compares submitted intent with stored intent; `liveDrift` compares
+  observable declared fields with the live provider. A first atomic apply
+  is `create` even without an old spec to diff. A preview is not an existence
+  reservation or permission to overwrite an unmanaged resource.
 - Preview cannot guarantee future API access, quotas, capacity, cloud-init
   success, or absence of concurrent changes. Verify those independently.
 - Review nonempty `requiredGates`; never translate them into automatic destructive

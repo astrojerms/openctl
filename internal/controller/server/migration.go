@@ -97,7 +97,12 @@ func (h *resourceHandler) AdoptResource(ctx context.Context, req *apiv1.AdoptRes
 	}
 	// Identity and observation must both succeed before recording intent.
 	// A read outage must not be replaced with fabricated observed state.
-	observed, err := p.Get(ctx, manifest.Kind, manifest.Metadata.Name)
+	var observed *protocol.Resource
+	if manager, ok := p.(providers.IdentityManager); ok {
+		observed, err = manager.ObserveIdentity(ctx, manifest, identity)
+	} else {
+		observed, err = p.Get(ctx, manifest.Kind, manifest.Metadata.Name)
+	}
 	if err != nil || observed == nil {
 		return nil, status.Error(codes.FailedPrecondition, "cannot observe existing VM; retry adoption before forgetting the source")
 	}
@@ -107,8 +112,16 @@ func (h *resourceHandler) AdoptResource(ctx context.Context, req *apiv1.AdoptRes
 	}
 	desiredSpec, observedSpec := providers.DriftSpecs(p, manifest.Kind, manifest.Spec, observed.Spec)
 	out.Drift = computeDrift(desiredSpec, observedSpec)
+	if err := h.checkManagedDependents(ctx, manifest.APIVersion, manifest.Kind, manifest.Metadata.Name); err != nil {
+		return nil, err
+	}
 	if err := h.manifests.Adopt(ctx, manifest); err != nil {
 		return nil, migrationError(err)
+	}
+	if manager, ok := p.(providers.IdentityManager); ok {
+		if err := manager.BindIdentity(ctx, manifest, identity); err != nil {
+			return nil, status.Error(codes.FailedPrecondition, "adoption intent saved but immutable identity could not be bound; retry adoption before any management operation")
+		}
 	}
 	if h.mirror != nil {
 		if err := h.mirror.Materialize(ctx, manifest); err != nil {
@@ -144,6 +157,11 @@ func (h *resourceHandler) ForgetResource(ctx context.Context, req *apiv1.ForgetR
 	}
 	if err := h.manifests.Forget(ctx, manifest, bundle.GetControllerId(), bundle.GetManifestDigest()); err != nil {
 		return nil, migrationError(err)
+	}
+	if manager, ok := p.(providers.IdentityManager); ok {
+		if err := manager.ReleaseIdentity(ctx, manifest.Metadata.Name); err != nil {
+			return nil, status.Error(codes.Internal, "VM tracking released but identity cleanup failed; retry forget")
+		}
 	}
 	if h.mirror != nil {
 		if err := h.mirror.RemoveProjection(ctx, manifest.APIVersion, manifest.Kind, manifest.Metadata.Name); err != nil {
@@ -192,8 +210,11 @@ func (h *resourceHandler) migrationResource(wire *apiv1.Resource) (*protocol.Res
 	if _, composite := p.(providers.Planner); composite {
 		return nil, nil, status.Error(codes.FailedPrecondition, "migration does not support composite providers")
 	}
-	if _, _, owned := h.registry.OwnerOf(manifest.Kind, manifest.Metadata.Name); owned ||
-		len(h.registry.ChildrenOf(manifest.Kind, manifest.Metadata.Name)) != 0 ||
+	_, _, owned, ownerErr := h.registry.CheckedOwnerOf(context.Background(), manifest.Kind, manifest.Metadata.Name)
+	if ownerErr != nil {
+		return nil, nil, status.Error(codes.FailedPrecondition, "cannot verify standalone resource ownership")
+	}
+	if owned || len(h.registry.ChildrenOf(manifest.Kind, manifest.Metadata.Name)) != 0 ||
 		manifest.Metadata.Labels[providers.LabelOwnerKind] != "" || manifest.Metadata.Labels[providers.LabelOwnerName] != "" {
 		return nil, nil, status.Error(codes.FailedPrecondition, "migration does not support owned or composite resources")
 	}

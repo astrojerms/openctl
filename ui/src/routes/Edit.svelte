@@ -3,7 +3,7 @@
   import { writable } from 'svelte/store';
   import {
     resources, schemas, operations as opsApi, UnauthorizedError,
-    type DryRunApplyResponse,
+    type DryRunApplyResponse, type Resource,
   } from '../lib/api';
   import { parseYAML, resourceToYAML } from '../lib/yaml';
   import { advancedKind } from '../lib/catalogue';
@@ -44,6 +44,8 @@
   // message. Refreshed by runPreview on each debounce tick.
   const fieldErrorsCtx = writable<Record<string, string>>({});
   setContext('resourceFieldErrorsStore', fieldErrorsCtx);
+  const formErrorsCtx = writable<Record<string, string>>({});
+  setContext('resourceFormErrorsStore', formErrorsCtx);
 
   // Publish the current form value (the whole manifest object) so a nested
   // FormField with a `dependsOn` option (e.g. a disk's storage dropdown that
@@ -73,7 +75,9 @@
   // panel can show both diagnostics and the planned diff in one update.
   const PREVIEW_DEBOUNCE_MS = 350;
   let timer: number | undefined;
-  let lastPreviewedText = '';
+  let previewRevision = 0;
+  let reviewedText = '';
+  let reviewedResource: Resource | null = null;
   let previewing = false;
   let parseError = '';
   let validateErrors: string[] = [];
@@ -172,7 +176,7 @@
         baseline = resourceToYAML({
           apiVersion: av,
           kind: k,
-          metadata: { name: n },
+          metadata: r.resource.metadata,
           spec: r.resource.spec ?? {},
         });
       }
@@ -351,30 +355,41 @@
 
   function schedulePreview() {
     if (timer !== undefined) clearTimeout(timer);
+    previewRevision++;
+    plan = null;
+    reviewedResource = null;
+    reviewedText = '';
+    checkedGates = {};
+    parseError = '';
+    validateErrors = [];
+    fieldErrorsCtx.set({});
+    previewing = true;
     timer = setTimeout(runPreview, PREVIEW_DEBOUNCE_MS) as unknown as number;
   }
 
   async function runPreview() {
-    if (text === lastPreviewedText) return;
-    lastPreviewedText = text;
+    const revision = previewRevision;
+    const previewText = text;
     parseError = '';
     validateErrors = [];
     plan = null;
 
-    const parsed = parseYAML(text);
+    const parsed = parseYAML(previewText);
     if (parsed.error) {
       parseError = parsed.error;
+      previewing = false;
       return;
     }
     if (!parsed.doc.apiVersion || !parsed.doc.kind) {
       parseError = 'apiVersion and kind are required';
+      previewing = false;
       return;
     }
 
-    const resource = {
+    const resource: Resource = {
       apiVersion: parsed.doc.apiVersion,
       kind: parsed.doc.kind,
-      metadata: { name: parsed.doc.metadata?.name ?? '' },
+      metadata: { ...parsed.doc.metadata, name: parsed.doc.metadata?.name ?? '' },
       spec: parsed.doc.spec as Record<string, unknown> | undefined,
     };
 
@@ -388,8 +403,11 @@
         schemas.validate(resource),
         resources.dryRunApply(resource),
       ]);
-      validateErrors = vResp.errors ?? [];
+      if (revision !== previewRevision) return;
+      validateErrors = [...(vResp.errors ?? []), ...(dResp.validationErrors ?? [])];
       plan = dResp;
+      reviewedResource = resource;
+      reviewedText = previewText;
       // Publish per-path field errors so FormField rows can highlight
       // themselves. DryRunApply always populates fieldErrors when
       // validation fails, so this is the single source of truth.
@@ -398,37 +416,28 @@
         if (fe.path && fe.message) errs[fe.path] = fe.message;
       }
       fieldErrorsCtx.set(errs);
-      // Preserve existing checkbox state for gates that still apply;
-      // drop gates that no longer apply.
-      const next: Record<string, boolean> = {};
-      for (const g of plan.requiredGates ?? []) {
-        next[g] = checkedGates[g] ?? false;
-      }
-      checkedGates = next;
+      checkedGates = Object.fromEntries((dResp.requiredGates ?? []).map((g) => [g, false]));
     } catch (err) {
+      if (revision !== previewRevision) return;
       if (err instanceof UnauthorizedError) return;
       validateErrors = [err instanceof Error ? err.message : String(err)];
     } finally {
-      previewing = false;
+      if (revision === previewRevision) previewing = false;
     }
   }
 
   async function doApply() {
-    if (applyBlocked || !plan) return;
-    const parsed = parseYAML(text);
-    if (parsed.error || !parsed.doc.apiVersion || !parsed.doc.kind) return;
+    if (applyBlocked || !$canMutate || !plan || !reviewedResource || reviewedText !== text) return;
+    const resource = reviewedResource;
+    const submittedText = reviewedText;
 
     applying = true;
     applyError = '';
     try {
-      const submitName = parsed.doc.metadata?.name ?? '';
+      const submitName = resource.metadata.name;
       const resp = await resources.apply({
-        resource: {
-          apiVersion: parsed.doc.apiVersion,
-          kind: parsed.doc.kind,
-          metadata: { name: submitName },
-          spec: parsed.doc.spec as Record<string, unknown> | undefined,
-        },
+        resource,
+        ...(isCreate ? { createOnly: true } : {}),
         allowDestructive: checkedGates['allow_destructive'] ?? false,
         iKnowThisBreaksTheCluster: checkedGates['i_know_this_breaks_the_cluster'] ?? false,
       });
@@ -438,7 +447,7 @@
         // should revert to what the user just sent, not the stale applied
         // manifest. Real applied-state catches up via the ops store +
         // Watch when the dispatcher writes back.
-        baseline = text;
+        baseline = submittedText;
         // Create mode: remember the submitted name so the success
         // handoff can navigate to the detail page.
         if (isCreate) createdName = submitName;
@@ -462,6 +471,7 @@
 
   onDestroy(() => {
     if (timer !== undefined) clearTimeout(timer);
+    previewRevision++;
   });
 
   function discard() {
@@ -480,11 +490,9 @@
   // Apply readiness: well-formed YAML + no validation errors + every
   // required gate checked + something to actually do. Also blocked
   // while a submission is in flight.
-  $: gatesSatisfied = (plan?.requiredGates ?? []).every((g) => checkedGates[g]);
-  $: hasChange = !!plan && (
-    (plan.diff?.length ?? 0) > 0 ||
-    (plan.children ?? []).some((c) => c.verb !== 'no-op')
-  );
+  $: gatesSatisfied = (plan?.requiredGates ?? []).every((g) =>
+    (g === 'allow_destructive' || g === 'i_know_this_breaks_the_cluster') && checkedGates[g]);
+  $: hasChange = !!plan && (plan.operation === 'create' || plan.operation === 'update');
   $: ownedByAnother = ownerRefs.length > 0;
   // Composite-child kinds (K3sNode, AgentInstall) get an info banner in create
   // mode nudging toward the owning composite.
@@ -500,13 +508,20 @@
     if (p.error) return '';
     return p.doc?.metadata?.name ?? '';
   })();
-  $: nameCollision = isCreate && currentName !== '' && existingNames.has(currentName);
+  $: nameCollision = isCreate && ((currentName !== '' && existingNames.has(currentName))
+    || (!!plan && plan.operation !== 'create'));
 
   $: applyBlocked =
     applying ||
+    loading ||
+    !!loadError ||
+    previewing ||
+    reviewedText !== text ||
+    Object.keys($formErrorsCtx).length > 0 ||
     ownedByAnother ||
     parseError !== '' ||
     validateErrors.length > 0 ||
+    (plan?.fieldErrors?.length ?? 0) > 0 ||
     !plan ||
     !hasChange ||
     !gatesSatisfied ||
@@ -630,6 +645,8 @@
       return `This resource is owned by ${owner.kind}/${owner.name} — edit the owner instead.`;
     }
     if (parseError) return 'Fix YAML parse error before applying';
+    if (previewing || reviewedText !== text) return 'Wait for the current manifest preview';
+    if (Object.keys($formErrorsCtx).length > 0) return 'Fix form parse errors before applying';
     if (validateErrors.length > 0) return 'Fix validation errors before applying';
     if (nameCollision) {
       return `A ${kind} named "${currentName}" already exists — pick a different name or Edit the existing one.`;
@@ -803,7 +820,7 @@
       </article>
     {/if}
 
-    {#if parseError || validateErrors.length > 0}
+    {#if parseError || validateErrors.length > 0 || Object.keys($formErrorsCtx).length > 0}
       <article class="diag">
         <h3>Validation</h3>
         {#if parseError}
@@ -811,6 +828,9 @@
         {/if}
         {#each validateErrors as e}
           <p class="err mono">{e}</p>
+        {/each}
+        {#each Object.entries($formErrorsCtx) as [path, error]}
+          <p class="err mono">{path}: {error}</p>
         {/each}
       </article>
     {/if}
@@ -823,13 +843,14 @@
         </header>
 
         {#if !hasChange}
-          <p class="muted">No changes. The manifest matches what's already applied.</p>
+          <p class="muted">No changes to stored intent or live infrastructure.</p>
         {/if}
 
         {#if (plan.diff?.length ?? 0) > 0}
+          <h4>Changes to stored intent</h4>
           <table class="diff">
             <thead>
-              <tr><th>Path</th><th>Current</th><th>Will become</th></tr>
+              <tr><th>Path</th><th>Stored intent</th><th>Submitted intent</th></tr>
             </thead>
             <tbody>
               {#each (plan.diff ?? []) as d}
@@ -838,6 +859,24 @@
                   <td class="mono">{_d.path}</td>
                   <td class="mono">{_d.desired}</td>
                   <td class="mono">{_d.observed}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        {/if}
+
+        {#if (plan.liveDrift?.length ?? 0) > 0}
+          <h4>Live infrastructure drift</h4>
+          <table class="diff">
+            <thead>
+              <tr><th>Path</th><th>Desired</th><th>Observed</th></tr>
+            </thead>
+            <tbody>
+              {#each plan.liveDrift ?? [] as d}
+                <tr>
+                  <td class="mono">{d.path}</td>
+                  <td class="mono">{d.desired}</td>
+                  <td class="mono">{d.observed}</td>
                 </tr>
               {/each}
             </tbody>

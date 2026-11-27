@@ -376,10 +376,7 @@ func (h *Handler) createVMFromTemplate(ctx context.Context, name, node string, s
 		}
 	}
 
-	return &protocol.Response{
-		Status:  protocol.StatusSuccess,
-		Message: fmt.Sprintf("VM %s created (vmid: %d)", name, vmid),
-	}, nil
+	return createdVMResponse(name, node, vmid), nil
 }
 
 // applyCloudInitVendorSnippet attaches a cicustom vendor snippet to the VM. When
@@ -597,10 +594,7 @@ func (h *Handler) createVMFromCloudImage(ctx context.Context, name, node string,
 		}
 	}
 
-	return &protocol.Response{
-		Status:  protocol.StatusSuccess,
-		Message: fmt.Sprintf("VM %s created from cloud image (vmid: %d, template: %s)", name, vmid, templateName),
-	}, nil
+	return createdVMResponse(name, node, vmid), nil
 }
 
 // createCloudImageTemplate downloads a cloud image and creates a template from it
@@ -800,10 +794,7 @@ func (h *Handler) createVMFromImage(ctx context.Context, name, node string, spec
 		}
 	}
 
-	return &protocol.Response{
-		Status:  protocol.StatusSuccess,
-		Message: fmt.Sprintf("VM %s created from image %s (vmid: %d)", name, spec.Image.File, vmid),
-	}, nil
+	return createdVMResponse(name, node, vmid), nil
 }
 
 func (h *Handler) deleteVM(ctx context.Context, name string) (*protocol.Response, error) {
@@ -861,6 +852,28 @@ func (h *Handler) applyVM(ctx context.Context, manifest *protocol.Resource) (*pr
 		return nil, err
 	}
 	return h.getVM(ctx, manifest.Metadata.Name)
+}
+
+// UpdateVM updates only the explicitly selected instance, never a name lookup.
+func (h *Handler) UpdateVM(ctx context.Context, vm *client.VM, manifest *protocol.Resource) error {
+	spec, err := resources.ParseVMSpec(manifest)
+	if err != nil {
+		return err
+	}
+	return h.resizeVM(ctx, vm, spec)
+}
+
+func createdVMResponse(name, node string, vmid int) *protocol.Response {
+	return &protocol.Response{
+		Status:  protocol.StatusSuccess,
+		Message: fmt.Sprintf("VM %s created (vmid: %d)", name, vmid),
+		Resource: &protocol.Resource{
+			APIVersion: "proxmox.openctl.io/v1", Kind: "VirtualMachine",
+			Metadata: protocol.ResourceMetadata{Name: name},
+			Spec:     map[string]any{"node": node},
+			Status:   map[string]any{"vmid": vmid},
+		},
+	}
 }
 
 func (h *Handler) listTemplates(ctx context.Context) (*protocol.Response, error) {

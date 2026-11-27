@@ -66,6 +66,7 @@ type resourceHandler struct {
 	manifests     *manifests.Store
 	mirror        *manifests.DiskMirror
 	gitopsEnabled bool
+	manifestMode  string
 }
 
 func newResourceHandler(reg *providers.Registry, ops *operations.Store, d *operations.Dispatcher, m *manifests.Store) *resourceHandler {
@@ -78,6 +79,9 @@ func (h *resourceHandler) Apply(ctx context.Context, req *apiv1.ApplyRequest) (*
 	}
 	h.managementMu.RLock()
 	defer h.managementMu.RUnlock()
+	if err := h.checkManifestAuthority(); err != nil {
+		return nil, err
+	}
 	if req.GetResource() == nil {
 		return nil, status.Error(codes.InvalidArgument, "resource is required")
 	}
@@ -95,6 +99,25 @@ func (h *resourceHandler) Apply(ctx context.Context, req *apiv1.ApplyRequest) (*
 	}
 	if err := h.checkNotForgotten(ctx, manifest.APIVersion, manifest.Kind, manifest.Metadata.Name); err != nil {
 		return nil, err
+	}
+	if req.GetCreateOnly() {
+		if h.manifests != nil {
+			existing, err := h.manifests.Load(ctx, manifest.APIVersion, manifest.Kind, manifest.Metadata.Name)
+			if err != nil {
+				return nil, status.Error(codes.FailedPrecondition, "cannot verify existing management tracking")
+			}
+			if existing != nil {
+				return nil, status.Error(codes.AlreadyExists, "resource is already managed")
+			}
+		}
+		p, _ := h.registry.For(manifest.APIVersion)
+		existing, err := p.Get(ctx, manifest.Kind, manifest.Metadata.Name)
+		if err != nil && !isNotFound(err) {
+			return nil, status.Errorf(codes.FailedPrecondition, "cannot verify provider resource absence: %v", err)
+		}
+		if existing != nil {
+			return nil, status.Error(codes.AlreadyExists, "provider resource already exists; use adoption, not creation")
+		}
 	}
 
 	// Phase 5: surface the destructive flags to providers via annotations.
@@ -129,6 +152,7 @@ func (h *resourceHandler) Apply(ctx context.Context, req *apiv1.ApplyRequest) (*
 		ResourceName: manifest.Metadata.Name,
 		ManifestJSON: string(manifestJSON),
 		Source:       sourceFromContext(ctx),
+		CreateOnly:   req.GetCreateOnly(),
 	})
 	if err != nil {
 		var forgotten *manifests.ForgottenError
@@ -137,8 +161,7 @@ func (h *resourceHandler) Apply(ctx context.Context, req *apiv1.ApplyRequest) (*
 		}
 		var conflict *operations.ConflictError
 		if errors.As(err, &conflict) {
-			return nil, status.Errorf(codes.AlreadyExists,
-				"operation %s already in flight for %s/%s", conflict.InflightID, manifest.Kind, manifest.Metadata.Name)
+			return nil, status.Error(codes.AlreadyExists, conflict.Error())
 		}
 		return nil, status.Errorf(codes.Internal, "submit op: %v", err)
 	}
@@ -271,6 +294,7 @@ func (h *resourceHandler) DryRunApply(ctx context.Context, req *apiv1.DryRunAppl
 		return nil, status.Error(codes.InvalidArgument, "resource is required")
 	}
 	manifest := protoToResource(req.GetResource())
+	submittedSpec := manifest.Spec
 
 	resp := &apiv1.DryRunApplyResponse{}
 
@@ -324,16 +348,31 @@ func (h *resourceHandler) DryRunApply(ctx context.Context, req *apiv1.DryRunAppl
 		manifest.Spec = resolved
 	}
 
-	// Spec-level diff vs the last applied manifest. Empty when this would
-	// be the first apply.
+	// Diff remains desired-versus-desired; live drift has its own field.
+	resp.Operation = "create"
+	var saved *protocol.Resource
 	if h.manifests != nil {
-		desired, _, lerr := h.manifests.LoadWithTime(ctx,
-			manifest.APIVersion, manifest.Kind, manifest.Metadata.Name)
-		if lerr != nil {
-			return nil, status.Errorf(codes.Internal, "load applied manifest: %v", lerr)
+		saved, err = h.manifests.Load(ctx, manifest.APIVersion, manifest.Kind, manifest.Metadata.Name)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "load applied manifest: %v", err)
 		}
-		if desired != nil {
-			resp.Diff = computeDrift(desired.Spec, manifest.Spec)
+	}
+	if saved != nil {
+		resp.Diff = computeDrift(saved.Spec, submittedSpec)
+		resp.Operation = "no-op"
+		observed, getErr := p.Get(ctx, manifest.Kind, manifest.Metadata.Name)
+		if getErr != nil && !isNotFound(getErr) {
+			return nil, status.Errorf(codes.FailedPrecondition, "cannot preview live resource: %v", getErr)
+		}
+		if observed == nil || isNotFound(getErr) {
+			resp.Operation = "update"
+			resp.ValidationErrors = append(resp.ValidationErrors, "managed resource is missing; inspect its identity before attempting replacement")
+		} else {
+			desiredSpec, observedSpec := providers.DriftSpecs(p, manifest.Kind, manifest.Spec, observed.Spec)
+			resp.LiveDrift = computeDrift(desiredSpec, observedSpec)
+		}
+		if len(resp.Diff) != 0 || len(resp.LiveDrift) != 0 {
+			resp.Operation = "update"
 		}
 	}
 
@@ -353,6 +392,14 @@ func (h *resourceHandler) DryRunApply(ctx context.Context, req *apiv1.DryRunAppl
 			resp.RequiredGates = append(resp.RequiredGates, plan.RequiredGates...)
 			if plan.Summary != "" {
 				resp.Summary = plan.Summary
+			}
+		}
+	}
+	if saved != nil {
+		for _, child := range resp.Children {
+			if child.Verb != "no-op" {
+				resp.Operation = "update"
+				break
 			}
 		}
 	}
@@ -708,6 +755,12 @@ func (g *graphBuilder) response() *apiv1.GetChildrenGraphResponse {
 // didn't supply one. Used for atomic providers: "no-op" when nothing
 // would change, "would update N field(s)" otherwise.
 func summarizeDryRun(r *apiv1.DryRunApplyResponse) string {
+	if r.GetOperation() == "create" {
+		return "would create resource"
+	}
+	if len(r.GetLiveDrift()) > 0 && len(r.GetDiff()) == 0 {
+		return fmt.Sprintf("would repair %d live drift field(s)", len(r.GetLiveDrift()))
+	}
 	if len(r.GetDiff()) == 0 && len(r.GetChildren()) == 0 {
 		return "no-op"
 	}
@@ -860,6 +913,9 @@ func (h *resourceHandler) Delete(ctx context.Context, req *apiv1.DeleteRequest) 
 	}
 	h.managementMu.RLock()
 	defer h.managementMu.RUnlock()
+	if err := h.checkManifestAuthority(); err != nil {
+		return nil, err
+	}
 	if _, err := h.registry.For(req.GetApiVersion()); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -867,13 +923,8 @@ func (h *resourceHandler) Delete(ctx context.Context, req *apiv1.DeleteRequest) 
 		return nil, err
 	}
 
-	// Block-on-references: refuse to delete a resource owned by another
-	// resource. Caller must delete the owner instead. (Architectural
-	// decision from CONTROLLER.md "Resource semantics: Delete".)
-	if ownerKind, ownerName, owned := h.registry.OwnerOf(req.GetKind(), req.GetName()); owned {
-		return nil, status.Errorf(codes.FailedPrecondition,
-			"%s %q is owned by %s %q; delete the owner instead",
-			req.GetKind(), req.GetName(), ownerKind, ownerName)
+	if err := h.CheckDelete(ctx, req.GetApiVersion(), req.GetKind(), req.GetName()); err != nil {
+		return nil, err
 	}
 
 	if h.ops == nil || h.dispatcher == nil {
@@ -904,8 +955,7 @@ func (h *resourceHandler) Delete(ctx context.Context, req *apiv1.DeleteRequest) 
 		}
 		var conflict *operations.ConflictError
 		if errors.As(err, &conflict) {
-			return nil, status.Errorf(codes.AlreadyExists,
-				"operation %s already in flight for %s/%s", conflict.InflightID, req.GetKind(), req.GetName())
+			return nil, status.Error(codes.AlreadyExists, conflict.Error())
 		}
 		return nil, status.Errorf(codes.Internal, "submit op: %v", err)
 	}

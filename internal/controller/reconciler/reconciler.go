@@ -10,10 +10,9 @@
 //     refresh and gives operational visibility today, and is the natural
 //     hook point for arch Phase 10 continuous reconcile later.
 //
-// The reconciler does NOT auto-remediate: detected drift gets logged.
-// Pushing desired state back over observed is the user's call via the
-// manual reconcile path (UI button → re-apply stored manifest), so we
-// don't surprise anyone with background mutation.
+// Remediation is opt-in: resources annotated with openctl.io/autoReconcile=true
+// may enqueue their stored intent when drift or provider-confirmed absence is
+// detected. Other resources only report drift.
 package reconciler
 
 import (
@@ -25,6 +24,8 @@ import (
 
 	"github.com/openctl/openctl/internal/controller/manifests"
 	"github.com/openctl/openctl/internal/controller/providers"
+	"github.com/openctl/openctl/internal/controller/refs"
+	"github.com/openctl/openctl/internal/controller/secrets"
 	"github.com/openctl/openctl/pkg/protocol"
 )
 
@@ -203,16 +204,22 @@ func (r *Reconciler) reconcileOne(ctx context.Context, ref manifests.Ref) {
 		return
 	}
 
+	if r.registry.IsObservedOnly(ref.APIVersion, ref.Kind) {
+		return
+	}
 	observed, err := p.Get(ctx, ref.Kind, ref.Name)
+	missing := false
 	if err != nil {
 		var nf *providers.NotFoundError
 		if errors.As(err, &nf) {
-			// NotFound is itself drift — the resource we expected to manage
-			// no longer exists. Log the transition once.
-			r.markAndLogIfChanged(key, ref, true, "missing from provider")
+			missing = true
+		} else {
+			log.Printf("reconciler: %s: get: %v", key, err)
 			return
 		}
-		log.Printf("reconciler: %s: get: %v", key, err)
+	}
+	if !missing && observed == nil {
+		log.Printf("reconciler: %s: get returned no resource without confirming absence", key)
 		return
 	}
 
@@ -226,10 +233,23 @@ func (r *Reconciler) reconcileOne(ctx context.Context, ref manifests.Ref) {
 		return
 	}
 
-	desiredSpec, observedSpec := providers.DriftSpecs(p, ref.Kind, desired.Spec, observed.Spec)
-	drifted := !specsEqual(desiredSpec, observedSpec)
-	reason := ""
-	if drifted {
+	drifted := missing
+	reason := "missing from provider"
+	if !missing {
+		// Resolve references just as Apply does, without ever reading secrets
+		// or substituting desired values for missing observed configuration.
+		resolvedSpec, err := refs.New(r.registry).Resolve(ctx, desired.Spec)
+		if err != nil {
+			log.Printf("reconciler: %s: resolve refs: %v", key, err)
+			return
+		}
+		desiredSpec, observedSpec := providers.DriftSpecs(p, ref.Kind, resolvedSpec, observed.Spec)
+		if len(desiredSpec) == 0 || secrets.HasSecrets(desiredSpec) {
+			// Empty projections and unresolved secret markers cannot establish
+			// convergence. Secret rotation has no observable revision contract.
+			return
+		}
+		drifted = !SpecsEqual(desiredSpec, observedSpec)
 		reason = "spec drift"
 	}
 	r.markAndLogIfChanged(key, ref, drifted, reason)

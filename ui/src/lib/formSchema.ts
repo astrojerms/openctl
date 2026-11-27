@@ -6,6 +6,8 @@
 // added there gets a discriminated case here (and a render branch in
 // components/FormField.svelte).
 
+import { parse as parseYAMLValue } from 'yaml';
+
 export type FieldType =
   | 'string'
   | 'int'
@@ -57,6 +59,21 @@ export function pathKey(path: string[]): string {
   return path.join('.');
 }
 
+// References are resolved by the controller, not coerced to the schema's
+// eventual scalar/object type by the form.
+export function isStructuredReference(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    && (Object.prototype.hasOwnProperty.call(value, '$secret') || Object.prototype.hasOwnProperty.call(value, '$ref'));
+}
+
+export function parseFreeform(text: string): { value?: unknown; error: string } {
+  try {
+    return { value: text.trim() === '' ? undefined : parseYAMLValue(text), error: '' };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 // initialValue derives a sensible starting value for a Field. Defaults
 // override; const wins over default; otherwise:
 //   string / int / number → empty
@@ -104,13 +121,13 @@ export function initialValue(f: FormField): unknown {
 // initialValue.
 export function fromManifest(f: FormField, data: unknown): unknown {
   if (f.const !== undefined) return f.const;
-  if (data === undefined || data === null) return initialValue(f);
+  if (data === undefined) return initialValue(f);
+  if (data === null || isStructuredReference(data)) return data;
 
   switch (f.type) {
     case 'object': {
-      const obj = (typeof data === 'object' && !Array.isArray(data))
-        ? (data as Record<string, unknown>)
-        : {};
+      if (typeof data !== 'object' || Array.isArray(data) || !f.fields?.length) return data;
+      const obj = data as Record<string, unknown>;
       const out: Record<string, unknown> = {};
       for (const child of f.fields ?? []) {
         if (!child.name) continue;
@@ -123,14 +140,14 @@ export function fromManifest(f: FormField, data: unknown): unknown {
       return out;
     }
     case 'array': {
-      const arr = Array.isArray(data) ? data : [];
+      if (!Array.isArray(data)) return data;
+      const arr = data;
       if (!f.items) return arr;
       return arr.map((el) => fromManifest(f.items!, el));
     }
     case 'map': {
-      const obj = (typeof data === 'object' && !Array.isArray(data))
-        ? (data as Record<string, unknown>)
-        : {};
+      if (typeof data !== 'object' || Array.isArray(data)) return data;
+      const obj = data as Record<string, unknown>;
       const out: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(obj)) {
         out[k] = f.valueType ? fromManifest(f.valueType, v) : v;
@@ -139,11 +156,11 @@ export function fromManifest(f: FormField, data: unknown): unknown {
     }
     case 'int':
     case 'number':
-      return typeof data === 'number' ? data : null;
     case 'bool':
-      return typeof data === 'boolean' ? data : false;
     case 'string':
-      return typeof data === 'string' ? data : '';
+      // Keep invalid types intact so validation reports them rather than
+      // silently replacing them with an empty/default value.
+      return data;
     default:
       return data;
   }
@@ -160,12 +177,14 @@ export function fromManifest(f: FormField, data: unknown): unknown {
 //   - {} for non-required objects (recursively scrubbed first)
 //   - [] for non-required arrays
 export function scrubEmpty(f: FormField, value: unknown): unknown {
+  if (isStructuredReference(value)) return value;
   switch (f.type) {
     case 'object': {
       if (typeof value !== 'object' || value === null || Array.isArray(value)) {
         return value;
       }
       const src = value as Record<string, unknown>;
+      if (!f.fields?.length) return value;
       const out: Record<string, unknown> = {};
       for (const child of f.fields ?? []) {
         if (!child.name) continue;
@@ -186,17 +205,14 @@ export function scrubEmpty(f: FormField, value: unknown): unknown {
       return value.map((el) => scrubEmpty(f.items!, el));
     }
     case 'map': {
-      // Maps just pass through after dropping empty values when value
-      // type is scalar — for `{[string]: string}` we drop entries
-      // whose value is the empty string so the preview doesn't carry
-      // half-typed rows the user hasn't filled in yet.
+      // Map keys and values are user data, including empty strings (valid
+      // label/annotation values). Leave invalid entries for validation too.
       if (typeof value !== 'object' || value === null || Array.isArray(value)) {
         return value;
       }
       const src = value as Record<string, unknown>;
       const out: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(src)) {
-        if (k === '' || isEmpty(v)) continue;
         out[k] = f.valueType ? scrubEmpty(f.valueType, v) : v;
       }
       return out;
@@ -230,11 +246,12 @@ export function isEmpty(v: unknown): boolean {
 // `object` with no fields list) short-circuit — those paths can't have
 // "extras" because nothing in the schema is more specific.
 export function extraKeys(f: FormField, data: unknown, prefix: string[] = []): string[] {
-  if (data === undefined || data === null) return [];
+  if (data === undefined || data === null || isStructuredReference(data)) return [];
 
   switch (f.type) {
     case 'object': {
       if (typeof data !== 'object' || Array.isArray(data)) return [];
+      if (!f.fields?.length) return [];
       const obj = data as Record<string, unknown>;
       const known = new Set((f.fields ?? []).map((c) => c.name).filter(Boolean) as string[]);
       const out: string[] = [];
