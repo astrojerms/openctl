@@ -139,6 +139,11 @@ confirmations before any new attempt. Its GPU driver reboot is explicit; there
 is no automatic VM recreation. Use `openctl ctl preview -f resource.yaml` before
 CLI Apply; previews distinguish metadata edits from spec edits and live drift.
 
+New VM provisioning exposes CPU cores, RAM in MiB and OS disk in GiB, defaulting
+to 4 / 4096 / 32. Chosen sizes survive review, reload and manifest downloads.
+Verify workload/host capacity and the template's existing disk size yourself;
+preview does not reserve capacity. Existing guests are not resized.
+
 The wizard's staged ZIP contains one numbered YAML file per resource stage;
 the current stage can also be downloaded alone. Preview/apply files individually
 in order, not as a bulk directory: public deployments have initial and final

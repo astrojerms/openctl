@@ -1195,6 +1195,14 @@ load independently. Saved-inventory failures are shown as unavailable, not an
 empty lab; refresh explicitly, reselect the guest and renew consent before
 preparing a review. No fallback provider scan or automatic Apply occurs.
 
+For a new guest, choose **VM CPU cores**, **VM memory (MiB)** and **VM OS disk
+(GiB)**; defaults remain 4 cores, 4096 MiB and 32 GiB. Values must be whole
+numbers: CPU and disk positive, memory at least 512 MiB. The reviewed VM,
+saved recovery record and downloaded declarations retain the chosen sizes.
+These bounds are not a capacity check or reservation: verify host/storage
+capacity, workload requirements and a disk at least as large as the template's
+existing disk. Selecting an existing guest does not resize it.
+
 Blocked guided previews retain schema, field and dependency diagnostics inline,
 including a failure discovered by the final preview immediately before Apply.
 Field paths take precedence over duplicate plain-text messages; unrelated

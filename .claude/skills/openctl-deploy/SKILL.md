@@ -141,6 +141,13 @@ name. Its preview resolves the selected VM reference; an unavailable target must
 block review, not trigger fallback adoption, recreation or unrelated scans.
 Active contexts for new VM provisioning load independently of saved guest names.
 
+For new Jellyfin guests, the wizard exposes CPU cores, memory in MiB and OS disk
+in GiB (defaults 4 / 4096 / 32). Whole-number validation requires positive CPU
+and disk and at least 512 MiB of memory, not proof of workload suitability.
+Verify host/storage capacity and choose a disk at least the template's existing
+size; preview does not reserve capacity. Review, recovery and downloads preserve
+these choices. Selecting an existing guest does not resize it.
+
 For a VM, establish the endpoint/context, actual node, template or image,
 storage, bridge/VLAN, available capacity, CPU, memory in MiB, disk sizes,
 guest access, power state, and DHCP or reserved static IP/gateway/DNS. Check

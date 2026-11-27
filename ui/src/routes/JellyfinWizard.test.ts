@@ -149,7 +149,7 @@ describe('saved metadata guest selection', () => {
   });
 });
 
-async function prepareVMReview() {
+async function fillVMForm(overrides: Record<string, string> = {}) {
   vi.mocked(resources.get).mockRejectedValue(new ApiError(404, 'not found'));
   await open(); check('Provision a new VM'); await tick();
   const fields = {
@@ -159,11 +159,15 @@ async function prepareVMReview() {
     'Controller-side SSH private key file': '/keys/guest', 'Official pinned image': 'jellyfin/jellyfin@sha256:' + 'a'.repeat(64),
     'NAS hostname/address': 'nas.example.invalid', 'SMB share': 'media', 'SMB credentials secret key': 'nas',
     'Admin username': 'admin', 'Admin password secret key': 'admin', 'Viewer username': 'viewer', 'Viewer password secret key': 'viewer',
+    ...overrides,
   };
   for (const [label, value] of Object.entries(fields)) {
     const field = control(label); field.value = value; field.dispatchEvent(new Event('input', { bubbles: true }));
   }
   check('This is a dedicated'); check('I will verify'); await tick();
+}
+async function prepareVMReview(overrides: Record<string, string> = {}) {
+  await fillVMForm(overrides);
   host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await settle();
   await waitForReview();
 }
@@ -410,5 +414,45 @@ describe('staged manifest downloads', () => {
     expect(JSON.stringify(app)).not.toContain('PRIVATE-');
     expect(resources.apply).not.toHaveBeenCalled();
     expect(button('Apply reviewed step').disabled).toBe(true);
+  });
+});
+
+describe('dedicated VM sizing', () => {
+  it('preserves selected capacity through review, submission and explicit recovery rather than resetting to form defaults', async () => {
+    await prepareVMReview({ 'VM CPU cores': '6', 'VM memory (MiB)': '12288', 'VM OS disk (GiB)': '80' });
+    const selected = { cpu: { cores: 6, sockets: 1, type: 'host' }, memory: { size: 12288 }, disks: [{ name: 'scsi0', storage: 'local-lvm', size: '80G', ssd: true, discard: true, iothread: true }] };
+    expect(parse(host.querySelector('pre')!.textContent!).spec).toMatchObject(selected);
+    expect(JSON.parse(window.sessionStorage.getItem(REVIEW_KEY)!).steps[0].resource.spec).toMatchObject(selected);
+    vi.mocked(resources.apply).mockImplementationOnce(async (request) => {
+      const resource = request.resource as ControllerAPI.Resource;
+      vi.mocked(operations.get).mockResolvedValue({
+        id: 'sized-operation', requestId: request.requestId, type: 'apply', status: 'succeeded',
+        apiVersion: resource.apiVersion, kind: resource.kind, resourceName: resource.metadata.name,
+        manifestJson: JSON.stringify(resource),
+      });
+      vi.mocked(resources.get).mockResolvedValue({ applied: resource, resource: { ...resource, status: { state: 'running', ready: true } } });
+      return { operationId: 'sized-operation', requestId: request.requestId };
+    });
+    button('Apply reviewed step').click(); await settle();
+    expect(resources.apply).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(resources.apply).mock.calls[0][0]).toMatchObject({ createOnly: true, resource: { spec: selected } });
+    await unmount(component!); component = undefined; await open();
+    button('Resume saved review').click(); await settle();
+    expect(parse(host.querySelector('pre')!.textContent!).spec).toMatchObject(selected);
+    expect(resources.apply).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['VM CPU cores', '0', 'VM CPU cores'],
+    ['VM memory (MiB)', '128', 'VM memory'],
+    ['VM OS disk (GiB)', '1.5', 'VM OS disk'],
+  ])('blocks invalid %s before any validation, preview, request identity or Apply', async (field, value, diagnostic) => {
+    await fillVMForm({ [field]: value });
+    host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await settle();
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain(diagnostic);
+    expect(window.sessionStorage.getItem(REVIEW_KEY)).toBeNull();
+    expect(schemas.validate).not.toHaveBeenCalled();
+    expect(resources.dryRunApply).not.toHaveBeenCalled();
+    expect(resources.apply).not.toHaveBeenCalled();
   });
 });

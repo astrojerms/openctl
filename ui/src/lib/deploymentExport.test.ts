@@ -7,6 +7,7 @@ import type { DeploymentStep, JellyfinInputs } from './jellyfin';
 
 const input: JellyfinInputs = {
   name: 'media', vmName: 'gpu', createVM: true, context: 'lab', node: 'pve1', templateVMID: 9000,
+  cpuCores: 8, memoryMiB: 8192, diskGiB: 96,
   storage: 'local-lvm', bridge: 'vmbr0', pciMapping: 'gpu', sshPublicKey: 'ssh-ed25519 fixture', ip: 'dhcp', gateway: '',
   sshUser: 'ubuntu', privateKeyFile: '/keys/guest', knownHostsFile: '/keys/known', image: 'jellyfin/jellyfin@sha256:' + 'a'.repeat(64),
   nasServer: 'nas', nasShare: 'media', nasMediaPath: "Kid's Movies/日本語", secretProvider: 'file', nasSecret: 'nas',
@@ -30,6 +31,9 @@ describe('staged deployment export', () => {
     const dns = manifest(files['04-dnsrecord.yaml']);
     const final = manifest(files['05-jellyfin.yaml']);
     expect(vm.metadata.labels).toEqual({ 'openctl.io/application': 'media' });
+    expect(vm.spec.cpu).toEqual({ cores: 8, sockets: 1, type: 'host' });
+    expect(vm.spec.memory).toEqual({ size: 8192 });
+    expect(vm.spec.disks[0].size).toBe('96G');
     expect(initial.metadata.name).toBe('media');
     expect(initial.spec.publicEndpoint).toBeUndefined();
     expect(final.metadata.name).toBe('media');

@@ -518,6 +518,25 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
   Proxmox requests were GET; zero durable operations or saved tracking records.
   No live homelab mutation or hardware acceptance.
 
+### Configurable guided VM sizing (2026-11-27)
+
+- [x] New Jellyfin VMs expose CPU cores, memory in MiB and OS disk in GiB,
+  retaining 4 / 4096 / 32 defaults. Invalid whole-number sizes stop preparation
+  before preview or request admission. Existing guests are not resized.
+- [x] Custom sizes survive the create-only VM declaration, saved review, explicit
+  recovery and individual/staged manifest downloads. GPU/UEFI and guest setup
+  remain intact. Capacity and template-disk requirements are explicit;
+  preview is not a reservation or physical-capacity guarantee.
+- Verification: 138 builder, review, export and wizard tests passed, with zero
+  frontend typecheck errors/warnings and a successful production build.
+  The actual console prepared a 6-core / 12288-MiB / 80-GiB VM against an isolated
+  native controller/provider with a simulated verified-TLS Proxmox endpoint.
+  Both HTTP preview requests retained those exact values. Reload retained the
+  saved declaration, reset consent and disabled Apply. The downloaded ZIP's VM
+  matched the individual YAML, which native CLI preview accepted for creation.
+  All Proxmox requests were GET; zero durable operations or saved tracking
+  records. No live provisioning, resizing or hardware/capacity acceptance.
+
 The next product acceptance gate is the complete operator journey on real
 hardware, including recovery, media playback and any approved public endpoint.
 See [direction](docs/direction.md). Provider breadth is downstream of that gate.

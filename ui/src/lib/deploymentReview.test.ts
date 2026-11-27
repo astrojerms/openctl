@@ -378,6 +378,7 @@ describe('explicit terminal-failure retry', () => {
 describe('full guided sequence recovery', () => {
   const inputs: JellyfinInputs = {
     name: 'media', vmName: 'gpu', createVM: true, context: 'pve', node: 'node', templateVMID: 101,
+    cpuCores: 4, memoryMiB: 4096, diskGiB: 32,
     storage: 'local-lvm', bridge: 'vmbr0', pciMapping: 'gpu', sshPublicKey: 'ssh-ed25519 public-key', ip: 'dhcp', gateway: '',
     sshUser: 'ubuntu', privateKeyFile: '/keys/id', knownHostsFile: '/keys/known', image: 'jellyfin/jellyfin@sha256:' + 'a'.repeat(64),
     nasServer: 'nas', nasShare: 'media', nasMediaPath: '', secretProvider: 'file', nasSecret: 'nas', adminUser: 'admin', adminSecret: 'admin',

@@ -10,6 +10,9 @@ export interface JellyfinInputs {
   context: string;
   node: string;
   templateVMID: number;
+  cpuCores: number;
+  memoryMiB: number;
+  diskGiB: number;
   storage: string;
   bridge: string;
   pciMapping: string;
@@ -66,6 +69,9 @@ export function jellyfinDeployment(input: JellyfinInputs): DeploymentStep[] {
       throw new Error('Complete the VM placement, Ubuntu 24.04 template, GPU mapping, network, and SSH public key.');
     }
     if (!Number.isInteger(input.templateVMID) || input.templateVMID < 1) throw new Error('Choose a valid Ubuntu 24.04 template VMID.');
+    if (!Number.isSafeInteger(input.cpuCores) || input.cpuCores < 1) throw new Error('VM CPU cores must be a positive whole number.');
+    if (!Number.isSafeInteger(input.memoryMiB) || input.memoryMiB < 512) throw new Error('VM memory must be a whole number of MiB, at least 512.');
+    if (!Number.isSafeInteger(input.diskGiB) || input.diskGiB < 1) throw new Error('VM OS disk size must be a positive whole number of GiB.');
     if (input.ip !== 'dhcp' && !input.gateway.trim()) throw new Error('A static guest IP needs its reserved gateway.');
     steps.push({
       title: 'Provision dedicated GPU VM', createOnly: true,
@@ -73,10 +79,10 @@ export function jellyfinDeployment(input: JellyfinInputs): DeploymentStep[] {
         apiVersion: VM_API, kind: 'VirtualMachine', metadata: { name: vmName, labels: { 'openctl.io/application': name } },
         spec: {
           context: input.context, node: input.node, template: { vmid: input.templateVMID },
-          cpu: { cores: 4, sockets: 1, type: 'host' }, memory: { size: 4096 },
+          cpu: { cores: input.cpuCores, sockets: 1, type: 'host' }, memory: { size: input.memoryMiB },
           osType: 'l26', bios: 'ovmf', machine: 'q35', efiDisk: { storage: input.storage, type: '4m', preEnrolledKeys: false },
           hostPCI: [{ mapping: input.pciMapping, pcie: true }], agent: { enabled: true },
-          disks: [{ name: 'scsi0', storage: input.storage, size: '32G', ssd: true, discard: true, iothread: true }],
+          disks: [{ name: 'scsi0', storage: input.storage, size: `${input.diskGiB}G`, ssd: true, discard: true, iothread: true }],
           networks: [{ name: 'net0', bridge: input.bridge, model: 'virtio' }],
           cloudInit: {
             user: input.sshUser, sshKeys: [input.sshPublicKey.trim()], packages: ['qemu-guest-agent'],

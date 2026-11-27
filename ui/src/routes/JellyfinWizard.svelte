@@ -12,6 +12,7 @@
 
   let input: JellyfinInputs = {
     name: 'jellyfin', vmName: '', createVM: false, context: '', node: '', templateVMID: 0,
+    cpuCores: 4, memoryMiB: 4096, diskGiB: 32,
     storage: '', bridge: '', pciMapping: '', sshPublicKey: '', ip: 'dhcp', gateway: '',
     sshUser: 'ubuntu', privateKeyFile: '', knownHostsFile: '~/.ssh/known_hosts', image: '',
     nasServer: '', nasShare: '', nasMediaPath: '', secretProvider: 'file', nasSecret: '',
@@ -270,13 +271,16 @@
           {:else if contexts.length === 0}<p class="hint">No active Proxmox contexts. Configure a provider and restart the controller.</p>{/if}
           <label>Proxmox node <input bind:value={input.node} required /></label>
           <label>Ubuntu 24.04 template VMID <input type="number" min="1" bind:value={input.templateVMID} required /></label>
+          <label>VM CPU cores <input type="number" min="1" step="1" bind:value={input.cpuCores} required /></label>
+          <label>VM memory (MiB) <input type="number" min="512" step="1" bind:value={input.memoryMiB} required /></label>
+          <label>VM OS disk (GiB) <input type="number" min="1" step="1" bind:value={input.diskGiB} required /></label>
           <label>VM disk and EFI storage <input bind:value={input.storage} required /></label>
           <label>Network bridge <input bind:value={input.bridge} required /></label>
           <label>Verified PCI/GPU resource mapping <input bind:value={input.pciMapping} required /></label>
           <label>Guest IP (dhcp or reserved CIDR) <input bind:value={input.ip} required /></label>
           {#if input.ip !== 'dhcp'}<label>Gateway <input bind:value={input.gateway} required /></label>{/if}
           <label>Guest SSH public key <textarea bind:value={input.sshPublicKey} required rows="2"></textarea></label>
-          <p class="hint">4 vCPUs, 4 GiB RAM, 32 GiB SSD, UEFI/q35. Host IOMMU/VFIO and the PCI mapping must already be prepared; OpenCtl does not disconnect host hardware automatically.</p>
+          <p class="hint">Defaults: 4 CPU cores, 4096 MiB RAM, 32 GiB OS disk; choose capacity that fits your workload and is at least the template's existing disk size. Preview does not reserve host/storage capacity. UEFI/q35 and GPU passthrough remain configured. Host IOMMU/VFIO and the PCI mapping must already be prepared; OpenCtl does not disconnect host hardware automatically. Existing guests are not resized by this wizard.</p>
         {:else}
           <label>Saved managed VM <select bind:value={input.vmName} required disabled={loadingVMs || !!vmError}><option value="">Select a saved VM</option>{#each vms as vm}<option value={vm.metadata.name}>{vm.metadata.name}</option>{/each}</select></label>
           {#if loadingVMs}<p role="status">Loading saved VM inventory…</p>
