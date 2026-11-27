@@ -136,6 +136,12 @@ confirmations before any new attempt. Its GPU driver reboot is explicit; there
 is no automatic VM recreation. Use `openctl ctl preview -f resource.yaml` before
 CLI Apply; previews distinguish metadata edits from spec edits and live drift.
 
+The wizard's staged ZIP contains one numbered YAML file per resource stage;
+the current stage can also be downloaded alone. Preview/apply files individually
+in order, not as a bulk directory: public deployments have initial and final
+versions of the same application. Keep exports private and outside watched
+GitOps directories. Downloads contain declarations, not consent or request recovery.
+
 Jellyfin media readiness checks both the guest's protected NAS mount and the
 running container's exact read-only `/media` binding and UID-1000 access.
 Wrong sources, writable/overridden mounts and unreadable directories block

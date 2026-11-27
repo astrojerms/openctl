@@ -1161,6 +1161,21 @@ official image, and controller-side `$secret` references for SMB/admin/viewer
 credentials. The wizard previews each resource and lets you download its
 reproducible manifests. Kubernetes is not required.
 
+**Download staged manifests (.zip)** exports one numbered, single-resource YAML
+file per stage; **Download current stage YAML** exports only the displayed stage.
+Saved reviews also offer the ZIP before resuming, without observing or submitting
+work. Labels, ordinary annotations, Unicode values and unresolved `$ref`/`$secret`
+markers are preserved; request identities, consent, ownership and observed health
+are not exported. Protect these files like manifests, not controller backups.
+
+Extract outside watched GitOps directories. Preview and apply each file in stage
+order, verifying upstream resources before proceeding. Public deployments include
+separate initial and final Jellyfin files for the **same** resource; do not pass
+the whole staged directory to a bulk planner or treat it as final GitOps intent.
+Use `--create-only` for reviewed first creates; the final application stage updates
+the existing application. A download does not recover accepted requests, prove
+readiness or authorize replay/publication.
+
 The existing-guest selector reads **saved VM metadata**, not a whole-lab live
 scan. Unavailable unrelated Proxmox contexts do not hide saved choices. Names
 are not proof of current existence, dedicated/GPU suitability, guest access or

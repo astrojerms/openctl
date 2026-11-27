@@ -213,11 +213,20 @@ openctl --config "$CONFIG" ctl apply -f "$MANIFEST" --wait-timeout 30m
 ```
 
 Apply takes exactly one resource in one manifest file, not a YAML stream,
-directory or repeated `-f` set. For multiple resources, split staged downloads
-and apply each file in reviewed graph order, verifying upstream outputs before
-dependents. Do not assume cluster children are separate apply targets. Use
-`--create-only` for reviewed first creates when updating an existing resource
-must be forbidden. Do not run both manual and GitOps paths for the same change.
+directory or repeated `-f` set. The Jellyfin wizard exports a staged ZIP of
+numbered, single-resource YAML files, or the current stage alone. Extract outside
+watched GitOps directories, then preview/apply each file in reviewed stage order,
+verifying upstream outputs before dependents. Public deployments include initial
+and final declarations for the same application: do not feed the whole staged
+directory to a bulk planner or treat it as final GitOps intent.
+
+Exports preserve unresolved reference/secret markers and ordinary desired metadata,
+not ownership, observed health, request identities or consent. They are not a
+controller backup or accepted-request recovery; never replay accepted work merely
+because declarations were downloaded. Do not assume cluster children are separate
+apply targets. Use `--create-only` for reviewed first creates when updates must be
+forbidden; the final application stage updates the existing resource. Do not run
+both manual and GitOps paths for the same change.
 
 Normally let the CLI wait. For a deliberately asynchronous submission:
 

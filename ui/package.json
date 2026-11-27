@@ -23,6 +23,7 @@
     "vitest": "^3.2.6"
   },
   "dependencies": {
+    "fflate": "^0.8.3",
     "monaco-editor": "^0.55.1",
     "yaml": "^2.9.0"
   },

@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount, tick, unmount } from 'svelte';
 import { get } from 'svelte/store';
+import { strFromU8, unzipSync } from 'fflate';
+import { parse } from 'yaml';
 import JellyfinWizard from './JellyfinWizard.svelte';
 import { discovery, inventoryApi, operations, ping, resources, schemas, session, ApiError, UnauthorizedError, type DiscoveryContext, type ListSavedResourcesResponse } from '../lib/api';
 import type * as ControllerAPI from '../lib/api';
@@ -341,5 +343,72 @@ describe('blocking deployment prerequisites', () => {
     expect(blocker.querySelector('[aria-label="Dependency readiness checks"]')).toBeNull();
     expect(button('Apply reviewed step').disabled).toBe(true);
     expect(resources.apply).not.toHaveBeenCalled();
+  });
+});
+
+describe('staged manifest downloads', () => {
+  function captureDownloads() {
+    const files: { filename: string; blob: Blob }[] = [];
+    let blob: Blob;
+    vi.spyOn(URL, 'createObjectURL').mockImplementation((value) => { blob = value as Blob; return 'blob:export-fixture'; });
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      files.push({ filename: this.download, blob });
+    });
+    return files;
+  }
+
+  it('downloads CLI-sized manifests from a blocked preview without submitting or changing recovery state', async () => {
+    vi.mocked(resources.dryRunApply).mockResolvedValueOnce({ fieldErrors: [{ path: 'spec.template', message: 'Repair template selection' }] });
+    await prepareVMReview();
+    const before = window.sessionStorage.getItem(REVIEW_KEY);
+    const previews = vi.mocked(resources.dryRunApply).mock.calls.length;
+    const reads = vi.mocked(resources.get).mock.calls.length;
+    const files = captureDownloads();
+    button('Download staged manifests (.zip)').click();
+    button('Download current stage YAML').click();
+    expect(files.map((file) => file.filename)).toEqual(['jellyfin-deployment.zip', '01-virtualmachine.yaml']);
+    const archive = unzipSync(new Uint8Array(await files[0].blob.arrayBuffer()));
+    expect(Object.keys(archive)).toEqual(['01-virtualmachine.yaml', '02-jellyfin.yaml']);
+    expect(parse(strFromU8(archive['02-jellyfin.yaml'])).spec.nas.credentials).toEqual({ $secret: { provider: 'file', key: 'nas' } });
+    const vm = parse(await files[1].blob.text());
+    expect(vm.kind).toBe('VirtualMachine');
+    expect(vm.metadata.name).toBe('gpu');
+    expect(files[0].blob.type).toBe('application/zip');
+    expect(files[1].blob.type).toBe('application/yaml');
+    expect(window.sessionStorage.getItem(REVIEW_KEY)).toBe(before);
+    expect(vi.mocked(resources.dryRunApply).mock.calls.length).toBe(previews);
+    expect(vi.mocked(resources.get).mock.calls.length).toBe(reads);
+    expect(resources.apply).not.toHaveBeenCalled();
+    expect(button('Apply reviewed step').disabled).toBe(true);
+  });
+
+  it('exports saved declarations before recovery and the selected later stage after a blocked resume without leaking accepted identities', async () => {
+    await prepareVMReview();
+    const saved = JSON.parse(window.sessionStorage.getItem(REVIEW_KEY)!);
+    saved.cursor = 1;
+    saved.steps[0].attempt = { requestId: 'PRIVATE-ACCEPTED-REQUEST', operationId: 'PRIVATE-OPERATION', createOnly: true, allowDestructive: false, iKnowThisBreaksTheCluster: false };
+    const before = JSON.stringify(saved);
+    window.sessionStorage.setItem(REVIEW_KEY, before);
+    await unmount(component!); component = undefined;
+    await open();
+    const previews = vi.mocked(resources.dryRunApply).mock.calls.length;
+    const files = captureDownloads();
+    button('Download saved manifests (.zip)').click();
+    const archive = unzipSync(new Uint8Array(await files[0].blob.arrayBuffer()));
+    expect(parse(strFromU8(archive['02-jellyfin.yaml'])).metadata.name).toBe('jellyfin');
+    expect(Object.values(archive).map((bytes) => strFromU8(bytes)).join('')).not.toContain('PRIVATE-');
+    expect(window.sessionStorage.getItem(REVIEW_KEY)).toBe(before);
+    expect(operations.get).not.toHaveBeenCalled();
+    expect(vi.mocked(resources.dryRunApply).mock.calls.length).toBe(previews);
+    button('Resume saved review').click(); await settle();
+    button('Download current stage YAML').click();
+    expect(files[1].filename).toBe('02-jellyfin.yaml');
+    const app = parse(await files[1].blob.text());
+    expect(app.kind).toBe('Jellyfin');
+    expect(app.spec.target.host.$ref.name).toBe('gpu');
+    expect(JSON.stringify(app)).not.toContain('PRIVATE-');
+    expect(resources.apply).not.toHaveBeenCalled();
+    expect(button('Apply reviewed step').disabled).toBe(true);
   });
 });

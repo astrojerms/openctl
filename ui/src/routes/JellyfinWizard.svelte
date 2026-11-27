@@ -8,6 +8,7 @@
   import { jellyfinDeployment, APP_API, VM_API, type DeploymentStep, type JellyfinInputs } from '../lib/jellyfin';
   import { routeHref } from '../lib/router';
   import { applicationCheckBadge, applicationChecks, applicationReadiness } from '../lib/detailState';
+  import { deploymentArchive, deploymentManifest } from '../lib/deploymentExport';
 
   let input: JellyfinInputs = {
     name: 'jellyfin', vmName: '', createVM: false, context: '', node: '', templateVMID: 0,
@@ -145,14 +146,21 @@
   $: checks = applicationChecks(observed?.status);
   $: applicationName = steps.find((step) => step.resource.kind === 'Jellyfin')?.resource.metadata.name ?? input.name;
 
-  function download(declarations: DeploymentStep[] = steps) {
-    if (!declarations.length) return;
-    const name = declarations.find((step) => step.resource.kind === 'Jellyfin')?.resource.metadata.name ?? input.name;
-    const blob = new Blob([declarations.map((step) => stringify(step.resource)).join('---\n')], { type: 'application/yaml' });
+  function saveDownload(blob: Blob, filename: string) {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.href = url; link.download = `${name}-deployment.yaml`; link.click();
-    URL.revokeObjectURL(url);
+    link.href = url; link.download = filename; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+  function download(declarations: DeploymentStep[] = steps) {
+    if (!declarations.length) return;
+    const name = (declarations.find((step) => step.resource.kind === 'Jellyfin')?.resource.metadata.name ?? input.name).replace(/[^a-z0-9-]/gi, '-');
+    saveDownload(new Blob([deploymentArchive(declarations)], { type: 'application/zip' }), `${name}-deployment.zip`);
+  }
+  function downloadCurrent() {
+    if (!current) return;
+    const file = deploymentManifest(current, index);
+    saveDownload(new Blob([file.yaml], { type: 'application/yaml' }), file.filename);
   }
   async function prepare() {
     await run(async () => {
@@ -234,6 +242,9 @@
   {#if loadingRecovery}<p>Checking controller recovery capability and this tab’s saved review…</p>{/if}
   {#if recoveryError}<p class="error" role="alert">{recoveryError}</p><button on:click={refreshRecovery} disabled={busy || loadingRecovery}>Check recovery access again</button>{/if}
   {#if savedError}<p class="error" role="alert">{savedError}</p>{/if}
+  {#if steps.length > 0 || savedCandidate}
+    <p class="hint">ZIP: one numbered YAML file per stage. Initial and final application files are separate versions; preview and apply individually. Keep exports private and outside watched GitOps directories. Exports are not request recovery or Apply permission.</p>
+  {/if}
 
   {#if steps.length === 0 && savedPresent}
     <aside class="notice">
@@ -241,7 +252,7 @@
       <p>No infrastructure will be changed by resuming. Accepted work is looked up on the controller; readiness, preview and all permissions must be checked again.</p>
       {#if savedCandidate}
         <button class="primary" on:click={resumeSaved} disabled={busy || loadingRecovery}>Resume saved review</button>
-        <button on:click={() => download(savedCandidate?.steps ?? [])} disabled={busy}>Download saved declarations</button>
+        <button on:click={() => download(savedCandidate?.steps ?? [])} disabled={busy}>Download saved manifests (.zip)</button>
       {/if}
       <button on:click={discard} disabled={busy}>Discard browser review (keeps controller work)</button>
     </aside>
@@ -315,7 +326,10 @@
     </form>
   {:else}
     <ol class="steps">{#each steps as step, i}<li class:active={i === index} class:done={verified && (i < index || (i === index && stepDone))}>{step.title}</li>{/each}</ol>
-    <button on:click={() => download()}>Download reproducible manifests</button>
+    <div class="actions">
+      <button on:click={() => download()}>Download staged manifests (.zip)</button>
+      <button on:click={downloadCurrent} disabled={!current}>Download current stage YAML</button>
+    </div>
     {#if current}
       <h3>{index + 1}. {current.title}</h3>
       <pre>{stringify(current.resource)}</pre>

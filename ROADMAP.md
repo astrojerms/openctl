@@ -479,6 +479,25 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
   stayed bound to inspected IDs. No guest command execution, live homelab
   mutation, real NAS/Docker/GPU validation or playback acceptance.
 
+**Portable per-stage deployment exports (2026-11-27):**
+
+- [x] Guided and saved reviews export standard ZIPs with ordered single-resource
+  YAML files instead of one CLI-incompatible YAML stream. Current stages are also
+  downloadable individually, including during blocked review. Initial/final
+  application versions have distinct stage filenames rather than overwriting
+  one another. Archive paths are flat and independent of resource names.
+- [x] Canonical desired serialization preserves metadata, Unicode and unresolved
+  reference/secret markers, excluding ownership, observed evidence, request
+  identities and inherited request consent. Exports neither resume nor submit;
+  staged sequencing and private/non-watched extraction are explicit.
+- Verification: 24 focused export/wizard cases, frontend typecheck and production
+  build passed. Actual browser ZIP/YAML downloads worked during blocked recovery
+  preflight and from a saved review before Resume. Independent ZIP/CRC checks
+  verified ordered, distinct application versions, Unicode and markers. The
+  actual CLI successfully previewed the downloaded YAML against an isolated
+  SQLite/TLS controller with simulated provider reads. Saved review stayed
+  unchanged; zero operations/provider mutations and no live homelab changes.
+
 The next product acceptance gate is the complete operator journey on real
 hardware, including recovery, media playback and any approved public endpoint.
 See [direction](docs/direction.md). Provider breadth is downstream of that gate.
