@@ -293,7 +293,7 @@ func TestMigrationMalformedAndUnsafeRequests(t *testing.T) {
 }
 
 func TestMigrationRESTRoutesReachRegisteredHandlers(t *testing.T) {
-	base, token := startGatewayTestServer(t)
+	base, token, _ := startGatewayTestServer(t)
 	for _, route := range []string{"export", "adopt", "forget"} {
 		req, err := http.NewRequest(http.MethodPost, base+"/v1/resources:"+route, strings.NewReader(`{}`))
 		if err != nil {

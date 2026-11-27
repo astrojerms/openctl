@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -82,13 +83,35 @@ func (h *resourceHandler) Apply(ctx context.Context, req *apiv1.ApplyRequest) (*
 	if err := h.checkManifestAuthority(); err != nil {
 		return nil, err
 	}
+	if err := operations.ValidateRequestID(req.GetRequestId()); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	if req.GetRequestId() != "" && (h.ops == nil || h.dispatcher == nil) {
+		return nil, status.Error(codes.FailedPrecondition, "request_id requires durable operations and an active dispatcher")
+	}
 	if req.GetResource() == nil {
 		return nil, status.Error(codes.InvalidArgument, "resource is required")
 	}
-	if _, err := h.registry.For(req.GetResource().GetApiVersion()); err != nil {
+	manifest := protoToResource(req.GetResource())
+	var request *operations.RequestBinding
+	if req.GetRequestId() != "" {
+		actor := auth.DefaultUserID
+		if principal, ok := auth.PrincipalFromContext(ctx); ok {
+			actor = principal.ActorID()
+		}
+		binding, err := operations.NewApplyRequest(req.GetRequestId(), actor, manifest,
+			req.GetCreateOnly(), req.GetAllowDestructive(), req.GetIKnowThisBreaksTheCluster())
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "request binding: %v", err)
+		}
+		request = &binding
+		if replay, err := h.replayApplyRequest(ctx, binding); err != nil || replay != nil {
+			return replay, err
+		}
+	}
+	if _, err := h.registry.For(manifest.APIVersion); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	manifest := protoToResource(req.GetResource())
 	// Re-validate server-side; the CLI already validated, but the controller
 	// never trusts the wire blindly.
 	if err := schema.Validate(manifest); err != nil {
@@ -97,33 +120,25 @@ func (h *resourceHandler) Apply(ctx context.Context, req *apiv1.ApplyRequest) (*
 	if manifest.Metadata.Name == "" {
 		return nil, status.Error(codes.InvalidArgument, "metadata.name is required")
 	}
-	if err := h.checkNotForgotten(ctx, manifest.APIVersion, manifest.Kind, manifest.Metadata.Name); err != nil {
+	if err := h.checkApplyAdmission(ctx, manifest, req.GetCreateOnly()); err != nil {
+		// Another admission can finish between the initial lookup and these
+		// mutable checks. Its committed binding must win over newly-existing
+		// provider/tracking state (especially for initial create-only replay).
+		if request != nil {
+			if replay, replayErr := h.replayApplyRequest(ctx, *request); replayErr != nil || replay != nil {
+				return replay, replayErr
+			}
+		}
 		return nil, err
-	}
-	if req.GetCreateOnly() {
-		if h.manifests != nil {
-			existing, err := h.manifests.Load(ctx, manifest.APIVersion, manifest.Kind, manifest.Metadata.Name)
-			if err != nil {
-				return nil, status.Error(codes.FailedPrecondition, "cannot verify existing management tracking")
-			}
-			if existing != nil {
-				return nil, status.Error(codes.AlreadyExists, "resource is already managed")
-			}
-		}
-		p, _ := h.registry.For(manifest.APIVersion)
-		existing, err := p.Get(ctx, manifest.Kind, manifest.Metadata.Name)
-		if err != nil && !isNotFound(err) {
-			return nil, status.Errorf(codes.FailedPrecondition, "cannot verify provider resource absence: %v", err)
-		}
-		if existing != nil {
-			return nil, status.Error(codes.AlreadyExists, "provider resource already exists; use adoption, not creation")
-		}
 	}
 
 	// Phase 5: surface the destructive flags to providers via annotations.
 	// Annotations ride along on manifest_json through the operations table,
 	// so the dispatcher delivers them to provider.Apply unchanged.
 	if req.GetAllowDestructive() || req.GetIKnowThisBreaksTheCluster() {
+		// protoToResource shares metadata maps with the wire request. Do not
+		// mutate it: the fingerprint must stay stable if the caller retries it.
+		manifest.Metadata.Annotations = maps.Clone(manifest.Metadata.Annotations)
 		if manifest.Metadata.Annotations == nil {
 			manifest.Metadata.Annotations = map[string]string{}
 		}
@@ -145,7 +160,7 @@ func (h *resourceHandler) Apply(ctx context.Context, req *apiv1.ApplyRequest) (*
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "encode manifest: %v", err)
 	}
-	op, err := h.ops.Submit(ctx, &operations.Operation{
+	candidate := &operations.Operation{
 		Type:         operations.TypeApply,
 		APIVersion:   manifest.APIVersion,
 		Kind:         manifest.Kind,
@@ -153,24 +168,87 @@ func (h *resourceHandler) Apply(ctx context.Context, req *apiv1.ApplyRequest) (*
 		ManifestJSON: string(manifestJSON),
 		Source:       sourceFromContext(ctx),
 		CreateOnly:   req.GetCreateOnly(),
-	})
-	if err != nil {
-		var forgotten *manifests.ForgottenError
-		if errors.As(err, &forgotten) {
-			return nil, status.Error(codes.FailedPrecondition, forgotten.Error())
-		}
-		var conflict *operations.ConflictError
-		if errors.As(err, &conflict) {
-			return nil, status.Error(codes.AlreadyExists, conflict.Error())
-		}
-		return nil, status.Errorf(codes.Internal, "submit op: %v", err)
 	}
-	h.dispatcher.Notify()
+	var op *operations.Operation
+	admitted := true
+	if request != nil {
+		op, admitted, err = h.ops.SubmitRequest(ctx, candidate, *request)
+	} else {
+		op, err = h.ops.Submit(ctx, candidate)
+	}
+	if err != nil {
+		return nil, applyOperationError(err)
+	}
+	if admitted {
+		h.dispatcher.Notify()
+	}
+	return applyOperationResponse(op), nil
+}
 
+func (h *resourceHandler) checkApplyAdmission(ctx context.Context, manifest *protocol.Resource, createOnly bool) error {
+	if err := h.checkNotForgotten(ctx, manifest.APIVersion, manifest.Kind, manifest.Metadata.Name); err != nil {
+		return err
+	}
+	if !createOnly {
+		return nil
+	}
+	if h.manifests != nil {
+		existing, err := h.manifests.Load(ctx, manifest.APIVersion, manifest.Kind, manifest.Metadata.Name)
+		if err != nil {
+			return status.Error(codes.FailedPrecondition, "cannot verify existing management tracking")
+		}
+		if existing != nil {
+			return status.Error(codes.AlreadyExists, "resource is already managed")
+		}
+	}
+	p, _ := h.registry.For(manifest.APIVersion)
+	existing, err := p.Get(ctx, manifest.Kind, manifest.Metadata.Name)
+	if err != nil && !isNotFound(err) {
+		return status.Errorf(codes.FailedPrecondition, "cannot verify provider resource absence: %v", err)
+	}
+	if existing != nil {
+		return status.Error(codes.AlreadyExists, "provider resource already exists; use adoption, not creation")
+	}
+	return nil
+}
+
+func (h *resourceHandler) replayApplyRequest(ctx context.Context, request operations.RequestBinding) (*apiv1.ApplyResponse, error) {
+	op, err := h.ops.ReplayRequest(ctx, request)
+	if err != nil {
+		return nil, applyOperationError(err)
+	}
+	if op == nil {
+		return nil, nil
+	}
+	return applyOperationResponse(op), nil
+}
+
+func applyOperationResponse(op *operations.Operation) *apiv1.ApplyResponse {
 	return &apiv1.ApplyResponse{
 		OperationId: op.ID,
-		Message:     fmt.Sprintf("%s %q apply submitted as %s", manifest.Kind, manifest.Metadata.Name, op.ID),
-	}, nil
+		RequestId:   op.RequestID,
+		Message:     fmt.Sprintf("%s %q apply submitted as %s", op.Kind, op.ResourceName, op.ID),
+	}
+}
+
+func applyOperationError(err error) error {
+	var forgotten *manifests.ForgottenError
+	if errors.As(err, &forgotten) {
+		return status.Error(codes.FailedPrecondition, forgotten.Error())
+	}
+	var pruned *operations.RequestPrunedError
+	if errors.As(err, &pruned) {
+		return status.Error(codes.FailedPrecondition, pruned.Error())
+	}
+	var requestConflict *operations.RequestConflictError
+	if errors.As(err, &requestConflict) {
+		return status.Error(codes.AlreadyExists, requestConflict.Error())
+	}
+	var conflict *operations.ConflictError
+	if errors.As(err, &conflict) {
+		return status.Error(codes.AlreadyExists, conflict.Error())
+	}
+	return status.Errorf(codes.Internal, "submit op: %v", err)
 }
 
 // applySync is the Phase 2 synchronous fallback used by tests that don't

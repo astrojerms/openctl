@@ -117,7 +117,9 @@ of application health; a passed fake-provider test is not hardware validation.
 - First-class standalone application lifecycle, including updates, logs,
   explicit runtime actions, health, and data-preserving removal.
 - One integrated Jellyfin journey, including storage, GPU, optional domain,
-  and failure recovery. No manual guest-script staging.
+  and failure recovery. Prepared reviews now resume explicitly with durable
+  request recovery, fresh consent and reverified dependencies; no manual
+  guest-script staging.
 - Linux/SSH/Proxmox installation and accurate onboarding documentation.
 
 ### Tier 3 — proof, then breadth

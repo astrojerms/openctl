@@ -50,6 +50,16 @@ type Principal struct {
 	Root bool
 }
 
+// ActorID is stable across credentials for the same operator. Root sessions
+// already use DefaultUserID; keep bearer/no-auth recovery bound to that identity
+// without changing UserID's existing "root" authentication signal.
+func (p Principal) ActorID() string {
+	if p.Root {
+		return DefaultUserID
+	}
+	return p.UserID
+}
+
 // RootPrincipal is the principal for the install-time root token: full admin.
 func RootPrincipal() Principal {
 	return Principal{UserID: "root", Role: RoleAdmin, Root: true}

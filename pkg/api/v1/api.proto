@@ -34,6 +34,10 @@ message PingResponse {
   string git_commit = 3;
   // RFC3339 build timestamp ("dev" for unlinked builds).
   string build_time = 4;
+  // Stable persisted identity; changes when connecting to another controller.
+  string controller_id = 5;
+  // Keyed Apply is durably deduplicated and recoverable by request ID.
+  bool supports_idempotent_apply = 6;
 }
 
 // ResourceService manages desired state and observed infrastructure. Apply
@@ -461,6 +465,10 @@ message ApplyRequest {
   bool i_know_this_breaks_the_cluster = 3;
   // Refuse to overwrite an existing managed or provider resource.
   bool create_only = 4;
+  // Optional caller-generated identity for one Apply attempt (1-128 printable
+  // ASCII characters). Reusing it with the same actor/intent returns the original
+  // operation, never another mutation; a different intent or actor is rejected.
+  string request_id = 5;
 }
 
 message ApplyResponse {
@@ -470,6 +478,8 @@ message ApplyResponse {
   string operation_id = 1;
   // Human-friendly message describing what was submitted.
   string message = 2;
+  // Echoes the durable request identity, including for an existing operation.
+  string request_id = 3;
 }
 
 message GetRequest {
@@ -731,6 +741,11 @@ service OperationService {
   rpc GetOperation(GetOperationRequest) returns (Operation) {
     option (google.api.http) = { get: "/v1/operations/{id}" };
   }
+  // Read-only recovery when an Apply acknowledgement was lost.
+  rpc GetOperationByRequest(GetOperationByRequestRequest) returns (Operation) {
+    // Opaque request IDs may contain reserved URL characters or dot segments.
+    option (google.api.http) = { post: "/v1/operations:byRequest" body: "*" };
+  }
   rpc ListOperations(ListOperationsRequest) returns (ListOperationsResponse) {
     option (google.api.http) = { post: "/v1/operations:list" body: "*" };
   }
@@ -780,12 +795,18 @@ message Operation {
   // so the UI's retry path can pre-fill the editor with the exact YAML
   // the failed/interrupted op was trying to apply.
   string manifest_json = 16;
+  string request_id = 17;
 }
 
 message GetOperationRequest {
   string id = 1;
   // Phase 4.5: include child operations in the response. Children are
   // ordered oldest first. List responses never include children.
+  bool include_children = 2;
+}
+
+message GetOperationByRequestRequest {
+  string request_id = 1;
   bool include_children = 2;
 }
 
@@ -868,6 +889,9 @@ message WhoAmIResponse {
   string user_id = 1;
   string session_id = 2; // empty if authenticated via root bearer
   string role = 3;       // RBAC role of the caller
+  // Stable actor identity across bearer/session credentials and --no-auth.
+  // Unlike user_id, this is also populated for the root principal.
+  string principal_id = 4;
 }
 
 // SchemaService introspects the controller's embedded CUE schemas and

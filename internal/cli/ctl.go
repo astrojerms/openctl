@@ -50,6 +50,8 @@ func newCtlApplyCommand() *cobra.Command {
 		waitTimeout      time.Duration
 		allowDestructive bool
 		iKnowThisBreaks  bool
+		createOnly       bool
+		requestID        string
 	)
 	cmd := &cobra.Command{
 		Use:   "apply -f <manifest>",
@@ -74,7 +76,15 @@ Destructive convergence (Phase 5):
 			if err := schema.Validate(r); err != nil {
 				return fmt.Errorf("validation: %w", err)
 			}
-			return ctlApply(cmd.Context(), r, !noWait, waitTimeout, allowDestructive, iKnowThisBreaks)
+			pr, err := resourceToProto(r)
+			if err != nil {
+				return err
+			}
+			return ctlApply(cmd.Context(), &apiv1.ApplyRequest{
+				Resource: pr, AllowDestructive: allowDestructive,
+				IKnowThisBreaksTheCluster: iKnowThisBreaks,
+				CreateOnly:                createOnly, RequestId: requestID,
+			}, !noWait, waitTimeout)
 		},
 	}
 	cmd.Flags().StringVarP(&file, "file", "f", "", "manifest file (.yaml or .cue)")
@@ -83,6 +93,8 @@ Destructive convergence (Phase 5):
 	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 30*time.Minute, "max time to wait for completion when not --no-wait (the op keeps running server-side if this fires)")
 	cmd.Flags().BoolVar(&allowDestructive, "allow-destructive", false, "permit removing declared children when re-applying a Cluster")
 	cmd.Flags().BoolVar(&iKnowThisBreaks, "i-know-this-breaks-the-cluster", false, "override the catastrophic-op block (last CP, quorum loss, last worker)")
+	cmd.Flags().BoolVar(&createOnly, "create-only", false, "refuse to overwrite an existing managed or provider resource")
+	cmd.Flags().StringVar(&requestID, "request-id", "", "durable Apply attempt identity; reuse only with identical intent to recover a lost response (default: new UUID)")
 	return cmd
 }
 
@@ -142,21 +154,37 @@ func newCtlOpCommand() *cobra.Command {
 
 func newCtlOpGetCommand() *cobra.Command {
 	var noChildren bool
+	var requestID string
 	cmd := &cobra.Command{
-		Use:   "get <op-id>",
-		Short: "Get an operation by ID",
-		Args:  cobra.ExactArgs(1),
+		Use:   "get [op-id]",
+		Short: "Get an operation by ID or --request-id",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if (len(args) == 0) == (requestID == "") {
+				return fmt.Errorf("provide exactly one operation ID or --request-id")
+			}
+			if requestID != "" {
+				if err := validateOperationRequestID(requestID); err != nil {
+					return err
+				}
+			}
 			conn, token, err := dialController()
 			if err != nil {
 				return err
 			}
 			defer func() { _ = conn.Close() }()
 			ctx := metadata.AppendToOutgoingContext(cmd.Context(), "authorization", "Bearer "+token)
-			op, err := apiv1.NewOperationServiceClient(conn).GetOperation(ctx, &apiv1.GetOperationRequest{
-				Id:              args[0],
-				IncludeChildren: !noChildren,
-			})
+			client := apiv1.NewOperationServiceClient(conn)
+			var op *apiv1.Operation
+			if requestID != "" {
+				op, err = client.GetOperationByRequest(ctx, &apiv1.GetOperationByRequestRequest{
+					RequestId: requestID, IncludeChildren: !noChildren,
+				})
+			} else {
+				op, err = client.GetOperation(ctx, &apiv1.GetOperationRequest{
+					Id: args[0], IncludeChildren: !noChildren,
+				})
+			}
 			if err != nil {
 				return err
 			}
@@ -164,6 +192,7 @@ func newCtlOpGetCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&noChildren, "no-children", false, "skip fetching child operations")
+	cmd.Flags().StringVar(&requestID, "request-id", "", "recover an Apply operation by its durable request identity, without submitting work")
 	return cmd
 }
 
@@ -220,25 +249,34 @@ func printOp(op *apiv1.Operation) error {
 	return nil
 }
 
-func ctlApply(ctx context.Context, r *protocol.Resource, wait bool, waitTimeout time.Duration, allowDestructive, iKnowThisBreaks bool) error {
+func ctlApply(ctx context.Context, req *apiv1.ApplyRequest, wait bool, waitTimeout time.Duration) error {
 	conn, token, err := dialController()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = conn.Close() }()
 
-	pr, err := resourceToProto(r)
-	if err != nil {
+	if err := prepareApplyRequest(req); err != nil {
 		return err
 	}
 	ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
-	resp, err := apiv1.NewResourceServiceClient(conn).Apply(ctx, &apiv1.ApplyRequest{
-		Resource:                  pr,
-		AllowDestructive:          allowDestructive,
-		IKnowThisBreaksTheCluster: iKnowThisBreaks,
-	})
+	capabilities, err := apiv1.NewPingServiceClient(conn).Ping(ctx, &apiv1.PingRequest{})
 	if err != nil {
-		return fmt.Errorf("apply: %w", err)
+		return fmt.Errorf("check controller Apply recovery support: %w", err)
+	}
+	if !capabilities.GetSupportsIdempotentApply() {
+		return fmt.Errorf("controller does not support durable Apply request recovery; upgrade it before submitting")
+	}
+	fmt.Fprintf(os.Stderr, "Apply request: %s\n", req.GetRequestId())
+	resp, err := apiv1.NewResourceServiceClient(conn).Apply(ctx, req)
+	if err != nil {
+		return fmt.Errorf("apply request %s: %w; recover with 'openctl ctl op get --request-id <request-id>' before choosing a new request ID", req.GetRequestId(), err)
+	}
+	if resp.GetRequestId() != req.GetRequestId() {
+		return fmt.Errorf("controller did not acknowledge request %s; operation %s may already be running; inspect it before retrying", req.GetRequestId(), resp.GetOperationId())
+	}
+	if resp.GetOperationId() == "" {
+		return fmt.Errorf("controller did not return an operation ID for request %s; recover by request ID before retrying", req.GetRequestId())
 	}
 	fmt.Fprintln(os.Stderr, resp.GetMessage())
 	if !wait {

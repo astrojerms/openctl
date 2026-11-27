@@ -1387,10 +1387,11 @@ var TemplateService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	OperationService_GetOperation_FullMethodName    = "/openctl.v1.OperationService/GetOperation"
-	OperationService_ListOperations_FullMethodName  = "/openctl.v1.OperationService/ListOperations"
-	OperationService_WatchOperations_FullMethodName = "/openctl.v1.OperationService/WatchOperations"
-	OperationService_CancelOperation_FullMethodName = "/openctl.v1.OperationService/CancelOperation"
+	OperationService_GetOperation_FullMethodName          = "/openctl.v1.OperationService/GetOperation"
+	OperationService_GetOperationByRequest_FullMethodName = "/openctl.v1.OperationService/GetOperationByRequest"
+	OperationService_ListOperations_FullMethodName        = "/openctl.v1.OperationService/ListOperations"
+	OperationService_WatchOperations_FullMethodName       = "/openctl.v1.OperationService/WatchOperations"
+	OperationService_CancelOperation_FullMethodName       = "/openctl.v1.OperationService/CancelOperation"
 )
 
 // OperationServiceClient is the client API for OperationService service.
@@ -1402,6 +1403,8 @@ const (
 // until terminal status (succeeded, failed, interrupted).
 type OperationServiceClient interface {
 	GetOperation(ctx context.Context, in *GetOperationRequest, opts ...grpc.CallOption) (*Operation, error)
+	// Read-only recovery when an Apply acknowledgement was lost.
+	GetOperationByRequest(ctx context.Context, in *GetOperationByRequestRequest, opts ...grpc.CallOption) (*Operation, error)
 	ListOperations(ctx context.Context, in *ListOperationsRequest, opts ...grpc.CallOption) (*ListOperationsResponse, error)
 	// WatchOperations streams op state transitions. Same poll-based v1 as
 	// ResourceService.Watch. Optional filters: by resource (apiVersion/kind/
@@ -1427,6 +1430,16 @@ func (c *operationServiceClient) GetOperation(ctx context.Context, in *GetOperat
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Operation)
 	err := c.cc.Invoke(ctx, OperationService_GetOperation_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *operationServiceClient) GetOperationByRequest(ctx context.Context, in *GetOperationByRequestRequest, opts ...grpc.CallOption) (*Operation, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Operation)
+	err := c.cc.Invoke(ctx, OperationService_GetOperationByRequest_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1481,6 +1494,8 @@ func (c *operationServiceClient) CancelOperation(ctx context.Context, in *Cancel
 // until terminal status (succeeded, failed, interrupted).
 type OperationServiceServer interface {
 	GetOperation(context.Context, *GetOperationRequest) (*Operation, error)
+	// Read-only recovery when an Apply acknowledgement was lost.
+	GetOperationByRequest(context.Context, *GetOperationByRequestRequest) (*Operation, error)
 	ListOperations(context.Context, *ListOperationsRequest) (*ListOperationsResponse, error)
 	// WatchOperations streams op state transitions. Same poll-based v1 as
 	// ResourceService.Watch. Optional filters: by resource (apiVersion/kind/
@@ -1504,6 +1519,9 @@ type UnimplementedOperationServiceServer struct{}
 
 func (UnimplementedOperationServiceServer) GetOperation(context.Context, *GetOperationRequest) (*Operation, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetOperation not implemented")
+}
+func (UnimplementedOperationServiceServer) GetOperationByRequest(context.Context, *GetOperationByRequestRequest) (*Operation, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetOperationByRequest not implemented")
 }
 func (UnimplementedOperationServiceServer) ListOperations(context.Context, *ListOperationsRequest) (*ListOperationsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListOperations not implemented")
@@ -1549,6 +1567,24 @@ func _OperationService_GetOperation_Handler(srv interface{}, ctx context.Context
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(OperationServiceServer).GetOperation(ctx, req.(*GetOperationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _OperationService_GetOperationByRequest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetOperationByRequestRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OperationServiceServer).GetOperationByRequest(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OperationService_GetOperationByRequest_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OperationServiceServer).GetOperationByRequest(ctx, req.(*GetOperationByRequestRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1610,6 +1646,10 @@ var OperationService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetOperation",
 			Handler:    _OperationService_GetOperation_Handler,
+		},
+		{
+			MethodName: "GetOperationByRequest",
+			Handler:    _OperationService_GetOperationByRequest_Handler,
 		},
 		{
 			MethodName: "ListOperations",

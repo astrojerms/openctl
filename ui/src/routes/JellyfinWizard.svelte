@@ -3,10 +3,10 @@
   import { stringify } from 'yaml';
   import { canMutate } from '../lib/auth';
   import { canEditDesired, desiredMutationHint } from '../lib/authority';
-  import { discovery, resources, schemas, type DiscoveryContext, type DryRunApplyResponse, type Operation, type Resource } from '../lib/api';
+  import { discovery, resources, type DiscoveryContext, type DryRunApplyResponse, type Operation, type Resource } from '../lib/api';
+  import { createSavedReview, DeploymentReview, discardSavedReview, failedReviewOperation, loadReviewBinding, readSavedReview, REVIEW_KEY, reviewError, type ReviewBinding, type ReviewState, type SavedReview } from '../lib/deploymentReview';
   import { jellyfinDeployment, APP_API, VM_API, type DeploymentStep, type JellyfinInputs } from '../lib/jellyfin';
   import { routeHref } from '../lib/router';
-  import { watchOperations } from '../lib/watch';
 
   let input: JellyfinInputs = {
     name: 'jellyfin', vmName: '', createVM: false, context: '', node: '', templateVMID: 0,
@@ -27,130 +27,148 @@
   let checkedGates: Record<string, boolean> = {};
   let error = '';
   let busy = false;
+  let loadingRecovery = true;
+  let binding: ReviewBinding | null = null;
+  let savedCandidate: SavedReview | null = null;
+  let savedPresent = false;
+  let savedError = '';
+  let recoveryError = '';
+  let engine: DeploymentReview | null = null;
+  let state: ReviewState | null = null;
   let operation: Operation | null = null;
-  let stepDone = false;
   let observed: Resource | null = null;
-  let watcher: AbortController | null = null;
+  let verified = false;
   let destroyed = false;
 
-  onMount(async () => {
+  onMount(() => {
+    void refreshRecovery();
+    void loadInventory();
+  });
+  onDestroy(() => { destroyed = true; engine?.dispose(); });
+
+  async function loadInventory() {
     try {
       const [ctx, inventory] = await Promise.all([discovery.contexts(), resources.list(VM_API, 'VirtualMachine')]);
+      if (destroyed) return;
       contexts = ctx.contexts ?? [];
       input.context = contexts.find((c) => c.defaultContext)?.name ?? contexts[0]?.name ?? '';
       vms = inventory.resources ?? [];
+    } catch (err) { if (!destroyed) error = reviewError(err); }
+  }
+  async function refreshRecovery() {
+    loadingRecovery = true; recoveryError = ''; savedError = ''; binding = null; savedCandidate = null;
+    try {
+      savedPresent = window.sessionStorage.getItem(REVIEW_KEY) !== null;
+      binding = await loadReviewBinding();
+      if (!destroyed) savedCandidate = readSavedReview(window.sessionStorage, binding);
     } catch (err) {
-      error = message(err);
-    }
-  });
-  onDestroy(() => { destroyed = true; watcher?.abort(); });
-
-  const message = (err: unknown) => err instanceof Error ? err.message : String(err);
+      if (savedPresent && binding) savedError = reviewError(err);
+      else recoveryError = reviewError(err);
+    } finally { loadingRecovery = false; }
+  }
+  function changed(value: ReviewState) {
+    if (destroyed) return;
+    if (preview !== value.preview) checkedGates = {};
+    state = value;
+    steps = value.saved.steps; index = value.saved.cursor;
+    preview = value.preview; operation = value.operation;
+    observed = value.observed; verified = value.verified;
+  }
+  function activate(saved: SavedReview) {
+    engine?.dispose();
+    engine = new DeploymentReview(window.sessionStorage, saved, { canApply: () => $canEditDesired, changed });
+    changed(engine.state);
+  }
+  async function run(action: () => Promise<void>) {
+    if (busy) return;
+    busy = true; error = '';
+    try { await action(); } catch (err) { if (!destroyed) error = reviewError(err); }
+    finally { busy = false; }
+  }
   $: current = steps[index];
+  $: stepDone = verified && operation?.status === 'succeeded';
   $: allDone = steps.length > 0 && index === steps.length - 1 && stepDone;
   $: gatesSatisfied = (preview?.requiredGates ?? []).every((gate) => checkedGates[gate]);
-  $: validPreview = !!preview && (preview.validationErrors?.length ?? 0) === 0 && gatesSatisfied;
+  $: publicReview = steps.some((step) => step.resource.kind === 'TunnelRoute');
+  $: consentSatisfied = dedicated && trustedKey && (!publicReview || publicConsent);
+  $: validPreview = verified && !!preview && (preview.validationErrors?.length ?? 0) === 0 && gatesSatisfied && consentSatisfied;
   $: monitorOnly = !!operation && ['pending', 'running'].includes(operation.status);
+  $: uncertain = !!state?.saved.steps[index]?.attempt && !operation;
   $: applicationReady = current?.resource.apiVersion !== APP_API || observed?.status?.ready === true;
   $: checks = Object.entries((observed?.status?.checks ?? {}) as Record<string, { ready?: boolean; message?: string }>);
+  $: applicationName = steps.find((step) => step.resource.kind === 'Jellyfin')?.resource.metadata.name ?? input.name;
 
-  function download() {
-    const blob = new Blob([steps.map((s) => stringify(s.resource)).join('---\n')], { type: 'application/yaml' });
+  function download(declarations: DeploymentStep[] = steps) {
+    if (!declarations.length) return;
+    const name = declarations.find((step) => step.resource.kind === 'Jellyfin')?.resource.metadata.name ?? input.name;
+    const blob = new Blob([declarations.map((step) => stringify(step.resource)).join('---\n')], { type: 'application/yaml' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.href = url; link.download = `${input.name}-deployment.yaml`; link.click();
+    link.href = url; link.download = `${name}-deployment.yaml`; link.click();
     URL.revokeObjectURL(url);
   }
-
   async function prepare() {
-    error = '';
-    if (!dedicated || !trustedKey || (input.expose && !publicConsent)) {
-      error = 'Confirm the dedicated guest, verified SSH host key, and any public exposure before review.';
-      return;
-    }
-    try {
+    await run(async () => {
+      if (!dedicated || !trustedKey || (input.expose && !publicConsent)) throw new Error('Confirm the dedicated guest, verified SSH host key, and any public exposure before review.');
       steps = jellyfinDeployment(input);
-      index = 0; operation = null; stepDone = false; observed = null;
-      await review();
-    } catch (err) { error = message(err); }
+      index = 0; preview = null; operation = null; observed = null; verified = false;
+      // Keep declarations downloadable even when capability/storage preflight fails.
+      binding = await loadReviewBinding();
+      if (window.sessionStorage.getItem(REVIEW_KEY) !== null) throw new Error('A saved review already exists in this tab. Resume or discard it before preparing another deployment.');
+      activate(createSavedReview(binding, steps));
+      engine!.save();
+      savedPresent = true;
+      await engine!.review();
+    });
   }
-
+  async function resumeSaved() {
+    dedicated = false; trustedKey = false; publicConsent = false; checkedGates = {};
+    await run(async () => {
+      const currentBinding = await loadReviewBinding();
+      const saved = readSavedReview(window.sessionStorage, currentBinding);
+      if (!saved) throw new Error('The saved review is no longer present.');
+      binding = currentBinding;
+      activate(saved);
+      savedCandidate = null;
+      await engine!.resume();
+    });
+  }
   async function review() {
-    const current = steps[index];
-    if (!current) return;
-    busy = true; error = ''; preview = null; checkedGates = {};
-    try {
-      const result = await schemas.validate(current.resource);
-      if (result.errors?.length) throw new Error(result.errors.join('\n'));
-      const plan = await resources.dryRunApply(current.resource);
-      if (current.createOnly && plan.operation !== 'create') {
-        throw new Error('This resource already exists. Inspect it before making changes; this guided flow will not overwrite it.');
-      }
-      preview = plan;
-    } catch (err) { error = message(err); }
-    finally { busy = false; }
+    dedicated = false; trustedKey = false; publicConsent = false; checkedGates = {};
+    await run(async () => {
+      if (!engine) throw new Error('Recovery is unavailable. Download these declarations, restore controller capability/session storage and start a fresh review.');
+      engine.save();
+      await engine.review();
+    });
   }
-
-  async function observeOperation(id: string) {
-    watcher?.abort();
-    watcher = new AbortController();
-    let terminal = false;
-    try {
-      await watchOperations({ id, includeChildren: true }, (event) => {
-        operation = event.operation;
-        if (event.terminal) {
-          terminal = true;
-          stepDone = event.operation.status === 'succeeded';
-          if (!stepDone) error = event.operation.error || `Operation ${event.operation.status}. Inspect partial infrastructure before retrying.`;
-          watcher?.abort();
-        }
-      }, { signal: watcher.signal });
-    } catch (err) {
-      if (!terminal && !destroyed) throw err;
-    }
-    if (!terminal && !destroyed) throw new Error('Operation monitoring disconnected. Observe this operation again; do not submit a duplicate.');
-    if (stepDone && current) {
-      const result = await resources.get(current.resource.apiVersion, current.resource.kind, current.resource.metadata.name);
-      observed = result.resource ?? null;
-    }
-  }
-
   async function apply() {
-    if (!current || busy || stepDone || (!monitorOnly && (!validPreview || !$canEditDesired))) return;
-    busy = true; error = '';
-    try {
-      if (operation && ['pending', 'running'].includes(operation.status)) {
-        await observeOperation(operation.id);
-        return;
+    await run(async () => {
+      if (!engine) throw new Error('Save a recoverable review before submitting.');
+      try {
+        await engine.submit({ dedicated, trustedKey, publicExposure: publicConsent, gates: { ...checkedGates } });
+      } finally {
+        dedicated = false; trustedKey = false; publicConsent = false; checkedGates = {};
       }
-      const retry = operation !== null;
-      const result = await resources.apply({
-        resource: current.resource,
-        createOnly: current.createOnly && !retry,
-        allowDestructive: checkedGates.allow_destructive ?? false,
-        iKnowThisBreaksTheCluster: checkedGates.i_know_this_breaks_the_cluster ?? false,
-      });
-      if (!result.operationId) throw new Error('The controller did not return an operation ID. Inspect operation history before trying again.');
-      operation = { id: result.operationId, type: 'apply', status: 'pending' };
-      await observeOperation(result.operationId);
-    } catch (err) { error = message(err); }
-    finally { busy = false; }
+      if (engine.state.operation && ['pending', 'running'].includes(engine.state.operation.status)) await engine.observe();
+    });
   }
-
-  async function refreshHealth() {
-    if (!current) return;
-    busy = true; error = '';
-    try {
-      const result = await resources.get(current.resource.apiVersion, current.resource.kind, current.resource.metadata.name);
-      observed = result.resource ?? null;
-    } catch (err) { error = message(err); }
-    finally { busy = false; }
-  }
-
+  async function observe() { await run(async () => { if (engine) await engine.observe(); }); }
+  async function refreshHealth() { await run(async () => { if (engine) await engine.refreshHealth(); }); }
   async function next() {
-    if (!stepDone || !applicationReady || index >= steps.length - 1) return;
-    index += 1; operation = null; stepDone = false; observed = null;
-    await review();
+    dedicated = false; trustedKey = false; publicConsent = false; checkedGates = {};
+    await run(async () => { if (engine) await engine.next(); });
+  }
+  function discard() {
+    error = '';
+    try {
+      discardSavedReview(window.sessionStorage);
+      engine?.dispose(); engine = null; state = null; savedCandidate = null;
+      savedPresent = false; savedError = ''; steps = []; index = 0;
+      preview = null; operation = null; observed = null; verified = false;
+      dedicated = false; trustedKey = false; publicConsent = false; checkedGates = {};
+    } catch {
+      error = 'Cannot clear this tab’s saved review. Enable session storage or clear it in browser settings. Existing controller work and infrastructure are unchanged.';
+    }
   }
 </script>
 
@@ -160,8 +178,22 @@
     <p>Dedicated GPU VM → protected media mount → application → optional public hostname.</p>
   </header>
   <p class="notice">OpenCtl manages each resource independently. Failure does not roll back the VM or delete media. Updates and recovery remain available from resource details.</p>
+  <p class="notice">Prepared reviews and request identities are saved only in this browser tab (session storage), bound to this controller and signed-in user. Reloading or navigating back offers recovery, never an automatic Apply. Download declarations before closing the tab. Discarding a review never cancels controller work or removes infrastructure.</p>
+  {#if loadingRecovery}<p>Checking controller recovery capability and this tab’s saved review…</p>{/if}
+  {#if recoveryError}<p class="error" role="alert">{recoveryError}</p><button on:click={refreshRecovery} disabled={busy || loadingRecovery}>Check recovery access again</button>{/if}
+  {#if savedError}<p class="error" role="alert">{savedError}</p>{/if}
 
-  {#if steps.length === 0}
+  {#if steps.length === 0 && savedPresent}
+    <aside class="notice">
+      <h3>Saved deployment review</h3>
+      <p>No infrastructure will be changed by resuming. Accepted work is looked up on the controller; readiness, preview and all permissions must be checked again.</p>
+      {#if savedCandidate}
+        <button class="primary" on:click={resumeSaved} disabled={busy || loadingRecovery}>Resume saved review</button>
+        <button on:click={() => download(savedCandidate?.steps ?? [])} disabled={busy}>Download saved declarations</button>
+      {/if}
+      <button on:click={discard} disabled={busy}>Discard browser review (keeps controller work)</button>
+    </aside>
+  {:else if steps.length === 0}
     <form on:submit|preventDefault={prepare}>
       <fieldset disabled={busy || !$canMutate}>
         <legend>1. Dedicated Ubuntu 24.04 GPU guest</legend>
@@ -220,41 +252,49 @@
           <label class="check"><input type="checkbox" bind:checked={publicConsent} required /> I authorize publishing this application at this hostname, after reviewing its access policy.</label>
         {/if}
       </fieldset>
-      <button class="primary" disabled={busy || !$canMutate}>Review deployment</button>
+      <button class="primary" disabled={busy || loadingRecovery || !$canMutate}>Prepare and save deployment review</button>
     </form>
   {:else}
-    <ol class="steps">{#each steps as step, i}<li class:active={i === index} class:done={i < index || (i === index && stepDone)}>{step.title}</li>{/each}</ol>
-    <button on:click={download}>Download reproducible manifests</button>
+    <ol class="steps">{#each steps as step, i}<li class:active={i === index} class:done={verified && (i < index || (i === index && stepDone))}>{step.title}</li>{/each}</ol>
+    <button on:click={() => download()}>Download reproducible manifests</button>
     {#if current}
       <h3>{index + 1}. {current.title}</h3>
       <pre>{stringify(current.resource)}</pre>
+      {#if state?.saved.steps[index]?.attempt}<p>Saved request: <code>{state.saved.steps[index].attempt?.requestId}</code>. Keep this identity when recovering an uncertain submission.</p>{/if}
+      {#if uncertain}<p class="notice">This request has no confirmed operation yet. Look it up first. If the controller still reports NotFound, a fresh review can explicitly retransmit the exact same request ID; a new ID must not be used.</p>{/if}
+      {#if failedReviewOperation(operation)}<p class="notice">This Apply ended without success. Inspect partial infrastructure first. Refresh the preview and confirm permissions to explicitly retry with a new request ID. No rollback or cleanup is automatic.</p>{/if}
       {#if preview}
         <p><strong>{preview.operation}</strong> — {preview.summary}</p>
         {#if preview.validationErrors?.length}<ul class="error">{#each preview.validationErrors as problem}<li>{problem}</li>{/each}</ul>{/if}
         {#if preview.diff?.length}<ul>{#each preview.diff as change}<li><code>{change.path}</code>: {change.observed} → {change.desired}</li>{/each}</ul>{/if}
         {#each preview.requiredGates ?? [] as gate}<label class="check"><input type="checkbox" bind:checked={checkedGates[gate]} disabled={busy} /> Explicitly allow {gate}</label>{/each}
+        <label class="check"><input type="checkbox" bind:checked={dedicated} disabled={busy} /> I confirm this dedicated guest and authorize the reviewed guest configuration.</label>
+        <label class="check"><input type="checkbox" bind:checked={trustedKey} disabled={busy} /> I verified this guest’s SSH host key in the controller’s known_hosts.</label>
+        {#if publicReview}<label class="check"><input type="checkbox" bind:checked={publicConsent} disabled={busy} /> I freshly authorize the declared public hostname and access policy.</label>{/if}
       {/if}
       {#if operation}<p>Operation <code>{operation.id}</code>: <strong>{operation.status}</strong>. Leaving this page does not cancel it.</p>{/if}
+      {#if operation?.error}<p class="error" role="alert">{operation.error}</p>{/if}
       {#if checks.length}<ul class="health">{#each checks as [name, check]}<li class:healthy={check.ready === true}><strong>{name}: {check.ready === true ? 'ready' : 'not ready'}</strong> — {check.message ?? 'No readiness evidence'}</li>{/each}</ul>{/if}
       {#if !stepDone}
         <div class="actions">
-          <button on:click={review} disabled={busy || !!operation}>Refresh preview</button>
-          <button class="primary" on:click={apply} disabled={busy || (!monitorOnly && (!validPreview || !$canEditDesired))} title={!monitorOnly && !$canEditDesired ? $desiredMutationHint : ''}>{busy ? 'Working…' : monitorOnly ? 'Observe existing operation' : operation ? 'Retry reviewed step' : 'Apply reviewed step'}</button>
+          <button on:click={observe} disabled={busy || !state?.saved.steps[index]?.attempt}>Look up / observe saved request</button>
+          <button on:click={review} disabled={busy || monitorOnly || operation?.status === 'succeeded'}>{failedReviewOperation(operation) ? 'Review explicit retry' : 'Refresh preview'}</button>
+          <button class="primary" on:click={apply} disabled={busy || !validPreview || !$canEditDesired} title={!$canEditDesired ? $desiredMutationHint : ''}>{busy ? 'Working…' : uncertain ? 'Retransmit SAME reviewed request' : failedReviewOperation(operation) ? 'Retry freshly reviewed step (new request ID)' : 'Apply reviewed step'}</button>
         </div>
       {:else if !applicationReady}
         <p class="notice">The configuration operation succeeded, but application readiness has not been proven. Resolve the reported checks before publishing or proceeding.</p>
         <div class="actions">
           <button on:click={refreshHealth} disabled={busy}>Refresh health</button>
-          <button on:click={() => { stepDone = false; void apply(); }} disabled={busy || !$canEditDesired} title={!$canEditDesired ? $desiredMutationHint : ''}>Reapply reviewed configuration</button>
+          <a href={routeHref({ name: 'detail', apiVersion: current.resource.apiVersion, kind: current.resource.kind, resourceName: current.resource.metadata.name })}>Inspect and repair resource configuration</a>
         </div>
       {:else if !allDone}
         <button class="primary" on:click={next} disabled={busy}>Preview next resource</button>
       {:else}
         <p class="success">Application readiness checks passed. GPU transcoding still needs a real playback test.</p>
-        <a href={routeHref({ name: 'detail', apiVersion: APP_API, kind: 'Jellyfin', resourceName: input.name })}>Open application health, logs and lifecycle controls</a>
+        <a href={routeHref({ name: 'detail', apiVersion: APP_API, kind: 'Jellyfin', resourceName: applicationName })}>Open application health, logs and lifecycle controls</a>
       {/if}
     {/if}
-    {#if !busy}<p><button on:click={() => { steps = []; preview = null; operation = null; error = ''; }}>Start a new review (keeps existing infrastructure)</button></p>{/if}
+    {#if !busy}<p><button on:click={discard}>Discard / start a new browser review (keeps controller work and infrastructure)</button></p>{/if}
   {/if}
   {#if error}<p class="error" role="alert">{error}</p>{/if}
 </section>

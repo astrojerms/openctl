@@ -162,10 +162,12 @@ VM CPU/memory fields into Cluster fields by analogy.
 openctl --config "$CONFIG" ctl apply -f "$MANIFEST" --wait-timeout 30m
 ```
 
-Apply takes one manifest file, not a directory or a repeated `-f` set. For
-multiple resources, apply each file in graph order, verifying upstream outputs
-before dependents. Do not assume cluster children are separate apply targets.
-Do not run both manual and GitOps deployment paths for the same change.
+Apply takes exactly one resource in one manifest file, not a YAML stream,
+directory or repeated `-f` set. For multiple resources, split staged downloads
+and apply each file in reviewed graph order, verifying upstream outputs before
+dependents. Do not assume cluster children are separate apply targets. Use
+`--create-only` for reviewed first creates when updating an existing resource
+must be forbidden. Do not run both manual and GitOps paths for the same change.
 
 Normally let the CLI wait. For a deliberately asynchronous submission:
 
@@ -174,13 +176,24 @@ openctl --config "$CONFIG" ctl apply -f "$MANIFEST" --no-wait
 openctl --config "$CONFIG" ctl op get "$OPERATION_ID" -o json
 ```
 
-Capture the returned operation ID. A wait timeout, disconnected client, or
-interrupted terminal does **not** cancel the controller-side operation. Inspect
-that ID before retrying; do not submit duplicate work because the wait ended.
-Use `ctl op list --api-version "$API_VERSION" --kind "$KIND" --name "$NAME"`
-to recover an ID. `ctl op get` includes child operations by default. Inspect
-failed/interrupted operations and partial resources; never auto-delete or
-recreate them as error recovery. Report blockers without claiming success.
+Capture the request ID printed before submission and the returned operation ID.
+A timeout, disconnect or interrupted terminal does **not** cancel accepted work.
+If the acknowledgement was lost, recover read-only:
+
+```bash
+openctl --config "$CONFIG" ctl op get --request-id "$REQUEST_ID" -o json
+```
+
+Identical replay with `--request-id "$REQUEST_ID"` returns the original operation,
+including a failure; it is not a new retry. Changed intent/flags or another actor
+conflict. Bindings survive normal restarts and operation-history pruning, but
+not rollback to a backup predating admission. Never blindly resubmit after a
+restore. Upgrade CLI/controller together; do not fall back to unkeyed Apply.
+
+Inspect failed/interrupted operations and partial resources before a freshly
+reviewed attempt with a **new** key; never auto-delete/recreate as recovery.
+`ctl op get` includes children by default. Report blockers without claiming
+success; neither a saved browser review nor past consent authorizes new work.
 
 ## 6. Verify and report
 

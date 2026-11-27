@@ -477,6 +477,7 @@ func runServe(args []string) error {
 		CertFile:      mat.ServerCertPath,
 		KeyFile:       mat.ServerKeyPath,
 		Registry:      registry,
+		ControllerID:  controllerID,
 		Operations:    opStore,
 		Dispatcher:    dispatcher,
 		Manifests:     manifestStore,

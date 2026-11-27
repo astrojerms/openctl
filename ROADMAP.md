@@ -64,6 +64,24 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
   identity and history. Real Compose 5.8 configuration passes validated staged
   env files and literal-dollar paths; no container rollout or live lab mutation.
 
+**2026-11-27 — durable submissions and resumable deployment review**
+
+- [x] Atomic Apply request ledger, canonical actor identity, read-only CLI/API
+  recovery and retained bindings after operation-history pruning; conflicting
+  reuse never submits another operation.
+- [x] Controller/principal-bound Jellyfin reviews survive reload without
+  resubmission, restored consent or cached readiness. Lost acknowledgements are
+  observed; explicit terminal retries get fresh review and a new request ID.
+- [x] Offline recovery accepts exact known historical SQLite schemas without
+  modifying the source; normal startup upgrades the restored database.
+- [x] Single-resource parsing rejects extra YAML documents; stream parsing uses
+  YAML document boundaries rather than textual separator splitting.
+- Verification: focused affected Go checks, 167 frontend tests, clean Svelte
+  diagnostics and successful UI build. Authenticated isolated console/CLI proofs
+  cover dropped acknowledgements, reload, explicit retry, pruned request bindings
+  and controller restart; a schema-14 archive boots at schema 15 with its actual
+  persisted identity. No live guest deployment, playback or public exposure.
+
 The next product acceptance gate is the complete operator journey on real
 hardware, including recovery, media playback and any approved public endpoint.
 See [direction](docs/direction.md). Provider breadth is downstream of that gate.

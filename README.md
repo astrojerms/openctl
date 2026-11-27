@@ -325,9 +325,11 @@ created mode `0600`, never overwritten; encrypt offsite copies separately.
 External SSH keys, external manifest/secret directories, VM disks and guest/NAS
 application data are **not** backed up by this command.
 
-Restore validates format, checksums, paths and the controller's exact SQLite
-schema before publishing private files. Destinations must not exist, even if
-empty; parents must exist. Symlinks/special files are refused, and path ancestors
+Restore validates format, checksums, paths and the exact SQLite schema of a known
+released migration version before publishing private files. Unknown, future or
+modified schemas are rejected. Offline backup/restore never upgrades a database;
+normal daemon startup applies later migrations. Destinations must not exist, even
+if empty; parents must exist. Symlinks/special files are refused, and path ancestors
 must be symlink-free. Limits: 16 GiB/file, 32 GiB total, 100,000 entries.
 
 Restore does not rewrite absolute paths, start the daemon, or change infrastructure.
@@ -336,6 +338,10 @@ daemon's `HOME`/`--dir` at the restored locations: startup may resume queued
 operations or reconciliation against the original lab. **Never run both copies.**
 The daemon and backup share an exclusive state lock; older binaries do not
 honor it and must also be stopped.
+
+Restoring an older backup also rolls back accepted Apply request history. Inspect
+provider work submitted after that backup and discard stale browser reviews before
+resubmitting: a snapshot cannot deduplicate requests it never recorded.
 
 ## Common Commands
 
@@ -365,6 +371,11 @@ Apply a manifest and wait for the operation:
 openctl ctl apply -f vm.yaml
 ```
 
+Apply accepts exactly one resource. Multi-document YAML is rejected rather than
+silently applying its first document. Split staged workflow downloads and apply
+resources in their reviewed order; they are not a batch Apply or an unordered
+GitOps directory.
+
 Fire and forget:
 
 ```bash
@@ -379,6 +390,23 @@ openctl ctl op list --status running
 openctl ctl op list --api-version k3s.openctl.io/v1 --kind Cluster --name dev
 openctl ctl op get OPERATION_ID
 ```
+
+Each Apply prints a generated UUID **before** submission. Keep it if the response
+or connection is lost; recover read-only, even if no operation ID was received:
+
+```bash
+openctl ctl op get --request-id REQUEST_ID
+# Deliberately choose an identity and prohibit updating an existing resource:
+openctl ctl apply -f vm.yaml --create-only --request-id YOUR_UUID
+```
+
+The same key, canonical actor, desired resource and flags return the original
+operation, including its failure; changed intent or another actor conflicts.
+The binding survives normal restarts and operation-history pruning. Pruned work
+cannot be resubmitted under its old key. A new attempt after known terminal
+failure needs fresh inspection/review and a **new** key, not automatic retries.
+Upgrade CLI and controller together: keyed Apply refuses controllers without
+durable request support. Request IDs are metadata, not credentials; prefer UUIDs.
 
 Delete a resource:
 
@@ -854,6 +882,16 @@ Retry restores the failed Apply's submitted intent even when a first deployment
 has no managed resource yet. Secret markers and desired metadata are preserved;
 inherited destructive approvals are cleared for fresh review. A failed Get caused
 by authentication or connectivity is not treated as an absent resource.
+
+The Jellyfin wizard saves its prepared steps and accepted request/operation IDs
+in this tab's session storage, bound to the controller and signed-in principal.
+After reload, explicitly **Resume saved review** or discard/download it. Resume
+observes accepted work without resubmission; a lost acknowledgement is recovered
+by request ID. New attempts require a fresh preview and unchecked confirmations.
+Past flags identify the original request, not renewed approval. Resolved secrets,
+cached readiness and checked consent are not restored. Earlier successful steps
+are reverified before dependent work proceeds. Closing the tab may lose this
+browser record; leaving or discarding it does not cancel work or delete resources.
 
 ## Drift And Reconciliation
 

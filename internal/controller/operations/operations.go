@@ -80,6 +80,8 @@ type Operation struct {
 	// CreateOnly rejects an existing managed or live resource instead of
 	// updating it. Persisted so a restart cannot turn creation into upsert.
 	CreateOnly bool
+	// RequestID is the durable Apply request key, when one was supplied.
+	RequestID string
 }
 
 // IsTerminal reports whether the operation has reached a final status —
@@ -137,6 +139,10 @@ func New(db *sql.DB, retainPerResource int) *Store {
 //
 // Also runs the per-resource GC after a successful submission.
 func (s *Store) Submit(ctx context.Context, op *Operation) (*Operation, error) {
+	return s.submit(ctx, op, nil)
+}
+
+func (s *Store) submit(ctx context.Context, op *Operation, request *RequestBinding) (*Operation, error) {
 	if op.Type == "" || op.APIVersion == "" || op.Kind == "" || op.ResourceName == "" {
 		return nil, fmt.Errorf("submit: type, apiVersion, kind, resource_name all required")
 	}
@@ -149,6 +155,12 @@ func (s *Store) Submit(ctx context.Context, op *Operation) (*Operation, error) {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if request != nil {
+		accepted, err := replayRequest(ctx, tx, *request)
+		if err != nil || accepted != nil {
+			return accepted, err
+		}
+	}
 
 	if err := manifests.CheckNotForgotten(ctx, tx, op.APIVersion, op.Kind, op.ResourceName); err != nil {
 		return nil, err
@@ -202,6 +214,15 @@ func (s *Store) Submit(ctx context.Context, op *Operation) (*Operation, error) {
 		nullable(op.Source), op.CreateOnly,
 	); err != nil {
 		return nil, fmt.Errorf("insert: %w", err)
+	}
+	if request != nil {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO operation_requests (request_id, actor, intent_hash, operation_id) VALUES (?, ?, ?, ?)`,
+			request.ID, request.Actor, request.IntentHash, op.ID,
+		); err != nil {
+			return nil, fmt.Errorf("bind request: %w", err)
+		}
+		op.RequestID = request.ID
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -623,7 +644,8 @@ const baseSelect = `SELECT id, COALESCE(parent_id, ''), type, api_version, kind,
 	COALESCE(label, ''),
 	COALESCE(manifest_json, ''), COALESCE(result_json, ''), status,
 	COALESCE(error, ''), submitted_at, COALESCE(started_at, ''), COALESCE(completed_at, ''),
-	COALESCE(source, ''), create_only
+	COALESCE(source, ''), create_only,
+	COALESCE((SELECT request_id FROM operation_requests WHERE operation_id = operations.id), '')
 	FROM operations`
 
 // rowScanner is the common interface implemented by sql.Row and sql.Rows.
@@ -638,7 +660,7 @@ func scanOp(s rowScanner) (*Operation, error) {
 		&op.Label,
 		&op.ManifestJSON, &op.ResultJSON, &op.Status,
 		&op.Error, &op.SubmittedAt, &op.StartedAt, &op.CompletedAt,
-		&op.Source, &op.CreateOnly,
+		&op.Source, &op.CreateOnly, &op.RequestID,
 	); err != nil {
 		return nil, err
 	}

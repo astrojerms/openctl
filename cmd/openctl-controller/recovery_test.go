@@ -53,7 +53,7 @@ func TestRecoveryCommandsRoundTripAndWarnings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec("INSERT INTO controller_meta(key,value) VALUES ('controller_id','cli-roundtrip-id')"); err != nil {
+	if _, err := db.Exec("INSERT INTO controller_meta(key,value) VALUES ('migration_controller_id','cli-roundtrip-id')"); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {

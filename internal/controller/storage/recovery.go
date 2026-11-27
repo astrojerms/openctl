@@ -9,7 +9,8 @@ import (
 )
 
 // ValidateSnapshot checks a standalone recovery database without migrating or
-// changing it. Recovery accepts precisely the schema understood by this binary.
+// changing it. The schema must exactly match a known embedded migration version;
+// a restored older database is upgraded only when the daemon is started.
 func ValidateSnapshot(ctx context.Context, path string) error {
 	u := url.URL{Scheme: "file", Path: filepath.ToSlash(path)}
 	db, err := sql.Open("sqlite", u.String()+"?mode=ro&immutable=1")
@@ -24,22 +25,37 @@ func ValidateSnapshot(ctx context.Context, path string) error {
 	if integrity != "ok" {
 		return fmt.Errorf("SQLite integrity check failed: %s", integrity)
 	}
+	version, err := currentVersion(ctx, db)
+	if err != nil {
+		return fmt.Errorf("read recovery schema version: %w", err)
+	}
+	migrations, err := pendingMigrations(0)
+	if err != nil {
+		return err
+	}
+	through := -1
+	for i, migration := range migrations {
+		if migration.version == version {
+			through = i
+			break
+		}
+	}
+	if through < 0 {
+		return fmt.Errorf("unsupported recovery schema version %d", version)
+	}
 	reference, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		return err
 	}
 	defer reference.Close()
 	reference.SetMaxOpenConns(1)
-	if err := migrate(ctx, reference); err != nil {
+	if _, err := reference.ExecContext(ctx, schemaMetaSQL); err != nil {
 		return err
 	}
-	wantVersion, err := currentVersion(ctx, reference)
-	if err != nil {
-		return err
-	}
-	version, err := currentVersion(ctx, db)
-	if err != nil || version != wantVersion {
-		return fmt.Errorf("unsupported recovery schema version %d (requires %d): %v", version, wantVersion, err)
+	for _, migration := range migrations[:through+1] {
+		if err := apply(ctx, reference, migration); err != nil {
+			return fmt.Errorf("build recovery schema reference: %w", err)
+		}
 	}
 	readSchema := func(db *sql.DB) ([]string, error) {
 		rows, err := db.QueryContext(ctx, "SELECT type || ':' || name || ':' || tbl_name || ':' || sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY type, name")

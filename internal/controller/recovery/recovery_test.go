@@ -57,7 +57,7 @@ func newFixture(t *testing.T, separate bool) fixture {
 	t.Cleanup(func() { _ = f.db.Close() })
 	for _, statement := range []string{
 		"PRAGMA wal_autocheckpoint=0",
-		"INSERT INTO controller_meta(key,value) VALUES ('controller_id','durable-controller-id')",
+		"INSERT INTO controller_meta(key,value) VALUES ('migration_controller_id','durable-controller-id')",
 		"INSERT INTO provider_identities VALUES ('vm1','home','https://pve.example:8006','node1',123,'persistent-vm-identity')",
 		"INSERT INTO provider_state VALUES ('test/v1','VM','vm1',X'000102FF',X'FEED',7,'2026-01-01T00:00:00Z')",
 		"INSERT INTO operations(id,type,api_version,kind,resource_name,status,submitted_at) VALUES ('operation-1','apply','test/v1','VM','vm1','pending','2026-01-01T00:00:00Z')",
@@ -142,7 +142,7 @@ func TestRoundTripIncludesWALAndIdentityWithoutSourceMutation(t *testing.T) {
 				}
 				defer db.Close()
 				for query, want := range map[string]string{
-					"SELECT value FROM controller_meta WHERE key='controller_id'":                             "durable-controller-id",
+					"SELECT value FROM controller_meta WHERE key='migration_controller_id'":                   "durable-controller-id",
 					"SELECT identity FROM provider_identities WHERE name='vm1'":                               "persistent-vm-identity",
 					"SELECT hex(state_blob)||':'||hex(private_blob)||':'||schema_version FROM provider_state": "000102FF:FEED:7",
 					"SELECT status FROM operations WHERE id='operation-1'":                                    "pending",

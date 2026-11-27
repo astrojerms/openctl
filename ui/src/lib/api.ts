@@ -97,6 +97,8 @@ export interface WhoAmIResponse {
   // server didn't report one (older server, or --no-auth) — treated as
   // full access by the UI, since the server is the real gate.
   role?: string;
+  // Canonical actor, including root/no-auth, independent of credential type.
+  principalId?: string;
 }
 
 export const session = {
@@ -121,6 +123,8 @@ export interface PingResponse {
   gitCommit?: string;
   // RFC3339 build timestamp. "dev" when unlinked.
   buildTime?: string;
+  controllerId?: string;
+  supportsIdempotentApply?: boolean;
 }
 
 export const ping = {
@@ -284,11 +288,13 @@ export interface ApplyRequest {
   allowDestructive?: boolean;
   iKnowThisBreaksTheCluster?: boolean;
   createOnly?: boolean;
+  requestId?: string;
 }
 
 export interface ApplyResponse {
   operationId?: string;
   message?: string;
+  requestId?: string;
 }
 
 export interface ActionParameterSpec {
@@ -513,6 +519,7 @@ export interface Operation {
   label?: string;
   source?: string;
   manifestJson?: string;
+  requestId?: string;
   children?: Operation[];
 }
 
@@ -539,6 +546,8 @@ export interface CancelOperationResponse {
 export const operations = {
   get: (id: string, includeChildren = false) =>
     api.get<Operation>(`/v1/operations/${encodeURIComponent(id)}${includeChildren ? '?include_children=true' : ''}`),
+  byRequest: (requestId: string, includeChildren = false) =>
+    api.post<Operation>('/v1/operations:byRequest', { requestId, includeChildren }),
   list: (req: ListOperationsRequest = {}) =>
     api.post<ListOperationsResponse>('/v1/operations:list', req),
   cancel: (id: string) =>

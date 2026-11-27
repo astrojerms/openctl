@@ -213,6 +213,47 @@ contradictory automation configuration.
   file revival, or direct console/CLI Apply/Delete competes with that repo
   (runtime controls remain available to editor/admin sessions)
 
+### Requirement: Durable Apply request identity
+
+An accepted keyed Apply SHALL atomically bind its original unresolved desired
+intent, flags and canonical actor to one operation without storing resolved
+secrets in the request ledger.
+
+#### Scenario: The acknowledgement is lost or operation history is pruned
+
+- **WHEN** the same actor presents the same key, intent and flags again
+- **THEN** the original operation is returned, including across normal restarts;
+  a pruned binding refuses resubmission and reports the original operation ID
+- **AND** changed intent or a different actor conflicts without new work
+- **AND** request lookup is read-only and accepts opaque printable request IDs
+
+### Requirement: A saved review is not execution authority
+
+Prepared reviews SHALL be bound to the controller and principal and require
+explicit resumption; browser persistence SHALL NOT substitute for live checks.
+
+#### Scenario: An operator resumes a prepared deployment
+
+- **WHEN** a saved review is resumed after reload or a lost acknowledgement
+- **THEN** accepted work is observed without automatic resubmission, previous
+  successful dependencies are reverified, and new attempts require fresh preview
+  and consent rather than restored approvals or cached readiness
+- **AND** known terminal retries use new request identities; discarding a browser
+  record neither cancels controller work nor deletes infrastructure
+
+### Requirement: Historical controller snapshots remain recoverable
+
+Offline recovery SHALL validate an exact known migration schema without modifying
+the source or upgrading the restored database before normal daemon startup.
+
+#### Scenario: An older supported snapshot is restored
+
+- **WHEN** a snapshot matches a known historical schema
+- **THEN** restore preserves its recorded identity and state and normal startup
+  applies subsequent migrations; unknown, future or modified schemas are refused
+- **AND** request deduplication covers only history present in that snapshot,
+  not provider work submitted after it was taken
+
 ### Requirement: Standalone application lifecycle is independent of VM lifecycle
 
 The system SHALL manage standalone applications with verified ownership,

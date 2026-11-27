@@ -49,6 +49,8 @@ type Options struct {
 	CertFile string
 	KeyFile  string
 	Token    string
+	// ControllerID is the stable persisted identity used to bind browser reviews.
+	ControllerID string
 	// Users are named non-root principals authenticated by their own tokens
 	// (loaded from the controller's users.yaml). Empty = root-only.
 	Users      []auth.User
@@ -119,7 +121,10 @@ func New(opts Options) (*Server, error) {
 	}
 
 	g := grpc.NewServer(srvOpts...)
-	apiv1.RegisterPingServiceServer(g, &pingHandler{})
+	apiv1.RegisterPingServiceServer(g, &pingHandler{
+		controllerID:    opts.ControllerID,
+		idempotentApply: opts.Operations != nil && opts.Dispatcher != nil,
+	})
 
 	registry := opts.Registry
 	if registry == nil {
@@ -217,13 +222,17 @@ func (s *Server) StopWithTimeout(d time.Duration) {
 // TLS, auth, and the gRPC pipeline end-to-end.
 type pingHandler struct {
 	apiv1.UnimplementedPingServiceServer
+	controllerID    string
+	idempotentApply bool
 }
 
 func (h *pingHandler) Ping(_ context.Context, req *apiv1.PingRequest) (*apiv1.PingResponse, error) {
 	return &apiv1.PingResponse{
-		Echo:          req.GetMessage(),
-		ServerVersion: ServerVersion,
-		GitCommit:     GitCommit,
-		BuildTime:     BuildTime,
+		Echo:                    req.GetMessage(),
+		ServerVersion:           ServerVersion,
+		GitCommit:               GitCommit,
+		BuildTime:               BuildTime,
+		ControllerId:            h.controllerID,
+		SupportsIdempotentApply: h.idempotentApply,
 	}, nil
 }
