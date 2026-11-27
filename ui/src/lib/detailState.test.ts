@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ResourceRef } from './api';
-import { applicationChecks, childHealth, type ChildState } from './detailState';
+import { applicationCheckBadge, applicationChecks, childHealth, type ChildState } from './detailState';
 
 const refs: ResourceRef[] = [
   { apiVersion: 'proxmox.openctl.io/v1', kind: 'VirtualMachine', name: 'one' },
@@ -33,23 +33,27 @@ describe('childHealth', () => {
 });
 
 describe('applicationChecks', () => {
-  it('keeps explicit failed and unknown readiness separate from successful checks', () => {
-    expect(applicationChecks({ checks: {
-      application: { ready: true, message: 'Containers running' },
-      http: { ready: false, message: 'Probe failed' },
-      gpu: { message: 'Not observed' },
-      publicEndpoint: { ready: false, message: 'Not configured; no endpoint was published' },
-    } })).toEqual([
-      { name: 'application', ready: true, message: 'Containers running' },
-      { name: 'http', ready: false, message: 'Probe failed' },
-      { name: 'gpu', ready: null, message: 'Not observed' },
-      { name: 'publicEndpoint', ready: false, message: 'Not configured; no endpoint was published' },
+  it('preserves evidence states with shared labels and only ready green', () => {
+    const checks = applicationChecks({ checks: {
+      application: { state: 'ready', message: 'Containers running' },
+      http: { state: 'not_ready', message: 'Probe failed' },
+      gpu: { state: 'unknown', message: 'Probe skipped' },
+      publicEndpoint: { state: 'not_configured', message: 'No endpoint' },
+    } });
+    expect(checks.map((check) => check.state)).toEqual(['ready', 'not_ready', 'unknown', 'not_configured']);
+    expect(checks.map((check) => applicationCheckBadge(check.state))).toEqual([
+      { label: 'Ready', tone: 'good' }, { label: 'Not ready', tone: 'warn' },
+      { label: 'Unknown', tone: 'unknown' }, { label: 'Not configured', tone: 'unknown' },
     ]);
+    expect(checks.map((check) => check.message)).toEqual(['Containers running', 'Probe failed', 'Probe skipped', 'No endpoint']);
   });
 
-  it('does not fabricate checks when status or checks are unavailable', () => {
+  it('fails closed on missing, malformed, future, and obsolete evidence', () => {
+    for (const value of [null, [], 'ready', {}, { ready: true }, { state: true }, { state: 'future' }, { state: 'Ready' }]) {
+      expect(applicationChecks({ checks: { vm: value } })).toEqual([{ name: 'vm', state: 'unknown', message: '' }]);
+    }
+    expect(applicationChecks({ checks: { vm: { state: 'ready', message: {} } } })[0].message).toBe('');
+    for (const checks of [undefined, null, [], true, 'ready']) expect(applicationChecks({ checks })).toEqual([]);
     expect(applicationChecks(undefined)).toEqual([]);
-    expect(applicationChecks({ checks: [] })).toEqual([]);
-    expect(applicationChecks({ checks: { vm: null } })).toEqual([{ name: 'vm', ready: null, message: '' }]);
   });
 });

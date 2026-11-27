@@ -157,6 +157,13 @@ func TestUnhealthyContainerAndFailedHTTPDoNotReportReady(t *testing.T) {
 			if observed.Status["ready"] != false || observed.Status["phase"] != "degraded" {
 				t.Fatalf("unhealthy app is green: %#v", observed.Status)
 			}
+			applicationState, httpState := "not_ready", "ready"
+			if tc.httpFails {
+				applicationState, httpState = "ready", "not_ready"
+			}
+			assertReadinessChecks(t, observed.Status, map[string]string{
+				"vm": "ready", "application": applicationState, "http": httpState, "publicEndpoint": "not_configured",
+			})
 		})
 	}
 }
@@ -178,10 +185,9 @@ func TestHealthyHTTPAndContainersDoNotRequirePublicExposure(t *testing.T) {
 	if observed.Status["ready"] != true {
 		t.Fatalf("healthy private app not ready: %#v", observed.Status)
 	}
-	checks := observed.Status["checks"].(map[string]any)
-	if checks["publicEndpoint"].(map[string]any)["ready"] != false {
-		t.Fatal("provider fabricated public endpoint")
-	}
+	assertReadinessChecks(t, observed.Status, map[string]string{
+		"vm": "ready", "application": "ready", "http": "ready", "publicEndpoint": "not_configured",
+	})
 }
 
 func TestJellyfinBootstrapRebootIsExplicitAndResumable(t *testing.T) {
@@ -265,9 +271,9 @@ func TestContainerFormatsAndHealth(t *testing.T) {
 		raw   string
 		ready bool
 	}{
-		{`[{"State":"running","Health":"healthy"}]`, true},
-		{"{\"State\":\"running\"}\n{\"State\":\"running\",\"Health\":\"starting\"}", false},
-		{`[]`, false}, {`not-json`, false}, {`{"State":"running","ExitCode":1}`, false},
+		{`[{"Service":"web","State":"running","Health":"healthy"}]`, true},
+		{"{\"Service\":\"web\",\"State\":\"running\"}\n{\"Service\":\"worker\",\"State\":\"running\",\"Health\":\"starting\"}", false},
+		{`[]`, false}, {`not-json`, false}, {`{"Service":"web","State":"running","ExitCode":1}`, false},
 	} {
 		_, ready := parseContainers(tc.raw)
 		if ready != tc.ready {

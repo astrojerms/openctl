@@ -135,6 +135,10 @@ same tab; explicitly resume to observe accepted work, then refresh previews and
 confirmations before any new attempt. Its GPU driver reboot is explicit; there
 is no automatic VM recreation. Use `openctl ctl preview -f resource.yaml` before
 CLI Apply; previews distinguish metadata edits from spec edits and live drift.
+Application checks distinguish **Ready**, **Not ready**, **Unknown** and
+**Not configured**. Guest access failure leaves skipped dependent checks unknown,
+not falsely failed; an absent optional public endpoint is neutral. Required
+unknown/failed checks still block readiness and guided progression.
 
 The wizard's existing-guest list uses saved VM metadata without scanning every
 Proxmox context. An unrelated provider outage does not hide choices; saved names

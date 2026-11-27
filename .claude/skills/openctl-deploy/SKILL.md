@@ -300,6 +300,13 @@ do not forward raw provider errors, response bodies, URLs or certificate fields.
   and cloud-init completion (`cloud-init status --wait`) when applicable. For
   k3s, inspect node readiness using the produced kubeconfig securely. Do not
   claim an application ready merely because a VM exists or an Apply succeeded.
+- For standalone applications, inspect each `status.checks.<name>.state`:
+  `ready`, `not_ready`, `unknown` or `not_configured`. Skipped dependent probes
+  are unknown, not observed failures; absent optional public exposure is neutral,
+  not a passed endpoint check. Required unknown/failed evidence keeps aggregate
+  `status.ready` false. Per-check state replaces the old per-check ready boolean;
+  upgrade structured-output consumers with the controller/console. Do not
+  publish, reboot or retry automatically to turn a check green.
 - Keep the approved desired manifest as the repeatable artifact. Delete only
   task-owned temporary preflight files. Never clean up infrastructure by default.
 - Report controller/context, resource names and physical IDs, manifest paths,

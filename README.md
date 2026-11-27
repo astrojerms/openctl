@@ -1189,6 +1189,24 @@ openctl ctl apply -f examples/jellyfin/application.cue --values /secure/jellyfin
   are previewed after local readiness; public HTTP is checked independently.
   DNS success alone is not application readiness.
 
+Standalone application evidence uses `status.checks.<name>.state`:
+
+| State | Meaning |
+|-------|---------|
+| `ready` | The attempted check passed. |
+| `not_ready` | The attempted check failed or observed a missing/unhealthy runtime. |
+| `unknown` | No usable evidence: for example, a dependent probe skipped because guest SSH is unavailable, or unreadable container output. |
+| `not_configured` | Optional public exposure is absent; no public endpoint was tested or published. |
+
+Resource detail and the guided review distinguish these states; only `ready`
+is green. An absent public endpoint does not block a healthy private application.
+A configured endpoint is checked independently even when guest access fails.
+Required unknown/failed checks keep aggregate `status.ready` false and block
+guided progression/publication. This per-check `state` replaces the former
+`ready` boolean; update structured-output consumers and upgrade console/controller
+together. Aggregate `status.ready` remains a boolean. No check replaces a real
+playback test or authorizes a reboot, retry or public exposure.
+
 Changing the pinned image is an in-place application rollout. Target host,
 project/directory and NAS placement are immutable to prevent orphaning data.
 Test actual transcoded playback, including HDR if used: a healthy GPU probe

@@ -323,6 +323,28 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
   were GET-only; no application locator/desired state, SSH execution or live
   homelab changes. No physical application-readiness claim.
 
+**Honest independent application readiness (2026-11-27):**
+
+- [x] Per-check evidence now has one canonical `state`: `ready`, `not_ready`,
+  `unknown` or `not_configured`. Guest-unavailable dependent probes and
+  malformed/incomplete container observations are unknown; valid empty container
+  inventory is not ready. Absent optional public exposure is neutral, while a
+  configured public probe remains independent of guest access and gates readiness.
+- [x] Resource details and guided reviews share strict state parsing and badge
+  labels. Only observed success is green; unsupported/malformed/obsolete evidence
+  is unknown. Aggregate `status.ready` remains boolean and required failed/unknown
+  evidence still blocks guided completion/publication. The old per-check boolean
+  is removed; structured-output consumers must migrate with the controller/UI.
+- Verification: application-provider package checks and 28 focused mounted/helper
+  console cases passed; Svelte reported zero errors/warnings and the production
+  build passed. Actual built-console Chromium and viewer CLI inspection used
+  native app-provider, SQLite, TLS/gRPC and verified local SSH transport with
+  simulated probe responses. Guest authentication failure, GPU failure, invalid
+  container output, empty containers and a healthy private app retained distinct
+  evidence and aggregate states. No operation was admitted; fixture intent and
+  locator counts were unchanged. The SSH simulator executed no guest shell
+  commands. No live homelab mutation, real GPU/media or playback acceptance.
+
 The next product acceptance gate is the complete operator journey on real
 hardware, including recovery, media playback and any approved public endpoint.
 See [direction](docs/direction.md). Provider breadth is downstream of that gate.

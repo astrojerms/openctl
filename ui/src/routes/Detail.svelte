@@ -4,7 +4,7 @@
   import { resources, ownership, operations, UnauthorizedError, type Operation, type Resource, type ResourceRef, type ActionSpec, type MigrationBundle } from '../lib/api';
   import { auth, canMutate } from '../lib/auth';
   import { canEditDesired, canManageOwnership, desiredMutationHint } from '../lib/authority';
-  import { applicationChecks, childHealth, type ChildState } from '../lib/detailState';
+  import { applicationCheckBadge, applicationChecks, childHealth, type ChildState } from '../lib/detailState';
   import { createDetailInspection, detailManifestYAML, type DetailLease } from '../lib/detailInspection';
   import { createDeleteAttempt } from '../lib/deletionAttempt';
   import { focusOpsDrawer } from '../lib/opsDrawer';
@@ -789,7 +789,8 @@
             <thead><tr><th>Check</th><th>Readiness</th><th>Details</th></tr></thead>
             <tbody>
               {#each appChecks as check}
-                <tr><td>{check.name}</td><td><span class="state state-{check.ready === true ? 'good' : check.ready === false ? 'warn' : 'unknown'}">{check.ready === true ? 'Ready' : check.ready === false ? 'Not ready' : 'Unknown'}</span></td><td>{check.message || 'No details reported'}</td></tr>
+                {@const badge = applicationCheckBadge(check.state)}
+                <tr><td>{check.name}</td><td><span class="state state-{badge.tone}">{badge.label}</span></td><td>{check.message || 'No details reported'}</td></tr>
               {/each}
             </tbody>
           </table>

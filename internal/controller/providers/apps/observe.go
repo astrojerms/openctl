@@ -39,6 +39,9 @@ func parseContainers(output string) ([]containerState, bool) {
 	}
 	ready := len(states) > 0
 	for _, c := range states {
+		if c.Service == "" || c.State == "" {
+			return nil, false
+		}
 		if c.State != "running" || (c.Health != "" && c.Health != "healthy") || c.ExitCode != 0 {
 			ready = false
 		}
@@ -53,8 +56,8 @@ func (p *Provider) observe(ctx context.Context, kind, name string, l locator) *p
 		r.Spec["publicEndpoint"] = l.PublicEndpoint
 	}
 	checks := map[string]any{}
-	set := func(key string, ready bool, message string) {
-		checks[key] = map[string]any{"ready": ready, "message": message}
+	set := func(key, state, message string) {
+		checks[key] = map[string]any{"state": state, "message": message}
 	}
 	r.Status["checks"] = checks
 	r.Status["ready"], r.Status["phase"], r.Status["state"] = false, "degraded", "degraded"
@@ -66,9 +69,10 @@ func (p *Provider) observe(ctx context.Context, kind, name string, l locator) *p
 	}
 	_, err := p.run(ctx, l, "observe verified guest SSH", "true", nil)
 	reachable := err == nil
-	set("vm", reachable, "Verified SSH guest is reachable")
-	if !reachable {
-		set("vm", false, "Guest SSH unavailable or host key unverified")
+	if reachable {
+		set("vm", "ready", "Verified SSH guest is reachable")
+	} else {
+		set("vm", "not_ready", "Guest SSH unavailable or host key unverified")
 	}
 	allReady := reachable
 	if reachable {
@@ -83,14 +87,20 @@ func (p *Provider) observe(ctx context.Context, kind, name string, l locator) *p
 			}
 		}
 		allReady = allReady && ready
-		set("application", ready, "All application containers must be running with healthy (or absent) container health checks")
+		state := "not_ready"
+		if err == nil && containers == nil {
+			state = "unknown"
+		} else if ready {
+			state = "ready"
+		}
+		set("application", state, "All application containers must be running with healthy (or absent) container health checks")
 		observed := make([]map[string]any, 0, len(containers))
 		for _, c := range containers {
 			observed = append(observed, map[string]any{"service": c.Service, "state": c.State, "health": c.Health, "exitCode": c.ExitCode})
 		}
 		r.Status["containers"] = observed
 	} else {
-		set("application", false, "Container state unavailable until guest SSH is reachable")
+		set("application", "unknown", "Restore verified guest SSH access to inspect application containers")
 	}
 	httpReady := false
 	if reachable {
@@ -100,8 +110,14 @@ func (p *Provider) observe(ctx context.Context, kind, name string, l locator) *p
 		}
 		_, err := p.run(ctx, l, "probe application HTTP", "set -e; "+command, nil)
 		httpReady = err == nil
+		state := "not_ready"
+		if httpReady {
+			state = "ready"
+		}
+		set("http", state, "Application HTTP probe must succeed; Jellyfin additionally requires completed onboarding")
+	} else {
+		set("http", "unknown", "Restore verified guest SSH access to probe application HTTP and onboarding completion")
 	}
-	set("http", httpReady, "Application HTTP probe must succeed; Jellyfin additionally requires completed onboarding")
 	allReady = allReady && httpReady
 	if kind == "Jellyfin" {
 		checksToRun := []struct{ key, command, message string }{
@@ -111,11 +127,17 @@ func (p *Provider) observe(ctx context.Context, kind, name string, l locator) *p
 		}
 		for _, check := range checksToRun {
 			ready := false
+			state := "unknown"
+			message := "Restore verified guest SSH access to inspect this application dependency"
 			if reachable {
 				_, err := p.run(ctx, l, "observe "+check.key, check.command, nil)
 				ready = err == nil
+				state, message = "not_ready", check.message
+				if ready {
+					state = "ready"
+				}
 			}
-			set(check.key, ready, check.message)
+			set(check.key, state, message)
 			allReady = allReady && ready
 		}
 		if reachable {
@@ -128,10 +150,14 @@ func (p *Provider) observe(ctx context.Context, kind, name string, l locator) *p
 		}
 	}
 	if l.PublicEndpoint == "" {
-		set("publicEndpoint", false, "Not configured; no endpoint was published")
+		set("publicEndpoint", "not_configured", "Not configured; no endpoint was published")
 	} else {
 		ready := probePublic(ctx, l.PublicEndpoint)
-		set("publicEndpoint", ready, "The configured public HTTP endpoint must respond successfully independently of guest/application readiness")
+		state := "not_ready"
+		if ready {
+			state = "ready"
+		}
+		set("publicEndpoint", state, "The configured public HTTP endpoint must respond successfully independently of guest/application readiness")
 		allReady = allReady && ready
 	}
 	r.Status["ready"] = allReady

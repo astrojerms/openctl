@@ -193,13 +193,40 @@ describe('saved-only detail inspection', () => {
     expect(apply).not.toHaveBeenCalled();
   });
 
+  it('renders mixed application evidence neutrally for skipped, absent optional, and unsupported checks', async () => {
+    const appProps = { ...props, apiVersion: 'apps.openctl.io/v1', kind: 'Jellyfin' };
+    const resource = { ...saved.resource, apiVersion: appProps.apiVersion, kind: appProps.kind };
+    vi.spyOn(inventoryApi, 'get').mockResolvedValue({ ...saved, resource });
+    vi.spyOn(resources, 'get').mockResolvedValue({ resource: { ...resource, status: { ready: false, checks: {
+      application: { state: 'ready', message: '<img src=x onerror=alert(1)>' },
+      http: { state: 'not_ready', message: 'Attempted probe failed' },
+      gpu: { state: 'unknown', message: 'Skipped without SSH' },
+      publicEndpoint: { state: 'not_configured' },
+      future: { state: 'future' }, obsolete: { ready: true }, malformed: [],
+    } } } });
+    component = mount(Detail, { target, props: appProps });
+    await settle();
+    const rows = [...target.querySelectorAll('tr')];
+    for (const [name, label, tone] of [
+      ['application', 'Ready', 'good'], ['http', 'Not ready', 'warn'],
+      ['gpu', 'Unknown', 'unknown'], ['publicEndpoint', 'Not configured', 'unknown'],
+      ['future', 'Unknown', 'unknown'], ['obsolete', 'Unknown', 'unknown'], ['malformed', 'Unknown', 'unknown'],
+    ]) {
+      const row = rows.find((node) => node.cells[0]?.textContent === name)!;
+      expect(row.cells[1].textContent).toBe(label);
+      expect(row.cells[1].querySelector(`.state-${tone}`)).not.toBeNull();
+    }
+    expect(target.textContent).toContain('<img src=x onerror=alert(1)>');
+    expect(target.querySelector('img')).toBeNull();
+  });
+
   it('removes application checks and child readiness and ignores late child results when observation fails', async () => {
     const child = Promise.withResolvers<GetResourceResponse>();
     const appProps = { ...props, apiVersion: 'apps.openctl.io/v1', kind: 'Application' };
     const appSaved = { ...saved, resource: { ...saved.resource, apiVersion: appProps.apiVersion, kind: appProps.kind } };
     const appObserved: GetResourceResponse = { resource: {
       ...appSaved.resource,
-      status: { phase: 'ready', ready: true, checks: { endpoint: { ready: true, message: 'previous green check' } } },
+      status: { phase: 'ready', ready: true, checks: { endpoint: { state: 'ready', message: 'previous green check' } } },
       children: [{ apiVersion: props.apiVersion, kind: props.kind, name: 'child' }],
     } };
     vi.spyOn(inventoryApi, 'get').mockResolvedValue(appSaved);

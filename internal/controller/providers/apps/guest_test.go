@@ -21,11 +21,10 @@ func TestGuestReadinessDoesNotImplyDockerOrHTTPReadiness(t *testing.T) {
 		return "", errors.New("Docker missing")
 	})
 	observed := p.observe(context.Background(), r.Kind, r.Metadata.Name, l)
-	checks := observed.Status["checks"].(map[string]any)
-	if checks["vm"].(map[string]any)["ready"] != true {
-		t.Fatal("healthy SSH guest was conflated with missing application runtime")
-	}
-	if checks["application"].(map[string]any)["ready"] != false || checks["http"].(map[string]any)["ready"] != false || observed.Status["ready"] != false {
+	assertReadinessChecks(t, observed.Status, map[string]string{
+		"vm": "ready", "application": "not_ready", "http": "not_ready", "publicEndpoint": "not_configured",
+	})
+	if observed.Status["ready"] != false {
 		t.Fatal("VM running incorrectly reported an application ready")
 	}
 }
@@ -47,6 +46,9 @@ func TestJellyfinReportsRebootRequirementIndependentlyOfApplication(t *testing.T
 		return "", errors.New("driver not loaded")
 	})
 	observed := p.observe(context.Background(), "Jellyfin", "media", l)
+	assertReadinessChecks(t, observed.Status, map[string]string{
+		"vm": "ready", "application": "not_ready", "http": "not_ready", "media": "not_ready", "gpu": "not_ready", "onboarding": "not_ready", "publicEndpoint": "not_configured",
+	})
 	if observed.Status["phase"] != "reboot-required" || observed.Status["ready"] != false {
 		t.Fatalf("reboot requirement hidden: %v", observed.Status)
 	}

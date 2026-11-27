@@ -7,6 +7,7 @@
   import { createSavedReview, DeploymentReview, discardSavedReview, failedReviewOperation, loadReviewBinding, readSavedReview, REVIEW_KEY, reviewError, type ReviewBinding, type ReviewState, type SavedReview } from '../lib/deploymentReview';
   import { jellyfinDeployment, APP_API, VM_API, type DeploymentStep, type JellyfinInputs } from '../lib/jellyfin';
   import { routeHref } from '../lib/router';
+  import { applicationCheckBadge, applicationChecks } from '../lib/detailState';
 
   let input: JellyfinInputs = {
     name: 'jellyfin', vmName: '', createVM: false, context: '', node: '', templateVMID: 0,
@@ -141,7 +142,7 @@
   $: monitorOnly = !!operation && ['pending', 'running'].includes(operation.status);
   $: uncertain = !!state?.saved.steps[index]?.attempt && !operation;
   $: applicationReady = current?.resource.apiVersion !== APP_API || observed?.status?.ready === true;
-  $: checks = Object.entries((observed?.status?.checks ?? {}) as Record<string, { ready?: boolean; message?: string }>);
+  $: checks = applicationChecks(observed?.status);
   $: applicationName = steps.find((step) => step.resource.kind === 'Jellyfin')?.resource.metadata.name ?? input.name;
 
   function download(declarations: DeploymentStep[] = steps) {
@@ -343,7 +344,12 @@
       {/if}
       {#if operation}<p>Operation <code>{operation.id}</code>: <strong>{operation.status}</strong>. Leaving this page does not cancel it.</p>{/if}
       {#if operation?.error}<p class="error" role="alert">{operation.error}</p>{/if}
-      {#if checks.length}<ul class="health">{#each checks as [name, check]}<li class:healthy={check.ready === true}><strong>{name}: {check.ready === true ? 'ready' : 'not ready'}</strong> — {check.message ?? 'No readiness evidence'}</li>{/each}</ul>{/if}
+      {#if checks.length}
+        <ul class="health">{#each checks as check}
+          {@const badge = applicationCheckBadge(check.state)}
+          <li class="health-{badge.tone}"><strong>{check.name}: {badge.label}</strong> — {check.message || 'No readiness evidence'}</li>
+        {/each}</ul>
+      {/if}
       {#if !stepDone}
         <div class="actions">
           <button on:click={observe} disabled={busy || !state?.saved.steps[index]?.attempt}>Look up / observe saved request</button>
@@ -387,7 +393,8 @@
   pre { overflow: auto; max-height: 28rem; background: rgba(127,127,127,.08); padding: 1rem; border-radius: 4px; }
   .steps { display: flex; flex-wrap: wrap; gap: .7rem 2rem; padding-left: 1.2rem; color: #888; }
   .steps .active { color: inherit; font-weight: 600; }
-  .steps .done, .success, .healthy { color: #41a77a; }
+  .steps .done, .success, .health-good { color: #41a77a; }
+  .health-warn { color: #c8a24a; }
   .actions { display: flex; gap: .6rem; margin: 1rem 0; }
   .error { color: #e76a6a; white-space: pre-wrap; }
   .health { padding: 1rem 1.5rem; border: 1px solid #555; border-radius: 4px; }

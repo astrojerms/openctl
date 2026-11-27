@@ -16,13 +16,26 @@ export function childHealth(refs: ResourceRef[], states: Record<string, ChildSta
   return { drifted, unhealthy, unknown, tone: drifted || unhealthy ? 'warn' : unknown || !refs.length ? 'unknown' : 'good' };
 }
 
-export interface AppCheck { name: string; ready: boolean | null; message: string }
+export type AppCheckState = 'ready' | 'not_ready' | 'unknown' | 'not_configured';
+export interface AppCheck { name: string; state: AppCheckState; message: string }
+
+const CHECK_BADGES: Record<AppCheckState, StatusBadge> = {
+  ready: { label: 'Ready', tone: 'good' },
+  not_ready: { label: 'Not ready', tone: 'warn' },
+  unknown: { label: 'Unknown', tone: 'unknown' },
+  not_configured: { label: 'Not configured', tone: 'unknown' },
+};
+
+export function applicationCheckBadge(state: AppCheckState): StatusBadge {
+  return CHECK_BADGES[state];
+}
 
 export function applicationChecks(status: Record<string, unknown> | undefined): AppCheck[] {
   const checks = status?.checks;
   if (!checks || typeof checks !== 'object' || Array.isArray(checks)) return [];
   return Object.entries(checks).map(([name, value]) => {
-    const check = value && typeof value === 'object' ? value as Record<string, unknown> : {};
-    return { name, ready: typeof check.ready === 'boolean' ? check.ready : null, message: typeof check.message === 'string' ? check.message : '' };
+    const check = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+    const state = check.state === 'ready' || check.state === 'not_ready' || check.state === 'not_configured' ? check.state : 'unknown';
+    return { name, state, message: typeof check.message === 'string' ? check.message : '' };
   });
 }

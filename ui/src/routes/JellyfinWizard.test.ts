@@ -222,3 +222,48 @@ describe('visible blocked deployment diagnostics', () => {
     expect(JSON.parse(window.sessionStorage.getItem(REVIEW_KEY)!).steps[0].attempt).toBeUndefined();
   });
 });
+
+describe('recovered application readiness evidence', () => {
+  it('keeps unknown and optional evidence neutral and blocks completion after a successful Apply with aggregate false', async () => {
+    const resource: ControllerAPI.Resource = {
+      apiVersion: 'apps.openctl.io/v1', kind: 'Jellyfin', metadata: { name: 'jellyfin' }, spec: {},
+    };
+    window.sessionStorage.setItem(REVIEW_KEY, JSON.stringify({
+      version: 1, binding: { controllerId: 'controller', userId: 'operator' }, cursor: 0,
+      steps: [{ title: 'Install and configure Jellyfin', resource, createOnly: true,
+        attempt: { requestId: 'saved-request', operationId: 'saved-operation', createOnly: true, allowDestructive: false, iKnowThisBreaksTheCluster: false } }],
+    }));
+    vi.mocked(operations.get).mockResolvedValue({
+      id: 'saved-operation', type: 'apply', requestId: 'saved-request', status: 'succeeded',
+      apiVersion: resource.apiVersion, kind: resource.kind, resourceName: resource.metadata.name,
+      manifestJson: JSON.stringify(resource),
+    });
+    vi.mocked(resources.get).mockResolvedValue({ applied: resource, resource: { ...resource, status: {
+      ready: false, checks: {
+        application: { state: 'ready', message: '<img src=x onerror=alert(1)>' },
+        http: { state: 'not_ready', message: 'Attempt failed' },
+        gpu: { state: 'unknown', message: 'Skipped without SSH' },
+        publicEndpoint: { state: 'not_configured' },
+        future: { state: 'future' }, obsolete: { ready: true }, malformed: [],
+      },
+    } } });
+    await open();
+    button('Resume saved review').click(); await settle();
+    const checks = [...host.querySelectorAll('.health li')];
+    for (const [name, label, tone] of [
+      ['application', 'Ready', 'good'], ['http', 'Not ready', 'warn'],
+      ['gpu', 'Unknown', 'unknown'], ['publicEndpoint', 'Not configured', 'unknown'],
+      ['future', 'Unknown', 'unknown'], ['obsolete', 'Unknown', 'unknown'], ['malformed', 'Unknown', 'unknown'],
+    ]) {
+      const check = checks.find((node) => node.querySelector('strong')?.textContent === `${name}: ${label}`);
+      expect(check).toBeDefined();
+      expect(check?.classList.contains(`health-${tone}`)).toBe(true);
+    }
+    expect(host.textContent).toContain('<img src=x onerror=alert(1)>');
+    expect(host.querySelector('img')).toBeNull();
+    expect(button('Refresh health').disabled).toBe(false);
+    expect(host.textContent).not.toContain('Application readiness checks passed');
+    expect([...host.querySelectorAll('button')].some((node) => node.textContent === 'Preview next resource')).toBe(false);
+    expect(resources.apply).not.toHaveBeenCalled();
+  });
+});
