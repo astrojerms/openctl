@@ -258,6 +258,27 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 - Upgrade: older unguarded plain-adoption clients must be updated; no automatic
   latest-fingerprint lookup or identity fallback is provided.
 
+**Saved-inventory Jellyfin guest selection (2026-11-27):**
+
+- [x] The guided existing-guest selector reads saved VM metadata, not live
+  whole-lab VM listings. Provider contexts for new provisioning load
+  independently; one metadata/context failure does not erase the other path.
+  Saved choices explicitly convey no live/GPU/SSH/application readiness.
+- [x] Missing snapshots are unavailable, not empty inventory. Explicit saved
+  refresh clears prior guest selection and consent. Preparation requires a
+  successful saved snapshot and selected name, or an active new-VM context.
+  Pending metadata requests are aborted/ignored on teardown and authorization
+  loss ends the session; no provider-scan fallback or automatic Apply exists.
+- Verification: nine mounted wizard regressions passed, with clean Svelte
+  diagnostics and a production build. Actual authenticated browser proof used
+  real SQLite, native Proxmox, application provider and dispatcher wiring with
+  one unavailable context. Wizard open/refresh made zero provider requests;
+  healthy guest preview resolved only its bound VM, while selecting the
+  unavailable guest blocked preview/Apply and kept declarations downloadable.
+  Refresh cleared choice/consent. Only provider GETs occurred, with no submitted
+  operations, application locators, SSH execution or live homelab changes.
+  No GPU, media playback or physical application-readiness claim.
+
 The next product acceptance gate is the complete operator journey on real
 hardware, including recovery, media playback and any approved public endpoint.
 See [direction](docs/direction.md). Provider breadth is downstream of that gate.

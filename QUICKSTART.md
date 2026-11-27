@@ -135,6 +135,13 @@ same tab; explicitly resume to observe accepted work, then refresh previews and
 confirmations before any new attempt. Its GPU driver reboot is explicit; there
 is no automatic VM recreation. Use `openctl ctl preview -f resource.yaml` before
 CLI Apply; previews distinguish metadata edits from spec edits and live drift.
+
+The wizard's existing-guest list uses saved VM metadata without scanning every
+Proxmox context. An unrelated provider outage does not hide choices; saved names
+do not prove GPU/SSH readiness. Preview resolves the selected VM reference.
+Active-context and saved-inventory failures are independent; refreshing guest
+choices clears the old selection and guest consent rather than reusing them.
+
 Apply and Delete print request IDs before submission;
 `openctl ctl op get --request-id ID` recovers a lost acknowledgement without
 submitting again. Console Apply and Delete attempts survive reload in the same

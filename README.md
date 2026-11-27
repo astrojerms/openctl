@@ -1129,6 +1129,15 @@ official image, and controller-side `$secret` references for SMB/admin/viewer
 credentials. The wizard previews each resource and lets you download its
 reproducible manifests. Kubernetes is not required.
 
+The existing-guest selector reads **saved VM metadata**, not a whole-lab live
+scan. Unavailable unrelated Proxmox contexts do not hide saved choices. Names
+are not proof of current existence, dedicated/GPU suitability, guest access or
+application readiness: the fresh deployment preview resolves the selected VM
+reference and blocks if it cannot be read. Active contexts for new provisioning
+load independently. Saved-inventory failures are shown as unavailable, not an
+empty lab; refresh explicitly, reselect the guest and renew consent before
+preparing a review. No fallback provider scan or automatic Apply occurs.
+
 For CLI/GitOps, use `examples/jellyfin/vm.cue` and
 `examples/jellyfin/application.cue` with private CUE values:
 

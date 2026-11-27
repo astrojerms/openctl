@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { stringify } from 'yaml';
-  import { canMutate } from '../lib/auth';
+  import { auth, canMutate } from '../lib/auth';
   import { canEditDesired, desiredMutationHint } from '../lib/authority';
-  import { discovery, resources, type DiscoveryContext, type DryRunApplyResponse, type Operation, type Resource } from '../lib/api';
+  import { discovery, inventoryApi, UnauthorizedError, type DiscoveryContext, type DryRunApplyResponse, type Operation, type Resource, type SavedResourceMetadata } from '../lib/api';
   import { createSavedReview, DeploymentReview, discardSavedReview, failedReviewOperation, loadReviewBinding, readSavedReview, REVIEW_KEY, reviewError, type ReviewBinding, type ReviewState, type SavedReview } from '../lib/deploymentReview';
   import { jellyfinDeployment, APP_API, VM_API, type DeploymentStep, type JellyfinInputs } from '../lib/jellyfin';
   import { routeHref } from '../lib/router';
@@ -17,7 +17,13 @@
     expose: false, hostname: '', tunnel: '', accountId: '', zoneId: '',
   };
   let contexts: DiscoveryContext[] = [];
-  let vms: Resource[] = [];
+  let vms: SavedResourceMetadata[] = [];
+  let loadingVMs = true;
+  let vmError = '';
+  let loadingContexts = true;
+  let contextError = '';
+  let vmRequests = new AbortController();
+  let contextRequests = new AbortController();
   let dedicated = false;
   let trustedKey = false;
   let publicConsent = false;
@@ -42,18 +48,55 @@
 
   onMount(() => {
     void refreshRecovery();
-    void loadInventory();
+    void loadSavedVMs();
+    void loadContexts();
   });
-  onDestroy(() => { destroyed = true; engine?.dispose(); });
+  onDestroy(() => {
+    destroyed = true;
+    vmRequests.abort();
+    contextRequests.abort();
+    engine?.dispose();
+  });
 
-  async function loadInventory() {
+  function inventoryFailure(err: unknown) {
+    if (!(err instanceof UnauthorizedError)) return false;
+    auth.set({ kind: 'signed-out' });
+    return true;
+  }
+  async function loadSavedVMs() {
+    if (destroyed || busy) return;
+    vmRequests.abort();
+    const request = vmRequests = new AbortController();
+    loadingVMs = true; vmError = '';
+    if (!input.createVM) { input.vmName = ''; dedicated = false; trustedKey = false; }
     try {
-      const [ctx, inventory] = await Promise.all([discovery.contexts(), resources.list(VM_API, 'VirtualMachine')]);
-      if (destroyed) return;
-      contexts = ctx.contexts ?? [];
-      input.context = contexts.find((c) => c.defaultContext)?.name ?? contexts[0]?.name ?? '';
-      vms = inventory.resources ?? [];
-    } catch (err) { if (!destroyed) error = reviewError(err); }
+      const inventory = await inventoryApi.list(VM_API, 'VirtualMachine', { signal: request.signal });
+      if (destroyed || request !== vmRequests) return;
+      vms = (inventory.resources ?? []).slice().sort((a, b) => a.metadata.name.localeCompare(b.metadata.name));
+    } catch (err) {
+      if (destroyed || request !== vmRequests || inventoryFailure(err)) return;
+      vms = [];
+      vmError = reviewError(err);
+    } finally { if (!destroyed && request === vmRequests) loadingVMs = false; }
+  }
+  async function loadContexts() {
+    if (destroyed || busy) return;
+    contextRequests.abort();
+    const request = contextRequests = new AbortController();
+    loadingContexts = true; contextError = '';
+    try {
+      const response = await discovery.contexts(undefined, { signal: request.signal });
+      if (destroyed || request !== contextRequests) return;
+      contexts = response.contexts ?? [];
+      if (!contexts.some((context) => context.name === input.context)) {
+        input.context = contexts.find((context) => context.defaultContext)?.name ?? contexts[0]?.name ?? '';
+        if (input.createVM) { dedicated = false; trustedKey = false; }
+      }
+    } catch (err) {
+      if (destroyed || request !== contextRequests || inventoryFailure(err)) return;
+      contexts = [];
+      contextError = reviewError(err);
+    } finally { if (!destroyed && request === contextRequests) loadingContexts = false; }
   }
   async function refreshRecovery() {
     loadingRecovery = true; recoveryError = ''; savedError = ''; binding = null; savedCandidate = null;
@@ -110,6 +153,11 @@
   async function prepare() {
     await run(async () => {
       if (!dedicated || !trustedKey || (input.expose && !publicConsent)) throw new Error('Confirm the dedicated guest, verified SSH host key, and any public exposure before review.');
+      if (input.createVM) {
+        if (loadingContexts || contextError || !contexts.some((context) => context.name === input.context)) throw new Error('Load and select an active Proxmox context before reviewing a new VM.');
+      } else if (loadingVMs || vmError || !vms.some((vm) => vm.metadata.name === input.vmName)) {
+        throw new Error('Load saved VM inventory and explicitly select a saved VM before preparing this review. Saved names are not live readiness evidence.');
+      }
       steps = jellyfinDeployment(input);
       index = 0; preview = null; operation = null; observed = null; verified = false;
       // Keep declarations downloadable even when capability/storage preflight fails.
@@ -201,7 +249,10 @@
         <label class="check"><input type="checkbox" bind:checked={input.createVM} /> Provision a new VM</label>
         {#if input.createVM}
           <label>VM name <input bind:value={input.vmName} required /></label>
-          <label>Proxmox context <select bind:value={input.context} required><option value="">Select context</option>{#each contexts as ctx}<option value={ctx.name}>{ctx.name}</option>{/each}</select></label>
+          <label>Proxmox context <select bind:value={input.context} required disabled={loadingContexts || !!contextError}><option value="">Select context</option>{#each contexts as ctx}<option value={ctx.name}>{ctx.name}</option>{/each}</select></label>
+          {#if loadingContexts}<p role="status">Loading active provider contexts…</p>
+          {:else if contextError}<p class="error" role="alert">Active contexts unavailable: {contextError}</p><button type="button" on:click={loadContexts}>Retry provider contexts</button>
+          {:else if contexts.length === 0}<p class="hint">No active Proxmox contexts. Configure a provider and restart the controller.</p>{/if}
           <label>Proxmox node <input bind:value={input.node} required /></label>
           <label>Ubuntu 24.04 template VMID <input type="number" min="1" bind:value={input.templateVMID} required /></label>
           <label>VM disk and EFI storage <input bind:value={input.storage} required /></label>
@@ -212,8 +263,12 @@
           <label>Guest SSH public key <textarea bind:value={input.sshPublicKey} required rows="2"></textarea></label>
           <p class="hint">4 vCPUs, 4 GiB RAM, 32 GiB SSD, UEFI/q35. Host IOMMU/VFIO and the PCI mapping must already be prepared; OpenCtl does not disconnect host hardware automatically.</p>
         {:else}
-          <label>Managed GPU VM <select bind:value={input.vmName} required><option value="">Select a VM</option>{#each vms as vm}<option value={vm.metadata.name}>{vm.metadata.name}</option>{/each}</select></label>
-          <p class="hint">Existing VM not listed? <a href={routeHref({ name: 'discover' })}>Discover and adopt it first.</a></p>
+          <label>Saved managed VM <select bind:value={input.vmName} required disabled={loadingVMs || !!vmError}><option value="">Select a saved VM</option>{#each vms as vm}<option value={vm.metadata.name}>{vm.metadata.name}</option>{/each}</select></label>
+          {#if loadingVMs}<p role="status">Loading saved VM inventory…</p>
+          {:else if vmError}<p class="error" role="alert">Saved VM inventory unavailable: {vmError}</p>
+          {:else if vms.length === 0}<p class="hint">No saved VirtualMachine intent. Discover and adopt an existing VM or provision a new dedicated guest.</p>{/if}
+          <button type="button" on:click={loadSavedVMs} disabled={loadingVMs}>Refresh saved VM choices</button>
+          <p class="hint">These names come from saved intent, not a live provider scan or proof of GPU/SSH readiness. Preview resolves only the selected VM reference; an unavailable guest blocks review instead of replanning unrelated infrastructure. <a href={routeHref({ name: 'discover' })}>Discover and adopt an existing VM first.</a></p>
         {/if}
         <label>SSH user <input bind:value={input.sshUser} required /></label>
         <label>Controller-side SSH private key file <input bind:value={input.privateKeyFile} required /></label>
@@ -252,7 +307,7 @@
           <label class="check"><input type="checkbox" bind:checked={publicConsent} required /> I authorize publishing this application at this hostname, after reviewing its access policy.</label>
         {/if}
       </fieldset>
-      <button class="primary" disabled={busy || loadingRecovery || !$canMutate}>Prepare and save deployment review</button>
+      <button class="primary" disabled={busy || loadingRecovery || !$canMutate || (input.createVM ? loadingContexts || !!contextError : loadingVMs || !!vmError)}>Prepare and save deployment review</button>
     </form>
   {:else}
     <ol class="steps">{#each steps as step, i}<li class:active={i === index} class:done={verified && (i < index || (i === index && stepDone))}>{step.title}</li>{/each}</ol>

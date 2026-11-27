@@ -130,6 +130,12 @@ secret/reference markers. Protect output like a manifest. This is not proof of
 existence, ownership, readiness or permission to recreate; do not treat a saved
 read as a successful live inspection or resolve its markers locally.
 
+The Jellyfin wizard likewise selects existing guests from saved metadata without
+a whole-lab provider scan. Do not infer live or GPU/SSH readiness from an offered
+name. Its preview resolves the selected VM reference; an unavailable target must
+block review, not trigger fallback adoption, recreation or unrelated scans.
+Active contexts for new VM provisioning load independently of saved guest names.
+
 For a VM, establish the endpoint/context, actual node, template or image,
 storage, bridge/VLAN, available capacity, CPU, memory in MiB, disk sizes,
 guest access, power state, and DHCP or reserved static IP/gateway/DNS. Check
