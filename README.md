@@ -984,6 +984,21 @@ has no managed resource yet. Secret markers and desired metadata are preserved;
 inherited destructive approvals are cleared for fresh review. A failed Get caused
 by authentication or connectivity is not treated as an absent resource.
 
+The resource editor and template starters persist only Apply request metadata in
+this tab, bound to the controller, principal and review surface. Draft manifests,
+template parameters, credentials and checked gates are **not** saved. Keep a
+protected manifest copy before leaving an unsent draft. After reload or a lost
+response, **Recover Apply request** reads the original operation without another
+submission; the submitted target is shown separately from the current draft.
+Acknowledgement is not Apply success and never silently updates the baseline or
+navigates away. **Review new Apply** rechecks a terminal outcome and starts fresh
+preview/consent; unknown, active or pruned requests cannot authorize another key.
+
+**Reconcile** opens the resource editor to review stored intent versus live drift;
+it does not immediately Apply. Failed first-creation retries without a managed
+baseline remain create-only, so newly discovered same-name resources are not
+silently overwritten.
+
 The Jellyfin wizard saves its prepared steps and accepted request/operation IDs
 in this tab's session storage, bound to the controller and signed-in principal.
 After reload, explicitly **Resume saved review** or discard/download it. Resume

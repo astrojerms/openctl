@@ -161,6 +161,27 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
   and principal isolation. All provider work was isolated fixture state; no live
   homelab infrastructure changed.
 
+**2026-11-27 — recoverable Apply across the console**
+
+- [x] Resource create/update and template starters use bound durable Apply
+  attempts, capability/acknowledgement checks and explicit read-only recovery.
+  Browser storage contains identity metadata only, never draft manifests,
+  parameters, credentials, destructive flags or consent.
+- [x] Reload preserves the submitted target independently of current defaults.
+  Acknowledgement no longer updates the baseline or triggers delayed navigation;
+  confirmed terminal outcomes permit an explicitly refreshed review and new key.
+- [x] Manual Reconcile opens the same editor preview/review path instead of an
+  unkeyed Apply. First-create retries without a baseline remain create-only.
+  Route/session/schema/preview leases reject stale asynchronous work.
+- Verification: frontend regression coverage and focused corrected-case checks,
+  clean Svelte diagnostics and production build. Actual authenticated browser
+  proof exercised reviewed reconciliation with zero submission, exact form
+  updates preserving metadata/inline credentials, editor/template acknowledgements
+  genuinely lost after admission, reload/recovery without resubmission, fresh-key
+  review, blank restored parameters, operation inspection and principal isolation.
+  Exactly three explicit keyed fixture operations ran; no live homelab changes
+  or physical application-readiness claim.
+
 The next product acceptance gate is the complete operator journey on real
 hardware, including recovery, media playback and any approved public endpoint.
 See [direction](docs/direction.md). Provider breadth is downstream of that gate.

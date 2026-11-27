@@ -1,4 +1,4 @@
-import { ApiError, operations, resources, type GetResourceResponse, type Operation, type Resource, type ResourceRef } from './api';
+import { ApiError, operations, resources, type GetResourceResponse, type Operation, type RequestOptions, type Resource, type ResourceRef } from './api';
 import { resourceToYAML } from './yaml';
 import { writable } from 'svelte/store';
 
@@ -72,6 +72,7 @@ export interface EditIntent {
   retryFromOpId: string;
   ownerRefs: ResourceRef[];
   children: ResourceRef[];
+  createOnly: boolean;
 }
 
 // Resolve explicit retry intent before looking for applied state: a first failed
@@ -81,16 +82,19 @@ export async function loadEditIntent(
   storage: RetryStorage,
   getOperation = operations.get,
   getResource = resources.get,
+  opts?: RequestOptions,
 ): Promise<EditIntent> {
   const marker = readRetry(storage, target);
-  const submitted = marker ? retryManifest(await getOperation(marker.id), marker) : null;
+  const submitted = marker ? retryManifest(await getOperation(marker.id, false, opts), marker) : null;
+  opts?.signal?.throwIfAborted();
   let response: GetResourceResponse | null;
   try {
-    response = await getResource(target.apiVersion, target.kind, target.name);
+    response = await getResource(target.apiVersion, target.kind, target.name, opts);
   } catch (err) {
     if (!submitted || !(err instanceof ApiError) || err.status !== 404) throw err;
     response = null;
   }
+  opts?.signal?.throwIfAborted();
   const applied = response?.applied;
   const observed = response?.resource;
   const baseline = applied ? resourceToYAML(withoutRequestConsent(applied)) : observed ? resourceToYAML(withoutRequestConsent({
@@ -102,5 +106,6 @@ export async function loadEditIntent(
     retryFromOpId: marker?.id ?? '',
     ownerRefs: observed?.metadata?.ownerRefs ?? applied?.metadata?.ownerRefs ?? submitted?.metadata?.ownerRefs ?? [],
     children: observed?.children ?? [],
+    createOnly: !applied && !observed,
   };
 }

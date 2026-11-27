@@ -1,21 +1,24 @@
 <script lang="ts">
   import { onDestroy, setContext } from 'svelte';
-  import { writable } from 'svelte/store';
+  import { get, writable } from 'svelte/store';
   import {
-    resources, schemas, UnauthorizedError,
-    type DryRunApplyResponse, type Resource,
+    resources, schemas, ApiError, UnauthorizedError,
+    type DryRunApplyResponse, type Operation, type Resource,
   } from '../lib/api';
   import { parseYAML, resourceToYAML } from '../lib/yaml';
   import { advancedKind } from '../lib/catalogue';
   import { canEditDesired, desiredMutationHint } from '../lib/authority';
+  import { auth, type AuthState } from '../lib/auth';
+  import { createApplyAttempt, type ApplyAttemptScope } from '../lib/applyAttempt';
   import { ops as opsStore } from '../lib/ops';
-  import type { OperationRow } from '../lib/watch';
+  import { focusOpsDrawer } from '../lib/opsDrawer';
   import { routeHref, navigate } from '../lib/router';
   import { extraKeys, fromManifest, initialValue, scrubEmpty, type FormField as FF } from '../lib/formSchema';
   import { loadEditIntent, retryRevision } from '../lib/retry';
   import MonacoEditor from '../components/MonacoEditor.svelte';
   import MonacoDiffEditor from '../components/MonacoDiffEditor.svelte';
   import FormField from '../components/FormField.svelte';
+  import ApplyAttemptPanel from '../components/ApplyAttemptPanel.svelte';
 
   export let apiVersion: string;
   export let kind: string;
@@ -54,10 +57,6 @@
   setContext('resourceManifestStore', manifestCtx);
   $: manifestCtx.set(formState);
 
-  // Captured at submit time in create mode so the success-handoff knows
-  // where to navigate after the op succeeds — `resourceName` is empty
-  // until then.
-  let createdName = '';
 
   // Existing resource names for this kind (create mode only). Filled on
   // load and used to warn + block when the user types a name that's
@@ -85,12 +84,13 @@
   // Gate checkboxes — keyed by gate string (e.g. "allow_destructive").
   let checkedGates: Record<string, boolean> = {};
 
-  // Apply lifecycle. `applying` covers the submit roundtrip; once we
-  // have an op id we switch to live op-progress mode driven off the
-  // existing ops store so we don't double-subscribe to WatchOperations.
-  let applying = false;
-  let applyError = '';
-  let liveOpId = '';
+  const attempt = createApplyAttempt({
+    storage: () => sessionStorage,
+    canSubmit: () => canSubmitDesired(),
+    onUnauthorized: () => auth.set({ kind: 'signed-out' }),
+  });
+  $: applying = $attempt.busy === 'submitting';
+  let createOnly = false;
 
   // U6 composite-UX gate: when the resource being edited is owned by
   // another (e.g. a Cluster's member VM), editing is blocked with a
@@ -144,88 +144,137 @@
   // typing).
   let formDriving = false;
 
-  $: void load(apiVersion, kind, resourceName, $retryRevision);
-  let loadRevision = 0;
+  interface EditorLoad {
+    apiVersion: string;
+    kind: string;
+    name: string;
+    auth: AuthState;
+    controller: AbortController;
+  }
+  let activeLoad: EditorLoad | null = null;
+  let previewController: AbortController | null = null;
+  let formSchemaRevision = 0;
+  let schemaLoading = false;
+  let schemaReady = false;
+  let reviewRefreshing = false;
+  $: void load(apiVersion, kind, resourceName, $retryRevision, $auth);
 
-  async function load(av: string, k: string, n: string, _retryRevision: number) {
+  function isCurrent(load: EditorLoad | null): load is EditorLoad {
+    return !!load && activeLoad === load && !load.controller.signal.aborted
+      && load.apiVersion === apiVersion && load.kind === kind && load.name === resourceName
+      && load.auth === get(auth);
+  }
+
+  async function load(av: string, k: string, n: string, _retryRevision: number, session: AuthState) {
+    activeLoad?.controller.abort();
+    previewController?.abort();
+    attempt.close();
+    const current: EditorLoad = {
+      apiVersion: av, kind: k, name: n,
+      auth: session, controller: new AbortController(),
+    };
+    activeLoad = current;
     loading = true;
-    const revision = ++loadRevision;
+    observedRow = null;
     loadError = '';
     ownerRefs = [];
-    liveOpId = '';
-    applyError = '';
     retryFromOpId = '';
     liveChildren = [];
     baseline = '';
     text = '';
+    createOnly = n === '';
+    existingNames = new Set();
+    formSchema = null;
+    formSchemaError = '';
+    formState = null;
+    schemaReady = false;
+    schemaLoading = false;
+    reviewRefreshing = false;
+    formErrorsCtx.set({});
     if (timer !== undefined) clearTimeout(timer);
     previewRevision++;
+    previewing = false;
     plan = null;
     reviewedResource = null;
     reviewedText = '';
     checkedGates = {};
-    createdName = '';
+    parseError = '';
+    validateErrors = [];
+    fieldErrorsCtx.set({});
+    const scope: ApplyAttemptScope = n
+      ? { source: 'resource', apiVersion: av, kind: k, name: n }
+      : { source: 'create', apiVersion: av, kind: k };
+    void attempt.open(scope, session.kind === 'signed-in' ? session.me : null);
+    if (session.kind !== 'signed-in') {
+      loading = false;
+      loadError = 'Sign in to review this manifest.';
+      return;
+    }
     try {
       if (n === '') {
-        // Create mode: no remote fetch, no baseline. Seed the editor with
-        // a minimal manifest stub; loadFormSchema below will replace it
-        // with a schema-driven seed once the schema arrives, but only if
-        // the user hasn't started typing.
-        baseline = '';
         text = seedManifest(av, k);
-        existingNames = new Set();
         schedulePreview();
-        void loadFormSchema(av, k);
-        void loadExistingNames(av, k);
+        void loadFormSchema(current);
+        void loadExistingNames(current);
         return;
       }
-      const intent = await loadEditIntent({ apiVersion: av, kind: k, name: n }, sessionStorage);
-      if (revision !== loadRevision) return;
+      const intent = await loadEditIntent(
+        { apiVersion: av, kind: k, name: n }, sessionStorage, undefined, undefined,
+        { signal: current.controller.signal },
+      );
+      if (!isCurrent(current)) return;
       baseline = intent.baseline;
       text = intent.text;
       ownerRefs = intent.ownerRefs;
       liveChildren = intent.children;
       retryFromOpId = intent.retryFromOpId;
+      createOnly = intent.createOnly;
       schedulePreview();
-      void loadFormSchema(av, k);
+      void loadFormSchema(current);
+      if (createOnly) void loadExistingNames(current);
     } catch (err) {
-      if (revision !== loadRevision || err instanceof UnauthorizedError) return;
+      if (!isCurrent(current)) return;
+      if (err instanceof UnauthorizedError) { auth.set({ kind: 'signed-out' }); return; }
       loadError = err instanceof Error ? err.message : String(err);
     } finally {
-      if (revision === loadRevision) loading = false;
+      if (isCurrent(current)) loading = false;
     }
   }
 
-  async function loadFormSchema(av: string, k: string) {
+  async function loadFormSchema(current: EditorLoad) {
+    if (!isCurrent(current)) return;
+    const revision = ++formSchemaRevision;
+    const { apiVersion: av, kind: k } = current;
     formSchema = null;
     formSchemaError = '';
+    schemaReady = false;
+    schemaLoading = true;
     try {
-      const resp = await schemas.getForm(av, k);
-      if (!resp.json) return;
-      formSchema = JSON.parse(resp.json) as FF;
-      // Create mode: upgrade the stub seed to the schema's defaults if
-      // the user hasn't touched it yet. We compare against the stub —
-      // any divergence means typing has begun and we leave it alone.
-      // The name suggestion carries over so the field isn't blank.
-      if (isCreate && text === seedManifest(av, k)) {
-        const specField = (formSchema.fields ?? []).find((f) => f.name === 'spec')
+      const resp = await schemas.getForm(av, k, { signal: current.controller.signal });
+      if (!isCurrent(current) || revision !== formSchemaRevision) return;
+      const schema = resp.json ? JSON.parse(resp.json) as FF : null;
+      formSchema = schema;
+      schemaReady = true;
+      // Only this route's untouched create draft may receive schema defaults.
+      // A recovered request target is never used to seed the editable draft.
+      if (schema && current.name === '' && text === seedManifest(av, k)) {
+        const specField = (schema.fields ?? []).find((f) => f.name === 'spec')
           ?? { type: 'object' as const };
         const seededSpec = scrubEmpty(specField, initialValue(specField));
-        const merged = {
-          apiVersion: av,
-          kind: k,
-          metadata: { name: suggestName(k) },
+        text = resourceToYAML({
+          apiVersion: av, kind: k, metadata: { name: suggestName(k) },
           spec: seededSpec as Record<string, unknown> | undefined,
-        };
-        text = resourceToYAML(merged as unknown as import('../lib/api').Resource);
+        });
         schedulePreview();
       }
       reseedFormState();
     } catch (err) {
-      // 404 = no schema for this kind — silently disable the Form tab.
-      if (err instanceof Error && err.message.includes('404')) return;
-      if (err instanceof UnauthorizedError) return;
+      if (!isCurrent(current) || revision !== formSchemaRevision) return;
+      if (err instanceof ApiError && err.status === 404) { schemaReady = true; return; }
+      if (err instanceof UnauthorizedError) { auth.set({ kind: 'signed-out' }); return; }
       formSchemaError = err instanceof Error ? err.message : String(err);
+    } finally {
+      if (isCurrent(current) && revision === formSchemaRevision) schemaLoading = false;
     }
   }
 
@@ -273,20 +322,16 @@
     return out;
   }
 
-  // loadExistingNames fetches the names of resources of this kind so
-  // the create flow can warn on collision. Best-effort: an error here
-  // (controller down, perms) just leaves the set empty — the apply RPC
-  // will still surface real failures.
-  async function loadExistingNames(av: string, k: string) {
+  // Name discovery is advisory; createOnly remains the atomic collision guard.
+  async function loadExistingNames(current: EditorLoad) {
+    if (!isCurrent(current)) return;
     try {
-      const resp = await resources.list(av, k);
+      const resp = await resources.list(current.apiVersion, current.kind, { signal: current.controller.signal });
+      if (!isCurrent(current)) return;
       existingNames = new Set((resp.resources ?? []).map((r) => r.metadata.name));
     } catch (err) {
-      if (err instanceof UnauthorizedError) return;
-      // Don't block the create flow on a list failure — surface in
-      // console for debugging but keep the form usable.
-      // eslint-disable-next-line no-console
-      console.warn('loadExistingNames failed', err);
+      if (!isCurrent(current)) return;
+      if (err instanceof UnauthorizedError) auth.set({ kind: 'signed-out' });
     }
   }
 
@@ -299,8 +344,8 @@
     formState = fromManifest(formSchema, parsed.doc);
   }
 
-  function onFormChange(detail: unknown) {
-    if (!formSchema) return;
+  function onFormChange(detail: unknown, source: EditorLoad | null) {
+    if (!isCurrent(source) || loading || !formSchema) return;
     formState = detail;
     // Form drives the text: serialise the scrubbed state back to YAML
     // and feed it through the same change path the editor uses.
@@ -314,24 +359,24 @@
     }
   }
 
-  function onChange(e: CustomEvent<string>) {
+  function onChange(e: CustomEvent<string>, source: EditorLoad | null) {
+    if (!isCurrent(source) || loading) return;
     text = e.detail;
     if (!formDriving && formSchema && view === 'form') {
       // Shouldn't usually fire — editor is hidden when view is 'form'
       // — but if it does, keep form in sync.
       reseedFormState();
     }
-    // Any edit invalidates a successful in-progress apply view — drop
-    // back to preview mode. (We don't cancel an in-flight Apply RPC;
-    // the user's edit can't change the server-side outcome at that
-    // point.)
-    if (liveOpId && !inflightOpRow(liveOpId)) {
-      liveOpId = '';
-    }
     schedulePreview();
   }
 
+  function onGateChange(gate: string, checked: boolean, source: EditorLoad | null, reviewedPlan: DryRunApplyResponse | null) {
+    if (!isCurrent(source) || plan !== reviewedPlan || !plan?.requiredGates?.includes(gate)) return;
+    checkedGates = { ...checkedGates, [gate]: checked };
+  }
+
   function schedulePreview() {
+    previewController?.abort();
     if (timer !== undefined) clearTimeout(timer);
     previewRevision++;
     plan = null;
@@ -342,10 +387,15 @@
     validateErrors = [];
     fieldErrorsCtx.set({});
     previewing = true;
-    timer = setTimeout(runPreview, PREVIEW_DEBOUNCE_MS) as unknown as number;
+    timer = setTimeout(() => void runPreview(), PREVIEW_DEBOUNCE_MS) as unknown as number;
   }
 
   async function runPreview() {
+    const current = activeLoad;
+    if (!isCurrent(current)) return;
+    previewController?.abort();
+    const controller = new AbortController();
+    previewController = controller;
     const revision = previewRevision;
     const previewText = text;
     parseError = '';
@@ -360,6 +410,12 @@
     }
     if (!parsed.doc.apiVersion || !parsed.doc.kind) {
       parseError = 'apiVersion and kind are required';
+      previewing = false;
+      return;
+    }
+    if (parsed.doc.apiVersion !== current.apiVersion || parsed.doc.kind !== current.kind
+      || (current.name !== '' && parsed.doc.metadata?.name !== current.name)) {
+      parseError = 'The manifest identity must match the resource selected in this editor.';
       previewing = false;
       return;
     }
@@ -378,10 +434,10 @@
       // server, just lets the UI render diagnostics independently of the
       // planning info.
       const [vResp, dResp] = await Promise.all([
-        schemas.validate(resource),
-        resources.dryRunApply(resource),
+        schemas.validate(resource, { signal: controller.signal }),
+        resources.dryRunApply(resource, { signal: controller.signal }),
       ]);
-      if (revision !== previewRevision) return;
+      if (!isCurrent(current) || controller.signal.aborted || revision !== previewRevision) return;
       validateErrors = [...(vResp.errors ?? []), ...(dResp.validationErrors ?? [])];
       plan = dResp;
       reviewedResource = resource;
@@ -396,69 +452,95 @@
       fieldErrorsCtx.set(errs);
       checkedGates = Object.fromEntries((dResp.requiredGates ?? []).map((g) => [g, false]));
     } catch (err) {
-      if (revision !== previewRevision) return;
-      if (err instanceof UnauthorizedError) return;
+      if (!isCurrent(current) || controller.signal.aborted || revision !== previewRevision) return;
+      if (err instanceof UnauthorizedError) { auth.set({ kind: 'signed-out' }); return; }
       validateErrors = [err instanceof Error ? err.message : String(err)];
     } finally {
-      if (revision === previewRevision) previewing = false;
+      if (isCurrent(current) && !controller.signal.aborted && revision === previewRevision) previewing = false;
     }
+  }
+
+  function canSubmitDesired(): boolean {
+    const session = get(auth);
+    return isCurrent(activeLoad) && session.kind === 'signed-in' && !!session.me.principalId
+      && get(canEditDesired) && ownerRefs.length === 0 && !(reviewedResource?.metadata.ownerRefs?.length);
+  }
+
+  function reviewReady(): boolean {
+    const resource = reviewedResource;
+    if (!canSubmitDesired() || loading || loadError || previewing || reviewRefreshing || schemaLoading || !schemaReady
+      || !plan || !resource || reviewedText !== text || parseError
+      || validateErrors.length || (plan.fieldErrors?.length ?? 0) || Object.keys(get(formErrorsCtx)).length
+      || ownerRefs.length || resource.metadata.ownerRefs?.length
+      || resource.apiVersion !== apiVersion || resource.kind !== kind || !resource.metadata.name
+      || (resourceName !== '' && resource.metadata.name !== resourceName)
+      || (plan.operation !== 'create' && plan.operation !== 'update')) return false;
+    if (createOnly && (existingNames.has(resource.metadata.name) || plan.operation !== 'create')) return false;
+    return (plan.requiredGates ?? []).every((gate) =>
+      (gate === 'allow_destructive' || gate === 'i_know_this_breaks_the_cluster') && checkedGates[gate]);
   }
 
   async function doApply() {
-    if (applyBlocked || !$canEditDesired || !plan || !reviewedResource || reviewedText !== text) return;
+    if (!reviewReady() || !reviewedResource) return;
+    const current = activeLoad;
+    const revision = previewRevision;
+    const submittedText = text;
     const resource = reviewedResource;
-    const submittedText = reviewedText;
+    const reviewedPlan = plan;
+    const onlyCreate = createOnly;
+    const gates = { ...checkedGates };
+    await attempt.submit({
+      resource,
+      ...(onlyCreate ? { createOnly: true } : {}),
+      allowDestructive: gates['allow_destructive'] ?? false,
+      iKnowThisBreaksTheCluster: gates['i_know_this_breaks_the_cluster'] ?? false,
+    }, () => reviewReady() && isCurrent(current) && revision === previewRevision && text === submittedText
+      && reviewedResource === resource && plan === reviewedPlan && createOnly === onlyCreate
+      && Object.keys(gates).length === Object.keys(checkedGates).length
+      && Object.entries(gates).every(([gate, checked]) => checkedGates[gate] === checked));
+  }
 
-    applying = true;
-    applyError = '';
+  async function reviewNewApply() {
+    const current = activeLoad;
+    if (!isCurrent(current) || !canSubmitDesired() || reviewRefreshing) return;
+    reviewRefreshing = true;
     try {
-      const submitName = resource.metadata.name;
-      const resp = await resources.apply({
-        resource,
-        ...(isCreate ? { createOnly: true } : {}),
-        allowDestructive: checkedGates['allow_destructive'] ?? false,
-        iKnowThisBreaksTheCluster: checkedGates['i_know_this_breaks_the_cluster'] ?? false,
-      });
-      if (resp.operationId) {
-        liveOpId = resp.operationId;
-        // Treat the just-submitted text as the new baseline — Discard
-        // should revert to what the user just sent, not the stale applied
-        // manifest. Real applied-state catches up via the ops store +
-        // Watch when the dispatcher writes back.
-        baseline = submittedText;
-        // Create mode: remember the submitted name so the success
-        // handoff can navigate to the detail page.
-        if (isCreate) createdName = submitName;
-      }
-    } catch (err) {
-      if (err instanceof UnauthorizedError) return;
-      applyError = err instanceof Error ? err.message : String(err);
+      if (!await attempt.reviewNew() || !isCurrent(current)) return;
+      // Recovery authorizes review only, never inherited readiness or consent.
+      schedulePreview();
+      await Promise.all([loadFormSchema(current), createOnly ? loadExistingNames(current) : Promise.resolve()]);
+      if (isCurrent(current)) schedulePreview();
     } finally {
-      applying = false;
+      if (isCurrent(current)) reviewRefreshing = false;
     }
   }
 
-  function inflightOpRow(opId: string): OperationRow | null {
-    const found = $opsStore.find((o) => o.id === opId);
-    if (!found) return null;
-    if (found.status === 'succeeded' || found.status === 'failed' || found.status === 'interrupted') {
-      return null;
-    }
-    return found;
+  let observedRow: Operation | null = null;
+  function observeOperations(rows: Operation[], operationId: string) {
+    const row = rows.find((operation) => operation.id === operationId);
+    if (!row || row === observedRow) return;
+    observedRow = row;
+    attempt.observe(row);
   }
+  $: observeOperations($opsStore, $attempt.attempt?.operationId ?? '');
 
   onDestroy(() => {
+    activeLoad?.controller.abort();
+    previewController?.abort();
+    activeLoad = null;
+    attempt.close();
     if (timer !== undefined) clearTimeout(timer);
     previewRevision++;
-    loadRevision++;
   });
 
   function discard() {
+    if (!isCurrent(activeLoad) || get(attempt).busy === 'submitting') return;
     text = baseline;
     schedulePreview();
   }
 
   function back() {
+    if (!isCurrent(activeLoad) || get(attempt).busy === 'submitting') return;
     if (isCreate) {
       navigate({ name: 'list', apiVersion, kind });
       return;
@@ -487,11 +569,19 @@
     if (p.error) return '';
     return p.doc?.metadata?.name ?? '';
   })();
-  $: nameCollision = isCreate && ((currentName !== '' && existingNames.has(currentName))
+  $: nameCollision = createOnly && ((currentName !== '' && existingNames.has(currentName))
     || (!!plan && plan.operation !== 'create'));
 
   $: applyBlocked =
     applying ||
+    !$attempt.ready ||
+    !!$attempt.busy ||
+    (!!$attempt.attempt && !$attempt.reviewingNew) ||
+    schemaLoading ||
+    reviewRefreshing ||
+    !schemaReady ||
+    ($auth.kind !== 'signed-in' || !$auth.me.principalId) ||
+    (reviewedResource?.metadata.ownerRefs?.length ?? 0) > 0 ||
     loading ||
     !!loadError ||
     previewing ||
@@ -550,20 +640,9 @@
   // the next save.
   $: if (view === 'form' && nonRoundtrippablePaths.length > 0) view = 'edit';
 
-  // Live op row (when an Apply is in flight) drives the inline progress
-  // banner. Driven off the shell-wide ops store so we don't open a
-  // second WatchOperations.
-  $: liveOp = liveOpId ? ($opsStore.find((o) => o.id === liveOpId) ?? null) : null;
-  $: if (liveOp?.status === 'succeeded') {
-    // Brief pause so the user sees the green flash, then jump to detail.
-    setTimeout(() => {
-      if (liveOpId && liveOp?.status === 'succeeded') {
-        const target = isCreate ? createdName : resourceName;
-        if (target) {
-          navigate({ name: 'detail', apiVersion, kind, resourceName: target });
-        }
-      }
-    }, 600);
+  function inspectOperation(id: string) {
+    if (!isCurrent(activeLoad)) return;
+    focusOpsDrawer({ opId: id });
   }
 
   $: markers = (() => {
@@ -618,7 +697,10 @@
   }
 
   function applyBlockReason(): string {
-    if (applying) return 'Apply already submitted';
+    if (applying) return 'Apply submission acknowledgement pending';
+    if ($attempt.attempt && !$attempt.reviewingNew) return 'Recover the original Apply request before reviewing a new Apply';
+    if (!$attempt.ready || $attempt.busy) return 'Verify Apply recovery before applying';
+    if (schemaLoading || !schemaReady) return formSchemaError || 'Wait for the current form schema';
     if (ownedByAnother) {
       const owner = ownerRefs[0];
       return `This resource is owned by ${owner.kind}/${owner.name} — edit the owner instead.`;
@@ -671,6 +753,13 @@
       </button>
     </div>
   </header>
+  <ApplyAttemptPanel
+    state={$attempt}
+    onRecover={() => attempt.recover()}
+    onVerify={() => attempt.verify()}
+    onReviewNew={reviewNewApply}
+    onInspect={inspectOperation}
+  />
 
   {#if loading}
     <p class="muted">{isCreate ? 'Preparing…' : 'Loading manifest…'}</p>
@@ -748,10 +837,12 @@
       {/if}
     </div>
 
+    {#key activeLoad}
+    {@const editorLoad = activeLoad}
     <div class="editor-wrap" class:form-view={view === 'form'} class:form-view-solo={view === 'form' && !showPreview}>
       {#if view === 'form' && formSchema}
         <div class="form-pane">
-          <FormField field={formSchema} value={formState} on:change={(e) => onFormChange(e.detail)} />
+          <FormField field={formSchema} value={formState} on:change={(e) => onFormChange(e.detail, editorLoad)} />
         </div>
         {#if showPreview}
           <div class="form-preview">
@@ -769,34 +860,15 @@
           </button>
         {/if}
       {:else if view === 'edit'}
-        <MonacoEditor value={text} on:change={onChange} {markers} disabled={applying} />
+        <MonacoEditor value={text} on:change={(e) => onChange(e, editorLoad)} {markers} />
       {:else}
         <MonacoDiffEditor original={baseline} modified={text} />
       {/if}
     </div>
+    {/key}
 
-    {#if applyError}
-      <article class="diag">
-        <h3>Apply failed</h3>
-        <p class="err mono">{applyError}</p>
-      </article>
-    {/if}
-
-    {#if liveOp}
-      <article class="op-card op-{liveOp.status}">
-        <h3>Operation {liveOp.id.slice(0, 12)} — {liveOp.status}</h3>
-        {#if liveOp.error}
-          <p class="err mono">{liveOp.error}</p>
-        {:else if liveOp.status === 'pending'}
-          <p class="muted">Queued, waiting for the dispatcher to pick it up…</p>
-        {:else if liveOp.status === 'running'}
-          <p class="muted">Provider is converging the resource. Tail in the ops drawer for substeps.</p>
-        {:else if liveOp.status === 'succeeded'}
-          <p>Applied. Returning to detail…</p>
-        {:else}
-          <p class="muted">Status: {liveOp.status}</p>
-        {/if}
-      </article>
+    {#if formSchemaError}
+      <p class="err">Cannot refresh form schema: {formSchemaError}</p>
     {/if}
 
     {#if parseError || validateErrors.length > 0 || Object.keys($formErrorsCtx).length > 0}
@@ -815,6 +887,9 @@
     {/if}
 
     {#if plan && validateErrors.length === 0 && !parseError}
+      {#key plan}
+      {@const reviewedPlan = plan}
+      {@const previewLoad = activeLoad}
       <article class="preview">
         <header class="preview-head">
           <h3>Preview</h3>
@@ -902,7 +977,7 @@
             <h4>Destructive change — confirm before applying:</h4>
             {#each plan.requiredGates ?? [] as g}
               <label class="gate">
-                <input type="checkbox" bind:checked={checkedGates[g]} />
+                <input type="checkbox" checked={checkedGates[g] ?? false} on:change={(event) => onGateChange(g, event.currentTarget.checked, previewLoad, reviewedPlan)} />
                 <span>{gateLabel(g)}</span>
                 <code class="muted small">{g}</code>
               </label>
@@ -910,6 +985,7 @@
           </div>
         {/if}
       </article>
+      {/key}
     {/if}
   {/if}
 </section>
@@ -1271,24 +1347,6 @@
     cursor: pointer;
   }
   .gate input {
-    margin: 0;
-  }
-  .op-card {
-    border-left: 3px solid #6ea8ff;
-    background: rgba(74, 142, 240, 0.06);
-    padding: 0.75rem 1rem;
-    border-radius: 4px;
-  }
-  .op-card h3 {
-    margin: 0 0 0.5rem;
-    font-size: 0.9rem;
-    color: #aaa;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-  .op-succeeded { border-color: #5fdb78; background: rgba(46, 160, 67, 0.08); }
-  .op-failed, .op-interrupted { border-color: #f57171; background: rgba(248, 81, 73, 0.06); }
-  .op-card p {
     margin: 0;
   }
 

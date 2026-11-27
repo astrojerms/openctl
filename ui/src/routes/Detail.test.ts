@@ -163,6 +163,21 @@ describe('saved-only detail inspection', () => {
     expect(apply).not.toHaveBeenCalled();
   });
 
+  it('opens fresh editor review for reconciliation without submitting Apply', async () => {
+    vi.spyOn(resources, 'get').mockResolvedValue(observed);
+    const apply = vi.spyOn(resources, 'apply');
+    const previousHash = location.hash;
+    try {
+      component = mount(Detail, { target, props });
+      await settle();
+      button('Reconcile').click();
+      expect(location.hash).toBe('#/k/proxmox.openctl.io/v1/VirtualMachine/saved-vm/edit');
+      expect(apply).not.toHaveBeenCalled();
+    } finally {
+      location.hash = previousHash;
+    }
+  });
+
   it('recovers the full live detail only after an explicit retry succeeds', async () => {
     vi.spyOn(resources, 'get').mockRejectedValueOnce(new ApiError(404, 'missing')).mockResolvedValueOnce(observed);
     const apply = vi.spyOn(resources, 'apply');

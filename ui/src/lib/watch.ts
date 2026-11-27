@@ -40,6 +40,8 @@ export function watchResources(
 export interface OperationRow {
   id: string;
   parentId?: string;
+  // Durable root admission identity, present on keyed Apply/Delete events.
+  requestId?: string;
   type: string;
   apiVersion?: string;
   kind?: string;

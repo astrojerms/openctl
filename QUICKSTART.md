@@ -128,8 +128,9 @@ is no automatic VM recreation. Use `openctl ctl preview -f resource.yaml` before
 CLI Apply; previews distinguish metadata edits from spec edits and live drift.
 Apply and Delete print request IDs before submission;
 `openctl ctl op get --request-id ID` recovers a lost acknowledgement without
-submitting again. Console delete attempts survive reload in the same tab;
-explicit recovery observes the original operation, never a replacement resource.
+submitting again. Console Apply and Delete attempts survive reload in the same
+tab as identity metadata, not saved credentials or consent. Explicit recovery
+observes the original operation; **Reconcile** opens the editor for fresh review.
 For CLI application logs and typed runtime actions, see
 [controller commands](README.md#common-commands). See also
 [managed Jellyfin](README.md#managed-jellyfin-on-proxmox).

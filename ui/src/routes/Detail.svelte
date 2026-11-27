@@ -4,7 +4,6 @@
   import { resources, ownership, operations, UnauthorizedError, type Operation, type Resource, type ResourceRef, type ActionSpec, type MigrationBundle } from '../lib/api';
   import { auth, canMutate } from '../lib/auth';
   import { canEditDesired, canManageOwnership, desiredMutationHint } from '../lib/authority';
-  import { withoutRequestConsent } from '../lib/retry';
   import { applicationChecks, childHealth, type ChildState } from '../lib/detailState';
   import { createDetailInspection, detailManifestYAML, type DetailLease } from '../lib/detailInspection';
   import { createDeleteAttempt } from '../lib/deletionAttempt';
@@ -13,7 +12,7 @@
   const readOnlyTitle = 'Read-only session — requires editor or admin role';
   import { watchResources } from '../lib/watch';
   import { statusBadge } from '../lib/format';
-  import { routeHref } from '../lib/router';
+  import { routeHref, navigate } from '../lib/router';
   import { ops as opsStore } from '../lib/ops';
   import HistoryDiff from '../components/HistoryDiff.svelte';
   import DagView from '../components/DagView.svelte';
@@ -30,8 +29,6 @@
     actionSpecs = [];
     actionMsg = '';
     actionErr = '';
-    reconcileMsg = '';
-    reconcileErr = '';
     migrationMessage = '';
     migrationError = '';
     copyMsg = '';
@@ -89,9 +86,6 @@
     migrationMessage = '';
     migrationError = '';
     migrating = false;
-    reconciling = false;
-    reconcileMsg = '';
-    reconcileErr = '';
     actionSpecs = [];
     actionInflight = '';
     actionMsg = '';
@@ -294,41 +288,11 @@
     }
   }
 
-  // Manual reconcile: re-submit the stored manifest through the normal
-  // Apply path so the dispatcher pushes desired state over observed. The
-  // resulting op surfaces in the bottom drawer like any other apply, so
-  // there's no separate "reconcile op" type to add on the wire.
-  let reconciling = false;
-  let reconcileMsg = '';
-  let reconcileErr = '';
-
-  async function doReconcile() {
-    if (!inspection.canAct() || reconciling || !data?.applied || !$canEditDesired) return;
-    const lease = inspection.capture();
-    if (!lease) return;
-    reconciling = true;
-    reconcileMsg = '';
-    reconcileErr = '';
-    try {
-      const resp = await resources.apply({
-        resource: withoutRequestConsent({
-          apiVersion: data.applied.apiVersion,
-          kind: data.applied.kind,
-          metadata: { ...data.applied.metadata, name: data.applied.metadata?.name ?? resourceName },
-          spec: data.applied.spec as Record<string, unknown> | undefined,
-        }),
-      }, { signal: lease.signal });
-      if (!inspection.current(lease, true)) return;
-      reconcileMsg = resp.operationId
-        ? `Reconcile submitted (operation ${resp.operationId})`
-        : 'Reconcile submitted';
-    } catch (err) {
-      if (!inspection.current(lease)) return;
-      if (err instanceof UnauthorizedError) { inspection.unauthorized(); return; }
-      if (inspection.current(lease, true)) reconcileErr = err instanceof Error ? err.message : String(err);
-    } finally {
-      if (inspection.current(lease)) reconciling = false;
-    }
+  // Reconciliation uses the editor's fresh preview and durable Apply protocol.
+  // Navigating here grants no destructive consent and submits no operation.
+  function reviewReconcile() {
+    if (!inspection.canAct() || !data?.applied || !$canEditDesired) return;
+    navigate({ name: 'edit', apiVersion, kind, resourceName });
   }
 
   // U8.12: runtime actions. Fetched once per kind on load. Empty means
@@ -600,15 +564,15 @@
       <button
         type="button"
         class="reconcile-btn"
-        disabled={!fresh || reconciling || !data?.applied || !$canEditDesired}
+        disabled={!fresh || !data?.applied || !$canEditDesired}
         title={!fresh ? 'Requires fresh provider observation' : !$canEditDesired
           ? $desiredMutationHint
           : data?.applied
-            ? 'Re-apply the stored manifest to push desired state over observed'
+            ? 'Review stored intent and live drift before submitting a recoverable Apply'
             : 'No applied manifest on file — nothing to reconcile from'}
-        on:click={doReconcile}
+        on:click={reviewReconcile}
       >
-        {reconciling ? 'Reconciling…' : 'Reconcile'}
+        Reconcile
       </button>
       {#if $canEditDesired}
         {#if fresh}
@@ -683,12 +647,6 @@
     </article>
   {/if}
 
-  {#if reconcileMsg}
-    <p class="muted small reconcile-msg">{reconcileMsg}</p>
-  {/if}
-  {#if reconcileErr}
-    <p class="err small">{reconcileErr}</p>
-  {/if}
   {#if paramAction && fresh}
     <form class="param-form" on:submit|preventDefault={submitParamForm}>
       <div class="param-form-head">{actionLabel(paramAction.name)} {resourceName}</div>
@@ -1033,9 +991,6 @@
   .reconcile-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
-  }
-  .reconcile-msg {
-    color: #4a8ef0;
   }
   .action-btn {
     background: transparent;

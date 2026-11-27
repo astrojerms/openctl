@@ -175,8 +175,8 @@ export interface GetSchemaResponse {
 
 export const schemas = {
   list: (opts?: RequestOptions) => api.get<ListSchemasResponse>('/v1/schemas', opts),
-  validate: (resource: Resource | Partial<Resource>) =>
-    api.post<ValidateResponse>('/v1/schemas:validate', { resource }),
+  validate: (resource: Resource | Partial<Resource>, opts?: RequestOptions) =>
+    api.post<ValidateResponse>('/v1/schemas:validate', { resource }, opts),
   getForm: (apiVersion: string, kind: string, opts?: RequestOptions) =>
     api.post<GetFormSchemaResponse>('/v1/schemas:getForm', { apiVersion, kind }, opts),
   get: (apiVersion: string, kind: string, opts?: RequestOptions) =>
@@ -505,12 +505,13 @@ export const controllerConfigApi = {
 
 export const templates = {
   list: () => api.get<ListTemplatesResponse>('/v1/templates'),
-  get: (name: string) =>
-    api.get<GetTemplateResponse>('/v1/templates/' + encodeURIComponent(name)),
-  render: (name: string, params: Record<string, unknown>) =>
+  get: (name: string, opts?: RequestOptions) =>
+    api.get<GetTemplateResponse>('/v1/templates/' + encodeURIComponent(name), opts),
+  render: (name: string, params: Record<string, unknown>, opts?: RequestOptions) =>
     api.post<RenderTemplateResponse>(
       '/v1/templates/' + encodeURIComponent(name) + ':render',
       { name, params },
+      opts,
     ),
 };
 
@@ -521,8 +522,8 @@ export const resources = {
     api.post<GetResourceResponse>('/v1/resources:get', { apiVersion, kind, name }, opts),
   childrenGraph: (apiVersion: string, kind: string, name: string, opts?: RequestOptions) =>
     api.post<ChildrenGraphResponse>('/v1/resources:childrenGraph', { apiVersion, kind, name }, opts),
-  dryRunApply: (resource: Resource | Partial<Resource>) =>
-    api.post<DryRunApplyResponse>('/v1/resources:dryRunApply', { resource }),
+  dryRunApply: (resource: Resource | Partial<Resource>, opts?: RequestOptions) =>
+    api.post<DryRunApplyResponse>('/v1/resources:dryRunApply', { resource }, opts),
   apply: (req: ApplyRequest, opts?: RequestOptions) =>
     api.post<ApplyResponse>('/v1/resources:apply', req, opts),
   listActions: (apiVersion: string, kind: string, opts?: RequestOptions) =>

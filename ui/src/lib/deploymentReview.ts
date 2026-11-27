@@ -1,4 +1,4 @@
-import { ApiError, operations, ping, resources, schemas, session, type ApplyRequest, type DryRunApplyResponse, type GetResourceResponse, type Operation, type Resource } from './api';
+import { ApiError, operations, ping, resources, schemas, session, type ApplyRequest, type DryRunApplyResponse, type GetResourceResponse, type Operation, type RequestOptions, type Resource } from './api';
 import { APP_API, VM_API, type DeploymentStep } from './jellyfin';
 import { withoutRequestConsent } from './retry';
 import { watchOperations, type OperationEvent } from './watch';
@@ -44,10 +44,10 @@ export interface ReviewAPI {
   watch: typeof watchOperations;
   requestId: () => string;
 }
-export async function loadReviewBinding(): Promise<ReviewBinding> {
-  const [controller, me] = await Promise.all([ping.ping(), session.whoami()]);
+export async function loadReviewBinding(opts?: RequestOptions): Promise<ReviewBinding> {
+  const [controller, me] = await Promise.all([ping.ping('', opts), session.whoami(opts)]);
   if (!controller.supportsIdempotentApply || !controller.controllerId || !me.principalId) {
-    throw new Error('This controller cannot safely recover guided Apply requests. Upgrade to a controller with durable request identity; manifests can still be downloaded.');
+    throw new Error('This controller cannot safely recover Apply requests. Upgrade to a controller with durable request identity before submitting.');
   }
   return { controllerId: controller.controllerId, userId: me.principalId };
 }

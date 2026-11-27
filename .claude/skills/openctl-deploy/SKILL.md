@@ -223,6 +223,14 @@ reviewed attempt with a **new** key; never auto-delete/recreate as recovery.
 `ctl op get` includes children by default. Report blockers without claiming
 success; neither a saved browser review nor past consent authorizes new work.
 
+Console editors and template starters likewise retain only bound Apply identity
+metadata in the current tab. **Recover Apply request** is read-only; neither
+reload nor acknowledgement resubmits work or proves readiness. Browser recovery
+does not save drafts, parameters or credentials: protect the declaration before
+leaving an unsent draft. **Review new Apply** requires a terminal outcome and
+fresh preview/consent. **Reconcile** opens that reviewed editor flow, not an
+immediate Apply. A first-create retry without a baseline remains create-only.
+
 ## 6. Verify and report
 
 - Require a successful terminal operation and then read the resulting resource:

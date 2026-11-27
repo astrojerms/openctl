@@ -320,6 +320,24 @@ secrets in the request ledger.
 - **AND** changed intent or a different actor conflicts without new work
 - **AND** request lookup is read-only and accepts opaque printable request IDs
 
+#### Scenario: Generic console Apply loses its acknowledgement
+
+- **WHEN** an editor, template starter or manual reconciliation submits Apply
+- **THEN** it uses advertised durable request support, persists bound identity
+  metadata before submission and verifies the acknowledged request/operation IDs
+- **AND** browser recovery storage contains no manifest, parameters, credentials,
+  destructive flags, consent or cached readiness
+- **AND** a restored record keeps its original target separate from current draft
+  defaults and performs no automatic submission, navigation or baseline update
+- **AND** explicit read-only recovery validates action, target and request identity
+  even if the template, schema, provider or managed resource is unavailable
+- **AND** only confirmed terminal work can start a newly reviewed attempt, with
+  refreshed preview, cleared gates and a new key; unknown/pruned work stays reserved
+- **AND** route, principal or preview changes reject old asynchronous work;
+  first-create retries without a baseline remain create-only
+- **AND** manual reconciliation opens the same preview/review Apply flow rather
+  than using a second unkeyed mutation path
+
 ### Requirement: Durable Delete identity cannot target replacement infrastructure
 
 An accepted keyed Delete SHALL atomically bind its action, canonical actor and

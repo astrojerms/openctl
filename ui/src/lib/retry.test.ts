@@ -35,10 +35,10 @@ describe('failed Apply retry handoff', () => {
     const intent = await loadEditIntent(target, handoff, getOp, getResource);
     expect(calls).toEqual(['operation', 'resource']);
     expect(intent.baseline).toBe('');
+    expect(intent.createOnly).toBe(true);
     expect(parseYAML(intent.text).doc).toEqual(manifest);
     expect(intent.retryFromOpId).toBe(operation.id);
     expect(handoff.getItem(RETRY_KEY)).toBeNull();
-    expect(getOp).toHaveBeenCalledExactlyOnceWith(operation.id);
   });
 
   it('uses last-successful intent only as a baseline, never as the failed draft', async () => {
@@ -47,6 +47,7 @@ describe('failed Apply retry handoff', () => {
     const intent = await loadEditIntent(target, handoff, async () => operation, async () => existing);
     expect(parseYAML(intent.text).doc).toEqual(manifest);
     expect(parseYAML(intent.baseline).doc).toEqual(existing.applied);
+    expect(intent.createOnly).toBe(false);
   });
 
   it('blocks explicit retries when the operation cannot be loaded instead of falling back to applied intent', async () => {
@@ -117,6 +118,47 @@ describe('failed Apply retry handoff', () => {
     const loaded = await loadEditIntent(target, handoff, async () => failed, async () => { throw new ApiError(404, 'not managed'); });
     expect(parseYAML(loaded.text).doc).toEqual({ ...manifest, metadata: { ...manifest.metadata, annotations: { purpose: 'keep' } } });
     expect(JSON.parse(failed.manifestJson).metadata.annotations['openctl.io/allow-destructive']).toBe('true');
+  });
+
+  it('does not turn an observed-only baseline into a create-only retry', async () => {
+    const handoff = storage();
+    saveRetry(handoff, operation);
+    const intent = await loadEditIntent(target, handoff, async () => operation, async () => ({ resource: existing.resource }));
+    expect(intent.createOnly).toBe(false);
+    expect(parseYAML(intent.baseline).doc.spec).toEqual(existing.resource.spec);
+  });
+
+  it('passes cancellation to both reads and retains the handoff after a stale route load', async () => {
+    const handoff = storage();
+    saveRetry(handoff, operation);
+    const controller = new AbortController();
+    const pending = Promise.withResolvers<Operation>();
+    const getOperation = vi.fn(() => pending.promise);
+    const getResource = vi.fn(async () => existing);
+    const intent = loadEditIntent(target, handoff, getOperation, getResource, { signal: controller.signal });
+    const rejected = expect(intent).rejects.toMatchObject({ name: 'AbortError' });
+    controller.abort();
+    pending.resolve(operation);
+    await rejected;
+    expect(getOperation).toHaveBeenCalledExactlyOnceWith(operation.id, false, { signal: controller.signal });
+    expect(getResource).not.toHaveBeenCalled();
+    expect(handoff.getItem(RETRY_KEY)).not.toBeNull();
+  });
+
+  it('does not consume a handoff when its baseline completes after cancellation', async () => {
+    const handoff = storage();
+    saveRetry(handoff, operation);
+    const controller = new AbortController();
+    const pending = Promise.withResolvers<GetResourceResponse>();
+    const getResource = vi.fn(() => pending.promise);
+    const intent = loadEditIntent(target, handoff, async () => operation, getResource, { signal: controller.signal });
+    const rejected = expect(intent).rejects.toMatchObject({ name: 'AbortError' });
+    await Promise.resolve();
+    expect(getResource).toHaveBeenCalledExactlyOnceWith(target.apiVersion, target.kind, target.name, { signal: controller.signal });
+    controller.abort();
+    pending.resolve(existing);
+    await rejected;
+    expect(handoff.getItem(RETRY_KEY)).not.toBeNull();
   });
 
   it('notifies an already-open editor on each explicit retry, including the same operation', () => {

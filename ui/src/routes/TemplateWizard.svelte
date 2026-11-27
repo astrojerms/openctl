@@ -1,14 +1,7 @@
 <script lang="ts">
-  // TemplateWizard: fetches a template's parameter set, renders a
-  // form using the parameters (a lightweight cousin of FormField for
-  // template shape, since template params are flat name+type pairs
-  // instead of a nested schema tree), and on submit:
-  //   1. calls RenderTemplate to get a full Resource
-  //   2. submits it via the normal Apply RPC
-  //   3. navigates to the new resource's detail page on success
-  //
-  // Same DryRun preview + Apply pipeline as the Create flow, just
-  // fronted by a template-specific parameter form.
+  // Parameters and rendered intent stay in memory. Only the durable controller
+  // request identity survives reloads; an uncertain acknowledgement is recovered
+  // read-only, never submitted again.
 
   import { onDestroy, onMount, setContext } from 'svelte';
   import { writable } from 'svelte/store';
@@ -22,9 +15,12 @@
     type Resource,
   } from '../lib/api';
   import { ensureOptions, optionsStore } from '../lib/options';
-  import { routeHref, navigate } from '../lib/router';
+  import { routeHref } from '../lib/router';
   import { resourceToYAML } from '../lib/yaml';
   import { canEditDesired, desiredMutationHint } from '../lib/authority';
+  import { auth } from '../lib/auth';
+  import { createApplyAttempt } from '../lib/applyAttempt';
+  import ApplyAttemptPanel from '../components/ApplyAttemptPanel.svelte';
 
   export let template: string;
 
@@ -50,50 +46,34 @@
   let reviewedResource: Resource | null = null;
   let checkedGates: Record<string, boolean> = {};
 
-  // Apply state.
-  let submitting = false;
-  let submitError = '';
+  let mounted = false;
+  let activeScope = '';
+  let scopeRevision = 0;
+  let loadController: AbortController | undefined;
+  let previewController: AbortController | undefined;
+  const attempt = createApplyAttempt({
+    storage: () => sessionStorage,
+    canSubmit: () => mounted && $auth.kind === 'signed-in' && $canEditDesired,
+    onUnauthorized: () => auth.set({ kind: 'signed-out' }),
+  });
 
   // options context so the OptionsKind dropdowns can resolve against
   // the containing apiVersion (which we know from the template summary).
   const apiVersionCtx = writable('');
   setContext('resourceAPIVersionStore', apiVersionCtx);
 
-  onMount(async () => {
-    try {
-      info = await templatesApi.get(template);
-      apiVersionCtx.set(info.summary.apiVersion);
-      for (const p of info.parameters ?? []) {
-        if (p.defaultJson) {
-          try {
-            params[p.name] = JSON.parse(p.defaultJson);
-          } catch {
-            /* ignore malformed defaults; user fills in */
-          }
-        }
-      }
-      params = { ...params };
-      schedulePreview();
-    } catch (err) {
-      if (err instanceof UnauthorizedError) return;
-      loadError = err instanceof Error ? err.message : String(err);
-    } finally {
-      loading = false;
-    }
-  });
+  onMount(() => { mounted = true; });
 
-  onDestroy(() => {
-    if (previewTimer !== undefined) clearTimeout(previewTimer);
-    previewRevision++;
-  });
-
-  function setParam(name: string, value: unknown) {
-    params = { ...params, [name]: value };
-    schedulePreview();
+  $: scopeKey = JSON.stringify([template, $auth]);
+  $: if (mounted && scopeKey !== activeScope) {
+    activeScope = scopeKey;
+    void openTemplate();
   }
 
-  function schedulePreview() {
+  function resetPreview() {
     if (previewTimer !== undefined) clearTimeout(previewTimer);
+    previewTimer = undefined;
+    previewController?.abort();
     previewRevision++;
     dryRun = null;
     reviewedResource = null;
@@ -102,6 +82,66 @@
     renderedYAML = '';
     renderError = '';
     dryRunError = '';
+    previewing = false;
+  }
+
+  async function openTemplate() {
+    const revision = ++scopeRevision;
+    const requestedTemplate = template;
+    loadController?.abort();
+    resetPreview();
+    attempt.close();
+    info = null;
+    params = {};
+    apiVersionCtx.set('');
+    loadError = '';
+    loading = true;
+    const controller = new AbortController();
+    loadController = controller;
+    // Binding/recovery is independent of template availability and defaults.
+    void attempt.open({ source: 'template', template: requestedTemplate }, $auth.kind === 'signed-in' ? $auth.me : null);
+    try {
+      const loaded = await templatesApi.get(requestedTemplate, { signal: controller.signal });
+      if (!mounted || revision !== scopeRevision) return;
+      info = loaded;
+      apiVersionCtx.set(loaded.summary.apiVersion);
+      const defaults: Record<string, unknown> = {};
+      for (const p of loaded.parameters ?? []) {
+        if (p.defaultJson) {
+          try {
+            defaults[p.name] = JSON.parse(p.defaultJson);
+          } catch {
+            /* ignore malformed defaults; user fills in */
+          }
+        }
+      }
+      params = defaults;
+      schedulePreview();
+    } catch (err) {
+      if (!mounted || revision !== scopeRevision) return;
+      if (err instanceof UnauthorizedError) { auth.set({ kind: 'signed-out' }); return; }
+      loadError = err instanceof Error ? err.message : String(err);
+    } finally {
+      if (mounted && revision === scopeRevision) loading = false;
+    }
+  }
+
+  onDestroy(() => {
+    mounted = false;
+    scopeRevision++;
+    loadController?.abort();
+    resetPreview();
+    attempt.close();
+  });
+
+  function setParam(name: string, value: unknown) {
+    params = { ...params, [name]: value };
+    schedulePreview();
+  }
+
+  function schedulePreview() {
+    resetPreview();
+    if (!info || !mounted) return;
     previewing = true;
     previewTimer = setTimeout(runPreview, PREVIEW_DEBOUNCE_MS) as unknown as number;
   }
@@ -109,25 +149,30 @@
   async function runPreview() {
     if (!info) return;
     const revision = previewRevision;
+    const requestedTemplate = template;
     const paramsKey = JSON.stringify(params);
     const previewParams = { ...params };
+    const controller = new AbortController();
+    previewController = controller;
     try {
-      const rendered = await templatesApi.render(template, previewParams);
+      const rendered = await templatesApi.render(requestedTemplate, previewParams, { signal: controller.signal });
       if (revision !== previewRevision) return;
       renderedYAML = resourceToYAML(rendered.resource);
       try {
-        const plan = await resources.dryRunApply(rendered.resource);
+        const plan = await resources.dryRunApply(rendered.resource, { signal: controller.signal });
         if (revision !== previewRevision) return;
         dryRun = plan;
         reviewedResource = rendered.resource;
         reviewedParams = paramsKey;
         checkedGates = Object.fromEntries((plan.requiredGates ?? []).map((g) => [g, false]));
       } catch (err) {
-        if (revision !== previewRevision || err instanceof UnauthorizedError) return;
+        if (revision !== previewRevision) return;
+        if (err instanceof UnauthorizedError) { auth.set({ kind: 'signed-out' }); return; }
         dryRunError = err instanceof Error ? err.message : String(err);
       }
     } catch (err) {
-      if (revision !== previewRevision || err instanceof UnauthorizedError) return;
+      if (revision !== previewRevision) return;
+      if (err instanceof UnauthorizedError) { auth.set({ kind: 'signed-out' }); return; }
       renderError = err instanceof Error ? err.message : String(err);
       renderedYAML = '';
     } finally {
@@ -135,37 +180,40 @@
     }
   }
 
+  function reviewValid() {
+    return !!info && !previewing && !renderError && !dryRunError && !!dryRun
+      && !!reviewedResource && reviewedParams === JSON.stringify(params)
+      && dryRun.operation === 'create'
+      && (dryRun.requiredGates ?? []).every((g) =>
+        (g === 'allow_destructive' || g === 'i_know_this_breaks_the_cluster') && checkedGates[g])
+      && !(dryRun.validationErrors?.length) && !(dryRun.fieldErrors?.length);
+  }
+
   async function submit() {
-    if (!info || applyBlocked || !$canEditDesired || !reviewedResource || reviewedParams !== JSON.stringify(params)) return;
+    if (applyBlocked || !$canEditDesired || $auth.kind !== 'signed-in' || !reviewedResource) return;
     const resource = reviewedResource;
-    submitError = '';
-    submitting = true;
-    try {
-      const resp = await resources.apply({
-        resource,
-        createOnly: true,
-        allowDestructive: checkedGates['allow_destructive'] ?? false,
-        iKnowThisBreaksTheCluster: checkedGates['i_know_this_breaks_the_cluster'] ?? false,
-      });
-      if (resp.operationId) {
-        // Navigate to the new resource's detail page — the op will tail
-        // in the drawer + the detail's inline op banner.
-        const name = resource.metadata?.name ?? '';
-        if (name && info.summary.apiVersion && info.summary.kind) {
-          navigate({
-            name: 'detail',
-            apiVersion: resource.apiVersion,
-            kind: resource.kind,
-            resourceName: name,
-          });
-        }
-      }
-    } catch (err) {
-      if (err instanceof UnauthorizedError) return;
-      submitError = err instanceof Error ? err.message : String(err);
-    } finally {
-      submitting = false;
-    }
+    const revision = previewRevision;
+    const scope = scopeRevision;
+    const reviewedTemplate = template;
+    const paramsKey = JSON.stringify(params);
+    const allowDestructive = checkedGates['allow_destructive'] ?? false;
+    const iKnowThisBreaksTheCluster = checkedGates['i_know_this_breaks_the_cluster'] ?? false;
+    await attempt.submit({
+      resource,
+      createOnly: true,
+      allowDestructive,
+      iKnowThisBreaksTheCluster,
+    }, () => mounted && scope === scopeRevision && revision === previewRevision
+      && template === reviewedTemplate && paramsKey === JSON.stringify(params)
+      && reviewedResource === resource && reviewValid()
+      && allowDestructive === (checkedGates['allow_destructive'] ?? false)
+      && iKnowThisBreaksTheCluster === (checkedGates['i_know_this_breaks_the_cluster'] ?? false));
+  }
+
+  async function reviewNew() {
+    if (!$canEditDesired || $auth.kind !== 'signed-in') return;
+    const scope = scopeRevision;
+    if (await attempt.reviewNew() && mounted && scope === scopeRevision) schedulePreview();
   }
 
   // OptionsKind dropdown support: for each param with optionsKind set,
@@ -192,13 +240,13 @@
     }
   }
 
-  $: gatesSatisfied = (dryRun?.requiredGates ?? []).every((g) =>
-    (g === 'allow_destructive' || g === 'i_know_this_breaks_the_cluster') && checkedGates[g]);
   $: nameCollision = !!dryRun && dryRun.operation !== 'create';
-  $: applyBlocked = submitting || previewing || !!renderError || !!dryRunError || !dryRun
+  $: applyBlocked = !!$attempt.busy || !$attempt.ready || (!!$attempt.attempt && !$attempt.reviewingNew)
+    || previewing || !!renderError || !!dryRunError || !dryRun
     || !reviewedResource || reviewedParams !== JSON.stringify(params)
-    || nameCollision || !gatesSatisfied || (dryRun.validationErrors?.length ?? 0) > 0
-    || (dryRun.fieldErrors?.length ?? 0) > 0;
+    || nameCollision || !(dryRun.requiredGates ?? []).every((g) =>
+      (g === 'allow_destructive' || g === 'i_know_this_breaks_the_cluster') && checkedGates[g])
+    || (dryRun.validationErrors?.length ?? 0) > 0 || (dryRun.fieldErrors?.length ?? 0) > 0;
 </script>
 
 <section>
@@ -213,6 +261,13 @@
       <h2>Loading…</h2>
     {/if}
   </header>
+
+  <ApplyAttemptPanel
+    state={$attempt}
+    onRecover={() => attempt.recover()}
+    onVerify={() => attempt.verify()}
+    onReviewNew={reviewNew}
+  />
 
   {#if loadError}
     <p class="err">{loadError}</p>
@@ -309,15 +364,12 @@
         <div class="actions">
           <button class="primary" disabled={applyBlocked || !$canEditDesired} on:click={submit}
             title={!$canEditDesired ? $desiredMutationHint : ''}>
-            {submitting ? 'Creating…' : 'Create'}
+            {$attempt.busy === 'submitting' ? 'Creating…' : 'Create'}
           </button>
           {#if previewing}
             <span class="muted small">previewing…</span>
           {/if}
         </div>
-        {#if submitError}
-          <p class="err small">{submitError}</p>
-        {/if}
         {#if renderError}
           <p class="err small">Render error: {renderError}</p>
         {/if}
