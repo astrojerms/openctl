@@ -24,7 +24,8 @@ func TestPublicReadinessRequiresSuccessfulHTTPNotLoginRedirect(t *testing.T) {
 				w.WriteHeader(tc.status)
 			}))
 			defer server.Close()
-			if ready := probePublic(context.Background(), server.URL); ready != tc.ready {
+			state, _ := probePublic(context.Background(), server.URL, "ComposeApplication", "")
+			if ready := state == "ready"; ready != tc.ready {
 				t.Fatalf("HTTP %d reported ready=%v", tc.status, ready)
 			}
 		})
@@ -34,7 +35,8 @@ func TestPublicReadinessRequiresSuccessfulHTTPNotLoginRedirect(t *testing.T) {
 func TestPublicReadinessHonorsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if probePublic(ctx, "http://192.0.2.1:8096") {
+	state, _ := probePublic(ctx, "http://192.0.2.1:8096", "ComposeApplication", "")
+	if state == "ready" {
 		t.Fatal("cancelled probe reported ready")
 	}
 }

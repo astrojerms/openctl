@@ -368,6 +368,28 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
   locator row fingerprints stayed unchanged, with zero durable operations.
   No live homelab mutation, guest restart or hardware/playback acceptance.
 
+**Same-instance public Jellyfin readiness (2026-11-27):**
+
+- [x] Public Jellyfin readiness requires bounded JSON system information,
+  completed onboarding and the same server identity freshly observed through
+  verified guest SSH. HTTP 200 login portals, wrong instances, malformed/oversized
+  responses and unfinished onboarding are not ready. Valid public information
+  without a guest-side identity is unknown and still blocks aggregate readiness.
+- [x] Public probes send no credentials/cookies, reject redirects and preserve
+  HTTPS verification. IDs and response bodies never enter public diagnostics or
+  persisted intent/placement; private applications avoid the additional identity
+  work. Generic Compose public HTTP checks retain their existing contract.
+- Verification: application-provider package checks passed, including semantic
+  matching, bounded parsing, TLS/cancellation, redaction, independent public
+  probing and unchanged locator state. Actual viewer CLI and built-console
+  Chromium exercised HTTP 200 portal, wrong-instance, unavailable-guest,
+  unfinished-onboarding and matching-instance cases with native provider,
+  TLS/gRPC, verified SSH and public HTTPS loopback fixtures. The native read-only
+  curl/Python JSON probe ran against fixture endpoints; other guest/GPU/media
+  checks were simulated. No public credentials, durable operations or changed
+  desired/locator fingerprints. No live homelab, tunnel/DNS, GPU or playback
+  acceptance; matching public identity is not access-policy proof.
+
 The next product acceptance gate is the complete operator journey on real
 hardware, including recovery, media playback and any approved public endpoint.
 See [direction](docs/direction.md). Provider breadth is downstream of that gate.

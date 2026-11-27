@@ -139,6 +139,10 @@ Application checks distinguish **Ready**, **Not ready**, **Unknown** and
 **Not configured**. Guest access failure leaves skipped dependent checks unknown,
 not falsely failed; an absent optional public endpoint is neutral. Required
 unknown/failed checks still block readiness and guided progression.
+Jellyfin public readiness also requires onboarded JSON from the same server
+observed through guest SSH. A login page or different instance returning HTTP
+200 is not ready; unavailable guest identity is unknown. Public probing sends
+no credentials and never bypasses access policy or certificate checks.
 
 The wizard's existing-guest list uses saved VM metadata without scanning every
 Proxmox context. An unrelated provider outage does not hide choices; saved names

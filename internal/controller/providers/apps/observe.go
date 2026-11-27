@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
-	"net/http"
 	"strings"
-	"time"
 
 	"github.com/openctl/openctl/pkg/protocol"
 )
@@ -103,18 +101,26 @@ func (p *Provider) observe(ctx context.Context, kind, name string, l locator) *p
 		set("application", "unknown", "Restore verified guest SSH access to inspect application containers")
 	}
 	httpReady := false
+	jellyfinID := ""
 	if reachable {
 		command := "curl --fail --silent --show-error --max-time 10 --output /dev/null -- " + quote(l.Probe.URL)
 		if kind == "Jellyfin" {
-			command += "; python3 -c " + quote("import json,urllib.request; r=json.load(urllib.request.urlopen('http://127.0.0.1:8096/System/Info/Public',timeout=10)); assert r.get('StartupWizardCompleted') is True")
+			script := "import json,urllib.request; r=json.load(urllib.request.urlopen('http://127.0.0.1:8096/System/Info/Public',timeout=10)); assert r.get('StartupWizardCompleted') is True"
+			if l.PublicEndpoint != "" {
+				script += "; print(json.dumps({'Id': r.get('Id'), 'StartupWizardCompleted': True}))"
+			}
+			command += "; python3 -c " + quote(script)
 		}
-		_, err := p.run(ctx, l, "probe application HTTP", "set -e; "+command, nil)
+		out, err := p.run(ctx, l, "probe application HTTP", "set -e; "+command, nil)
 		httpReady = err == nil
+		if httpReady && kind == "Jellyfin" && l.PublicEndpoint != "" {
+			jellyfinID, httpReady = jellyfinServerID([]byte(out))
+		}
 		state := "not_ready"
 		if httpReady {
 			state = "ready"
 		}
-		set("http", state, "Application HTTP probe must succeed; Jellyfin additionally requires completed onboarding")
+		set("http", state, "Application HTTP must succeed; Jellyfin requires completed onboarding and a readable server identity when public exposure is configured")
 	} else {
 		set("http", "unknown", "Restore verified guest SSH access to probe application HTTP and onboarding completion")
 	}
@@ -152,36 +158,15 @@ func (p *Provider) observe(ctx context.Context, kind, name string, l locator) *p
 	if l.PublicEndpoint == "" {
 		set("publicEndpoint", "not_configured", "Not configured; no endpoint was published")
 	} else {
-		ready := probePublic(ctx, l.PublicEndpoint)
-		state := "not_ready"
-		if ready {
-			state = "ready"
-		}
-		set("publicEndpoint", state, "The configured public HTTP endpoint must respond successfully independently of guest/application readiness")
-		allReady = allReady && ready
+		state, message := probePublic(ctx, l.PublicEndpoint, kind, jellyfinID)
+		set("publicEndpoint", state, message)
+		allReady = allReady && state == "ready"
 	}
 	r.Status["ready"] = allReady
 	if allReady {
 		r.Status["phase"], r.Status["state"], r.Status["message"] = "ready", "ready", "Application HTTP, containers and all configured dependency checks are ready."
 	}
 	return r
-}
-
-func probePublic(ctx context.Context, address string) bool {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
-	if err != nil {
-		return false
-	}
-	// Do not silently follow redirects to a login portal and call it healthy.
-	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	response, err := client.Do(request)
-	if err != nil {
-		return false
-	}
-	defer response.Body.Close()
-	return response.StatusCode >= 200 && response.StatusCode < 300
 }
 
 // Filter on the guest, before raw logs cross into the controller. Container

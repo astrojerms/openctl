@@ -315,6 +315,13 @@ do not forward raw provider errors, response bodies, URLs or certificate fields.
   `status.ready` false. Per-check state replaces the old per-check ready boolean;
   upgrade structured-output consumers with the controller/console. Do not
   publish, reboot or retry automatically to turn a check green.
+- A Jellyfin public endpoint must return onboarded JSON system information whose
+  server ID matches the fresh local observation over verified guest SSH. HTTP
+  200 from a login portal or another instance is not readiness; missing guest
+  identity is unknown. Probes send no credentials/cookies, do not follow
+  redirects and retain HTTPS verification. Inspect tunnel origin, DNS and access
+  policy; never bypass protection to force a green check. Matching identity is
+  not authorization or playback evidence.
 - Keep the approved desired manifest as the repeatable artifact. Delete only
   task-owned temporary preflight files. Never clean up infrastructure by default.
 - Report controller/context, resource names and physical IDs, manifest paths,

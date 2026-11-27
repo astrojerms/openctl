@@ -1200,6 +1200,18 @@ openctl ctl apply -f examples/jellyfin/application.cue --values /secure/jellyfin
   are previewed after local readiness; public HTTP is checked independently.
   DNS success alone is not application readiness.
 
+For Jellyfin, `publicEndpoint` must return JSON system information (normally
+`https://HOST/System/Info/Public`), completed onboarding and the same server `Id`
+observed locally through verified guest SSH. HTTP 200 alone is insufficient:
+login portals, malformed/oversized responses, unfinished onboarding and a
+different Jellyfin instance are **not ready**. A valid public response without a
+fresh guest-side identity is **unknown**, not green. Identity is transient
+inspection data, never persisted to desired intent or provider placement.
+Public probes send no credentials or cookies, reject redirects, retain HTTPS
+certificate verification and cap Jellyfin response bodies at 64 KiB. Do not
+weaken access policy to make a check pass. Instance agreement is not proof of
+authorization or playback; generic Compose health URLs retain status-only checks.
+
 Standalone application evidence uses `status.checks.<name>.state`:
 
 | State | Meaning |
