@@ -463,9 +463,11 @@ openctl ctl action list Jellyfin --api-version apps.openctl.io/v1
 openctl ctl action run Jellyfin media logs --api-version apps.openctl.io/v1 --download ./media.log
 ```
 
-Action listings include parameter types, requirements and defaults. Invocation
-requires editor/admin access and an explicit API version. Non-sensitive arguments
-use repeatable `--param key=value`; use `--params-file PATH` (or `-` for stdin)
+Action listings include provider-owned display labels, descriptions, parameter
+types, requirements and defaults. `ACTION` is the stable invocation ID; `LABEL`
+is presentation only. CLI/API calls use the raw action name, never the label.
+Invocation requires editor/admin access and an explicit API version.
+Non-sensitive arguments use repeatable `--param key=value`; use `--params-file PATH` (or `-` for stdin)
 for a single JSON object of string values, particularly credentials. Duplicate
 keys and non-string values are rejected without echoing them.
 
@@ -480,6 +482,15 @@ Runtime actions do not change desired intent or use durable admission request ID
 They are never automatically retried. A successful request may only have queued
 a provider task: inspect task completion and independent readiness. After a
 timeout, disconnection or output failure, inspect before deciding to repeat.
+
+In the console, every runtime action opens an inline review before invocation,
+including parameterless actions and downloads. Review the exact API version,
+kind/name, raw action ID, provider-specific effect and parameters, then explicitly
+run or cancel. Application restart is not a k3s restart, and a graceful application
+stop is not a VM force-power-off. Missing provider labels display the raw name
+rather than guessing its meaning. Reviews are transient, not saved authority;
+stale observation, navigation or a changed session requires a fresh review.
+This is console interaction safety, not an additional API authorization boundary.
 
 Delete a resource:
 

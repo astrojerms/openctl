@@ -345,6 +345,29 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
   locator counts were unchanged. The SSH simulator executed no guest shell
   commands. No live homelab mutation, real GPU/media or playback acceptance.
 
+**Provider-labeled runtime action review (2026-11-27):**
+
+- [x] Native application, Proxmox and k3s action descriptors provide truthful
+  display labels and effect descriptions. Stable action IDs and execution stay
+  unchanged; API/CLI listings expose optional labels without using them as IDs.
+  Application restart/stop no longer inherit k3s/VM-power-off wording.
+- [x] Every console runtime action, including parameterless and download actions,
+  opens one explicit target/action/parameter review before invocation. Cancel
+  sends nothing; required values, duplicate submission, stale observations,
+  route changes and session changes fail closed. Late prior-session results
+  cannot open private links or expire a replacement session. Reviews are transient
+  interaction safety, not durable request identities or a new authorization boundary.
+- Verification: focused provider/identity/k3s/CLI checks and mounted detail/
+  deletion regressions passed, including required boolean/default handling.
+  Svelte reported zero errors/warnings and the production build passed. Actual
+  built-console Chromium and native viewer CLI discovery distinguished Jellyfin,
+  VM-force-stop and k3s labels. Restart/download review and cancellation admitted
+  no invocation; observation refresh revoked consent. Explicit Run produced
+  exactly one runtime RPC and one native application restart request through
+  verified local SSH. The SSH simulator executed no shell commands; desired and
+  locator row fingerprints stayed unchanged, with zero durable operations.
+  No live homelab mutation, guest restart or hardware/playback acceptance.
+
 The next product acceptance gate is the complete operator journey on real
 hardware, including recovery, media playback and any approved public endpoint.
 See [direction](docs/direction.md). Provider breadth is downstream of that gate.

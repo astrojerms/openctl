@@ -225,7 +225,9 @@ type ActionParameter struct {
 // ActionSpec describes a runtime action and any parameters it accepts. It is
 // the richer form of a bare action name returned by Actioner.Actions.
 type ActionSpec struct {
-	Name        string
+	Name string
+	// Label is optional provider-owned presentation; Name remains the action ID.
+	Label       string
 	Description string
 	Parameters  []ActionParameter
 }

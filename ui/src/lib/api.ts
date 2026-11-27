@@ -343,6 +343,7 @@ export interface ActionParameterSpec {
 
 export interface ActionSpec {
   name: string;
+  label?: string;
   description?: string;
   parameters?: ActionParameterSpec[];
 }

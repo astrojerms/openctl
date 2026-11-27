@@ -45,6 +45,8 @@ type Provider struct {
 	mutationMu sync.Mutex
 }
 
+var _ providers.ActionDescriber = (*Provider)(nil)
+
 // New constructs a single-context Provider from one endpoint configuration.
 // Kept for the common single-endpoint case, tests, and CLI direct-apply.
 func New(cfg *Config) (*Provider, error) {
@@ -176,6 +178,40 @@ func (p *Provider) Actions(kind string) []string {
 	}
 	// Ordering matters for the UI — buttons render in this order.
 	return []string{"start", "shutdown", "stop", "reboot", "console"}
+}
+
+// ActionSpecs describes VM runtime actions; ProxmoxNode has none.
+func (*Provider) ActionSpecs(kind string) []providers.ActionSpec {
+	if kind != kindVM {
+		return nil
+	}
+	return []providers.ActionSpec{
+		{
+			Name:        "start",
+			Label:       "Start VM",
+			Description: "Request VM power-on through Proxmox. Returns a task ID without waiting for guest readiness.",
+		},
+		{
+			Name:        "shutdown",
+			Label:       "Shut down VM (graceful)",
+			Description: "Request a graceful guest shutdown through Proxmox, interrupting guest services. Requires a cooperating guest; returns a task ID without waiting for shutdown completion.",
+		},
+		{
+			Name:        "stop",
+			Label:       "Force stop VM",
+			Description: "Immediately power off the VM through Proxmox, equivalent to pulling the plug. Interrupts all guest services and risks data loss or corruption; returns a task ID without waiting for completion.",
+		},
+		{
+			Name:        "reboot",
+			Label:       "Reboot VM",
+			Description: "Request a graceful guest reboot through Proxmox, interrupting guest services. Requires a cooperating guest; returns a task ID without waiting for guest readiness.",
+		},
+		{
+			Name:        "console",
+			Label:       "Open VM console",
+			Description: "Open the VM's Proxmox noVNC console URL. Requires an existing Proxmox web login; does not change VM power state.",
+		},
+	}
 }
 
 // DoAction implements providers.Actioner. Looks up the VM to get its

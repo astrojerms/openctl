@@ -1,11 +1,14 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { get } from 'svelte/store';
-  import { resources, ownership, operations, UnauthorizedError, type Operation, type Resource, type ResourceRef, type ActionSpec, type MigrationBundle } from '../lib/api';
+  import { resources, ownership, operations, UnauthorizedError } from '../lib/api';
+  import type { Operation, Resource, ResourceRef, ActionSpec, MigrationBundle } from '../lib/api';
   import { auth, canMutate } from '../lib/auth';
   import { canEditDesired, canManageOwnership, desiredMutationHint } from '../lib/authority';
-  import { applicationCheckBadge, applicationChecks, childHealth, type ChildState } from '../lib/detailState';
-  import { createDetailInspection, detailManifestYAML, type DetailLease } from '../lib/detailInspection';
+  import { applicationCheckBadge, applicationChecks, childHealth } from '../lib/detailState';
+  import type { ChildState } from '../lib/detailState';
+  import { createDetailInspection, detailManifestYAML } from '../lib/detailInspection';
+  import type { DetailLease } from '../lib/detailInspection';
   import { createDeleteAttempt } from '../lib/deletionAttempt';
   import { focusOpsDrawer } from '../lib/opsDrawer';
   // Shown on disabled mutation controls for a read-only (viewer) session.
@@ -33,7 +36,7 @@
     migrationError = '';
     copyMsg = '';
     exportedBundle = null;
-    cancelParamForm();
+    cancelRuntimeActionReview();
     auth.set({ kind: 'signed-out' });
   });
   // Uncertain Delete admission stays recovery-only. A missing resource or
@@ -95,7 +98,7 @@
     historyLoading = false;
     historyError = '';
     lastSeenOpId = '';
-    cancelParamForm();
+    cancelRuntimeActionReview();
     released = false;
     inspection.open({ apiVersion: av, kind: k, name: n });
     const session = get(auth);
@@ -116,7 +119,7 @@
   } else {
     childController?.abort();
     childStates = {};
-    cancelParamForm();
+    cancelRuntimeActionReview();
     exportedBundle = null;
     secretAcknowledged = false;
   }
@@ -186,6 +189,8 @@
     childController?.abort();
     inspection.stop();
     unsubscribeDeleteAuth();
+    unsubscribeRuntimeActionAuth();
+    unsubscribeRuntimeActionInspection();
     deletion.close();
   });
 
@@ -295,20 +300,41 @@
     navigate({ name: 'edit', apiVersion, kind, resourceName });
   }
 
-  // U8.12: runtime actions. Fetched once per kind on load. Empty means
-  // the provider has no runtime actions for this kind — bar hides.
-  // U10.1: actions carry parameter schemas so parameterized actions
-  // (e.g. Cluster upgrade's target version) can prompt for inputs.
+  // Every runtime action needs transient consent tied to this observation.
   let actionSpecs: ActionSpec[] = [];
   let actionInflight = '';
   let actionMsg = '';
   let actionErr = '';
 
-  // Parameterized-action prompt: when an action declares parameters, clicking
-  // it opens this inline form instead of firing immediately.
-  let paramAction: ActionSpec | null = null;
-  let paramValues: Record<string, string> = {};
-  let paramError = '';
+  interface RuntimeActionReview {
+    spec: ActionSpec;
+    lease: DetailLease;
+    values: Record<string, string>;
+    error: string;
+  }
+  let runtimeActionReview: RuntimeActionReview | null = null;
+  const unsubscribeRuntimeActionAuth = auth.subscribe(() => cancelRuntimeActionReview());
+  const unsubscribeRuntimeActionInspection = inspection.subscribe(() => {
+    if (runtimeActionReview && !inspection.current(runtimeActionReview.lease, true)) cancelRuntimeActionReview();
+  });
+
+  function runtimeActionAllowed(lease: DetailLease): boolean {
+    return inspection.current(lease, true) && get(canMutate) && get(auth).kind !== 'signed-out'
+      && !actionInflight && lease.target.apiVersion === apiVersion
+      && lease.target.kind === kind && lease.target.name === resourceName;
+  }
+
+  function openRuntimeActionReview(spec: ActionSpec) {
+    const lease = inspection.capture();
+    if (!lease || !runtimeActionAllowed(lease)) return;
+    const values: Record<string, string> = {};
+    for (const p of spec.parameters ?? []) values[p.name] = p.defaultValue ?? '';
+    runtimeActionReview = { spec, lease, values, error: '' };
+  }
+
+  function cancelRuntimeActionReview() {
+    runtimeActionReview = null;
+  }
 
   async function loadActions(av: string, k: string, lease: DetailLease) {
     try {
@@ -323,16 +349,26 @@
     }
   }
 
-  async function doAction(action: string, parameters?: Record<string, string>) {
-    if (!inspection.canAct() || !$canMutate || actionInflight) return;
-    const lease = inspection.capture();
-    if (!lease) return;
+  async function submitRuntimeActionReview(review: RuntimeActionReview) {
+    if (runtimeActionReview !== review || !runtimeActionAllowed(review.lease)) return;
+    for (const p of review.spec.parameters ?? []) {
+      if (p.required && !(review.values[p.name] ?? '').trim()) {
+        review.error = `${p.name} is required`;
+        runtimeActionReview = review;
+        return;
+      }
+    }
+    const { lease, spec } = review;
+    const parameters = spec.parameters?.length ? { ...review.values } : undefined;
+    const action = spec.name;
+    const actor = get(auth);
+    cancelRuntimeActionReview();
     actionInflight = action;
     actionMsg = '';
     actionErr = '';
     try {
-      const resp = await resources.invokeAction(apiVersion, kind, resourceName, action, parameters, { signal: lease.signal });
-      if (!inspection.current(lease, true)) return;
+      const resp = await resources.invokeAction(lease.target.apiVersion, lease.target.kind, lease.target.name, action, parameters, { signal: lease.signal });
+      if (!inspection.current(lease, true) || get(auth) !== actor) return;
       // Dispatch on result shape: URL → open in new tab, download →
       // stream a file, otherwise show the message inline.
       if (resp.downloadContent && resp.downloadFilename) {
@@ -358,79 +394,12 @@
       // different resource after navigation.
       if (!resp.url && !resp.downloadContent) void inspection.refresh();
     } catch (err) {
-      if (!inspection.current(lease)) return;
+      if (!inspection.current(lease) || get(auth) !== actor) return;
       if (err instanceof UnauthorizedError) { inspection.unauthorized(); return; }
       if (inspection.current(lease, true)) actionErr = err instanceof Error ? err.message : String(err);
     } finally {
       if (inspection.current(lease)) actionInflight = '';
     }
-  }
-
-  // Human labels for known actions. Falls back to the raw action name
-  // so unknown actions still render (with a plain label).
-  function actionLabel(a: string): string {
-    switch (a) {
-      case 'start': return 'Start';
-      case 'stop': return 'Force stop';
-      case 'shutdown': return 'Shutdown';
-      case 'reboot': return 'Reboot';
-      case 'console': return 'Console';
-      case 'get-kubeconfig': return 'Kubeconfig';
-      case 'upgrade': return 'Upgrade';
-      case 'logs': return 'Logs';
-      case 'restart': return 'Restart k3s';
-      default: return a;
-    }
-  }
-
-  // Destructive actions get a confirmation prompt.
-  function actionIsDestructive(a: string): boolean {
-    return a === 'stop' || a === 'shutdown' || a === 'reboot' || a === 'restart';
-  }
-
-  function openParamForm(spec: ActionSpec) {
-    if (!inspection.canAct() || !$canMutate || actionInflight) return;
-    paramAction = spec;
-    paramError = '';
-    const seed: Record<string, string> = {};
-    for (const p of spec.parameters ?? []) seed[p.name] = p.defaultValue ?? '';
-    paramValues = seed;
-  }
-
-  function cancelParamForm() {
-    paramAction = null;
-    paramValues = {};
-    paramError = '';
-  }
-
-  async function submitParamForm() {
-    if (!inspection.canAct() || !$canMutate || actionInflight || !paramAction) return;
-    // Validate required params client-side before invoking.
-    for (const p of paramAction.parameters ?? []) {
-      if (p.required && !(paramValues[p.name] ?? '').trim()) {
-        paramError = `${p.name} is required`;
-        return;
-      }
-    }
-    const spec = paramAction;
-    const values = { ...paramValues };
-    cancelParamForm();
-    await doAction(spec.name, values);
-  }
-
-  async function onActionClick(spec: ActionSpec) {
-    if (!inspection.canAct() || !$canMutate || actionInflight) return;
-    // Parameterized actions open an input form; others fire immediately
-    // (with a confirm for destructive ones).
-    if (spec.parameters && spec.parameters.length > 0) {
-      openParamForm(spec);
-      return;
-    }
-    if (actionIsDestructive(spec.name)) {
-      const ok = confirm(`${actionLabel(spec.name)} ${resourceName}?`);
-      if (!ok) return;
-    }
-    await doAction(spec.name);
   }
 
   function inspectDeleteOperation() {
@@ -552,13 +521,11 @@
         <button
           type="button"
           class="action-btn"
-          class:destructive={actionIsDestructive(a.name)}
           disabled={!fresh || !!actionInflight || !$canMutate}
           title={!fresh ? 'Requires fresh provider observation' : $canMutate ? (a.description || `Invoke '${a.name}' on ${resourceName}`) : readOnlyTitle}
-          on:click={() => onActionClick(a)}
+          on:click={() => openRuntimeActionReview(a)}
         >
-          {actionInflight === a.name ? '…' : actionLabel(a.name)}
-          {#if a.parameters && a.parameters.length > 0}…{/if}
+          {actionInflight === a.name ? '…' : (a.label || a.name)}
         </button>
       {/each}
       <button
@@ -647,40 +614,47 @@
     </article>
   {/if}
 
-  {#if paramAction && fresh}
-    <form class="param-form" on:submit|preventDefault={submitParamForm}>
-      <div class="param-form-head">{actionLabel(paramAction.name)} {resourceName}</div>
-      {#if paramAction.description}
-        <p class="muted small">{paramAction.description}</p>
-      {/if}
-      {#each paramAction.parameters ?? [] as p}
-        <label class="param-row">
-          <span class="param-label">{p.name}{#if p.required}<span class="req">*</span>{/if}</span>
-          {#if p.type === 'bool'}
-            <select bind:value={paramValues[p.name]}>
-              <option value="true">true</option>
-              <option value="false">false</option>
-            </select>
-          {:else}
-            <input
-              type={p.type === 'int' ? 'number' : 'text'}
-              bind:value={paramValues[p.name]}
-              placeholder={p.description || ''}
-              required={p.required}
-            />
-          {/if}
-          {#if p.description}<span class="param-help muted small">{p.description}</span>{/if}
-        </label>
-      {/each}
-      {#if paramError}<p class="err small">{paramError}</p>{/if}
-      <div class="param-form-actions">
-        <button type="submit" class="action-btn" disabled={!fresh || !$canMutate || !!actionInflight}>
-          {actionInflight === paramAction.name ? '…' : `Run ${actionLabel(paramAction.name)}`}
-        </button>
-        <button type="button" class="param-cancel" on:click={cancelParamForm}>Cancel</button>
-      </div>
-    </form>
-  {/if}
+  {#each runtimeActionReview && fresh ? [runtimeActionReview] : [] as review (review)}
+      <form class="runtime-action-review" aria-label="Review runtime action" on:submit|preventDefault={() => submitRuntimeActionReview(review)}>
+        <div class="runtime-action-review-head">Review {review.spec.label || review.spec.name}</div>
+        <p class="small">API version: <code>{review.lease.target.apiVersion}</code><br />
+          Kind: <code>{review.lease.target.kind}</code><br />
+          Resource name: <code>{review.lease.target.name}</code><br />
+          Action ID: <code>{review.spec.name}</code></p>
+        {#if review.spec.description}
+          <p class="muted small">{review.spec.description}</p>
+        {/if}
+        <p class="muted small">This runs a live runtime action, not saved desired intent or durable Apply. There are no automatic retries; inspect an uncertain outcome before repeating. Downloads and URLs may contain sensitive information.</p>
+        {#each review.spec.parameters ?? [] as p}
+          <label class="runtime-action-field">
+            <span class="runtime-action-label">{p.name}{#if p.required}<span class="req">*</span>{/if}</span>
+            {#if p.type === 'bool'}
+              <select value={review.values[p.name]} on:change={(event) => { review.values[p.name] = event.currentTarget.value; }} required={p.required}>
+                <option value="">Select a value</option>
+                <option value="true">true</option>
+                <option value="false">false</option>
+              </select>
+            {:else}
+              <input
+                type={p.type === 'int' ? 'number' : 'text'}
+                value={review.values[p.name]}
+                on:input={(event) => { review.values[p.name] = event.currentTarget.value; }}
+                placeholder={p.description || ''}
+                required={p.required}
+              />
+            {/if}
+            {#if p.description}<span class="runtime-action-help muted small">{p.description}</span>{/if}
+          </label>
+        {/each}
+        {#if review.error}<p class="err small" role="alert">{review.error}</p>{/if}
+        <div class="runtime-action-review-actions">
+          <button type="submit" class="action-btn" disabled={!fresh || !$canMutate || !!actionInflight}>
+            Run {review.spec.label || review.spec.name}
+          </button>
+          <button type="button" class="runtime-action-cancel" on:click={() => { if (runtimeActionReview === review) cancelRuntimeActionReview(); }}>Cancel</button>
+        </div>
+      </form>
+  {/each}
   {#if actionMsg}
     <p class="muted small">{actionMsg}</p>
   {/if}
@@ -1018,7 +992,7 @@
     background: rgba(255, 137, 128, 0.1);
     color: #ff8980;
   }
-  .param-form {
+  .runtime-action-review {
     margin: 0.75em 0;
     padding: 0.9em 1em;
     border: 1px solid rgba(127, 127, 127, 0.3);
@@ -1026,26 +1000,26 @@
     background: rgba(127, 127, 127, 0.06);
     max-width: 32rem;
   }
-  .param-form-head {
+  .runtime-action-review-head {
     font-weight: 600;
     margin-bottom: 0.4em;
   }
-  .param-row {
+  .runtime-action-field {
     display: flex;
     flex-direction: column;
     gap: 0.2em;
     margin: 0.6em 0;
   }
-  .param-label {
+  .runtime-action-label {
     font-size: 0.85rem;
     color: #ccc;
   }
-  .param-label .req {
+  .runtime-action-label .req {
     color: #ff8980;
     margin-left: 0.15em;
   }
-  .param-row input,
-  .param-row select {
+  .runtime-action-field input,
+  .runtime-action-field select {
     padding: 0.4em 0.6em;
     border-radius: 6px;
     border: 1px solid rgba(127, 127, 127, 0.35);
@@ -1053,15 +1027,15 @@
     color: #eee;
     font: inherit;
   }
-  .param-help {
+  .runtime-action-help {
     opacity: 0.75;
   }
-  .param-form-actions {
+  .runtime-action-review-actions {
     display: flex;
     gap: 0.5em;
     margin-top: 0.6em;
   }
-  .param-cancel {
+  .runtime-action-cancel {
     background: transparent;
     color: #aaa;
     border: 1px solid rgba(127, 127, 127, 0.35);
@@ -1070,7 +1044,7 @@
     font-size: 0.85rem;
     cursor: pointer;
   }
-  .param-cancel:hover {
+  .runtime-action-cancel:hover {
     color: #fff;
     background: rgba(127, 127, 127, 0.12);
   }

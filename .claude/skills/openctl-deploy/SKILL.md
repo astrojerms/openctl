@@ -291,6 +291,14 @@ do not forward raw provider errors, response bodies, URLs or certificate fields.
   not argv. `--download -` and returned links may expose credentials. If output
   handling fails after invocation, inspect before deciding whether to repeat.
 
+  Native action listings expose provider-owned labels and effect descriptions.
+  Invoke the raw action `name`/CLI `ACTION`, never its display label. In the
+  console, every action (including parameterless/download actions) opens a
+  transient review of the API/kind/name, action and parameters. Run explicitly
+  only after reviewing impact; Cancel sends nothing. Navigation, stale
+  observation or changed authority requires a fresh review, not replaying an old
+  form. Console review does not add a new server-side authorization boundary.
+
 - Check the actual provider identity and intended CPU/memory/storage/network,
   not only the manifest or operation message. For Proxmox updates, compare the
   node/VMID before/after and read authoritative VM config for configured memory

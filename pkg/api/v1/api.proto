@@ -279,6 +279,9 @@ message ActionSpec {
   // Optional human-readable description for a tooltip/help text.
   string description = 2;
   repeated ActionParameterSpec parameters = 3;
+  // Optional provider-owned display label. Clients invoke name, never label.
+  // An absent label is displayed as the raw name.
+  string label = 4;
 }
 
 // ActionParameterSpec describes one argument an action accepts so the UI can

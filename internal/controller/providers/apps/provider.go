@@ -32,6 +32,7 @@ func (*Provider) Kinds() []string { return []string{"ComposeApplication", "Jelly
 var _ providers.Provider = (*Provider)(nil)
 var _ providers.DryRunner = (*Provider)(nil)
 var _ providers.Actioner = (*Provider)(nil)
+var _ providers.ActionDescriber = (*Provider)(nil)
 var _ providers.DriftProjector = (*Provider)(nil)
 
 func (p *Provider) lock(kind, name string) func() {
@@ -240,6 +241,43 @@ func (*Provider) Actions(kind string) []string {
 		return nil
 	}
 	return []string{"logs", "start", "stop", "restart"}
+}
+
+// ActionSpecs describes the runtime commands without changing their stable IDs.
+func (*Provider) ActionSpecs(kind string) []providers.ActionSpec {
+	if checkKind(kind) != nil {
+		return nil
+	}
+	start := "Start the Compose application with existing local images after ownership and project checks. Does not reboot, bootstrap the host, or pull a new image; preserves volumes, configuration, and media."
+	stop := "Stop the Compose containers, interrupting application availability. Preserves containers, volumes, configuration, and media; does not change boot startup policy."
+	restart := "Restart the Compose containers, interrupting application availability. Preserves volumes, configuration, and media; does not pull a new image."
+	if kind == "Jellyfin" {
+		start = "Check onboarding, reboot-required status, NVIDIA, and read-only media prerequisites, then enable and start the Jellyfin service, including boot startup. Does not reboot, bootstrap the host, or pull a new image; preserves configuration, volumes, and media."
+		stop = "Disable and stop the Jellyfin service, interrupting playback and disabling boot startup. Removes application containers through Compose down, but preserves volumes, configuration, and media."
+		restart = "Check onboarding, reboot-required status, NVIDIA, and read-only media prerequisites, then restart the Jellyfin service, interrupting playback. Recreates application containers without pulling a new image; preserves boot startup policy, volumes, configuration, and media."
+	}
+	return []providers.ActionSpec{
+		{
+			Name:        "logs",
+			Label:       "Download application logs",
+			Description: "Download redacted application logs without changing runtime state. Logs may still contain sensitive application data.",
+		},
+		{
+			Name:        "start",
+			Label:       "Start application",
+			Description: start,
+		},
+		{
+			Name:        "stop",
+			Label:       "Stop application",
+			Description: stop,
+		},
+		{
+			Name:        "restart",
+			Label:       "Restart application",
+			Description: restart,
+		},
+	}
 }
 
 func (p *Provider) DoAction(ctx context.Context, kind, name, action string) (*providers.ActionResult, error) {

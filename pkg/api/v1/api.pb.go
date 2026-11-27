@@ -1326,8 +1326,11 @@ type ActionSpec struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// Optional human-readable description for a tooltip/help text.
-	Description   string                 `protobuf:"bytes,2,opt,name=description,proto3" json:"description,omitempty"`
-	Parameters    []*ActionParameterSpec `protobuf:"bytes,3,rep,name=parameters,proto3" json:"parameters,omitempty"`
+	Description string                 `protobuf:"bytes,2,opt,name=description,proto3" json:"description,omitempty"`
+	Parameters  []*ActionParameterSpec `protobuf:"bytes,3,rep,name=parameters,proto3" json:"parameters,omitempty"`
+	// Optional provider-owned display label. Clients invoke name, never label.
+	// An absent label is displayed as the raw name.
+	Label         string `protobuf:"bytes,4,opt,name=label,proto3" json:"label,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1381,6 +1384,13 @@ func (x *ActionSpec) GetParameters() []*ActionParameterSpec {
 		return x.Parameters
 	}
 	return nil
+}
+
+func (x *ActionSpec) GetLabel() string {
+	if x != nil {
+		return x.Label
+	}
+	return ""
 }
 
 // ActionParameterSpec describes one argument an action accepts so the UI can
@@ -6811,14 +6821,15 @@ const file_api_proto_rawDesc = "" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\"j\n" +
 	"\x13ListActionsResponse\x12\x18\n" +
 	"\aactions\x18\x01 \x03(\tR\aactions\x129\n" +
-	"\faction_specs\x18\x02 \x03(\v2\x16.openctl.v1.ActionSpecR\vactionSpecs\"\x83\x01\n" +
+	"\faction_specs\x18\x02 \x03(\v2\x16.openctl.v1.ActionSpecR\vactionSpecs\"\x99\x01\n" +
 	"\n" +
 	"ActionSpec\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12?\n" +
 	"\n" +
 	"parameters\x18\x03 \x03(\v2\x1f.openctl.v1.ActionParameterSpecR\n" +
-	"parameters\"\xa0\x01\n" +
+	"parameters\x12\x14\n" +
+	"\x05label\x18\x04 \x01(\tR\x05label\"\xa0\x01\n" +
 	"\x13ActionParameterSpec\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12\x1a\n" +

@@ -569,6 +569,7 @@ func (h *resourceHandler) ListActions(ctx context.Context, req *apiv1.ListAction
 		}
 		pbSpecs = append(pbSpecs, &apiv1.ActionSpec{
 			Name:        s.Name,
+			Label:       s.Label,
 			Description: s.Description,
 			Parameters:  params,
 		})

@@ -65,20 +65,24 @@ func newCtlActionListCommand() *cobra.Command {
 				return err
 			}
 			out := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(out, "ACTION\tDESCRIPTION\tPARAMETER\tTYPE\tREQUIRED\tDEFAULT\tPARAMETER DESCRIPTION")
+			fmt.Fprintln(out, "ACTION\tLABEL\tDESCRIPTION\tPARAMETER\tTYPE\tREQUIRED\tDEFAULT\tPARAMETER DESCRIPTION")
 			seen := make(map[string]bool, len(response.GetActionSpecs()))
 			for _, spec := range response.GetActionSpecs() {
 				seen[spec.GetName()] = true
+				label := spec.GetLabel()
+				if label == "" {
+					label = spec.GetName()
+				}
 				if len(spec.GetParameters()) == 0 {
-					fmt.Fprintf(out, "%s\t%s\t\t\t\t\t\n", spec.GetName(), spec.GetDescription())
+					fmt.Fprintf(out, "%s\t%s\t%s\t\t\t\t\t\n", spec.GetName(), label, spec.GetDescription())
 				}
 				for _, parameter := range spec.GetParameters() {
-					fmt.Fprintf(out, "%s\t%s\t%s\t%s\t%t\t%s\t%s\n", spec.GetName(), spec.GetDescription(), parameter.GetName(), parameter.GetType(), parameter.GetRequired(), parameter.GetDefaultValue(), parameter.GetDescription())
+					fmt.Fprintf(out, "%s\t%s\t%s\t%s\t%s\t%t\t%s\t%s\n", spec.GetName(), label, spec.GetDescription(), parameter.GetName(), parameter.GetType(), parameter.GetRequired(), parameter.GetDefaultValue(), parameter.GetDescription())
 				}
 			}
 			for _, name := range response.GetActions() {
 				if !seen[name] {
-					fmt.Fprintf(out, "%s\t\t\t\t\t\t\n", name)
+					fmt.Fprintf(out, "%s\t%s\t\t\t\t\t\t\n", name, name)
 				}
 			}
 			return out.Flush()

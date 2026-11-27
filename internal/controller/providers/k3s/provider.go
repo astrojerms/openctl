@@ -93,9 +93,7 @@ func (p *Provider) AdvancedKinds() []providers.AdvancedKind {
 	}
 }
 
-// Actions implements providers.Actioner. Cluster supports one
-// runtime action today: get-kubeconfig, which returns the stored
-// kubeconfig contents from ~/.openctl/k3s/<name>/kubeconfig.
+// Actions implements providers.Actioner for Cluster runtime operations.
 func (p *Provider) Actions(kind string) []string {
 	if kind != kindCluster {
 		return nil
@@ -103,10 +101,8 @@ func (p *Provider) Actions(kind string) []string {
 	return []string{"get-kubeconfig", "upgrade", "logs", "restart"}
 }
 
-// ActionSpecs implements providers.ActionDescriber: it annotates the Cluster
-// actions with their parameter schemas so the UI can render inputs. Only
-// `upgrade` takes a parameter today (the target k3s version); `get-kubeconfig`
-// is parameterless. Names must match Actions.
+// ActionSpecs describes Cluster runtime actions and their parameter schemas.
+// Names and ordering match Actions.
 func (p *Provider) ActionSpecs(kind string) []providers.ActionSpec {
 	if kind != kindCluster {
 		return nil
@@ -114,10 +110,12 @@ func (p *Provider) ActionSpecs(kind string) []providers.ActionSpec {
 	return []providers.ActionSpec{
 		{
 			Name:        "get-kubeconfig",
+			Label:       "Download kubeconfig",
 			Description: "Download the cluster's kubeconfig.",
 		},
 		{
 			Name:        "upgrade",
+			Label:       "Upgrade k3s",
 			Description: "Rolling k3s version upgrade — control planes first (for etcd quorum), then workers, health-gated. Idempotent: nodes already at the target are skipped.",
 			Parameters: []providers.ActionParameter{
 				{
@@ -130,6 +128,7 @@ func (p *Provider) ActionSpecs(kind string) []providers.ActionSpec {
 		},
 		{
 			Name:        "logs",
+			Label:       "Download node logs",
 			Description: "Download a node's k3s journal via its agent (mTLS). Leave node blank for a single-node cluster.",
 			Parameters: []providers.ActionParameter{
 				{
@@ -148,6 +147,7 @@ func (p *Provider) ActionSpecs(kind string) []providers.ActionSpec {
 		},
 		{
 			Name:        "restart",
+			Label:       "Restart k3s",
 			Description: "Restart the k3s service on a node via its agent (mTLS).",
 			Parameters: []providers.ActionParameter{
 				{
@@ -161,10 +161,8 @@ func (p *Provider) ActionSpecs(kind string) []providers.ActionSpec {
 	}
 }
 
-// DoActionWithParams implements providers.ParameterizedActioner. The `upgrade`
-// action takes a `version` parameter and rolls every node to that k3s version
-// (control planes first for etcd quorum, then workers, health-gated); all other
-// actions ignore parameters and delegate to DoAction.
+// DoActionWithParams dispatches upgrade, logs, and restart with their parameters.
+// Other actions delegate to DoAction.
 func (p *Provider) DoActionWithParams(ctx context.Context, kind, name, action string, params map[string]string) (*providers.ActionResult, error) {
 	if kind == kindCluster {
 		switch action {

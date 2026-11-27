@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount, tick, unmount } from 'svelte';
-import { get } from 'svelte/store';
+import { fromStore, get, writable } from 'svelte/store';
 import Detail from './Detail.svelte';
-import { ApiError, UnauthorizedError, inventoryApi, operations, ownership, repo, resources, type GetResourceResponse, type GetSavedResourceResponse } from '../lib/api';
+import { ApiError, UnauthorizedError, inventoryApi, operations, ownership, repo, resources } from '../lib/api';
+import type { ActionSpec, GetResourceResponse, GetSavedResourceResponse, InvokeActionResponse } from '../lib/api';
 import { auth } from '../lib/auth';
 import { recordAuthority, resetAuthority } from '../lib/authority';
 import { ops } from '../lib/ops';
@@ -28,7 +29,7 @@ beforeEach(() => {
   recordAuthority('mirror');
   ops.set([]);
   vi.spyOn(inventoryApi, 'get').mockResolvedValue(saved);
-  vi.spyOn(resources, 'listActions').mockResolvedValue({ actionSpecs: [{ name: 'start' }, { name: 'upgrade', parameters: [{ name: 'version', required: true, defaultValue: 'v1' }] }] });
+  vi.spyOn(resources, 'listActions').mockResolvedValue({ actionSpecs: [{ name: 'start', label: 'Start' }, { name: 'upgrade', label: 'Upgrade', parameters: [{ name: 'version', required: true, defaultValue: 'v1' }] }] });
   vi.spyOn(resources, 'childrenGraph').mockResolvedValue({ nodes: [], edges: [] });
   vi.spyOn(repo, 'history').mockResolvedValue({ commits: [] });
   vi.spyOn(watch, 'watchResources').mockImplementation((_av, _kind, _name, onEvent, opts) => {
@@ -108,9 +109,9 @@ describe('saved-only detail inspection', () => {
     button('Export bundle').click();
     await settle();
     expect(exportBundle).toHaveBeenCalledTimes(1);
-    button('Upgrade…').click();
+    button('Upgrade').click();
     await tick();
-    const form = target.querySelector<HTMLFormElement>('form.param-form')!;
+    const form = target.querySelector<HTMLFormElement>('form.runtime-action-review')!;
     expect(form).not.toBeNull();
     const runtime = button('Start');
     const reconcile = button('Reconcile');
@@ -138,7 +139,7 @@ describe('saved-only detail inspection', () => {
     expect(exportBundle).toHaveBeenCalledTimes(1);
     expect(forget).not.toHaveBeenCalled();
     expect(prompt).not.toHaveBeenCalled();
-    expect(target.querySelector('form.param-form')).toBeNull();
+    expect(target.querySelector('form.runtime-action-review')).toBeNull();
     expect(target.querySelector('.state-good')).toBeNull();
     expect(target.textContent).not.toContain('Observed state');
     expect(target.textContent).toContain('Saved desired intent');
@@ -265,5 +266,262 @@ describe('saved-only detail inspection', () => {
     expect(target.textContent).not.toContain('Saved desired intent');
     expect(target.textContent).not.toContain('${secret:homelab/password}');
     expect(target.textContent).not.toContain('Provider/Get reported not found');
+  });
+});
+
+describe('runtime action review', () => {
+  function reviewForm() {
+    const form = target.querySelector<HTMLFormElement>('form[aria-label="Review runtime action"]');
+    if (!form) throw new Error('Missing runtime action review');
+    return form;
+  }
+
+  function submit(form = reviewForm()) {
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  }
+
+  async function openAction(spec: ActionSpec) {
+    vi.spyOn(resources, 'get').mockResolvedValue(observed);
+    vi.mocked(resources.listActions).mockResolvedValue({ actionSpecs: [spec] });
+    component = mount(Detail, { target, props });
+    await settle();
+    button(spec.label || spec.name).click();
+    await tick();
+    return reviewForm();
+  }
+
+  it.each([
+    { name: 'restart', label: 'Restart Jellyfin', description: 'Restart this media server.' },
+    { name: 'get-kubeconfig', label: 'Download credentials', description: 'Download cluster credentials.' },
+    { name: 'upgrade', label: 'Upgrade service', parameters: [{ name: 'version', required: true, defaultValue: 'v1' }] },
+  ])('reviews $name without invoking and cancel revokes the captured form', async (spec) => {
+    const invoke = vi.spyOn(resources, 'invokeAction');
+    const confirm = vi.spyOn(window, 'confirm');
+    const form = await openAction(spec);
+    expect(form.textContent).toContain(`Review ${spec.label}`);
+    const reviewedIdentity = [...form.querySelectorAll('code')].map((node) => node.textContent);
+    expect(reviewedIdentity).toEqual([props.apiVersion, props.kind, props.resourceName, spec.name]);
+    if (spec.description) expect(form.textContent).toContain(spec.description);
+    expect(button(`Run ${spec.label}`).type).toBe('submit');
+    expect(invoke).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+    button('Cancel').click();
+    submit(form);
+    await tick();
+    expect(target.querySelector('form.runtime-action-review')).toBeNull();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('submits the raw ID and reviewed string parameters once, preserving defaults and blocking duplicate submits', async () => {
+    const pending = Promise.withResolvers<InvokeActionResponse>();
+    const invoke = vi.spyOn(resources, 'invokeAction').mockReturnValue(pending.promise);
+    const form = await openAction({
+      name: 'upgrade', label: 'Install release', description: 'Install on this target.',
+      parameters: [
+        { name: 'version', required: true, defaultValue: 'v1', description: 'Release version' },
+        { name: 'replicas', type: 'int', defaultValue: '2' },
+        { name: 'drain', type: 'bool', defaultValue: 'false' },
+      ],
+    });
+    const inputs = [...form.querySelectorAll('input')];
+    expect(inputs.map((input) => input.value)).toEqual(['v1', '2']);
+    expect(form.querySelector('select')?.value).toBe('false');
+    inputs[0].value = 'v2';
+    inputs[0].dispatchEvent(new Event('input', { bubbles: true }));
+    inputs[1].value = '3';
+    inputs[1].dispatchEvent(new Event('input', { bubbles: true }));
+    expect(invoke).not.toHaveBeenCalled();
+    button('Run Install release').click();
+    submit(form);
+    expect(invoke).toHaveBeenCalledExactlyOnceWith(
+      props.apiVersion, props.kind, props.resourceName, 'upgrade',
+      { version: 'v2', replicas: '3', drain: 'false' }, { signal: expect.any(AbortSignal) },
+    );
+    pending.resolve({ message: 'installed' });
+    await settle();
+    expect(target.textContent).toContain('upgrade → installed');
+    expect(resources.get).toHaveBeenCalledTimes(2);
+  });
+
+  it('blocks missing required values even when a captured form bypasses native validation', async () => {
+    const invoke = vi.spyOn(resources, 'invokeAction').mockResolvedValue({});
+    const form = await openAction({ name: 'new-operation', parameters: [{ name: 'destination', required: true }, { name: 'enabled', type: 'bool', required: true }] });
+    submit(form);
+    await tick();
+    expect(form.textContent).toContain('destination is required');
+    expect(invoke).not.toHaveBeenCalled();
+    const input = form.querySelector('input')!;
+    input.value = 'chosen-target';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    submit(form);
+    await tick();
+    expect(form.textContent).toContain('enabled is required');
+    expect(invoke).not.toHaveBeenCalled();
+    const select = form.querySelector('select')!;
+    select.value = 'false';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    submit(form);
+    expect(invoke).toHaveBeenCalledExactlyOnceWith(
+      props.apiVersion, props.kind, props.resourceName, 'new-operation',
+      { destination: 'chosen-target', enabled: 'false' }, { signal: expect.any(AbortSignal) },
+    );
+    await settle();
+  });
+
+  it('requires review for unknown raw names and escapes the action, label and description', async () => {
+    const raw = '<script>alert("action")</script>';
+    const invoke = vi.spyOn(resources, 'invokeAction').mockResolvedValue({ message: 'completed' });
+    const form = await openAction({ name: raw, description: '<img src=x onerror=alert(1)>' });
+    expect(form.textContent).toContain(`Review ${raw}`);
+    expect(form.textContent).toContain('<img src=x onerror=alert(1)>');
+    expect(form.querySelector('script, img')).toBeNull();
+    expect(invoke).not.toHaveBeenCalled();
+    button(`Run ${raw}`).click();
+    expect(invoke).toHaveBeenCalledExactlyOnceWith(
+      props.apiVersion, props.kind, props.resourceName, raw, undefined, { signal: expect.any(AbortSignal) },
+    );
+    await settle();
+  });
+
+  it.each(['viewer', 'signed-out', 'different-session'])('revokes review immediately on %s auth change and does not revive it after restoration', async (change) => {
+    const invoke = vi.spyOn(resources, 'invokeAction');
+    const form = await openAction({ name: 'restart', label: 'Restart service' });
+    const previous = get(auth);
+    if (change === 'signed-out') auth.set({ kind: 'signed-out' });
+    else auth.set({ kind: 'signed-in', me: { role: change === 'viewer' ? 'viewer' : 'admin', userId: 'admin', sessionId: 'new-session' } });
+    submit(form);
+    auth.set(previous);
+    submit(form);
+    await tick();
+    expect(target.querySelector('form.runtime-action-review')).toBeNull();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('does not reuse a prior observation review after freshness recovers or let an old form submit the new review', async () => {
+    const invoke = vi.spyOn(resources, 'invokeAction').mockResolvedValue({});
+    const form = await openAction({ name: 'restart', label: 'Restart service' });
+    notify();
+    submit(form);
+    expect(invoke).not.toHaveBeenCalled();
+    await settle();
+    expect(target.querySelector('form.runtime-action-review')).toBeNull();
+    submit(form);
+    button('Restart service').click();
+    await tick();
+    const current = reviewForm();
+    expect(current).not.toBe(form);
+    submit(form);
+    expect(invoke).not.toHaveBeenCalled();
+    button('Run Restart service').click();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    await settle();
+  });
+
+  it('binds consent to the exact route, including an old form dispatched before route redraw', async () => {
+    const invoke = vi.spyOn(resources, 'invokeAction').mockResolvedValue({});
+    vi.spyOn(resources, 'get').mockResolvedValue(observed);
+    const route = writable({ ...props });
+    const current = fromStore(route);
+    component = mount(Detail, { target, props: {
+      get apiVersion() { return current.current.apiVersion; },
+      get kind() { return current.current.kind; },
+      get resourceName() { return current.current.resourceName; },
+    } });
+    await settle();
+    button('Start').click();
+    await tick();
+    const old = reviewForm();
+    const next = { apiVersion: 'apps.openctl.io/v1', kind: 'Jellyfin', resourceName: 'other-server' };
+    route.set(next);
+    submit(old);
+    expect(invoke).not.toHaveBeenCalled();
+    await settle();
+    expect(target.querySelector('form.runtime-action-review')).toBeNull();
+    button('Start').click();
+    await tick();
+    expect([...reviewForm().querySelectorAll('code')].map((node) => node.textContent)).toEqual([next.apiVersion, next.kind, next.resourceName, 'start']);
+    submit(old);
+    expect(invoke).not.toHaveBeenCalled();
+    button('Run Start').click();
+    expect(invoke).toHaveBeenCalledExactlyOnceWith(next.apiVersion, next.kind, next.resourceName, 'start', undefined, { signal: expect.any(AbortSignal) });
+    await settle();
+  });
+
+  it('renders a provider label as text without changing the raw invocation ID', async () => {
+    const label = '<img src=x onerror=alert(1)>';
+    const invoke = vi.spyOn(resources, 'invokeAction').mockResolvedValue({});
+    const form = await openAction({ name: 'provider-custom-action', label });
+    expect(form.textContent).toContain(`Review ${label}`);
+    expect(target.querySelector('img')).toBeNull();
+    expect(invoke).not.toHaveBeenCalled();
+    button(`Run ${label}`).click();
+    expect(invoke).toHaveBeenCalledExactlyOnceWith(
+      props.apiVersion, props.kind, props.resourceName, 'provider-custom-action', undefined, { signal: expect.any(AbortSignal) },
+    );
+    await settle();
+  });
+
+  it('opens a reviewed URL result safely without invoking again', async () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    const invoke = vi.spyOn(resources, 'invokeAction').mockResolvedValue({ url: 'https://console.example/session', message: 'Console opened' });
+    await openAction({ name: 'console', label: 'Open console' });
+    expect(open).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+    button('Run Open console').click();
+    await settle();
+    expect(open).toHaveBeenCalledExactlyOnceWith('https://console.example/session', '_blank', 'noopener,noreferrer');
+    expect(target.textContent).toContain('Console opened');
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('downloads only after explicit review submission and retains filename and content handling', async () => {
+    const createURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:runtime-download');
+    const revokeURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+    const downloads: { href: string; filename: string }[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      downloads.push({ href: this.href, filename: this.download });
+    });
+    const invoke = vi.spyOn(resources, 'invokeAction').mockResolvedValue({ downloadContent: 'sensitive credentials', downloadFilename: 'cluster.yaml' });
+    await openAction({ name: 'get-kubeconfig', label: 'Download credentials' });
+    expect(downloads).toEqual([]);
+    expect(invoke).not.toHaveBeenCalled();
+    button('Run Download credentials').click();
+    await settle();
+    expect(downloads).toEqual([{ href: 'blob:runtime-download', filename: 'cluster.yaml' }]);
+    expect(createURL).toHaveBeenCalledExactlyOnceWith(expect.any(Blob));
+    expect(revokeURL).toHaveBeenCalledExactlyOnceWith('blob:runtime-download');
+    expect(target.textContent).toContain('Downloaded cluster.yaml');
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])('does not deliver a prior session result or expire a replacement session (unauthorized=%s)', async (unauthorized) => {
+    const pending = Promise.withResolvers<InvokeActionResponse>();
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    const invoke = vi.spyOn(resources, 'invokeAction').mockReturnValue(pending.promise);
+    await openAction({ name: 'console', label: 'Open console' });
+    button('Run Open console').click();
+    auth.set({ kind: 'signed-in', me: { role: 'admin', userId: 'replacement', sessionId: 'replacement-session' } });
+    const replacement = get(auth);
+    if (unauthorized) pending.reject(new UnauthorizedError('old session expired'));
+    else pending.resolve({ url: 'https://console.example/private-session', message: 'Private prior-session result' });
+    await settle();
+    expect(open).not.toHaveBeenCalled();
+    expect(target.textContent).not.toContain('Private prior-session result');
+    expect(get(auth)).toBe(replacement);
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry an uncertain action outcome on observation refresh or old form submission', async () => {
+    const invoke = vi.spyOn(resources, 'invokeAction').mockRejectedValue(new Error('Connection lost after submission'));
+    const form = await openAction({ name: 'provider-task', label: 'Run provider task' });
+    button('Run Run provider task').click();
+    await settle();
+    expect(target.textContent).toContain('Connection lost after submission');
+    expect(invoke).toHaveBeenCalledTimes(1);
+    notify();
+    submit(form);
+    await settle();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(target.querySelector('form.runtime-action-review')).toBeNull();
   });
 });

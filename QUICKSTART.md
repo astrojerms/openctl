@@ -158,6 +158,10 @@ Apply and Delete print request IDs before submission;
 submitting again. Console Apply and Delete attempts survive reload in the same
 tab as identity metadata, not saved credentials or consent. Explicit recovery
 observes the original operation; **Reconcile** opens the editor for fresh review.
+Runtime buttons first open a review of the exact target, provider-described
+effect and parameters; no request is sent until explicit Run. Cancel does
+nothing. Runtime actions are not durable Apply requests; inspect uncertain
+outcomes before repeating them.
 For CLI application logs and typed runtime actions, see
 [controller commands](README.md#common-commands). See also
 [managed Jellyfin](README.md#managed-jellyfin-on-proxmox).
