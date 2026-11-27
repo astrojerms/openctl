@@ -848,18 +848,15 @@ func buildRegistryFromConfig(ctx context.Context, stateStore externalprovider.St
 		if err != nil {
 			return nil, nil, cleanup, fmt.Errorf("load proxmox config: %w", err)
 		}
-		valid := make(map[string]*protocol.ProviderConfig, len(ctxConfigs))
-		for name, pc := range ctxConfigs {
-			if pc.Endpoint != "" {
-				valid[name] = pc
+		if len(ctxConfigs) > 0 {
+			pmp, err = pmprovider.NewMulti(ctxConfigs, defaultCtx)
+			if err != nil {
+				return nil, nil, cleanup, fmt.Errorf("initialize proxmox provider: %w", err)
 			}
-		}
-		if len(valid) > 0 {
-			pmp = pmprovider.NewMulti(valid, defaultCtx)
 			registry.Register(pmp)
 			names = append(names, "proxmox")
-			if len(valid) > 1 {
-				log.Printf("  provider \"proxmox\": %d endpoints configured (default context %q)", len(valid), defaultCtx)
+			if len(ctxConfigs) > 1 {
+				log.Printf("  provider \"proxmox\": %d endpoints configured (default context %q)", len(ctxConfigs), defaultCtx)
 			}
 		}
 	}

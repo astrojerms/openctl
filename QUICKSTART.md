@@ -152,6 +152,8 @@ providers:
         endpoint: https://pve.example.com:8006
         node: pve1
         credentials: homelab-creds
+        # Optional private CA, installed on the controller/plugin host:
+        # caFile: /etc/openctl/proxmox-ca.pem
     credentials:
       homelab-creds:
         tokenId: root@pam!openctl
@@ -159,6 +161,15 @@ providers:
 ```
 
 Put the API token in the `tokenSecretFile` path (mode `0600`).
+
+Proxmox HTTPS certificates and hostnames are verified by default. Obtain private
+CA bundles through a trusted out-of-band channel; `caFile` appends that PEM
+bundle to system roots. The endpoint name/IP must match the certificate. Native
+clients no longer silently skip verification: upgrading self-signed labs must
+configure trust before connecting. Explicit per-context `insecureSkipVerify:
+true` disables certificate/hostname checks for HTTPS only, exposes API tokens to
+impersonation, and cannot be combined with `caFile`. HTTP and API redirects are
+rejected. Restart the controller after saving credential or trust changes.
 
 ## Write a cluster manifest
 

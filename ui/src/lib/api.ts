@@ -414,6 +414,8 @@ export interface ProviderEntry {
   tokenId?: string;
   hasSecret?: boolean;
   usesSecretFile?: boolean;
+  caFile?: string;
+  insecureSkipVerify?: boolean;
 }
 
 export interface ListProvidersResponse {
@@ -425,14 +427,16 @@ export interface UpsertProviderRequest {
   endpoint: string;
   tokenId: string;
   tokenSecret?: string;
+  caFile?: string;
+  insecureSkipVerify?: boolean;
 }
 
 export const providersApi = {
-  list: () => api.get<ListProvidersResponse>('/v1/config/providers'),
-  upsert: (req: UpsertProviderRequest) =>
-    api.post<{ provider: ProviderEntry }>('/v1/config/providers', req),
-  delete: (name: string) =>
-    api.delete<Record<string, never>>('/v1/config/providers/' + encodeURIComponent(name)),
+  list: (opts?: RequestOptions) => api.get<ListProvidersResponse>('/v1/config/providers', opts),
+  upsert: (req: UpsertProviderRequest, opts?: RequestOptions) =>
+    api.post<{ provider: ProviderEntry }>('/v1/config/providers', req, opts),
+  delete: (name: string, opts?: RequestOptions) =>
+    api.delete<Record<string, never>>('/v1/config/providers/' + encodeURIComponent(name), opts),
 };
 
 export interface DiscoveryContext {

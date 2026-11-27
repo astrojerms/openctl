@@ -27,16 +27,25 @@ type Handler struct {
 	client *client.Client
 }
 
-// New creates a new Handler
-func New(config *protocol.ProviderConfig) *Handler {
-	c := client.New(config.Endpoint, config.TokenID, config.TokenSecret)
+// New creates a Handler only after validating its endpoint and TLS trust.
+func New(config *protocol.ProviderConfig) (*Handler, error) {
+	if config == nil {
+		return nil, errors.New("proxmox handler: configuration is required")
+	}
+	c, err := client.New(config.Endpoint, config.TokenID, config.TokenSecret, client.TLSOptions{
+		CAFile:             config.CAFile,
+		InsecureSkipVerify: config.InsecureSkipVerify,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("proxmox handler: %w", err)
+	}
 	if config.SnippetSSH != nil {
 		c.SetSnippetSSH(config.SnippetSSH.Hosts, config.SnippetSSH.User, config.SnippetSSH.IdentityFile)
 	}
 	return &Handler{
 		config: config,
 		client: c,
-	}
+	}, nil
 }
 
 // Client returns the underlying Proxmox client. Exposed so the

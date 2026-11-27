@@ -20,11 +20,18 @@ type ProxmoxProvider struct {
 }
 
 // NewProvider creates a new Proxmox compute provider
-func NewProvider(config *protocol.ProviderConfig) *ProxmoxProvider {
-	return &ProxmoxProvider{
-		client: client.New(config.Endpoint, config.TokenID, config.TokenSecret),
-		config: config,
+func NewProvider(config *protocol.ProviderConfig) (*ProxmoxProvider, error) {
+	if config == nil {
+		return nil, fmt.Errorf("proxmox provider configuration is required")
 	}
+	c, err := client.New(config.Endpoint, config.TokenID, config.TokenSecret, client.TLSOptions{
+		CAFile:             config.CAFile,
+		InsecureSkipVerify: config.InsecureSkipVerify,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("initialize proxmox compute provider: %w", err)
+	}
+	return &ProxmoxProvider{client: c, config: config}, nil
 }
 
 // CreateInstance creates a new compute instance

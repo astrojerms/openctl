@@ -182,6 +182,31 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
   Exactly three explicit keyed fixture operations ran; no live homelab changes
   or physical application-readiness claim.
 
+**Verified native Proxmox transport (2026-11-27):**
+
+- [x] Native Proxmox verifies HTTPS certificates and hostnames by default, with
+  per-context controller/plugin-host `caFile` bundles augmenting system roots.
+  Explicit `insecureSkipVerify` is HTTPS-only, mutually exclusive with a CA
+  bundle, and never a fallback. HTTP, unsafe endpoints, malformed/missing CA
+  bundles and API redirects fail closed; constructor failures stop startup.
+- [x] Providers exposes saved certificate policy, private-CA configuration and
+  explicit insecure risk. Omitted API trust fields preserve existing settings;
+  explicit clearing is supported. Trust edits preserve file-backed credentials
+  and sibling contexts, remain admin-only and require restart.
+- [x] `ctl discover --test` exits nonzero on a disconnected result while retaining
+  table/JSON/YAML output; connection diagnostics mention certificate trust
+  without exposing upstream credential-bearing errors.
+- Verification: focused native-client, handler, provider, configuration, server,
+  registry, migration-adoption and CLI checks passed; the standalone plugin
+  compiled. Eight mounted Providers tests, clean Svelte diagnostics and the
+  production UI build passed. Actual console/CLI proof against an isolated
+  native Proxmox simulator rejected untrusted TLS before authenticated HTTP,
+  saved a private CA while preserving file-backed credentials, remained blocked
+  before restart, then authenticated read-only discovery after restart. Only
+  provider GETs occurred; no live homelab changes or hardware-readiness claim.
+- Upgrade: self-signed installations that depended on the former silent bypass
+  must configure trusted CA material or explicitly accept insecure HTTPS.
+
 The next product acceptance gate is the complete operator journey on real
 hardware, including recovery, media playback and any approved public endpoint.
 See [direction](docs/direction.md). Provider breadth is downstream of that gate.

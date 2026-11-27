@@ -287,10 +287,13 @@ type TerraformResourceMap struct {
 
 // Context represents a provider context (like a cluster or endpoint)
 type Context struct {
-	Endpoint    string                     `yaml:"endpoint"`
-	Node        string                     `yaml:"node"`
-	Credentials string                     `yaml:"credentials"`
-	SnippetSSH  *protocol.SnippetSSHConfig `yaml:"snippetSSH,omitempty"`
+	Endpoint    string `yaml:"endpoint"`
+	Node        string `yaml:"node"`
+	Credentials string `yaml:"credentials"`
+	// Native Proxmox verifies HTTPS by default. CAFile is controller-local.
+	CAFile             string                     `yaml:"caFile,omitempty"`
+	InsecureSkipVerify bool                       `yaml:"insecureSkipVerify,omitempty"`
+	SnippetSSH         *protocol.SnippetSSHConfig `yaml:"snippetSSH,omitempty"`
 }
 
 // Credential represents credentials for a provider
@@ -409,9 +412,17 @@ func (c *Config) GetProviderConfig(providerName, contextName string) (*protocol.
 	}
 
 	cfg := &protocol.ProviderConfig{
-		Endpoint: ctx.Endpoint,
-		Node:     ctx.Node,
-		Defaults: provider.Defaults,
+		Endpoint:           ctx.Endpoint,
+		Node:               ctx.Node,
+		Defaults:           provider.Defaults,
+		InsecureSkipVerify: ctx.InsecureSkipVerify,
+	}
+	if ctx.CAFile != "" {
+		caFile, err := ExpandPath(ctx.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("resolve provider CA file: %w", err)
+		}
+		cfg.CAFile = caFile
 	}
 
 	if ctx.SnippetSSH != nil {

@@ -310,7 +310,10 @@ func runInstallProxmox(rawTarget, sshKeyFlag string) error {
 	}
 
 	ctx := context.Background()
-	prov := pmprovider.New(pcfg)
+	prov, err := pmprovider.New(pcfg)
+	if err != nil {
+		return fmt.Errorf("initialize proxmox context %q: %w", target.Context, err)
+	}
 	manifest := buildProxmoxBootstrapVM(opts)
 
 	fmt.Printf("Creating controller VM %q on Proxmox context %q ...\n", opts.VMName, target.Context)

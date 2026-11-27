@@ -76,6 +76,16 @@ provisioning must exist **on the controller/plugin host**, not just the agent's
 machine. A loopback endpoint or tunnel on the agent's machine is not available
 on a different controller host.
 
+Native Proxmox requires verified HTTPS. Private/self-signed labs need a context
+`caFile` PEM bundle obtained through a trusted out-of-band channel and installed
+on the controller/plugin host; system roots and endpoint hostname checks still
+apply. Never automatically set `insecureSkipVerify` to bypass a trust failure.
+That explicit operator opt-in disables certificate/hostname checks and exposes
+API tokens to impersonation; it cannot be combined with `caFile`, never enables
+HTTP, and does not enable redirects. Saved credential/trust edits require a
+controller restart. `ctl discover --test` returns nonzero on failure; inspect its
+result before provisioning.
+
 Discover known kinds with `GET /v1/schemas` and fetch the chosen kind's CUE
 schema with `POST /v1/schemas:get` as described in the reference. Schemas describe
 shapes, not proof that a provider is configured: confirm availability with

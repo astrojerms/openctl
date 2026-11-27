@@ -515,6 +515,20 @@ infrastructure**, test each connection, discover existing VMs, and review a VM's
 observed desired manifest before adopting it. Adoption is admin-only, requires
 an idle controller with GitOps disabled, and never applies or changes the VM.
 
+Native Proxmox uses HTTPS with certificate and hostname verification by default.
+For a private/self-signed CA, obtain its PEM bundle through a trusted,
+out-of-band channel, place it on the controller host, and set the context's
+`caFile` (or **CA bundle file** in Providers). The bundle adds to system roots;
+the endpoint's DNS name or IP must still match the certificate. Trust and
+credential changes require a controller restart.
+
+**Upgrade note:** older native clients silently disabled verification. Existing
+self-signed installations now fail closed until trust is configured. An explicit
+per-context `insecureSkipVerify: true` is available only for knowingly insecure
+HTTPS: it disables certificate and hostname checks and exposes API credentials
+to impersonation. It cannot be combined with `caFile`. Plain HTTP and API
+redirects are never allowed; no automatic insecure fallback exists.
+
 The same read-only inventory is available through the controller CLI:
 
 ```bash
@@ -522,6 +536,9 @@ openctl ctl discover --contexts
 openctl ctl discover --test --provider-context homelab
 openctl ctl discover --provider-context homelab -o json
 ```
+
+`ctl discover --test` exits nonzero when the connection test fails, while keeping
+its table/JSON/YAML result available for inspection. Discovery remains read-only.
 
 VM operations bind to context, endpoint, node, VMID and SMBIOS UUID rather than
 trusting a name alone. After upgrading an older controller, Discovery offers

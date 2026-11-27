@@ -36,8 +36,7 @@ func TestWaitForTaskRequiresSuccessfulExit(t *testing.T) {
 				json.NewEncoder(w).Encode(map[string]any{"data": map[string]string{"status": "stopped", "exitstatus": exitStatus}})
 			})
 			defer server.Close()
-			c := New(server.URL, "test", "test")
-			c.httpClient = server.Client()
+			c := trustedTestClient(t, server, "test", "test")
 			err := c.WaitForTask(context.Background(), "pve1", "UPID:download", time.Second)
 			if (err == nil) != (exitStatus == "OK") {
 				t.Fatalf("only a successful task may proceed: exitstatus=%q err=%v", exitStatus, err)
@@ -53,8 +52,7 @@ func TestDownloadRequiresTrackableTask(t *testing.T) {
 				_, _ = w.Write([]byte(response))
 			})
 			defer server.Close()
-			c := New(server.URL, "test", "test")
-			c.httpClient = server.Client()
+			c := trustedTestClient(t, server, "test", "test")
 			if _, err := c.DownloadToStorage(context.Background(), "pve1", "local", "https://example.invalid/image.img", "image.qcow2", "import", ImageChecksum{}); err == nil {
 				t.Fatal("untrackable download would bypass completion and checksum verification")
 			}

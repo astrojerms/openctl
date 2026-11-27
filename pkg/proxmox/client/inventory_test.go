@@ -24,7 +24,7 @@ func TestListVMsFailsClosedWhenAnyNodeInventoryFails(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	c := New(srv.URL, "test", "secret")
+	c := trustedTestClient(t, srv, "test", "secret")
 	vms, err := c.ListVMs(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "unavailable") || vms != nil {
 		t.Fatalf("partial inventory accepted: vms=%v err=%v", vms, err)

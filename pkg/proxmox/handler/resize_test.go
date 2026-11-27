@@ -94,7 +94,7 @@ func resizeServer(t *testing.T, currentDiskSize string, mutating map[string]int,
 
 func applyDiskSize(t *testing.T, srv *httptest.Server, size string) (*protocol.Response, error) {
 	t.Helper()
-	h := New(&protocol.ProviderConfig{Endpoint: srv.URL, TokenID: "t", TokenSecret: "s", Node: "pve1"})
+	h := mustNewHandler(t, &protocol.ProviderConfig{Endpoint: srv.URL, CAFile: fixtureCA(t, srv), TokenID: "t", TokenSecret: "s", Node: "pve1"})
 	return h.Handle(context.Background(), &protocol.Request{
 		Version:      protocol.ProtocolVersion,
 		Action:       protocol.ActionApply,

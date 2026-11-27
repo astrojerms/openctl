@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"net/url"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -90,6 +91,21 @@ func (h *configHandler) UpsertProvider(ctx context.Context, req *apiv1.UpsertPro
 		credName = p.Contexts[ctxName].Credentials
 	} else {
 		p.Contexts[ctxName].Credentials = credName
+	}
+	if req.CaFile != nil {
+		p.Contexts[ctxName].CAFile = req.GetCaFile()
+	}
+	if req.InsecureSkipVerify != nil {
+		p.Contexts[ctxName].InsecureSkipVerify = req.GetInsecureSkipVerify()
+	}
+	if p.Contexts[ctxName].CAFile != "" && p.Contexts[ctxName].InsecureSkipVerify {
+		return nil, status.Error(codes.InvalidArgument, "choose a CA file or explicit insecure certificate verification, not both")
+	}
+	if req.GetName() == "proxmox" {
+		endpoint, err := url.Parse(req.GetEndpoint())
+		if err != nil || endpoint.Scheme != "https" || endpoint.Hostname() == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+			return nil, status.Error(codes.InvalidArgument, "Proxmox endpoint must be an absolute HTTPS URL without embedded credentials, query or fragment")
+		}
 	}
 	p.Contexts[ctxName].Endpoint = req.GetEndpoint()
 	if p.Credentials[credName] == nil {
@@ -243,6 +259,8 @@ func providerEntry(name string, p *config.Provider) *apiv1.ProviderEntry {
 		return entry
 	}
 	entry.Endpoint = ctx.Endpoint
+	entry.CaFile = ctx.CAFile
+	entry.InsecureSkipVerify = ctx.InsecureSkipVerify
 	if ctx.Credentials == "" {
 		return entry
 	}

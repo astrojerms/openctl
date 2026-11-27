@@ -36,7 +36,7 @@ func TestApplyReturnsObservedVM(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := New(&Config{Endpoint: srv.URL, TokenID: "t", TokenSecret: "s"})
+	p := mustNewProvider(t, &Config{Endpoint: srv.URL, CAFile: fixtureCA(t, srv), TokenID: "t", TokenSecret: "s"})
 	got, err := p.Apply(context.Background(), &protocol.Resource{
 		APIVersion: "proxmox.openctl.io/v1",
 		Kind:       kindVM,

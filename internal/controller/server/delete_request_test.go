@@ -408,14 +408,17 @@ func TestFreshDeleteRequestsRetainAuthorityOwnershipAndDependencyGuards(t *testi
 }
 
 func TestAcceptedDeleteReplaysAfterForgetButFreshRequestIsFenced(t *testing.T) {
-	pve := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+	pve := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		t.Errorf("Delete admission/replay unexpectedly contacted provider: %s", request.URL.Path)
 		http.Error(w, "no provider calls expected", http.StatusMethodNotAllowed)
 	}))
 	defer pve.Close()
-	provider := pmprovider.NewMulti(map[string]*pmprovider.Config{
-		"source": {Endpoint: pve.URL, TokenID: "fixture", TokenSecret: "fixture"},
+	provider, err := pmprovider.NewMulti(map[string]*pmprovider.Config{
+		"source": {Endpoint: pve.URL, CAFile: proxmoxFixtureCA(t, pve), TokenID: "fixture", TokenSecret: "fixture"},
 	}, "source")
+	if err != nil {
+		t.Fatal(err)
+	}
 	h, lookup, _ := requestHandlers(t, provider, 0)
 	ctx := context.Background()
 	target := migrationVM()

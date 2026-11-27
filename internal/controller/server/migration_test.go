@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -51,6 +52,15 @@ func migrationFixture(t *testing.T, reg *providers.Registry) (*resourceHandler, 
 	return h, db, operations.New(db, 50)
 }
 
+func proxmoxFixtureCA(t *testing.T, srv *httptest.Server) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "proxmox-ca.pem")
+	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 // Real Proxmox decoding and real SQLite are used here: forwarding-only mocks
 // would not catch accidental Apply/resize or exporting observation as intent.
 func TestMigrationExportAdoptForgetPreservesLiveVM(t *testing.T) {
@@ -82,9 +92,13 @@ func TestMigrationExportAdoptForgetPreservesLiveVM(t *testing.T) {
 	defer pve.Close()
 	registry := func(contextName string) *providers.Registry {
 		reg := providers.NewRegistry()
-		reg.Register(pmprovider.NewMulti(map[string]*pmprovider.Config{
-			contextName: {Endpoint: pve.URL, TokenID: "test", TokenSecret: "test"},
-		}, contextName))
+		provider, err := pmprovider.NewMulti(map[string]*pmprovider.Config{
+			contextName: {Endpoint: pve.URL, CAFile: proxmoxFixtureCA(t, pve), TokenID: "test", TokenSecret: "test"},
+		}, contextName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reg.Register(provider)
 		return reg
 	}
 	source, _, _ := migrationFixture(t, registry("source"))

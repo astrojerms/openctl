@@ -14,7 +14,7 @@ import (
 // picks the default, a named context picks itself, and an unknown context
 // fails fast so a typo'd spec.context surfaces at apply time.
 func TestHandlerForContext(t *testing.T) {
-	p := NewMulti(map[string]*Config{
+	p := mustNewMultiProvider(t, map[string]*Config{
 		"siteA": {Endpoint: "https://a"},
 		"siteB": {Endpoint: "https://b"},
 	}, "siteA")
@@ -50,7 +50,7 @@ func TestHandlerForContext(t *testing.T) {
 // TestNewSingleContextDefaults ensures the single-endpoint constructor keeps
 // working: the sole context is the default, selected by an empty spec.context.
 func TestNewSingleContextDefaults(t *testing.T) {
-	p := New(&Config{Endpoint: "https://only"})
+	p := mustNewProvider(t, &Config{Endpoint: "https://only"})
 	_, name, err := p.handlerForContext("")
 	if err != nil {
 		t.Fatalf("handlerForContext(\"\"): %v", err)
@@ -63,7 +63,7 @@ func TestNewSingleContextDefaults(t *testing.T) {
 // TestApplyUnknownContextErrors: a VM naming a context that isn't configured
 // is rejected before any endpoint call.
 func TestApplyUnknownContextErrors(t *testing.T) {
-	p := NewMulti(map[string]*Config{"siteA": {Endpoint: "https://a"}}, "siteA")
+	p := mustNewMultiProvider(t, map[string]*Config{"siteA": {Endpoint: "https://a"}}, "siteA")
 	_, err := p.Apply(context.Background(), &protocol.Resource{
 		Kind:     "VirtualMachine",
 		Metadata: protocol.ResourceMetadata{Name: "vm0"},
@@ -90,9 +90,9 @@ func TestListMergesAcrossEndpoints(t *testing.T) {
 	})
 	defer srvB.Close()
 
-	p := NewMulti(map[string]*Config{
-		"siteA": {Endpoint: srvA.URL, TokenID: "t", TokenSecret: "s"},
-		"siteB": {Endpoint: srvB.URL, TokenID: "t", TokenSecret: "s"},
+	p := mustNewMultiProvider(t, map[string]*Config{
+		"siteA": {Endpoint: srvA.URL, CAFile: fixtureCA(t, srvA), TokenID: "t", TokenSecret: "s"},
+		"siteB": {Endpoint: srvB.URL, CAFile: fixtureCA(t, srvB), TokenID: "t", TokenSecret: "s"},
 	}, "siteA")
 
 	vms, err := p.List(context.Background(), "VirtualMachine")
@@ -123,9 +123,9 @@ func TestGetRoutesToOwningEndpoint(t *testing.T) {
 	})
 	defer srvB.Close()
 
-	p := NewMulti(map[string]*Config{
-		"siteA": {Endpoint: srvA.URL, TokenID: "t", TokenSecret: "s"},
-		"siteB": {Endpoint: srvB.URL, TokenID: "t", TokenSecret: "s"},
+	p := mustNewMultiProvider(t, map[string]*Config{
+		"siteA": {Endpoint: srvA.URL, CAFile: fixtureCA(t, srvA), TokenID: "t", TokenSecret: "s"},
+		"siteB": {Endpoint: srvB.URL, CAFile: fixtureCA(t, srvB), TokenID: "t", TokenSecret: "s"},
 	}, "siteA")
 
 	res, err := p.Get(context.Background(), "VirtualMachine", "cache-01")
@@ -149,9 +149,9 @@ func TestGetNotFoundAcrossAllEndpoints(t *testing.T) {
 	srvB := mockProxmox(t, routes)
 	defer srvB.Close()
 
-	p := NewMulti(map[string]*Config{
-		"siteA": {Endpoint: srvA.URL, TokenID: "t", TokenSecret: "s"},
-		"siteB": {Endpoint: srvB.URL, TokenID: "t", TokenSecret: "s"},
+	p := mustNewMultiProvider(t, map[string]*Config{
+		"siteA": {Endpoint: srvA.URL, CAFile: fixtureCA(t, srvA), TokenID: "t", TokenSecret: "s"},
+		"siteB": {Endpoint: srvB.URL, CAFile: fixtureCA(t, srvB), TokenID: "t", TokenSecret: "s"},
 	}, "siteA")
 
 	_, err := p.Get(context.Background(), "VirtualMachine", "ghost")

@@ -58,9 +58,9 @@ func TestMigrationIdentityReadsSelectedContextAndActualUUID(t *testing.T) {
 				}
 			}))
 			defer right.Close()
-			p := NewMulti(map[string]*Config{
-				"source":      {Endpoint: wrong.URL, TokenID: "test", TokenSecret: "test"},
-				"destination": {Endpoint: right.URL, TokenID: "test", TokenSecret: "test"},
+			p := mustNewMultiProvider(t, map[string]*Config{
+				"source":      {Endpoint: wrong.URL, CAFile: fixtureCA(t, wrong), TokenID: "test", TokenSecret: "test"},
+				"destination": {Endpoint: right.URL, CAFile: fixtureCA(t, right), TokenID: "test", TokenSecret: "test"},
 			}, "source")
 			identity, err := p.MigrationIdentity(context.Background(), &protocol.Resource{
 				Kind: kindVM, Metadata: protocol.ResourceMetadata{Name: "existing"},

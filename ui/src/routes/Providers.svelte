@@ -1,103 +1,134 @@
 <script lang="ts">
-  // Edits affect the on-disk configuration only; live providers are startup-bound.
-
-  import { onMount } from 'svelte';
-  import {
-    providersApi,
-    UnauthorizedError,
-    type ProviderEntry,
-  } from '../lib/api';
+  // Saved credentials/trust are startup-bound, never proof of active connectivity.
+  import { onDestroy, onMount } from 'svelte';
+  import { get } from 'svelte/store';
+  import { providersApi, UnauthorizedError, type ProviderEntry } from '../lib/api';
   import { auth } from '../lib/auth';
   import { routeHref } from '../lib/router';
 
   $: isAdmin = $auth.kind === 'signed-in' && (!$auth.me.role || $auth.me.role === 'admin');
-
   let entries: ProviderEntry[] = [];
   let loading = true;
   let loadError = '';
-
-  // Edit form state — one form at a time, either "add new" or
-  // "editing existing by name". Empty editing = closed.
   let editing = '';
-  let form = { name: '', endpoint: '', tokenId: '', tokenSecret: '' };
+  let form = emptyForm();
   let saveError = '';
   let saving = false;
+  let deleting = '';
   let restartMessage = '';
+  let editRevision = 0;
+  let loadRevision = 0;
+  let active = true;
+  const controller = new AbortController();
 
+  function emptyForm() {
+    return { name: '', endpoint: '', tokenId: '', tokenSecret: '', caFile: '', insecureSkipVerify: false };
+  }
+  function canAdminister() {
+    const state = get(auth);
+    return active && state.kind === 'signed-in' && (!state.me.role || state.me.role === 'admin');
+  }
+  function closeForm() {
+    editRevision++;
+    editing = '';
+    form = emptyForm();
+    saveError = '';
+  }
+  const unsubscribe = auth.subscribe((state) => {
+    if (state.kind !== 'signed-in' || (state.me.role && state.me.role !== 'admin')) closeForm();
+  });
+  function unauthorized(error: unknown) {
+    if (!(error instanceof UnauthorizedError)) return false;
+    closeForm();
+    auth.set({ kind: 'signed-out' });
+    return true;
+  }
   async function refresh() {
+    const revision = ++loadRevision;
     loading = true;
     loadError = '';
     try {
-      const resp = await providersApi.list();
-      entries = (resp.providers ?? []).slice().sort((a, b) => a.name.localeCompare(b.name));
-    } catch (err) {
-      if (err instanceof UnauthorizedError) return;
-      loadError = err instanceof Error ? err.message : String(err);
+      const response = await providersApi.list({ signal: controller.signal });
+      if (!active || revision !== loadRevision) return;
+      entries = (response.providers ?? []).slice().sort((a, b) => a.name.localeCompare(b.name));
+    } catch (error) {
+      if (!active || revision !== loadRevision || unauthorized(error)) return;
+      loadError = error instanceof Error ? error.message : String(error);
     } finally {
-      loading = false;
+      if (active && revision === loadRevision) loading = false;
     }
   }
-
-  onMount(refresh);
+  onMount(() => { void refresh(); });
+  onDestroy(() => {
+    active = false;
+    controller.abort();
+    unsubscribe();
+    closeForm();
+    entries = [];
+  });
 
   function openNew() {
+    if (!canAdminister() || saving || deleting) return;
+    closeForm();
     editing = '__new__';
-    form = { name: '', endpoint: '', tokenId: '', tokenSecret: '' };
-    saveError = '';
   }
-
-  function openEdit(e: ProviderEntry) {
-    editing = e.name;
+  function openEdit(entry: ProviderEntry) {
+    if (!canAdminister() || saving || deleting) return;
+    closeForm();
+    editing = entry.name;
     form = {
-      name: e.name,
-      endpoint: e.endpoint ?? '',
-      tokenId: e.tokenId ?? '',
-      tokenSecret: '',
+      name: entry.name, endpoint: entry.endpoint ?? '', tokenId: entry.tokenId ?? '',
+      tokenSecret: '', caFile: entry.caFile ?? '', insecureSkipVerify: entry.insecureSkipVerify ?? false,
     };
-    saveError = '';
   }
-
-  function closeForm() {
-    editing = '';
-    saveError = '';
-  }
-
   async function save() {
-    if (!isAdmin || saving) return;
-    if (!form.name) {
-      saveError = 'Name is required.';
+    if (!canAdminister() || saving || deleting || !editing) return;
+    if (!form.name) { saveError = 'Name is required.'; return; }
+    if (form.caFile && form.insecureSkipVerify) {
+      saveError = 'Choose a CA file or explicit insecure verification, not both.';
       return;
     }
+    if (form.name === 'proxmox') {
+      try {
+        const endpoint = new URL(form.endpoint);
+        if (endpoint.protocol !== 'https:' || !endpoint.hostname || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) throw new Error();
+      } catch {
+        saveError = 'Proxmox requires an HTTPS endpoint without embedded credentials, query or fragment.';
+        return;
+      }
+    }
+    const request = { ...form };
+    const revision = editRevision;
     saving = true;
     saveError = '';
     try {
-      await providersApi.upsert({
-        name: form.name,
-        endpoint: form.endpoint,
-        tokenId: form.tokenId,
-        tokenSecret: form.tokenSecret,
-      });
-      restartMessage = 'Provider configuration saved. Restart the controller before testing or discovering with these credentials.';
+      await providersApi.upsert(request, { signal: controller.signal });
+      if (!active || revision !== editRevision || !canAdminister()) return;
+      restartMessage = 'Provider configuration saved. Restart the controller before testing or discovering with these credentials and trust settings.';
+      closeForm();
       await refresh();
-      editing = '';
-    } catch (err) {
-      if (err instanceof UnauthorizedError) return;
-      saveError = err instanceof Error ? err.message : String(err);
+    } catch (error) {
+      if (!active || revision !== editRevision || unauthorized(error)) return;
+      saveError = error instanceof Error ? error.message : String(error);
     } finally {
-      saving = false;
+      if (active) saving = false;
     }
   }
-
   async function del(name: string) {
-    if (!isAdmin) return;
-    if (!confirm(`Delete provider ${name} from config.yaml?`)) return;
+    if (!canAdminister() || saving || deleting) return;
+    if (!confirm(`Delete provider ${name} from config.yaml?`) || !canAdminister()) return;
+    deleting = name;
     try {
-      await providersApi.delete(name);
+      await providersApi.delete(name, { signal: controller.signal });
+      if (!active || !canAdminister()) return;
       restartMessage = 'Provider configuration removed. Restart the controller to update its active providers.';
+      closeForm();
       await refresh();
-    } catch (err) {
-      if (err instanceof UnauthorizedError) return;
-      loadError = err instanceof Error ? err.message : String(err);
+    } catch (error) {
+      if (!active || unauthorized(error)) return;
+      loadError = error instanceof Error ? error.message : String(error);
+    } finally {
+      if (active) deleting = '';
     }
   }
 </script>
@@ -108,10 +139,11 @@
       <h2>Provider Credentials</h2>
       <p class="lede">Edit provider endpoints and API tokens in <code>~/.openctl/config.yaml</code>.</p>
     </div>
-    {#if isAdmin}<button class="primary" on:click={openNew}>+ Add provider</button>{/if}
+    {#if isAdmin}<button class="primary" on:click={openNew} disabled={saving || !!deleting}>+ Add provider</button>{/if}
   </header>
 
   <p class="muted">Configuration changes require a controller restart. Credential hot reload is intentionally disabled because changing live provider identities is unsafe. Discovery uses the currently running configuration.</p>
+  <p class="muted">Native Proxmox requires HTTPS and verifies the server certificate and hostname by default. For a private CA, install its PEM bundle on the controller host and set its path below. Changing trust does not test the endpoint or hot-reload existing connections.</p>
   <p><a class="link" href={routeHref({ name: 'discover' })}>Test connections and discover Proxmox VMs →</a></p>
   {#if restartMessage}<p role="status">{restartMessage}</p>{/if}
   {#if !isAdmin}<p class="muted">Provider configuration requires an admin role.</p>{/if}
@@ -132,6 +164,7 @@
             <th>Endpoint</th>
             <th>Token ID</th>
             <th>Secret</th>
+            <th>Certificate policy (saved)</th>
             <th></th>
           </tr>
         </thead>
@@ -152,10 +185,17 @@
                   <span class="pill pill-missing">missing</span>
                 {/if}
               </td>
+              <td>
+                {#if e.name === 'proxmox'}
+                  {#if e.insecureSkipVerify}<strong class="err">Verification disabled — insecure</strong>
+                  {:else if e.caFile}<span title={e.caFile}>System roots + CA file: <code>{e.caFile}</code></span>
+                  {:else}System roots + hostname verification{/if}
+                {:else}Provider-specific{/if}
+              </td>
               <td class="right">
                 {#if isAdmin}
-                  <button class="link" on:click={() => openEdit(e)}>Edit</button>
-                  <button class="link danger" on:click={() => del(e.name)}>Delete</button>
+                  <button class="link" on:click={() => openEdit(e)} disabled={saving || !!deleting}>Edit</button>
+                  <button class="link danger" on:click={() => del(e.name)} disabled={saving || !!deleting}>{deleting === e.name ? 'Removing…' : 'Delete'}</button>
                 {/if}
               </td>
             </tr>
@@ -210,6 +250,20 @@
             Stored inline in <code>config.yaml</code>. For file-backed secrets, edit the config manually with <code>tokenSecretFile:</code>.
           </p>
         </div>
+        {#if form.name === 'proxmox'}
+          <div class="row">
+            <label for="prov-ca-file">CA bundle file (controller host)</label>
+            <input id="prov-ca-file" type="text" bind:value={form.caFile} placeholder="/etc/openctl/proxmox-ca.pem" />
+            <p class="hint">PEM trust bundle, read by the controller/plugin at startup. Obtain and verify it out of band; this is not a browser file upload. Empty uses system trust.</p>
+          </div>
+          <label>
+            <input id="prov-insecure" type="checkbox" bind:checked={form.insecureSkipVerify} />
+            Disable certificate verification (insecure HTTPS only)
+          </label>
+          {#if form.insecureSkipVerify}
+            <p class="err" role="alert">Certificate and hostname verification are disabled. An impersonated Proxmox server can steal API credentials and control infrastructure. Prefer a verified CA bundle. Plain HTTP is never allowed.</p>
+          {/if}
+        {/if}
         {#if saveError}
           <p class="err">{saveError}</p>
         {/if}

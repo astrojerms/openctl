@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -49,28 +51,96 @@ type Client struct {
 	snippetSSHIdentityFile string
 }
 
-// New creates a new Proxmox client with API token authentication
-func New(endpoint, tokenID, tokenSecret string) *Client {
+// TLSOptions configures certificate verification for a Proxmox HTTPS endpoint.
+// CAFile adds a controller-local PEM bundle to the operating system trust roots.
+// InsecureSkipVerify explicitly disables certificate verification; it cannot be
+// combined with CAFile and never permits plaintext HTTP.
+type TLSOptions struct {
+	CAFile             string
+	InsecureSkipVerify bool
+}
+
+// New creates a Proxmox client with API token authentication and verified HTTPS.
+// Endpoint and trust configuration are validated before any network request.
+func New(endpoint, tokenID, tokenSecret string, options TLSOptions) (*Client, error) {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.Opaque != "" {
+		return nil, errors.New("Proxmox endpoint must be an absolute HTTPS URL")
+	}
+	if u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(endpoint, "#") {
+		return nil, errors.New("Proxmox endpoint must not contain credentials, a query, or a fragment")
+	}
+	if strings.HasSuffix(u.Host, ":") {
+		return nil, errors.New("Proxmox endpoint has an invalid port")
+	}
+	if port := u.Port(); port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return nil, errors.New("Proxmox endpoint has an invalid port")
+		}
+	}
+	if strings.HasPrefix(u.Host, "[") && net.ParseIP(u.Hostname()) == nil {
+		return nil, errors.New("Proxmox endpoint has an invalid IP address")
+	}
+	if options.CAFile != "" && options.InsecureSkipVerify {
+		return nil, errors.New("Proxmox CA file and insecure certificate verification are mutually exclusive")
+	}
+	tlsConfig := &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: options.InsecureSkipVerify, // Explicit HTTPS-only opt-in.
+	}
+	if options.CAFile != "" {
+		bundle, err := os.ReadFile(options.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("read Proxmox CA bundle: %w", err)
+		}
+		roots, err := x509.SystemCertPool()
+		if err != nil {
+			return nil, fmt.Errorf("load system certificate roots: %w", err)
+		}
+		count := 0
+		for rest := bytes.TrimSpace(bundle); len(rest) > 0; {
+			if !bytes.HasPrefix(rest, []byte("-----BEGIN CERTIFICATE-----")) {
+				return nil, errors.New("Proxmox CA bundle contains invalid certificate PEM")
+			}
+			block, remaining := pem.Decode(rest)
+			if block == nil || block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
+				return nil, errors.New("Proxmox CA bundle contains invalid certificate PEM")
+			}
+			// Decode may otherwise skip a malformed block before a valid one.
+			consumed := rest[:len(rest)-len(remaining)]
+			if bytes.Count(consumed, []byte("-----BEGIN ")) != 1 {
+				return nil, errors.New("Proxmox CA bundle contains invalid certificate PEM")
+			}
+			cert, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				return nil, fmt.Errorf("parse Proxmox CA certificate: %w", err)
+			}
+			roots.AddCert(cert)
+			count++
+			rest = bytes.TrimSpace(remaining)
+		}
+		if count == 0 {
+			return nil, errors.New("Proxmox CA bundle contains no certificates")
+		}
+		tlsConfig.RootCAs = roots
+	}
 	return &Client{
-		endpoint:    strings.TrimSuffix(endpoint, "/"),
+		endpoint:    strings.TrimRight(endpoint, "/"),
 		tokenID:     tokenID,
 		tokenSecret: tokenSecret,
 		httpClient: &http.Client{
 			Timeout: 60 * time.Second,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return errors.New("Proxmox API redirects are not permitted")
+			},
 			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: true,
-				},
-				// Bound the TCP connect phase separately from the overall
-				// 60s request timeout. When the Proxmox host is offline or
-				// black-holing packets, dials would otherwise hang the full
-				// 60s per request; a tight connect timeout fails fast so
-				// watches and the reconciler shed the dead endpoint quickly
-				// instead of holding streams open.
+				TLSClientConfig: tlsConfig,
+				// Bound offline-host TCP connects separately from requests.
 				DialContext: (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
 			},
 		},
-	}
+	}, nil
 }
 
 // Node represents a Proxmox cluster member as returned by /api2/json/nodes.

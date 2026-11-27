@@ -69,7 +69,10 @@ func TestIdentityConfirmationUsesCanonicalPlacementWithoutAdoptionOrProviderWrit
 			defer db.Close()
 			store := manifests.New(db)
 			bindings := provideridentity.New(db)
-			pm := pmprovider.NewMulti(map[string]*pmprovider.Config{"site": {Endpoint: srv.URL}}, "site")
+			pm, err := pmprovider.NewMulti(map[string]*pmprovider.Config{"site": {Endpoint: srv.URL, CAFile: proxmoxFixtureCA(t, srv)}}, "site")
+			if err != nil {
+				t.Fatal(err)
+			}
 			pm.SetIdentityStore(bindings)
 			reg := providers.NewRegistry()
 			reg.Register(pm)

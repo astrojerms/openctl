@@ -24,7 +24,7 @@ func TestDiscoveryOffersSchemaValidObservedAdoptionIntent(t *testing.T) {
 				"/api2/json/nodes/pve/qemu/101/config": fmt.Sprintf(`{"data":{"cores":2,"memory":"4096","net0":"virtio=02:00:00:00:00:01,bridge=vmbr0%s","smbios1":"uuid=11111111-1111-4111-8111-111111111111"}}`, tc.tag),
 			})
 			defer srv.Close()
-			p := NewMulti(map[string]*Config{"lab": {Endpoint: srv.URL}}, "lab")
+			p := mustNewMultiProvider(t, map[string]*Config{"lab": {Endpoint: srv.URL, CAFile: fixtureCA(t, srv)}}, "lab")
 			found, err := p.Discover(context.Background(), "lab")
 			if err != nil {
 				t.Fatal(err)

@@ -622,16 +622,21 @@ message ProviderEntry {
   // True when the secret is stored in a file (tokenSecretFile) rather
   // than inline. Purely informational for the UI.
   bool uses_secret_file = 5;
+  // Trust bundle path on the controller host; PEM contents are never returned.
+  string ca_file = 6;
+  bool insecure_skip_verify = 7;
 }
 
 message UpsertProviderRequest {
   string name = 1;
   string endpoint = 2;
   string token_id = 3;
-  // Empty preserves the existing secret. Non-empty replaces it inline
-  // (tokenSecret). Writing to tokenSecretFile is out of scope for the
-  // MVP — users who want file-backed secrets edit config.yaml directly.
+  // Empty preserves the existing secret. Non-empty replaces it inline.
+  // File-backed credential management remains controller-local.
   string token_secret = 4;
+  // Omitted trust fields preserve existing settings; explicit empty/false clears.
+  optional string ca_file = 5;
+  optional bool insecure_skip_verify = 6;
 }
 
 message UpsertProviderResponse {

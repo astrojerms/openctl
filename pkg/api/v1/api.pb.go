@@ -3204,8 +3204,11 @@ type ProviderEntry struct {
 	// True when the secret is stored in a file (tokenSecretFile) rather
 	// than inline. Purely informational for the UI.
 	UsesSecretFile bool `protobuf:"varint,5,opt,name=uses_secret_file,json=usesSecretFile,proto3" json:"uses_secret_file,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Trust bundle path on the controller host; PEM contents are never returned.
+	CaFile             string `protobuf:"bytes,6,opt,name=ca_file,json=caFile,proto3" json:"ca_file,omitempty"`
+	InsecureSkipVerify bool   `protobuf:"varint,7,opt,name=insecure_skip_verify,json=insecureSkipVerify,proto3" json:"insecure_skip_verify,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ProviderEntry) Reset() {
@@ -3273,17 +3276,33 @@ func (x *ProviderEntry) GetUsesSecretFile() bool {
 	return false
 }
 
+func (x *ProviderEntry) GetCaFile() string {
+	if x != nil {
+		return x.CaFile
+	}
+	return ""
+}
+
+func (x *ProviderEntry) GetInsecureSkipVerify() bool {
+	if x != nil {
+		return x.InsecureSkipVerify
+	}
+	return false
+}
+
 type UpsertProviderRequest struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	Name     string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	Endpoint string                 `protobuf:"bytes,2,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
 	TokenId  string                 `protobuf:"bytes,3,opt,name=token_id,json=tokenId,proto3" json:"token_id,omitempty"`
-	// Empty preserves the existing secret. Non-empty replaces it inline
-	// (tokenSecret). Writing to tokenSecretFile is out of scope for the
-	// MVP — users who want file-backed secrets edit config.yaml directly.
-	TokenSecret   string `protobuf:"bytes,4,opt,name=token_secret,json=tokenSecret,proto3" json:"token_secret,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Empty preserves the existing secret. Non-empty replaces it inline.
+	// File-backed credential management remains controller-local.
+	TokenSecret string `protobuf:"bytes,4,opt,name=token_secret,json=tokenSecret,proto3" json:"token_secret,omitempty"`
+	// Omitted trust fields preserve existing settings; explicit empty/false clears.
+	CaFile             *string `protobuf:"bytes,5,opt,name=ca_file,json=caFile,proto3,oneof" json:"ca_file,omitempty"`
+	InsecureSkipVerify *bool   `protobuf:"varint,6,opt,name=insecure_skip_verify,json=insecureSkipVerify,proto3,oneof" json:"insecure_skip_verify,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *UpsertProviderRequest) Reset() {
@@ -3342,6 +3361,20 @@ func (x *UpsertProviderRequest) GetTokenSecret() string {
 		return x.TokenSecret
 	}
 	return ""
+}
+
+func (x *UpsertProviderRequest) GetCaFile() string {
+	if x != nil && x.CaFile != nil {
+		return *x.CaFile
+	}
+	return ""
+}
+
+func (x *UpsertProviderRequest) GetInsecureSkipVerify() bool {
+	if x != nil && x.InsecureSkipVerify != nil {
+		return *x.InsecureSkipVerify
+	}
+	return false
 }
 
 type UpsertProviderResponse struct {
@@ -6908,19 +6941,26 @@ const file_api_proto_rawDesc = "" +
 	"\aDELETED\x10\x03\"\x16\n" +
 	"\x14ListProvidersRequest\"P\n" +
 	"\x15ListProvidersResponse\x127\n" +
-	"\tproviders\x18\x01 \x03(\v2\x19.openctl.v1.ProviderEntryR\tproviders\"\xa3\x01\n" +
+	"\tproviders\x18\x01 \x03(\v2\x19.openctl.v1.ProviderEntryR\tproviders\"\xee\x01\n" +
 	"\rProviderEntry\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1a\n" +
 	"\bendpoint\x18\x02 \x01(\tR\bendpoint\x12\x19\n" +
 	"\btoken_id\x18\x03 \x01(\tR\atokenId\x12\x1d\n" +
 	"\n" +
 	"has_secret\x18\x04 \x01(\bR\thasSecret\x12(\n" +
-	"\x10uses_secret_file\x18\x05 \x01(\bR\x0eusesSecretFile\"\x85\x01\n" +
+	"\x10uses_secret_file\x18\x05 \x01(\bR\x0eusesSecretFile\x12\x17\n" +
+	"\aca_file\x18\x06 \x01(\tR\x06caFile\x120\n" +
+	"\x14insecure_skip_verify\x18\a \x01(\bR\x12insecureSkipVerify\"\xff\x01\n" +
 	"\x15UpsertProviderRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1a\n" +
 	"\bendpoint\x18\x02 \x01(\tR\bendpoint\x12\x19\n" +
 	"\btoken_id\x18\x03 \x01(\tR\atokenId\x12!\n" +
-	"\ftoken_secret\x18\x04 \x01(\tR\vtokenSecret\"O\n" +
+	"\ftoken_secret\x18\x04 \x01(\tR\vtokenSecret\x12\x1c\n" +
+	"\aca_file\x18\x05 \x01(\tH\x00R\x06caFile\x88\x01\x01\x125\n" +
+	"\x14insecure_skip_verify\x18\x06 \x01(\bH\x01R\x12insecureSkipVerify\x88\x01\x01B\n" +
+	"\n" +
+	"\b_ca_fileB\x17\n" +
+	"\x15_insecure_skip_verify\"O\n" +
 	"\x16UpsertProviderResponse\x125\n" +
 	"\bprovider\x18\x01 \x01(\v2\x19.openctl.v1.ProviderEntryR\bprovider\"+\n" +
 	"\x15DeleteProviderRequest\x12\x12\n" +
@@ -7502,6 +7542,7 @@ func file_api_proto_init() {
 	if File_api_proto != nil {
 		return
 	}
+	file_api_proto_msgTypes[50].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

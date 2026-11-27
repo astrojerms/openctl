@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/openctl/openctl/internal/controller/providerstate"
@@ -13,6 +14,33 @@ import (
 	openctlschema "github.com/openctl/openctl/internal/schema"
 	"github.com/openctl/openctl/pkg/protocol"
 )
+
+func TestBuildRegistryRejectsInvalidProxmoxTLS(t *testing.T) {
+	for _, settings := range []string{
+		"endpoint: http://pve.example:8006",
+		"endpoint: https://pve.example:8006\n        caFile: /missing/openctl-proxmox-ca.pem",
+		"endpoint: https://pve.example:8006\n        caFile: /missing/openctl-proxmox-ca.pem\n        insecureSkipVerify: true",
+		"endpoint: ''",
+	} {
+		t.Run(settings, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			dir := filepath.Join(home, ".openctl")
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			body := "providers:\n  proxmox:\n    default-context: site\n    contexts:\n      site:\n        " + settings + "\n"
+			if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(body), 0600); err != nil {
+				t.Fatal(err)
+			}
+			registry, _, cleanup, err := buildRegistry(context.Background(), nil)
+			defer cleanup()
+			if err == nil || registry != nil || !strings.Contains(err.Error(), "proxmox") {
+				t.Fatalf("invalid native TLS configuration must fail startup: registry=%v error=%v", registry, err)
+			}
+		})
+	}
+}
 
 func TestBuildRegistryLoadsTerraformProvider(t *testing.T) {
 	openctlschema.ResetExternal()

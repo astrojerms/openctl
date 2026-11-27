@@ -41,8 +41,15 @@ func newCtlDiscoverCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("controller discovery: %w", err)
 			}
+			var outcomeErr error
+			if response, ok := result.(*apiv1.TestDiscoveryConnectionResponse); ok && !response.GetConnected() {
+				outcomeErr = fmt.Errorf("provider connection test failed; check endpoint certificate trust, credentials and permissions")
+			}
 			if handled, err := printControllerStructured(cmd.OutOrStdout(), result); handled {
-				return err
+				if err != nil {
+					return err
+				}
+				return outcomeErr
 			}
 			out := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 			switch response := result.(type) {
@@ -59,7 +66,10 @@ func newCtlDiscoverCommand() *cobra.Command {
 					fmt.Fprintf(out, "%s\t%s\t%d\t%s\t%t\t%t\t%t\t%s\t%s\n", r.GetContext(), r.GetNode(), r.GetVmid(), r.GetResource().GetMetadata().GetName(), r.GetManaged(), r.GetAdoptable(), r.GetIdentityConfirmationRequired(), r.GetIdentity(), r.GetReason())
 				}
 			}
-			return out.Flush()
+			if err := out.Flush(); err != nil {
+				return err
+			}
+			return outcomeErr
 		},
 	}
 	cmd.Flags().StringVar(&apiVersion, "api-version", "proxmox.openctl.io/v1", "provider apiVersion")

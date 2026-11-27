@@ -57,7 +57,7 @@ func vmSafetyServer(t *testing.T, vms string, uuid string, writes *[]string) *ht
 
 func boundSafetyProvider(t *testing.T, srv *httptest.Server) *Provider {
 	t.Helper()
-	p := NewMulti(map[string]*Config{"site": {Endpoint: srv.URL}}, "site")
+	p := mustNewMultiProvider(t, map[string]*Config{"site": {Endpoint: srv.URL, CAFile: fixtureCA(t, srv)}}, "site")
 	p.SetIdentityStore(memoryIdentities{"existing": {Context: "site", Endpoint: srv.URL, Node: "pve1", VMID: 101, Identity: "proxmox:pve1:101:" + testVMUUID}})
 	return p
 }
@@ -103,7 +103,7 @@ func TestUnboundDuplicateNamesNeverRouteOrMutate(t *testing.T) {
 	var writes []string
 	srv := vmSafetyServer(t, `[{"vmid":101,"name":"existing"},{"vmid":102,"name":"existing"}]`, testVMUUID, &writes)
 	defer srv.Close()
-	p := New(&Config{Endpoint: srv.URL})
+	p := mustNewProvider(t, &Config{Endpoint: srv.URL, CAFile: fixtureCA(t, srv)})
 	if _, err := p.Get(context.Background(), kindVM, "existing"); err == nil || !strings.Contains(err.Error(), "ambiguous") {
 		t.Fatalf("Get error=%v", err)
 	}
@@ -119,7 +119,7 @@ func TestApplyCannotAdoptUntrackedVM(t *testing.T) {
 	var writes []string
 	srv := vmSafetyServer(t, `[{"vmid":101,"name":"existing"}]`, testVMUUID, &writes)
 	defer srv.Close()
-	p := New(&Config{Endpoint: srv.URL})
+	p := mustNewProvider(t, &Config{Endpoint: srv.URL, CAFile: fixtureCA(t, srv)})
 	p.SetIdentityStore(memoryIdentities{})
 	_, err := p.Apply(context.Background(), &protocol.Resource{Kind: kindVM, Metadata: protocol.ResourceMetadata{Name: "existing"}, Spec: map[string]any{"node": "pve1"}})
 	if err == nil {
@@ -134,7 +134,7 @@ func TestDiscoveryIsReadOnlyAndExcludesWriteOnlySecrets(t *testing.T) {
 	var writes []string
 	srv := vmSafetyServer(t, `[{"vmid":101,"name":"existing","status":"stopped"}]`, testVMUUID, &writes)
 	defer srv.Close()
-	p := NewMulti(map[string]*Config{"site": {Endpoint: srv.URL}}, "site")
+	p := mustNewMultiProvider(t, map[string]*Config{"site": {Endpoint: srv.URL, CAFile: fixtureCA(t, srv)}}, "site")
 	p.SetIdentityStore(memoryIdentities{})
 	if err := p.TestConnection(context.Background(), "site"); err != nil {
 		t.Fatal(err)

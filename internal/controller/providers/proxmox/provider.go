@@ -47,7 +47,7 @@ type Provider struct {
 
 // New constructs a single-context Provider from one endpoint configuration.
 // Kept for the common single-endpoint case, tests, and CLI direct-apply.
-func New(cfg *Config) *Provider {
+func New(cfg *Config) (*Provider, error) {
 	return NewMulti(map[string]*Config{"": cfg}, "")
 }
 
@@ -55,19 +55,25 @@ func New(cfg *Config) *Provider {
 // context name. A resource's spec.context selects its endpoint; an empty
 // context selects defaultContext (or the sole context when only one is
 // configured). Reads by name resolve the endpoint via the index/full-scan.
-func NewMulti(configs map[string]*Config, defaultContext string) *Provider {
-	handlers := make(map[string]*pmhandler.Handler, len(configs))
+func NewMulti(configs map[string]*Config, defaultContext string) (*Provider, error) {
 	order := make([]string, 0, len(configs))
-	for name, cfg := range configs {
-		handlers[name] = pmhandler.New(cfg)
+	for name := range configs {
 		order = append(order, name)
 	}
 	sort.Strings(order)
+	handlers := make(map[string]*pmhandler.Handler, len(configs))
+	for _, name := range order {
+		h, err := pmhandler.New(configs[name])
+		if err != nil {
+			return nil, fmt.Errorf("proxmox context %q: %w", name, err)
+		}
+		handlers[name] = h
+	}
 	// A single configured context is unambiguously the default.
 	if defaultContext == "" && len(order) == 1 {
 		defaultContext = order[0]
 	}
-	return &Provider{handlers: handlers, order: order, defaultCtx: defaultContext}
+	return &Provider{handlers: handlers, order: order, defaultCtx: defaultContext}, nil
 }
 
 // handlerForContext resolves the handler for a manifest's spec.context. An
