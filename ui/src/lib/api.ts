@@ -279,6 +279,8 @@ export interface FieldError {
   path?: string;
   message?: string;
   code?: string;
+  reference?: ResourceRef;
+  referenceField?: string;
 }
 
 // --- Composite DAG (Phase U9) --------------------------------------------

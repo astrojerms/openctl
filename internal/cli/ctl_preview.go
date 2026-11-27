@@ -140,6 +140,15 @@ func printCtlPreview(out io.Writer, response *apiv1.DryRunApplyResponse) error {
 		if _, err := fmt.Fprintf(out, "Validation error at %s: %s\n", diagnostic.GetPath(), diagnostic.GetMessage()); err != nil {
 			return err
 		}
+		if ref := diagnostic.GetReference(); ref.GetApiVersion() != "" && ref.GetKind() != "" && ref.GetName() != "" {
+			field := diagnostic.GetReferenceField()
+			if field == "" {
+				field = "(whole resource)"
+			}
+			if _, err := fmt.Fprintf(out, "  Referenced resource: %s %s/%s; requested output: %s\n", ref.GetApiVersion(), ref.GetKind(), ref.GetName(), field); err != nil {
+				return err
+			}
+		}
 	}
 	_, err := fmt.Fprintln(out, "Preview only: no changes applied; existence is not reserved and Apply is not authorized.")
 	return err

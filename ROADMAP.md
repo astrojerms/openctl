@@ -600,6 +600,28 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
   address loss. All Proxmox requests were GET; zero operations/provider state,
   with one unchanged seeded VM tracking record. No live guest or SSH mutation.
 
+### Structured reference inspection (2026-11-27)
+
+- [x] Known reference preview failures carry an optional complete declared
+  resource triple and requested output, without provider observations or causes.
+  Malformed, incomplete, untyped and unknown failure kinds remain fail-closed;
+  old diagnostics and clients retain their existing path/code/message behavior.
+- [x] Editor, template and guided preview diagnostics share inspection links,
+  preserving field highlighting, deduplication and blocked Apply. Inspection
+  opens in a separate no-opener tab to retain unsaved drafts. CLI tables and JSON
+  expose the same declared target/output; invalid previews still exit nonzero.
+- Verification: targeted Go server/reference and CLI preview checks passed;
+  generated API bindings compiled. All 105 focused frontend tests, clean
+  typecheck and production build passed, followed by a targeted draft-preserving
+  link check/build. Actual native CLI table/JSON previews, disk-loaded CUE
+  template and Monaco editor used an isolated SQLite/TLS controller and native
+  application/Proxmox providers with simulated verified-TLS Proxmox responses.
+  Missing output identified the exact VM; its link inspected that VM, parameter
+  repair cleared old diagnostics, and new-tab inspection retained a nondefault
+  unsaved draft with no opener access. All Proxmox requests were GET; zero
+  operations/provider state and one unchanged seeded VM tracking count.
+  No live infrastructure or SSH mutation.
+
 The next product acceptance gate is the complete operator journey on real
 hardware, including recovery, media playback and any approved public endpoint.
 See [direction](docs/direction.md). Provider breadth is downstream of that gate.

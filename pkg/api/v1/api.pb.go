@@ -2104,9 +2104,14 @@ type FieldError struct {
 	Message string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
 	// Optional safe machine-readable category. Empty for uncategorized schema
 	// validation. New categories may be added; never contains upstream data.
-	Code          string `protobuf:"bytes,3,opt,name=code,proto3" json:"code,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Code string `protobuf:"bytes,3,opt,name=code,proto3" json:"code,omitempty"`
+	// Optional complete declared target for a known reference-resolution failure.
+	// Never contains provider observations or identity inferred from error text.
+	Reference *ResourceRef `protobuf:"bytes,4,opt,name=reference,proto3" json:"reference,omitempty"`
+	// Declared requested output path. Empty with reference means whole resource.
+	ReferenceField string `protobuf:"bytes,5,opt,name=reference_field,json=referenceField,proto3" json:"reference_field,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *FieldError) Reset() {
@@ -2156,6 +2161,20 @@ func (x *FieldError) GetMessage() string {
 func (x *FieldError) GetCode() string {
 	if x != nil {
 		return x.Code
+	}
+	return ""
+}
+
+func (x *FieldError) GetReference() *ResourceRef {
+	if x != nil {
+		return x.Reference
+	}
+	return nil
+}
+
+func (x *FieldError) GetReferenceField() string {
+	if x != nil {
+		return x.ReferenceField
 	}
 	return ""
 }
@@ -6887,12 +6906,14 @@ const file_api_proto_rawDesc = "" +
 	"\toperation\x18\a \x01(\tR\toperation\x125\n" +
 	"\n" +
 	"live_drift\x18\b \x03(\v2\x16.openctl.v1.DriftEntryR\tliveDrift\x12;\n" +
-	"\rmetadata_diff\x18\t \x03(\v2\x16.openctl.v1.DriftEntryR\fmetadataDiff\"N\n" +
+	"\rmetadata_diff\x18\t \x03(\v2\x16.openctl.v1.DriftEntryR\fmetadataDiff\"\xae\x01\n" +
 	"\n" +
 	"FieldError\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12\x12\n" +
-	"\x04code\x18\x03 \x01(\tR\x04code\"a\n" +
+	"\x04code\x18\x03 \x01(\tR\x04code\x125\n" +
+	"\treference\x18\x04 \x01(\v2\x17.openctl.v1.ResourceRefR\treference\x12'\n" +
+	"\x0freference_field\x18\x05 \x01(\tR\x0ereferenceField\"a\n" +
 	"\vChildAction\x12\x12\n" +
 	"\x04verb\x18\x01 \x01(\tR\x04verb\x12\x12\n" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x12\n" +
@@ -7448,139 +7469,140 @@ var file_api_proto_depIdxs = []int32{
 	32,  // 18: openctl.v1.DryRunApplyResponse.field_errors:type_name -> openctl.v1.FieldError
 	36,  // 19: openctl.v1.DryRunApplyResponse.live_drift:type_name -> openctl.v1.DriftEntry
 	36,  // 20: openctl.v1.DryRunApplyResponse.metadata_diff:type_name -> openctl.v1.DriftEntry
-	37,  // 21: openctl.v1.Resource.metadata:type_name -> openctl.v1.Metadata
-	112, // 22: openctl.v1.Resource.spec:type_name -> google.protobuf.Struct
-	112, // 23: openctl.v1.Resource.status:type_name -> google.protobuf.Struct
-	36,  // 24: openctl.v1.Resource.drift:type_name -> openctl.v1.DriftEntry
-	35,  // 25: openctl.v1.Resource.children:type_name -> openctl.v1.ResourceRef
-	110, // 26: openctl.v1.Metadata.labels:type_name -> openctl.v1.Metadata.LabelsEntry
-	111, // 27: openctl.v1.Metadata.annotations:type_name -> openctl.v1.Metadata.AnnotationsEntry
-	35,  // 28: openctl.v1.Metadata.owner_refs:type_name -> openctl.v1.ResourceRef
-	34,  // 29: openctl.v1.ApplyRequest.resource:type_name -> openctl.v1.Resource
-	34,  // 30: openctl.v1.GetResponse.resource:type_name -> openctl.v1.Resource
-	34,  // 31: openctl.v1.GetResponse.applied:type_name -> openctl.v1.Resource
-	34,  // 32: openctl.v1.ListResponse.resources:type_name -> openctl.v1.Resource
-	0,   // 33: openctl.v1.WatchEvent.type:type_name -> openctl.v1.WatchEvent.Type
-	34,  // 34: openctl.v1.WatchEvent.resource:type_name -> openctl.v1.Resource
-	50,  // 35: openctl.v1.ListProvidersResponse.providers:type_name -> openctl.v1.ProviderEntry
-	50,  // 36: openctl.v1.UpsertProviderResponse.provider:type_name -> openctl.v1.ProviderEntry
-	55,  // 37: openctl.v1.GetControllerConfigResponse.config:type_name -> openctl.v1.ControllerConfig
-	55,  // 38: openctl.v1.UpdateControllerConfigRequest.config:type_name -> openctl.v1.ControllerConfig
-	55,  // 39: openctl.v1.UpdateControllerConfigResponse.config:type_name -> openctl.v1.ControllerConfig
-	62,  // 40: openctl.v1.ListTemplatesResponse.templates:type_name -> openctl.v1.TemplateSummary
-	62,  // 41: openctl.v1.GetTemplateResponse.summary:type_name -> openctl.v1.TemplateSummary
-	65,  // 42: openctl.v1.GetTemplateResponse.parameters:type_name -> openctl.v1.TemplateParameter
-	112, // 43: openctl.v1.RenderTemplateRequest.params:type_name -> google.protobuf.Struct
-	34,  // 44: openctl.v1.RenderTemplateResponse.resource:type_name -> openctl.v1.Resource
-	34,  // 45: openctl.v1.Operation.result:type_name -> openctl.v1.Resource
-	68,  // 46: openctl.v1.Operation.children:type_name -> openctl.v1.Operation
-	68,  // 47: openctl.v1.ListOperationsResponse.operations:type_name -> openctl.v1.Operation
-	83,  // 48: openctl.v1.ListSchemasResponse.schemas:type_name -> openctl.v1.SchemaInfo
-	83,  // 49: openctl.v1.GetSchemaResponse.info:type_name -> openctl.v1.SchemaInfo
-	34,  // 50: openctl.v1.ValidateRequest.resource:type_name -> openctl.v1.Resource
-	68,  // 51: openctl.v1.OperationEvent.operation:type_name -> openctl.v1.Operation
-	98,  // 52: openctl.v1.GetResourceHistoryResponse.commits:type_name -> openctl.v1.CommitInfo
-	104, // 53: openctl.v1.GetOverviewResponse.kinds:type_name -> openctl.v1.ManagedKindCount
-	68,  // 54: openctl.v1.GetOverviewResponse.active_operations:type_name -> openctl.v1.Operation
-	68,  // 55: openctl.v1.GetOverviewResponse.review_operations:type_name -> openctl.v1.Operation
-	37,  // 56: openctl.v1.SavedResourceMetadata.metadata:type_name -> openctl.v1.Metadata
-	106, // 57: openctl.v1.ListSavedResourcesResponse.resources:type_name -> openctl.v1.SavedResourceMetadata
-	34,  // 58: openctl.v1.GetSavedResourceResponse.resource:type_name -> openctl.v1.Resource
-	1,   // 59: openctl.v1.PingService.Ping:input_type -> openctl.v1.PingRequest
-	38,  // 60: openctl.v1.ResourceService.Apply:input_type -> openctl.v1.ApplyRequest
-	40,  // 61: openctl.v1.ResourceService.Get:input_type -> openctl.v1.GetRequest
-	42,  // 62: openctl.v1.ResourceService.List:input_type -> openctl.v1.ListRequest
-	44,  // 63: openctl.v1.ResourceService.Delete:input_type -> openctl.v1.DeleteRequest
-	46,  // 64: openctl.v1.ResourceService.Watch:input_type -> openctl.v1.WatchRequest
-	30,  // 65: openctl.v1.ResourceService.DryRunApply:input_type -> openctl.v1.DryRunApplyRequest
-	20,  // 66: openctl.v1.ResourceService.ListActions:input_type -> openctl.v1.ListActionsRequest
-	24,  // 67: openctl.v1.ResourceService.InvokeAction:input_type -> openctl.v1.InvokeActionRequest
-	26,  // 68: openctl.v1.ResourceService.GetChildrenGraph:input_type -> openctl.v1.GetChildrenGraphRequest
-	14,  // 69: openctl.v1.ResourceService.ExportResource:input_type -> openctl.v1.ExportResourceRequest
-	16,  // 70: openctl.v1.ResourceService.AdoptResource:input_type -> openctl.v1.AdoptResourceRequest
-	18,  // 71: openctl.v1.ResourceService.ForgetResource:input_type -> openctl.v1.ForgetResourceRequest
-	3,   // 72: openctl.v1.ResourceService.ConfirmResourceIdentity:input_type -> openctl.v1.ConfirmResourceIdentityRequest
-	5,   // 73: openctl.v1.ResourceService.ListDiscoveryContexts:input_type -> openctl.v1.ListDiscoveryContextsRequest
-	8,   // 74: openctl.v1.ResourceService.DiscoverResources:input_type -> openctl.v1.DiscoverResourcesRequest
-	11,  // 75: openctl.v1.ResourceService.TestDiscoveryConnection:input_type -> openctl.v1.TestDiscoveryConnectionRequest
-	48,  // 76: openctl.v1.ConfigService.ListProviders:input_type -> openctl.v1.ListProvidersRequest
-	51,  // 77: openctl.v1.ConfigService.UpsertProvider:input_type -> openctl.v1.UpsertProviderRequest
-	53,  // 78: openctl.v1.ConfigService.DeleteProvider:input_type -> openctl.v1.DeleteProviderRequest
-	56,  // 79: openctl.v1.ConfigService.GetControllerConfig:input_type -> openctl.v1.GetControllerConfigRequest
-	58,  // 80: openctl.v1.ConfigService.UpdateControllerConfig:input_type -> openctl.v1.UpdateControllerConfigRequest
-	60,  // 81: openctl.v1.TemplateService.ListTemplates:input_type -> openctl.v1.ListTemplatesRequest
-	63,  // 82: openctl.v1.TemplateService.GetTemplate:input_type -> openctl.v1.GetTemplateRequest
-	66,  // 83: openctl.v1.TemplateService.RenderTemplate:input_type -> openctl.v1.RenderTemplateRequest
-	69,  // 84: openctl.v1.OperationService.GetOperation:input_type -> openctl.v1.GetOperationRequest
-	70,  // 85: openctl.v1.OperationService.GetOperationByRequest:input_type -> openctl.v1.GetOperationByRequestRequest
-	71,  // 86: openctl.v1.OperationService.ListOperations:input_type -> openctl.v1.ListOperationsRequest
-	90,  // 87: openctl.v1.OperationService.WatchOperations:input_type -> openctl.v1.WatchOperationsRequest
-	73,  // 88: openctl.v1.OperationService.CancelOperation:input_type -> openctl.v1.CancelOperationRequest
-	75,  // 89: openctl.v1.SessionService.Login:input_type -> openctl.v1.LoginRequest
-	77,  // 90: openctl.v1.SessionService.Logout:input_type -> openctl.v1.LogoutRequest
-	79,  // 91: openctl.v1.SessionService.WhoAmI:input_type -> openctl.v1.WhoAmIRequest
-	81,  // 92: openctl.v1.SchemaService.ListSchemas:input_type -> openctl.v1.ListSchemasRequest
-	84,  // 93: openctl.v1.SchemaService.GetSchema:input_type -> openctl.v1.GetSchemaRequest
-	86,  // 94: openctl.v1.SchemaService.Validate:input_type -> openctl.v1.ValidateRequest
-	88,  // 95: openctl.v1.SchemaService.GetFormSchema:input_type -> openctl.v1.GetFormSchemaRequest
-	92,  // 96: openctl.v1.RepoService.GetStatus:input_type -> openctl.v1.GetRepoStatusRequest
-	94,  // 97: openctl.v1.RepoService.Push:input_type -> openctl.v1.PushRepoRequest
-	96,  // 98: openctl.v1.RepoService.Pull:input_type -> openctl.v1.PullRepoRequest
-	99,  // 99: openctl.v1.RepoService.GetResourceHistory:input_type -> openctl.v1.GetResourceHistoryRequest
-	101, // 100: openctl.v1.RepoService.GetResourceAtCommit:input_type -> openctl.v1.GetResourceAtCommitRequest
-	103, // 101: openctl.v1.OverviewService.GetOverview:input_type -> openctl.v1.GetOverviewRequest
-	42,  // 102: openctl.v1.InventoryService.ListSavedResources:input_type -> openctl.v1.ListRequest
-	40,  // 103: openctl.v1.InventoryService.GetSavedResource:input_type -> openctl.v1.GetRequest
-	2,   // 104: openctl.v1.PingService.Ping:output_type -> openctl.v1.PingResponse
-	39,  // 105: openctl.v1.ResourceService.Apply:output_type -> openctl.v1.ApplyResponse
-	41,  // 106: openctl.v1.ResourceService.Get:output_type -> openctl.v1.GetResponse
-	43,  // 107: openctl.v1.ResourceService.List:output_type -> openctl.v1.ListResponse
-	45,  // 108: openctl.v1.ResourceService.Delete:output_type -> openctl.v1.DeleteResponse
-	47,  // 109: openctl.v1.ResourceService.Watch:output_type -> openctl.v1.WatchEvent
-	31,  // 110: openctl.v1.ResourceService.DryRunApply:output_type -> openctl.v1.DryRunApplyResponse
-	21,  // 111: openctl.v1.ResourceService.ListActions:output_type -> openctl.v1.ListActionsResponse
-	25,  // 112: openctl.v1.ResourceService.InvokeAction:output_type -> openctl.v1.InvokeActionResponse
-	29,  // 113: openctl.v1.ResourceService.GetChildrenGraph:output_type -> openctl.v1.GetChildrenGraphResponse
-	15,  // 114: openctl.v1.ResourceService.ExportResource:output_type -> openctl.v1.ExportResourceResponse
-	17,  // 115: openctl.v1.ResourceService.AdoptResource:output_type -> openctl.v1.AdoptResourceResponse
-	19,  // 116: openctl.v1.ResourceService.ForgetResource:output_type -> openctl.v1.ForgetResourceResponse
-	4,   // 117: openctl.v1.ResourceService.ConfirmResourceIdentity:output_type -> openctl.v1.ConfirmResourceIdentityResponse
-	7,   // 118: openctl.v1.ResourceService.ListDiscoveryContexts:output_type -> openctl.v1.ListDiscoveryContextsResponse
-	10,  // 119: openctl.v1.ResourceService.DiscoverResources:output_type -> openctl.v1.DiscoverResourcesResponse
-	12,  // 120: openctl.v1.ResourceService.TestDiscoveryConnection:output_type -> openctl.v1.TestDiscoveryConnectionResponse
-	49,  // 121: openctl.v1.ConfigService.ListProviders:output_type -> openctl.v1.ListProvidersResponse
-	52,  // 122: openctl.v1.ConfigService.UpsertProvider:output_type -> openctl.v1.UpsertProviderResponse
-	54,  // 123: openctl.v1.ConfigService.DeleteProvider:output_type -> openctl.v1.DeleteProviderResponse
-	57,  // 124: openctl.v1.ConfigService.GetControllerConfig:output_type -> openctl.v1.GetControllerConfigResponse
-	59,  // 125: openctl.v1.ConfigService.UpdateControllerConfig:output_type -> openctl.v1.UpdateControllerConfigResponse
-	61,  // 126: openctl.v1.TemplateService.ListTemplates:output_type -> openctl.v1.ListTemplatesResponse
-	64,  // 127: openctl.v1.TemplateService.GetTemplate:output_type -> openctl.v1.GetTemplateResponse
-	67,  // 128: openctl.v1.TemplateService.RenderTemplate:output_type -> openctl.v1.RenderTemplateResponse
-	68,  // 129: openctl.v1.OperationService.GetOperation:output_type -> openctl.v1.Operation
-	68,  // 130: openctl.v1.OperationService.GetOperationByRequest:output_type -> openctl.v1.Operation
-	72,  // 131: openctl.v1.OperationService.ListOperations:output_type -> openctl.v1.ListOperationsResponse
-	91,  // 132: openctl.v1.OperationService.WatchOperations:output_type -> openctl.v1.OperationEvent
-	74,  // 133: openctl.v1.OperationService.CancelOperation:output_type -> openctl.v1.CancelOperationResponse
-	76,  // 134: openctl.v1.SessionService.Login:output_type -> openctl.v1.LoginResponse
-	78,  // 135: openctl.v1.SessionService.Logout:output_type -> openctl.v1.LogoutResponse
-	80,  // 136: openctl.v1.SessionService.WhoAmI:output_type -> openctl.v1.WhoAmIResponse
-	82,  // 137: openctl.v1.SchemaService.ListSchemas:output_type -> openctl.v1.ListSchemasResponse
-	85,  // 138: openctl.v1.SchemaService.GetSchema:output_type -> openctl.v1.GetSchemaResponse
-	87,  // 139: openctl.v1.SchemaService.Validate:output_type -> openctl.v1.ValidateResponse
-	89,  // 140: openctl.v1.SchemaService.GetFormSchema:output_type -> openctl.v1.GetFormSchemaResponse
-	93,  // 141: openctl.v1.RepoService.GetStatus:output_type -> openctl.v1.GetRepoStatusResponse
-	95,  // 142: openctl.v1.RepoService.Push:output_type -> openctl.v1.PushRepoResponse
-	97,  // 143: openctl.v1.RepoService.Pull:output_type -> openctl.v1.PullRepoResponse
-	100, // 144: openctl.v1.RepoService.GetResourceHistory:output_type -> openctl.v1.GetResourceHistoryResponse
-	102, // 145: openctl.v1.RepoService.GetResourceAtCommit:output_type -> openctl.v1.GetResourceAtCommitResponse
-	105, // 146: openctl.v1.OverviewService.GetOverview:output_type -> openctl.v1.GetOverviewResponse
-	107, // 147: openctl.v1.InventoryService.ListSavedResources:output_type -> openctl.v1.ListSavedResourcesResponse
-	108, // 148: openctl.v1.InventoryService.GetSavedResource:output_type -> openctl.v1.GetSavedResourceResponse
-	104, // [104:149] is the sub-list for method output_type
-	59,  // [59:104] is the sub-list for method input_type
-	59,  // [59:59] is the sub-list for extension type_name
-	59,  // [59:59] is the sub-list for extension extendee
-	0,   // [0:59] is the sub-list for field type_name
+	35,  // 21: openctl.v1.FieldError.reference:type_name -> openctl.v1.ResourceRef
+	37,  // 22: openctl.v1.Resource.metadata:type_name -> openctl.v1.Metadata
+	112, // 23: openctl.v1.Resource.spec:type_name -> google.protobuf.Struct
+	112, // 24: openctl.v1.Resource.status:type_name -> google.protobuf.Struct
+	36,  // 25: openctl.v1.Resource.drift:type_name -> openctl.v1.DriftEntry
+	35,  // 26: openctl.v1.Resource.children:type_name -> openctl.v1.ResourceRef
+	110, // 27: openctl.v1.Metadata.labels:type_name -> openctl.v1.Metadata.LabelsEntry
+	111, // 28: openctl.v1.Metadata.annotations:type_name -> openctl.v1.Metadata.AnnotationsEntry
+	35,  // 29: openctl.v1.Metadata.owner_refs:type_name -> openctl.v1.ResourceRef
+	34,  // 30: openctl.v1.ApplyRequest.resource:type_name -> openctl.v1.Resource
+	34,  // 31: openctl.v1.GetResponse.resource:type_name -> openctl.v1.Resource
+	34,  // 32: openctl.v1.GetResponse.applied:type_name -> openctl.v1.Resource
+	34,  // 33: openctl.v1.ListResponse.resources:type_name -> openctl.v1.Resource
+	0,   // 34: openctl.v1.WatchEvent.type:type_name -> openctl.v1.WatchEvent.Type
+	34,  // 35: openctl.v1.WatchEvent.resource:type_name -> openctl.v1.Resource
+	50,  // 36: openctl.v1.ListProvidersResponse.providers:type_name -> openctl.v1.ProviderEntry
+	50,  // 37: openctl.v1.UpsertProviderResponse.provider:type_name -> openctl.v1.ProviderEntry
+	55,  // 38: openctl.v1.GetControllerConfigResponse.config:type_name -> openctl.v1.ControllerConfig
+	55,  // 39: openctl.v1.UpdateControllerConfigRequest.config:type_name -> openctl.v1.ControllerConfig
+	55,  // 40: openctl.v1.UpdateControllerConfigResponse.config:type_name -> openctl.v1.ControllerConfig
+	62,  // 41: openctl.v1.ListTemplatesResponse.templates:type_name -> openctl.v1.TemplateSummary
+	62,  // 42: openctl.v1.GetTemplateResponse.summary:type_name -> openctl.v1.TemplateSummary
+	65,  // 43: openctl.v1.GetTemplateResponse.parameters:type_name -> openctl.v1.TemplateParameter
+	112, // 44: openctl.v1.RenderTemplateRequest.params:type_name -> google.protobuf.Struct
+	34,  // 45: openctl.v1.RenderTemplateResponse.resource:type_name -> openctl.v1.Resource
+	34,  // 46: openctl.v1.Operation.result:type_name -> openctl.v1.Resource
+	68,  // 47: openctl.v1.Operation.children:type_name -> openctl.v1.Operation
+	68,  // 48: openctl.v1.ListOperationsResponse.operations:type_name -> openctl.v1.Operation
+	83,  // 49: openctl.v1.ListSchemasResponse.schemas:type_name -> openctl.v1.SchemaInfo
+	83,  // 50: openctl.v1.GetSchemaResponse.info:type_name -> openctl.v1.SchemaInfo
+	34,  // 51: openctl.v1.ValidateRequest.resource:type_name -> openctl.v1.Resource
+	68,  // 52: openctl.v1.OperationEvent.operation:type_name -> openctl.v1.Operation
+	98,  // 53: openctl.v1.GetResourceHistoryResponse.commits:type_name -> openctl.v1.CommitInfo
+	104, // 54: openctl.v1.GetOverviewResponse.kinds:type_name -> openctl.v1.ManagedKindCount
+	68,  // 55: openctl.v1.GetOverviewResponse.active_operations:type_name -> openctl.v1.Operation
+	68,  // 56: openctl.v1.GetOverviewResponse.review_operations:type_name -> openctl.v1.Operation
+	37,  // 57: openctl.v1.SavedResourceMetadata.metadata:type_name -> openctl.v1.Metadata
+	106, // 58: openctl.v1.ListSavedResourcesResponse.resources:type_name -> openctl.v1.SavedResourceMetadata
+	34,  // 59: openctl.v1.GetSavedResourceResponse.resource:type_name -> openctl.v1.Resource
+	1,   // 60: openctl.v1.PingService.Ping:input_type -> openctl.v1.PingRequest
+	38,  // 61: openctl.v1.ResourceService.Apply:input_type -> openctl.v1.ApplyRequest
+	40,  // 62: openctl.v1.ResourceService.Get:input_type -> openctl.v1.GetRequest
+	42,  // 63: openctl.v1.ResourceService.List:input_type -> openctl.v1.ListRequest
+	44,  // 64: openctl.v1.ResourceService.Delete:input_type -> openctl.v1.DeleteRequest
+	46,  // 65: openctl.v1.ResourceService.Watch:input_type -> openctl.v1.WatchRequest
+	30,  // 66: openctl.v1.ResourceService.DryRunApply:input_type -> openctl.v1.DryRunApplyRequest
+	20,  // 67: openctl.v1.ResourceService.ListActions:input_type -> openctl.v1.ListActionsRequest
+	24,  // 68: openctl.v1.ResourceService.InvokeAction:input_type -> openctl.v1.InvokeActionRequest
+	26,  // 69: openctl.v1.ResourceService.GetChildrenGraph:input_type -> openctl.v1.GetChildrenGraphRequest
+	14,  // 70: openctl.v1.ResourceService.ExportResource:input_type -> openctl.v1.ExportResourceRequest
+	16,  // 71: openctl.v1.ResourceService.AdoptResource:input_type -> openctl.v1.AdoptResourceRequest
+	18,  // 72: openctl.v1.ResourceService.ForgetResource:input_type -> openctl.v1.ForgetResourceRequest
+	3,   // 73: openctl.v1.ResourceService.ConfirmResourceIdentity:input_type -> openctl.v1.ConfirmResourceIdentityRequest
+	5,   // 74: openctl.v1.ResourceService.ListDiscoveryContexts:input_type -> openctl.v1.ListDiscoveryContextsRequest
+	8,   // 75: openctl.v1.ResourceService.DiscoverResources:input_type -> openctl.v1.DiscoverResourcesRequest
+	11,  // 76: openctl.v1.ResourceService.TestDiscoveryConnection:input_type -> openctl.v1.TestDiscoveryConnectionRequest
+	48,  // 77: openctl.v1.ConfigService.ListProviders:input_type -> openctl.v1.ListProvidersRequest
+	51,  // 78: openctl.v1.ConfigService.UpsertProvider:input_type -> openctl.v1.UpsertProviderRequest
+	53,  // 79: openctl.v1.ConfigService.DeleteProvider:input_type -> openctl.v1.DeleteProviderRequest
+	56,  // 80: openctl.v1.ConfigService.GetControllerConfig:input_type -> openctl.v1.GetControllerConfigRequest
+	58,  // 81: openctl.v1.ConfigService.UpdateControllerConfig:input_type -> openctl.v1.UpdateControllerConfigRequest
+	60,  // 82: openctl.v1.TemplateService.ListTemplates:input_type -> openctl.v1.ListTemplatesRequest
+	63,  // 83: openctl.v1.TemplateService.GetTemplate:input_type -> openctl.v1.GetTemplateRequest
+	66,  // 84: openctl.v1.TemplateService.RenderTemplate:input_type -> openctl.v1.RenderTemplateRequest
+	69,  // 85: openctl.v1.OperationService.GetOperation:input_type -> openctl.v1.GetOperationRequest
+	70,  // 86: openctl.v1.OperationService.GetOperationByRequest:input_type -> openctl.v1.GetOperationByRequestRequest
+	71,  // 87: openctl.v1.OperationService.ListOperations:input_type -> openctl.v1.ListOperationsRequest
+	90,  // 88: openctl.v1.OperationService.WatchOperations:input_type -> openctl.v1.WatchOperationsRequest
+	73,  // 89: openctl.v1.OperationService.CancelOperation:input_type -> openctl.v1.CancelOperationRequest
+	75,  // 90: openctl.v1.SessionService.Login:input_type -> openctl.v1.LoginRequest
+	77,  // 91: openctl.v1.SessionService.Logout:input_type -> openctl.v1.LogoutRequest
+	79,  // 92: openctl.v1.SessionService.WhoAmI:input_type -> openctl.v1.WhoAmIRequest
+	81,  // 93: openctl.v1.SchemaService.ListSchemas:input_type -> openctl.v1.ListSchemasRequest
+	84,  // 94: openctl.v1.SchemaService.GetSchema:input_type -> openctl.v1.GetSchemaRequest
+	86,  // 95: openctl.v1.SchemaService.Validate:input_type -> openctl.v1.ValidateRequest
+	88,  // 96: openctl.v1.SchemaService.GetFormSchema:input_type -> openctl.v1.GetFormSchemaRequest
+	92,  // 97: openctl.v1.RepoService.GetStatus:input_type -> openctl.v1.GetRepoStatusRequest
+	94,  // 98: openctl.v1.RepoService.Push:input_type -> openctl.v1.PushRepoRequest
+	96,  // 99: openctl.v1.RepoService.Pull:input_type -> openctl.v1.PullRepoRequest
+	99,  // 100: openctl.v1.RepoService.GetResourceHistory:input_type -> openctl.v1.GetResourceHistoryRequest
+	101, // 101: openctl.v1.RepoService.GetResourceAtCommit:input_type -> openctl.v1.GetResourceAtCommitRequest
+	103, // 102: openctl.v1.OverviewService.GetOverview:input_type -> openctl.v1.GetOverviewRequest
+	42,  // 103: openctl.v1.InventoryService.ListSavedResources:input_type -> openctl.v1.ListRequest
+	40,  // 104: openctl.v1.InventoryService.GetSavedResource:input_type -> openctl.v1.GetRequest
+	2,   // 105: openctl.v1.PingService.Ping:output_type -> openctl.v1.PingResponse
+	39,  // 106: openctl.v1.ResourceService.Apply:output_type -> openctl.v1.ApplyResponse
+	41,  // 107: openctl.v1.ResourceService.Get:output_type -> openctl.v1.GetResponse
+	43,  // 108: openctl.v1.ResourceService.List:output_type -> openctl.v1.ListResponse
+	45,  // 109: openctl.v1.ResourceService.Delete:output_type -> openctl.v1.DeleteResponse
+	47,  // 110: openctl.v1.ResourceService.Watch:output_type -> openctl.v1.WatchEvent
+	31,  // 111: openctl.v1.ResourceService.DryRunApply:output_type -> openctl.v1.DryRunApplyResponse
+	21,  // 112: openctl.v1.ResourceService.ListActions:output_type -> openctl.v1.ListActionsResponse
+	25,  // 113: openctl.v1.ResourceService.InvokeAction:output_type -> openctl.v1.InvokeActionResponse
+	29,  // 114: openctl.v1.ResourceService.GetChildrenGraph:output_type -> openctl.v1.GetChildrenGraphResponse
+	15,  // 115: openctl.v1.ResourceService.ExportResource:output_type -> openctl.v1.ExportResourceResponse
+	17,  // 116: openctl.v1.ResourceService.AdoptResource:output_type -> openctl.v1.AdoptResourceResponse
+	19,  // 117: openctl.v1.ResourceService.ForgetResource:output_type -> openctl.v1.ForgetResourceResponse
+	4,   // 118: openctl.v1.ResourceService.ConfirmResourceIdentity:output_type -> openctl.v1.ConfirmResourceIdentityResponse
+	7,   // 119: openctl.v1.ResourceService.ListDiscoveryContexts:output_type -> openctl.v1.ListDiscoveryContextsResponse
+	10,  // 120: openctl.v1.ResourceService.DiscoverResources:output_type -> openctl.v1.DiscoverResourcesResponse
+	12,  // 121: openctl.v1.ResourceService.TestDiscoveryConnection:output_type -> openctl.v1.TestDiscoveryConnectionResponse
+	49,  // 122: openctl.v1.ConfigService.ListProviders:output_type -> openctl.v1.ListProvidersResponse
+	52,  // 123: openctl.v1.ConfigService.UpsertProvider:output_type -> openctl.v1.UpsertProviderResponse
+	54,  // 124: openctl.v1.ConfigService.DeleteProvider:output_type -> openctl.v1.DeleteProviderResponse
+	57,  // 125: openctl.v1.ConfigService.GetControllerConfig:output_type -> openctl.v1.GetControllerConfigResponse
+	59,  // 126: openctl.v1.ConfigService.UpdateControllerConfig:output_type -> openctl.v1.UpdateControllerConfigResponse
+	61,  // 127: openctl.v1.TemplateService.ListTemplates:output_type -> openctl.v1.ListTemplatesResponse
+	64,  // 128: openctl.v1.TemplateService.GetTemplate:output_type -> openctl.v1.GetTemplateResponse
+	67,  // 129: openctl.v1.TemplateService.RenderTemplate:output_type -> openctl.v1.RenderTemplateResponse
+	68,  // 130: openctl.v1.OperationService.GetOperation:output_type -> openctl.v1.Operation
+	68,  // 131: openctl.v1.OperationService.GetOperationByRequest:output_type -> openctl.v1.Operation
+	72,  // 132: openctl.v1.OperationService.ListOperations:output_type -> openctl.v1.ListOperationsResponse
+	91,  // 133: openctl.v1.OperationService.WatchOperations:output_type -> openctl.v1.OperationEvent
+	74,  // 134: openctl.v1.OperationService.CancelOperation:output_type -> openctl.v1.CancelOperationResponse
+	76,  // 135: openctl.v1.SessionService.Login:output_type -> openctl.v1.LoginResponse
+	78,  // 136: openctl.v1.SessionService.Logout:output_type -> openctl.v1.LogoutResponse
+	80,  // 137: openctl.v1.SessionService.WhoAmI:output_type -> openctl.v1.WhoAmIResponse
+	82,  // 138: openctl.v1.SchemaService.ListSchemas:output_type -> openctl.v1.ListSchemasResponse
+	85,  // 139: openctl.v1.SchemaService.GetSchema:output_type -> openctl.v1.GetSchemaResponse
+	87,  // 140: openctl.v1.SchemaService.Validate:output_type -> openctl.v1.ValidateResponse
+	89,  // 141: openctl.v1.SchemaService.GetFormSchema:output_type -> openctl.v1.GetFormSchemaResponse
+	93,  // 142: openctl.v1.RepoService.GetStatus:output_type -> openctl.v1.GetRepoStatusResponse
+	95,  // 143: openctl.v1.RepoService.Push:output_type -> openctl.v1.PushRepoResponse
+	97,  // 144: openctl.v1.RepoService.Pull:output_type -> openctl.v1.PullRepoResponse
+	100, // 145: openctl.v1.RepoService.GetResourceHistory:output_type -> openctl.v1.GetResourceHistoryResponse
+	102, // 146: openctl.v1.RepoService.GetResourceAtCommit:output_type -> openctl.v1.GetResourceAtCommitResponse
+	105, // 147: openctl.v1.OverviewService.GetOverview:output_type -> openctl.v1.GetOverviewResponse
+	107, // 148: openctl.v1.InventoryService.ListSavedResources:output_type -> openctl.v1.ListSavedResourcesResponse
+	108, // 149: openctl.v1.InventoryService.GetSavedResource:output_type -> openctl.v1.GetSavedResourceResponse
+	105, // [105:150] is the sub-list for method output_type
+	60,  // [60:105] is the sub-list for method input_type
+	60,  // [60:60] is the sub-list for extension type_name
+	60,  // [60:60] is the sub-list for extension extendee
+	0,   // [0:60] is the sub-list for field type_name
 }
 
 func init() { file_api_proto_init() }

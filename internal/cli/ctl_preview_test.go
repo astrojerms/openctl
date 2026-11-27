@@ -144,3 +144,86 @@ func TestCtlPreviewDistinguishesStoredEditsFromLiveObservation(t *testing.T) {
 		}
 	}
 }
+
+func TestCtlPreviewReferenceFailuresRemainActionable(t *testing.T) {
+	for _, field := range []string{"status.ip", ""} {
+		for _, format := range []string{"table", "json"} {
+			t.Run(format+"/"+field, func(t *testing.T) {
+				code := "reference_field_unavailable"
+				if field == "" {
+					code = "reference_read_failed"
+				}
+				out, err := runPreviewTest(t, t.Context(), &apiv1.DryRunApplyResponse{
+					FieldErrors: []*apiv1.FieldError{{
+						Path: "spec.target.host", Code: code,
+						Message:        "Referenced output is unavailable. Inspect the declared dependency.",
+						Reference:      &apiv1.ResourceRef{ApiVersion: "proxmox.openctl.io/v1", Kind: "VirtualMachine", Name: "declared-vm"},
+						ReferenceField: field,
+					}},
+				}, nil, format)
+				if err == nil {
+					t.Fatal("field-only invalid preview succeeded")
+				}
+				if format == "table" {
+					requested := field
+					if requested == "" {
+						requested = "(whole resource)"
+					}
+					for _, want := range []string{
+						"Validation error at spec.target.host:",
+						"Referenced resource: proxmox.openctl.io/v1 VirtualMachine/declared-vm",
+						"requested output: " + requested,
+					} {
+						if !strings.Contains(out, want) {
+							t.Fatalf("actionable reference diagnostic lost %q: %s", want, out)
+						}
+					}
+				} else {
+					var response struct {
+						FieldErrors []struct {
+							Path      string `json:"path"`
+							Code      string `json:"code"`
+							Reference struct {
+								APIVersion string `json:"apiVersion"`
+								Kind       string `json:"kind"`
+								Name       string `json:"name"`
+							} `json:"reference"`
+							ReferenceField string `json:"referenceField"`
+						} `json:"fieldErrors"`
+					}
+					if err := json.Unmarshal([]byte(out), &response); err != nil {
+						t.Fatalf("invalid preview lost usable JSON: %v", err)
+					}
+					if len(response.FieldErrors) != 1 {
+						t.Fatalf("field diagnostic lost: %s", out)
+					}
+					fe := response.FieldErrors[0]
+					if fe.Path != "spec.target.host" || fe.Code != code || fe.Reference.APIVersion != "proxmox.openctl.io/v1" || fe.Reference.Kind != "VirtualMachine" || fe.Reference.Name != "declared-vm" || fe.ReferenceField != field {
+						t.Fatalf("structured reference target lost: %s", out)
+					}
+				}
+				for _, forbidden := range []string{"PRIVATE-TOKEN", "PRIVATE-BODY", "private.invalid", "ctl apply", "ctl delete"} {
+					if strings.Contains(out, forbidden) {
+						t.Fatalf("preview emitted unsafe content %q", forbidden)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestCtlPreviewDoesNotInventReferenceTargets(t *testing.T) {
+	for _, reference := range []*apiv1.ResourceRef{nil, {Kind: "VirtualMachine", Name: "partial"}} {
+		var out bytes.Buffer
+		if err := printCtlPreview(&out, &apiv1.DryRunApplyResponse{FieldErrors: []*apiv1.FieldError{{
+			Path: "spec.target.host", Code: "reference_invalid",
+			Message:   "Reference proxmox.openctl.io/v1 VirtualMachine/declared-vm status.ip is invalid.",
+			Reference: reference, ReferenceField: "status.ip",
+		}}}); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out.String(), "Validation error at spec.target.host:") || strings.Contains(out.String(), "Referenced resource:") || strings.Contains(out.String(), "requested output:") {
+			t.Fatalf("missing metadata was inferred from message or partial target: %s", out.String())
+		}
+	}
+}

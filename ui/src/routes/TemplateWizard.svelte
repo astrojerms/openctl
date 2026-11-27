@@ -21,6 +21,7 @@
   import { auth } from '../lib/auth';
   import { createApplyAttempt } from '../lib/applyAttempt';
   import ApplyAttemptPanel from '../components/ApplyAttemptPanel.svelte';
+  import FieldDiagnostic from '../components/FieldDiagnostic.svelte';
 
   export let template: string;
 
@@ -382,7 +383,7 @@
           <article class="diag" aria-label="Preview validation errors">
             <h4>Validation</h4>
             {#each dryRun.fieldErrors ?? [] as field}
-              <p class="err small mono">{#if field.code}<code>[{field.code}]</code>{' '}{/if}{#if field.path}<code>{field.path}</code>{': '}{/if}{field.message ?? 'Invalid value'}</p>
+              <p class="err small mono"><FieldDiagnostic {field} /></p>
             {/each}
             {#each previewErrors as problem}<p class="err small mono">{problem}</p>{/each}
           </article>

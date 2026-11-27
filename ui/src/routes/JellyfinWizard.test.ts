@@ -180,7 +180,11 @@ describe('visible blocked deployment diagnostics', () => {
   it('shows controller field paths once, preserves other diagnostics, and blocks Apply without consent prompts', async () => {
     vi.mocked(resources.dryRunApply).mockResolvedValueOnce({
       operation: 'create', summary: 'invalid guest declaration',
-      fieldErrors: [{ path: 'spec.memory.size', code: 'reference_field_unavailable', message: 'Unsupported guest capacity' }],
+      fieldErrors: [{
+        path: 'spec.memory.size', code: 'reference_field_unavailable', message: 'Unsupported guest capacity',
+        reference: { apiVersion: 'proxmox.openctl.io/v1', kind: 'VirtualMachine', name: 'capacity-source' },
+        referenceField: 'status.capacity.memory',
+      }],
       validationErrors: ['spec.memory.size: Unsupported guest capacity', 'Selected provider is unavailable'],
     });
     await prepareVMReview();
@@ -189,6 +193,10 @@ describe('visible blocked deployment diagnostics', () => {
     expect(list.textContent).toContain('reference_field_unavailable');
     expect(list.textContent?.match(/Unsupported guest capacity/g)).toHaveLength(1);
     expect(list.textContent).toContain('Selected provider is unavailable');
+    expect(list.querySelector('a')?.textContent).toBe('Inspect referenced resource');
+    expect(list.querySelector('a')?.getAttribute('href')).toBe('#/k/proxmox.openctl.io/v1/VirtualMachine/capacity-source');
+    expect(list.textContent).toContain('requested field: status.capacity.memory');
+    expect(vi.mocked(resources.get).mock.calls.map((call) => call.slice(0, 3))).not.toContainEqual(['proxmox.openctl.io/v1', 'VirtualMachine', 'capacity-source']);
     expect(button('Apply reviewed step').disabled).toBe(true);
     expect(host.querySelectorAll('input[type="checkbox"]')).toHaveLength(0);
     expect(resources.apply).not.toHaveBeenCalled();
@@ -206,9 +214,19 @@ describe('visible blocked deployment diagnostics', () => {
   });
 
   it('replaces failed diagnostics after repair but requires new consent before Apply', async () => {
-    vi.mocked(resources.dryRunApply).mockResolvedValueOnce({ validationErrors: ['Guest read unavailable'], summary: 'unresolved ref' });
+    vi.mocked(resources.dryRunApply).mockResolvedValueOnce({
+      fieldErrors: [{
+        path: 'spec.target.host', message: 'Guest read unavailable',
+        reference: { apiVersion: 'proxmox.openctl.io/v1', kind: 'VirtualMachine', name: 'dependency-vm' },
+        referenceField: 'status.ip',
+      }],
+      summary: 'unresolved ref',
+    });
     await prepareVMReview();
     expect(host.querySelector('[aria-label="Preview validation errors"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Preview validation errors"] a')).not.toBeNull();
+    expect(window.sessionStorage.getItem(REVIEW_KEY)).not.toContain('dependency-vm');
+    expect(window.sessionStorage.getItem(REVIEW_KEY)).not.toContain('Guest read unavailable');
     button('Refresh preview').click(); await waitForReview();
     expect(host.querySelector('[aria-label="Preview validation errors"]')).toBeNull();
     expect(button('Apply reviewed step').disabled).toBe(true);
@@ -220,12 +238,53 @@ describe('visible blocked deployment diagnostics', () => {
   it('surfaces a field-only submission-time failure without sending Apply or saving a new request key', async () => {
     await prepareVMReview();
     expect(button('Apply reviewed step').disabled).toBe(false);
-    vi.mocked(resources.dryRunApply).mockResolvedValueOnce({ operation: 'create', fieldErrors: [{ path: 'spec.target.host', message: 'Guest unavailable after review' }] });
+    vi.mocked(resources.dryRunApply).mockResolvedValueOnce({
+      operation: 'create', fieldErrors: [{
+        path: 'spec.target.host', message: 'Guest unavailable after review',
+        reference: { apiVersion: 'proxmox.openctl.io/v1', kind: 'VirtualMachine', name: 'dependency-vm' },
+        referenceField: 'status.ip',
+      }],
+    });
     button('Apply reviewed step').click(); await waitForReview();
     expect(host.querySelector('[aria-label="Preview validation errors"]')?.textContent).toContain('Guest unavailable after review');
+    expect(host.querySelector('[aria-label="Preview validation errors"] a')?.getAttribute('href')).toBe('#/k/proxmox.openctl.io/v1/VirtualMachine/dependency-vm');
     expect(button('Apply reviewed step').disabled).toBe(true);
     expect(resources.apply).not.toHaveBeenCalled();
     expect(JSON.parse(window.sessionStorage.getItem(REVIEW_KEY)!).steps[0].attempt).toBeUndefined();
+  });
+
+  it('keeps whole-resource and legacy field-only blockers safe and visible without inventing partial targets', async () => {
+    const hostile = '<svg onload=alert(1)>';
+    vi.mocked(resources.dryRunApply).mockResolvedValueOnce(JSON.parse(JSON.stringify({
+      operation: 'create',
+      fieldErrors: [
+        { path: 'spec.template', code: 'reference_resource_unavailable', message: hostile,
+          reference: { apiVersion: 'proxmox.openctl.io/v1', kind: 'VirtualMachine', name: 'whole-guest' }, referenceField: '' },
+        { path: 'spec.target.host', message: 'Incomplete dependency', reference: { apiVersion: 'proxmox.openctl.io/v1', name: 'partial-guest' } },
+        { path: 'spec.disk', message: 'Legacy diagnostic; inspect Disk/guessed' },
+      ],
+    })));
+    await prepareVMReview();
+    const panel = host.querySelector('[aria-label="Preview validation errors"]')!;
+    expect(panel.querySelectorAll('a')).toHaveLength(1);
+    expect(panel.querySelector('a')?.getAttribute('href')).toBe('#/k/proxmox.openctl.io/v1/VirtualMachine/whole-guest');
+    expect(panel.textContent).toContain('whole resource');
+    expect(panel.textContent).toContain(hostile);
+    expect(panel.textContent).toContain('Incomplete dependency');
+    expect(panel.textContent).toContain('Legacy diagnostic; inspect Disk/guessed');
+    expect(panel.querySelector('svg, script, [onload]')).toBeNull();
+    expect(button('Apply reviewed step').disabled).toBe(true);
+    const reads = vi.mocked(resources.get).mock.calls.length;
+    const previews = vi.mocked(resources.dryRunApply).mock.calls.length;
+    const saved = window.sessionStorage.getItem(REVIEW_KEY);
+    button('Apply reviewed step').click();
+    await settle();
+    expect(resources.apply).not.toHaveBeenCalled();
+    expect(resources.get).toHaveBeenCalledTimes(reads);
+    expect(resources.dryRunApply).toHaveBeenCalledTimes(previews);
+    expect(window.sessionStorage.getItem(REVIEW_KEY)).toBe(saved);
+    expect(saved).not.toContain('whole-guest');
+    expect(saved).not.toContain(hostile);
   });
 });
 

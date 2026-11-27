@@ -418,6 +418,11 @@ message FieldError {
   // Optional safe machine-readable category. Empty for uncategorized schema
   // validation. New categories may be added; never contains upstream data.
   string code = 3;
+  // Optional complete declared target for a known reference-resolution failure.
+  // Never contains provider observations or identity inferred from error text.
+  ResourceRef reference = 4;
+  // Declared requested output path. Empty with reference means whole resource.
+  string reference_field = 5;
 }
 
 message ChildAction {

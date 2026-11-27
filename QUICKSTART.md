@@ -158,6 +158,12 @@ before Apply. Address blockers link directly to VM inspection; recheck after
 repair, refresh the preview and renew consent. Blocked checks never admit another
 request or retry VM creation. Accepted-request recovery remains read-only.
 
+For failed references in editor, template or guided previews, use **Inspect
+referenced resource**. It opens the declared dependency in another tab without
+discarding the draft. Check its requested output, repair explicitly, then obtain
+a fresh preview; the link is not existence/readiness evidence or Apply approval.
+CLI preview shows the same dependency and output, including structured JSON.
+
 The wizard's staged ZIP contains one numbered YAML file per resource stage;
 the current stage can also be downloaded alone. Preview/apply files individually
 in order, not as a bulk directory: public deployments have initial and final

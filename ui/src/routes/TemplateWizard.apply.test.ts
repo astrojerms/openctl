@@ -362,7 +362,11 @@ it('shows coded reference paths and remaining diagnostics once without admitting
   const diagnostic = 'Referenced VM cannot be read; inspect provider service health';
   vi.mocked(resources.dryRunApply).mockResolvedValue({
     operation: 'create',
-    fieldErrors: [{ path: 'spec.target.host', code: 'provider_unavailable', message: diagnostic }],
+    fieldErrors: [{
+      path: 'spec.target.host', code: 'provider_unavailable', message: diagnostic,
+      reference: { apiVersion: 'proxmox.openctl.io/v1', kind: 'VirtualMachine', name: 'dependency-vm' },
+      referenceField: 'status.ip',
+    }],
     validationErrors: [`spec.target.host: ${diagnostic}`, 'Other provider precondition failed'],
   });
   await open();
@@ -371,7 +375,62 @@ it('shows coded reference paths and remaining diagnostics once without admitting
   expect(panel.textContent).toContain('provider_unavailable');
   expect(panel.textContent?.split(diagnostic)).toHaveLength(2);
   expect(panel.textContent).toContain('Other provider precondition failed');
+  expect(panel.querySelector('a')?.textContent).toBe('Inspect referenced resource');
+  expect(panel.querySelector('a')?.getAttribute('href')).toBe('#/k/proxmox.openctl.io/v1/VirtualMachine/dependency-vm');
+  expect(panel.textContent).toContain('requested field: status.ip');
   expect(button('Create').disabled).toBe(true);
   expect(resources.apply).not.toHaveBeenCalled();
   expect(entries.size).toBe(0);
+});
+
+it('renders whole-resource and hostile reference diagnostics as text, leaving partial and legacy targets unlinked', async () => {
+  const hostile = '<img src=x onerror=alert(1)>';
+  const reference = { apiVersion: 'proxmox.openctl.io/v1', kind: 'VirtualMachine', name: hostile };
+  vi.mocked(resources.dryRunApply).mockResolvedValue(JSON.parse(JSON.stringify({
+    operation: 'create',
+    fieldErrors: [
+      { path: 'spec.target.host', code: 'reference_resource_unavailable', message: hostile, reference },
+      { path: hostile, code: hostile, message: 'Requested output unavailable', reference, referenceField: hostile },
+      { path: 'spec.image', message: 'Partial dependency metadata', reference: { kind: 'Image', name: 'approved' }, referenceField: 'status.image' },
+      { path: 'spec.password', message: 'Legacy diagnostic without a structured dependency' },
+    ],
+  })));
+  await open();
+  const panel = target.querySelector('[aria-label="Preview validation errors"]')!;
+  const links = [...panel.querySelectorAll('a')];
+  expect(links).toHaveLength(2);
+  expect(links.every((link) => link.textContent === 'Inspect referenced resource')).toBe(true);
+  expect(links[0].getAttribute('href')).toBe('#/k/proxmox.openctl.io/v1/VirtualMachine/%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E');
+  expect(panel.textContent).toContain(`VirtualMachine/${hostile}`);
+  expect(panel.textContent).toContain(`requested field: ${hostile}`);
+  expect(panel.textContent).toContain('whole resource');
+  expect(panel.textContent).toContain('Partial dependency metadata');
+  expect(panel.textContent).toContain('Legacy diagnostic without a structured dependency');
+  expect(panel.querySelector('img, script, svg, [onerror], [onload]')).toBeNull();
+  expect(button('Create').disabled).toBe(true);
+  button('Create').click();
+  await settle();
+  expect(resources.apply).not.toHaveBeenCalled();
+  expect(fetch).not.toHaveBeenCalled();
+  expect(entries.size).toBe(0);
+});
+
+it.each(['parameters', 'template', 'session'])('forgets dependency diagnostics when the template %s changes', async (change) => {
+  vi.mocked(resources.dryRunApply).mockResolvedValue({
+    operation: 'create',
+    fieldErrors: [{
+      path: 'spec.target.host', message: 'Stale template dependency',
+      reference: { apiVersion: 'proxmox.openctl.io/v1', kind: 'VirtualMachine', name: 'dependency-vm' },
+      referenceField: 'status.ip',
+    }],
+  });
+  await open();
+  expect(target.querySelector('[aria-label="Preview validation errors"] a')).not.toBeNull();
+  if (change === 'parameters') setParam('name', 'fresh-machine');
+  if (change === 'template') selection.set('other-template');
+  if (change === 'session') auth.set({ kind: 'signed-out' });
+  await settle();
+  expect(target.querySelector('[aria-label="Preview validation errors"]')).toBeNull();
+  expect(target.textContent).not.toContain('Stale template dependency');
+  expect(resources.apply).not.toHaveBeenCalled();
 });

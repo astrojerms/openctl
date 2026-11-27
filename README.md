@@ -1249,6 +1249,16 @@ new or absent codes. Reference failures in previews and operation errors never
 forward raw upstream error text, HTTP bodies, credential-bearing URLs or
 certificate fields; wrapped causes remain available internally for classification.
 
+Known, complete reference failures also include optional
+`fieldErrors[].reference` (`apiVersion`, `kind`, `name`) and `referenceField`.
+An empty field with a reference requests the whole resource. Editor, template
+and guided preview diagnostics offer **Inspect referenced resource** in a
+separate tab, preserving the current draft and preview. These are declared
+targets, not proof of existence, ownership or readiness; inspection never
+replays Apply. Missing, malformed or unsupported metadata does not invent a link.
+CLI preview tables show the same target/output, JSON preserves the structured
+fields, and invalid previews still exit nonzero. Older diagnostics remain usable.
+
 Preview diagnostics are transient inspection data, not saved recovery evidence.
 Reloading restores only the declaration and existing request identity; a fresh
 review must fetch current diagnostics and authority again.

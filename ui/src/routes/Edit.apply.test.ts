@@ -435,3 +435,119 @@ describe('recoverable editor Apply', () => {
     expect(parseYAML(editor().value).doc).toEqual(baseline);
   });
 });
+
+describe('reference diagnostic inspection', () => {
+  const reference = { apiVersion: 'proxmox.openctl.io/v1', kind: 'VirtualMachine', name: 'guest #1' };
+
+  it('links only the declared dependency and requested output, deduplicates plain errors, and never admits blocked work', async () => {
+    const message = 'The requested guest address is unavailable';
+    vi.mocked(resources.dryRunApply).mockResolvedValue({
+      operation: 'create',
+      fieldErrors: [{ path: 'spec.target.host', code: 'reference_field_unavailable', message, reference, referenceField: 'status.ip' }],
+      validationErrors: [`spec.target.host: ${message}`, message, 'Other preview precondition failed'],
+    });
+    await open();
+    await edit(desired);
+    await preview();
+    const panel = target.querySelector('[aria-label="Preview validation errors"]')!;
+    const link = panel.querySelector('a')!;
+    expect(link.textContent).toBe('Inspect referenced resource');
+    expect(link.getAttribute('href')).toBe('#/k/proxmox.openctl.io/v1/VirtualMachine/guest%20%231');
+    expect(link.getAttribute('target')).toBe('_blank');
+    expect(link.getAttribute('rel')).toContain('noopener');
+    expect(panel.textContent).toContain('VirtualMachine/guest #1');
+    expect(panel.textContent).toContain('requested field: status.ip');
+    expect(panel.textContent).toContain('spec.target.host');
+    expect(panel.textContent).toContain('[reference_field_unavailable]');
+    expect(panel.textContent?.split(message)).toHaveLength(2);
+    expect(panel.textContent).toContain('Other preview precondition failed');
+    expect(button('Create').disabled).toBe(true);
+    button('Create').click();
+    await settle();
+    expect(resources.apply).not.toHaveBeenCalled();
+    expect(resources.get).not.toHaveBeenCalled();
+    expect(router.navigate).not.toHaveBeenCalled();
+    expect(sessionStorage.length).toBe(0);
+  });
+
+  it('shows whole-resource field-only failures and keeps inline form highlighting', async () => {
+    vi.mocked(schemas.getForm).mockResolvedValue({ json: JSON.stringify({
+      type: 'object', fields: [
+        { name: 'apiVersion', type: 'string' }, { name: 'kind', type: 'string' },
+        { name: 'metadata', type: 'object', fields: [{ name: 'name', type: 'string' }] },
+        { name: 'spec', type: 'object', fields: [{ name: 'image', type: 'string' }] },
+      ],
+    }) });
+    vi.mocked(resources.dryRunApply).mockResolvedValue({
+      operation: 'create',
+      fieldErrors: [{ path: 'spec.image', code: 'reference_resource_unavailable', message: 'Image dependency unavailable', reference }],
+    });
+    await open();
+    await edit({ apiVersion: createRoute.apiVersion, kind: createRoute.kind, metadata: { name: 'blocked-machine' }, spec: { image: 'approved' } });
+    await preview();
+    button('Form').click();
+    await settle();
+    expect(target.querySelector('.row-error')?.textContent).toContain('[reference_resource_unavailable] Image dependency unavailable');
+    const panel = target.querySelector('[aria-label="Preview validation errors"]')!;
+    expect(panel.textContent).toContain('whole resource');
+    expect(panel.textContent).not.toContain('requested field:');
+    expect(panel.querySelector('a')?.getAttribute('href')).toBe('#/k/proxmox.openctl.io/v1/VirtualMachine/guest%20%231');
+    expect(button('Create').disabled).toBe(true);
+    expect(target.querySelector('.preview')).toBeNull();
+    expect(resources.apply).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['absent', undefined], ['null', null], ['empty', {}],
+    ['missing version', { kind: 'VirtualMachine', name: 'guest' }],
+    ['missing kind', { apiVersion: 'proxmox.openctl.io/v1', name: 'guest' }],
+    ['missing name', { apiVersion: 'proxmox.openctl.io/v1', kind: 'VirtualMachine' }],
+    ['empty name', { ...reference, name: '' }],
+    ['whitespace name', { ...reference, name: ' ' }],
+    ['non-string name', { ...reference, name: 7 }],
+    ['invalid version', { ...reference, apiVersion: 'proxmox.openctl.io/v1/extra' }],
+    ['unversioned', { ...reference, apiVersion: 'proxmox.openctl.io' }],
+    ['create route collision', { ...reference, name: 'new' }],
+    ['array', []],
+  ])('keeps %s reference metadata as a plain blocking diagnostic without guessing a target', async (_label, malformed) => {
+    vi.mocked(resources.dryRunApply).mockResolvedValue(JSON.parse(JSON.stringify({
+      operation: 'create',
+      fieldErrors: [{ path: 'spec.target.host', code: 'reference_resource_unavailable', message: 'Inspect VirtualMachine/guest at proxmox.openctl.io/v1', reference: malformed, referenceField: 'status.ip' }],
+    })));
+    await open();
+    const panel = target.querySelector('[aria-label="Preview validation errors"]')!;
+    expect(panel.textContent).toContain('Inspect VirtualMachine/guest at proxmox.openctl.io/v1');
+    expect(panel.querySelector('a')).toBeNull();
+    expect(button('Create').disabled).toBe(true);
+    expect(resources.get).not.toHaveBeenCalled();
+    expect(resources.apply).not.toHaveBeenCalled();
+  });
+
+  it.each([{ referenceField: null }, { referenceField: 7 }, { referenceField: {} }, { referenceField: [] }])('does not reinterpret malformed output metadata $referenceField as a whole-resource reference', async ({ referenceField }) => {
+    vi.mocked(resources.dryRunApply).mockResolvedValue(JSON.parse(JSON.stringify({
+      operation: 'create',
+      fieldErrors: [{ path: 'spec.target.host', message: 'Malformed reference output metadata', reference, referenceField }],
+    })));
+    await open();
+    const panel = target.querySelector('[aria-label="Preview validation errors"]')!;
+    expect(panel.textContent).toContain('Malformed reference output metadata');
+    expect(panel.querySelector('a')).toBeNull();
+    expect(button('Create').disabled).toBe(true);
+    expect(resources.apply).not.toHaveBeenCalled();
+  });
+
+  it.each(['draft', 'route', 'session'])('drops reference diagnostics immediately when the %s changes', async (change) => {
+    vi.mocked(resources.dryRunApply).mockResolvedValue({
+      fieldErrors: [{ path: 'spec.target.host', message: 'Stale dependency evidence', reference, referenceField: 'status.ip' }],
+    });
+    await open();
+    expect(target.querySelector('[aria-label="Preview validation errors"] a')).not.toBeNull();
+    if (change === 'draft') await edit(desired);
+    if (change === 'route') route.set({ ...createRoute, kind: 'OtherMachine' });
+    if (change === 'session') auth.set({ kind: 'signed-out' });
+    await settle();
+    expect(target.querySelector('[aria-label="Preview validation errors"]')).toBeNull();
+    expect(target.textContent).not.toContain('Stale dependency evidence');
+    expect(resources.apply).not.toHaveBeenCalled();
+  });
+});

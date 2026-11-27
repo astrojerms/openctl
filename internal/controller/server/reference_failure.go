@@ -47,5 +47,13 @@ func referenceFieldError(err error) *apiv1.FieldError {
 		// Do not trust formatting of a future, unsupported failure kind.
 		out.Message = fmt.Sprintf("Reference resolution failed at %s. Check the declared reference and controller-side provider configuration.", out.Path)
 	}
+	switch resolution.Kind {
+	case refs.UnavailableResource, refs.UnavailableField, refs.ProviderReadFailed:
+		ref := resolution.Reference
+		if ref.APIVersion != "" && ref.Kind != "" && ref.Name != "" {
+			out.Reference = &apiv1.ResourceRef{ApiVersion: ref.APIVersion, Kind: ref.Kind, Name: ref.Name}
+			out.ReferenceField = ref.Field
+		}
+	}
 	return out
 }

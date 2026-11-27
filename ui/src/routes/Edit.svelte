@@ -19,6 +19,7 @@
   import MonacoDiffEditor from '../components/MonacoDiffEditor.svelte';
   import FormField from '../components/FormField.svelte';
   import ApplyAttemptPanel from '../components/ApplyAttemptPanel.svelte';
+  import FieldDiagnostic from '../components/FieldDiagnostic.svelte';
 
   export let apiVersion: string;
   export let kind: string;
@@ -80,6 +81,8 @@
   let parseError = '';
   let validateErrors: string[] = [];
   let plan: DryRunApplyResponse | null = null;
+  $: previewErrors = validateErrors.filter((problem) =>
+    !(plan?.fieldErrors ?? []).some((field) => problem === field.message || problem === `${field.path}: ${field.message}`));
 
   // Gate checkboxes — keyed by gate string (e.g. "allow_destructive").
   let checkedGates: Record<string, boolean> = {};
@@ -871,13 +874,16 @@
       <p class="err">Cannot refresh form schema: {formSchemaError}</p>
     {/if}
 
-    {#if parseError || validateErrors.length > 0 || Object.keys($formErrorsCtx).length > 0}
-      <article class="diag">
+    {#if parseError || validateErrors.length > 0 || (plan?.fieldErrors?.length ?? 0) > 0 || Object.keys($formErrorsCtx).length > 0}
+      <article class="diag" aria-label="Preview validation errors">
         <h3>Validation</h3>
         {#if parseError}
           <p class="err mono">YAML: {parseError}</p>
         {/if}
-        {#each validateErrors as e}
+        {#each plan?.fieldErrors ?? [] as field}
+          <p class="err mono"><FieldDiagnostic {field} /></p>
+        {/each}
+        {#each previewErrors as e}
           <p class="err mono">{e}</p>
         {/each}
         {#each Object.entries($formErrorsCtx) as [path, error]}
@@ -886,7 +892,7 @@
       </article>
     {/if}
 
-    {#if plan && validateErrors.length === 0 && !parseError}
+    {#if plan && validateErrors.length === 0 && !(plan.fieldErrors?.length) && !parseError}
       {#key plan}
       {@const reviewedPlan = plan}
       {@const previewLoad = activeLoad}

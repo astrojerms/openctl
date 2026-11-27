@@ -304,6 +304,15 @@ unknown categories require inspection, not automatic retry. Codes are optional
 and extensible. Reference diagnostics and persisted reference-resolution errors
 do not forward raw provider errors, response bodies, URLs or certificate fields.
 
+Known reference failures may include `fieldErrors[].reference` with the declared
+`apiVersion`/`kind`/`name` and `referenceField` (empty means whole resource).
+Use **Inspect referenced resource** in editor/template/guided previews; it opens
+a separate tab so unsaved parameters and declarations remain in place. Native
+CLI preview prints the same target/output and JSON fields. Absent, incomplete or
+unsupported metadata does not authorize guessing a target. The link proves no
+existence, ownership, readiness or permission to replay work; obtain a fresh
+preview after explicit repair.
+
 ## 6. Verify and report
 
 - Require a successful terminal operation and then read the resulting resource:
