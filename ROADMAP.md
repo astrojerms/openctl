@@ -457,6 +457,28 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
   unchanged. SQLite/provider audit showed one application Apply, no route/DNS
   operation and no duplicate mutation. No live homelab or hardware acceptance.
 
+**Runtime-verified Jellyfin media readiness (2026-11-27):**
+
+- [x] Media health retains guest CIFS/share/read-only/access checks and now reads
+  actual container mounts rather than trusting Compose intent. `/media` must be
+  a read-only bind of the selected NAS directory, without nested overrides.
+  UID-1000 read/traverse tests target the same inspected full container ID, not
+  a newly resolved service. No media write, remount or restart is performed.
+- [x] Wrong sources, writable/absent bindings, overrides and denied access block
+  readiness; unavailable, incomplete or ambiguous runtime metadata remains unknown.
+  Health output omits raw metadata, container IDs and private probe errors.
+- Verification: regressions first reproduced false-ready writable/wrong-source
+  bindings. The native application-provider package passed, covering binding,
+  subdirectory, permission, identity, malformed evidence and persistence/privacy
+  cases. The actual CLI used viewer access to a native-provider SQLite/TLS
+  controller over verified local SSH with simulated guest responses. Healthy and
+  repaired media exited zero; writable, wrong-source, missing read-only metadata
+  and inaccessible container media retained diagnostics and exited nonzero.
+  Unhealthy resources remained inspectable. Intent/locator fingerprints were
+  unchanged, zero durable operations were admitted, and audit confirmed probes
+  stayed bound to inspected IDs. No guest command execution, live homelab
+  mutation, real NAS/Docker/GPU validation or playback acceptance.
+
 The next product acceptance gate is the complete operator journey on real
 hardware, including recovery, media playback and any approved public endpoint.
 See [direction](docs/direction.md). Provider breadth is downstream of that gate.

@@ -126,8 +126,13 @@ func (p *Provider) observe(ctx context.Context, kind, name string, l locator) *p
 	}
 	allReady = allReady && httpReady
 	if kind == "Jellyfin" {
+		mediaState, mediaMessage := "unknown", "Restore verified guest SSH access to inspect this application dependency"
+		if reachable {
+			mediaState, mediaMessage = p.observeJellyfinMedia(ctx, l)
+		}
+		set("media", mediaState, mediaMessage)
+		allReady = allReady && mediaState == "ready"
 		checksToRun := []struct{ key, command, message string }{
-			{"media", mediaCheck(l) + " && setpriv --reuid=1000 --regid=1000 --clear-groups test -r " + quote(mediaDirectory(l)) + " && setpriv --reuid=1000 --regid=1000 --clear-groups test -x " + quote(mediaDirectory(l)), "Declared read-only CIFS media mount and media directory must be accessible to UID 1000"},
 			{"gpu", "nvidia-smi >/dev/null && docker exec $(" + compose(l) + " ps -q jellyfin) nvidia-smi >/dev/null", "NVIDIA GPU must work in both guest and Jellyfin container"},
 			{"onboarding", "test -f /opt/jellyfin/.openctl-onboarded", "Authenticated onboarding must finish before the application is exposed"},
 		}

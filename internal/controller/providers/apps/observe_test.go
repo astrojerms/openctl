@@ -103,6 +103,9 @@ func TestAttemptedJellyfinDependencyFailuresRemainNotReady(t *testing.T) {
 				if strings.Contains(command, "ps --all") {
 					return `[{"Service":"jellyfin","State":"running","Health":"healthy","ExitCode":0}]`, nil
 				}
+				if strings.Contains(command, ".Mounts") {
+					return healthyMediaInspection, nil
+				}
 				return "", nil
 			})
 			observed := p.observe(context.Background(), r.Kind, r.Metadata.Name, l)
@@ -239,6 +242,9 @@ func TestHealthyJellyfinReadinessStillRequiresClearedReboot(t *testing.T) {
 				}
 				if strings.Contains(command, "ps --all") {
 					return `[{"Service":"jellyfin","State":"running","Health":"healthy"}]`, nil
+				}
+				if strings.Contains(command, ".Mounts") {
+					return healthyMediaInspection, nil
 				}
 				return "", nil
 			})

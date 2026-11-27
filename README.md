@@ -1231,6 +1231,16 @@ openctl ctl apply -f examples/jellyfin/application.cue --values /secure/jellyfin
   are previewed after local readiness; public HTTP is checked independently.
   DNS success alone is not application readiness.
 
+The Jellyfin `media` check verifies the declared read-only CIFS share and UID-1000
+guest access, then inspects the **running container**, not the desired Compose
+file. `/media` must bind the exact selected NAS directory read-only, without
+nested mounts overriding its contents. A read/traverse probe runs as UID 1000
+inside that same inspected container ID. Wrong/writable bindings or denied access
+are **not ready**; unavailable or incomplete runtime metadata is **unknown**.
+Both block readiness. Observation never remounts, restarts or writes media, and
+diagnostics omit raw mount metadata, container IDs and private probe errors.
+This is not a real-file playback test.
+
 For Jellyfin, `publicEndpoint` must return JSON system information (normally
 `https://HOST/System/Info/Public`), completed onboarding and the same server `Id`
 observed locally through verified guest SSH. HTTP 200 alone is insufficient:

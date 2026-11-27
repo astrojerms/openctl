@@ -339,6 +339,14 @@ do not forward raw provider errors, response bodies, URLs or certificate fields.
   the old per-check ready boolean; upgrade structured-output consumers with the
   controller/console. Do not publish, reboot or retry automatically to turn a
   check green.
+- Jellyfin `media` readiness requires the declared read-only CIFS share, the
+  exact selected NAS directory bound read-only at container `/media` with no
+  nested overrides, and read/traverse access as UID 1000 in the same inspected
+  container ID. Unavailable or incomplete runtime metadata is unknown; wrong or
+  writable bindings and denied access are not ready. Inspect before repairing:
+  observation never remounts, restarts or writes media. Raw mount metadata,
+  container IDs and private probe errors are not health output. This is not
+  playback evidence.
 - A Jellyfin public endpoint must return onboarded JSON system information whose
   server ID matches the fresh local observation over verified guest SSH. HTTP
   200 from a login portal or another instance is not readiness; missing guest

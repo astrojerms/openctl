@@ -60,6 +60,9 @@ func TestObservedJellyfinPublicIdentityGatesReadinessWithoutPersistence(t *testi
 				if command == "test -e /var/run/reboot-required" {
 					return "", errors.New("absent")
 				}
+				if strings.Contains(command, ".Mounts") {
+					return healthyMediaInspection, nil
+				}
 				return "", nil
 			})
 			observed, err := p.Get(context.Background(), r.Kind, r.Metadata.Name)

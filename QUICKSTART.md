@@ -135,6 +135,13 @@ same tab; explicitly resume to observe accepted work, then refresh previews and
 confirmations before any new attempt. Its GPU driver reboot is explicit; there
 is no automatic VM recreation. Use `openctl ctl preview -f resource.yaml` before
 CLI Apply; previews distinguish metadata edits from spec edits and live drift.
+
+Jellyfin media readiness checks both the guest's protected NAS mount and the
+running container's exact read-only `/media` binding and UID-1000 access.
+Wrong sources, writable/overridden mounts and unreadable directories block
+readiness; missing runtime evidence is unknown. Inspection never repairs mounts
+or restarts containers automatically.
+
 Application checks distinguish **Ready**, **Not ready**, **Unknown** and
 **Not configured**. Guest access failure leaves skipped dependent checks unknown,
 not falsely failed; an absent optional public endpoint is neutral. Required
