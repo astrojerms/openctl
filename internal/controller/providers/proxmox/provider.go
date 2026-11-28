@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/crypto/ssh/knownhosts"
+
 	"github.com/openctl/openctl/internal/controller/provideridentity"
 	"github.com/openctl/openctl/internal/controller/providers"
 	"github.com/openctl/openctl/pkg/protocol"
@@ -169,15 +171,14 @@ func (p *Provider) DriftSpecs(kind string, desired, observed map[string]any) (ma
 	return desired, observed
 }
 
-// Actions implements providers.Actioner. VirtualMachine supports the
-// standard power-lifecycle set plus "console" (opens Proxmox noVNC in
-// a new tab); ProxmoxNode has no runtime actions.
+// Actions implements providers.Actioner. VirtualMachine supports power lifecycle,
+// console access, and verified guest SSH host-key inspection; ProxmoxNode has none.
 func (p *Provider) Actions(kind string) []string {
 	if kind != kindVM {
 		return nil
 	}
 	// Ordering matters for the UI — buttons render in this order.
-	return []string{"start", "shutdown", "stop", "reboot", "console"}
+	return []string{"start", "shutdown", "stop", "reboot", "console", "ssh-host-keys"}
 }
 
 // ActionSpecs describes VM runtime actions; ProxmoxNode has none.
@@ -211,6 +212,11 @@ func (*Provider) ActionSpecs(kind string) []providers.ActionSpec {
 			Label:       "Open VM console",
 			Description: "Open the VM's Proxmox noVNC console URL. Requires an existing Proxmox web login; does not change VM power state.",
 		},
+		{
+			Name:        "ssh-host-keys",
+			Label:       "Download verified SSH host keys",
+			Description: "Run a fixed read-only guest-agent inspection through already TLS-verified Proxmox to download the existing Ed25519 SSH host public key for the VM's fresh, unique configured-MAC IPv4 address on port 22. Requires a running QEMU guest agent and guest-agent execution access (VM.Monitor on Proxmox 8). No SSH or network TOFU, VM/config/key mutation, or automatic trust installation.",
+		},
 	}
 }
 
@@ -222,6 +228,9 @@ func (*Provider) ActionSpecs(kind string) []providers.ActionSpec {
 func (p *Provider) DoAction(ctx context.Context, kind, name, action string) (*providers.ActionResult, error) {
 	if kind != kindVM {
 		return nil, fmt.Errorf("no actions for kind %q", kind)
+	}
+	if action == "ssh-host-keys" {
+		return p.downloadSSHHostKeys(ctx, name)
 	}
 	h, vm, id, err := p.boundVM(ctx, name)
 	if err != nil {
@@ -280,6 +289,70 @@ func (p *Provider) DoAction(ctx context.Context, kind, name, action string) (*pr
 	default:
 		return nil, fmt.Errorf("unknown action %q", action)
 	}
+}
+
+// downloadSSHHostKeys fences the read with immutable binding and fresh,
+// configured-MAC address checks. No name-only legacy action fallback is allowed.
+func (p *Provider) downloadSSHHostKeys(ctx context.Context, name string) (*providers.ActionResult, error) {
+	fail := func(reason string) (*providers.ActionResult, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("SSH host key inspection: %s: %w", reason, err)
+		}
+		return nil, fmt.Errorf("SSH host key inspection: %s; requires the recorded immutable VM identity, a running QEMU guest agent, and Proxmox VM audit and guest-agent execution access (VM.Monitor on Proxmox 8, VM.GuestAgent.Unrestricted on newer versions)", reason)
+	}
+	if p.identities == nil {
+		return fail("VM has no recorded management identity; adopt it first")
+	}
+	h, vm, id, err := p.boundVM(ctx, name)
+	if err != nil {
+		return fail("cannot verify the recorded VM; unavailable or replaced instances are not trusted")
+	}
+	if id == nil {
+		return fail("VM has no recorded management identity; adopt it first")
+	}
+	binding := *id
+	if h.Config().InsecureSkipVerify {
+		return fail("certificate-verified Proxmox HTTPS is required")
+	}
+	client := h.Client()
+	address := func() (string, error) {
+		cfg, err := client.GetVMConfig(ctx, binding.Node, binding.VMID)
+		if err != nil {
+			return "", err
+		}
+		actual, err := vmIdentity(vm, cfg.Raw)
+		if err != nil || actual != binding.Identity {
+			return "", fmt.Errorf("VM identity changed")
+		}
+		ip, err := client.GetVMIPAddress(ctx, binding.Node, binding.VMID, cfg)
+		if err != nil {
+			return "", err
+		}
+		_, currentVM, current, err := p.boundVM(ctx, name)
+		if err != nil || current == nil || *current != binding || currentVM.Status != "running" {
+			return "", fmt.Errorf("VM identity or running state changed")
+		}
+		return ip, nil
+	}
+	if vm.Status != "running" {
+		return fail("the bound VM must be running")
+	}
+	before, err := address()
+	if err != nil {
+		return fail("cannot verify the VM identity and a fresh unique configured-MAC guest IPv4 address")
+	}
+	key, err := client.GetVMSSHHostKey(ctx, binding.Node, binding.VMID)
+	if err != nil {
+		return nil, err // The native inspection method only returns safe diagnostics.
+	}
+	after, err := address()
+	if err != nil || after != before {
+		return fail("VM identity or fresh unique configured-MAC guest IPv4 address changed during inspection; no trust was emitted")
+	}
+	return &providers.ActionResult{
+		DownloadFilename: name + ".known_hosts",
+		DownloadContent:  knownhosts.Line([]string{knownhosts.Normalize(before + ":22")}, key) + "\n",
+	}, nil
 }
 
 // Apply creates a missing VM or resizes an existing VM's CPU, memory, and disks,

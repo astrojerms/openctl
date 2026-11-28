@@ -1,5 +1,5 @@
 import { ApiError, operations, ping, resources, schemas, session, UnauthorizedError, type ApplyRequest, type DryRunApplyResponse, type GetResourceResponse, type Operation, type RequestOptions, type Resource } from './api';
-import { APP_API, VM_API, type DeploymentStep } from './jellyfin';
+import { APP_API, VM_API, REVIEW_KEYS, type DeploymentProfile, type DeploymentStep } from './deployment';
 import { withoutRequestConsent } from './retry';
 import { watchOperations, type OperationEvent } from './watch';
 import { applicationChecks, applicationReadiness } from './detailState';
@@ -7,7 +7,6 @@ import type { AppCheck } from './detailState';
 import type { ResourceRef } from './api';
 import { guestAddressObservation } from './guestAddress';
 
-export const REVIEW_KEY = 'openctl.jellyfinReview';
 export const MAX_REVIEW_BYTES = 128 * 1024;
 type ReviewStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 export interface ReviewBinding { controllerId: string; userId: string }
@@ -20,6 +19,7 @@ interface Attempt {
 }
 export interface SavedReview {
   version: 1;
+  profile: DeploymentProfile;
   binding: ReviewBinding;
   cursor: number;
   steps: (DeploymentStep & { attempt?: Attempt })[];
@@ -112,15 +112,18 @@ function safeJSON(value: unknown, depth = 0): void {
     safeJSON(entry, depth + 1);
   }
 }
-function validateSaved(value: unknown, binding: ReviewBinding): SavedReview {
+function validateSaved(value: unknown, binding: ReviewBinding, profile: DeploymentProfile): SavedReview {
   if (!object(value) || value.version !== 1 || !object(value.binding)
     || !text(value.binding.controllerId) || !text(value.binding.userId)
     || !sameBinding(value.binding as unknown as ReviewBinding, binding)) {
     throw new Error('This saved review has an unsupported version or belongs to a different controller or signed-in user. Discard it to start a new review.');
   }
+  if ((profile !== 'jellyfin' && profile !== 'compose') || (value.profile !== profile && !(profile === 'jellyfin' && value.profile === undefined))) {
+    throw new Error('This saved review belongs to a different or unsupported deployment profile. Discard it in its original flow; no work was submitted.');
+  }
   if (!Array.isArray(value.steps) || value.steps.length < 1 || value.steps.length > 5
     || !Number.isInteger(value.cursor) || (value.cursor as number) < 0 || (value.cursor as number) >= value.steps.length
-    || Object.keys(value).some((key) => !['version', 'binding', 'cursor', 'steps'].includes(key))) {
+    || Object.keys(value).some((key) => !['version', 'profile', 'binding', 'cursor', 'steps'].includes(key))) {
     throw new Error('The saved review is malformed. Discard it and prepare the declarations again.');
   }
   safeJSON(value);
@@ -146,30 +149,31 @@ function validateSaved(value: unknown, binding: ReviewBinding): SavedReview {
     return { ...entry, resource: desired(entry.resource as unknown as Resource) } as unknown as SavedReview['steps'][number];
   });
   const offset = steps[0].resource.kind === 'VirtualMachine' ? 1 : 0;
-  const expected = offset ? [`${VM_API}/VirtualMachine`, `${APP_API}/Jellyfin`] : [`${APP_API}/Jellyfin`];
-  if (steps.length > expected.length) expected.push('cloudflare.openctl.io/v1/TunnelRoute', 'cloudflare.openctl.io/v1/DNSRecord', `${APP_API}/Jellyfin`);
+  const appKind = profile === 'jellyfin' ? 'Jellyfin' : 'ComposeApplication';
+  const expected = offset ? [`${VM_API}/VirtualMachine`, `${APP_API}/${appKind}`] : [`${APP_API}/${appKind}`];
+  if (profile === 'jellyfin' && steps.length > expected.length) expected.push('cloudflare.openctl.io/v1/TunnelRoute', 'cloudflare.openctl.io/v1/DNSRecord', `${APP_API}/Jellyfin`);
   if (steps.length !== expected.length || steps.some((step, i) => `${step.resource.apiVersion}/${step.resource.kind}` !== expected[i]
     || step.createOnly !== (i !== steps.length - 1 || steps.length === offset + 1))) {
-    throw new Error('The saved review is not a supported Jellyfin deployment sequence.');
+    throw new Error(`The saved review is not a supported ${profile} deployment sequence.`);
   }
   const app = steps[offset].resource;
   if (steps.length > offset + 1 && !sameTarget(app, steps[steps.length - 1].resource)) throw new Error('Saved application identities do not match.');
   if (steps.some((step, i) => i < (value.cursor as number) && !step.attempt)
     || steps.some((step, i) => i > (value.cursor as number) && step.attempt)) throw new Error('The saved review cursor does not match its requests.');
-  return { version: 1, binding: { controllerId: binding.controllerId, userId: binding.userId }, cursor: value.cursor as number, steps };
+  return { version: 1, profile, binding: { controllerId: binding.controllerId, userId: binding.userId }, cursor: value.cursor as number, steps };
 }
-export function createSavedReview(binding: ReviewBinding, steps: DeploymentStep[]): SavedReview {
-  return validateSaved({ version: 1, binding, cursor: 0, steps: steps.map((step) => ({ ...step, resource: desired(step.resource) })) }, binding);
+export function createSavedReview(profile: DeploymentProfile, binding: ReviewBinding, steps: DeploymentStep[]): SavedReview {
+  return validateSaved({ version: 1, profile, binding, cursor: 0, steps: steps.map((step) => ({ ...step, resource: desired(step.resource) })) }, binding, profile);
 }
-export function readSavedReview(storage: ReviewStorage, binding: ReviewBinding): SavedReview | null {
-  const raw = storage.getItem(REVIEW_KEY);
+export function readSavedReview(profile: DeploymentProfile, storage: ReviewStorage, binding: ReviewBinding): SavedReview | null {
+  const raw = storage.getItem(REVIEW_KEYS[profile]);
   if (raw === null) return null;
   if (new TextEncoder().encode(raw).byteLength > MAX_REVIEW_BYTES) throw new Error('The saved review is too large. Discard it before starting again.');
   let value: unknown;
   try { value = JSON.parse(raw); } catch { throw new Error('The saved review is unreadable. Discard it before starting again.'); }
-  return validateSaved(value, binding);
+  return validateSaved(value, binding, profile);
 }
-export function discardSavedReview(storage: ReviewStorage): void { storage.removeItem(REVIEW_KEY); }
+export function discardSavedReview(profile: DeploymentProfile, storage: ReviewStorage): void { storage.removeItem(REVIEW_KEYS[profile]); }
 export function reviewError(error: unknown): string {
   if (error instanceof ApiError && (error.status === 400 || error.status === 409)) return 'The controller rejected this recovery request. Operation history may have expired or the current intent may conflict. Inspect the original operation and existing resources before preparing a new review. No replacement Apply was submitted.';
   if (error instanceof ApiError) return `Controller request failed (HTTP ${error.status}). Recovery is blocked; restore access and look up the saved request again. No replacement Apply was submitted.`;
@@ -206,10 +210,10 @@ export class DeploymentReview {
   private plannedCreateOnly = true;
   private watcher: AbortController | null = null;
   private disposed = false;
-  constructor(private storage: ReviewStorage, saved: SavedReview, private options: {
+  constructor(private profile: DeploymentProfile, private storage: ReviewStorage, saved: SavedReview, private options: {
     canApply: () => boolean; changed?: (state: ReviewState) => void; api?: ReviewAPI;
   }) {
-    this.state = { saved: validateSaved(saved, saved.binding), operation: null, preview: null, observed: null, blocker: null, verified: false };
+    this.state = { saved: validateSaved(saved, saved.binding, profile), operation: null, preview: null, observed: null, blocker: null, verified: false };
   }
   private get api(): ReviewAPI { return this.options.api ?? defaultAPI; }
   private get step() { return this.state.saved.steps[this.state.saved.cursor]; }
@@ -236,7 +240,7 @@ export class DeploymentReview {
     this.ensureActive();
     const raw = JSON.stringify(saved);
     if (new TextEncoder().encode(raw).byteLength > MAX_REVIEW_BYTES) throw new Error('This review exceeds browser recovery storage limits. Download the manifests. Further submissions are blocked; accepted controller work is not canceled.');
-    try { this.storage.setItem(REVIEW_KEY, raw); } catch {
+    try { this.storage.setItem(REVIEW_KEYS[this.profile], raw); } catch {
       throw new Error('Cannot save this tab’s recovery record. Further submissions are blocked. Download the manifests and free session storage before looking up the saved request again. Existing controller work may still be running and is not canceled.');
     }
     this.state.saved = saved;
@@ -306,7 +310,7 @@ export class DeploymentReview {
   }
   private async verifyGuestAddress(observed: Map<string, Resource>): Promise<void> {
     const resource = this.step.resource;
-    if (resource.apiVersion !== APP_API || resource.kind !== 'Jellyfin') return;
+    if (resource.apiVersion !== APP_API || !['Jellyfin', 'ComposeApplication'].includes(resource.kind)) return;
     const target = resource.spec?.target;
     if (!object(target) || !object(target.host) || !object(target.host.$ref)) return;
     const ref = target.host.$ref;
@@ -396,10 +400,10 @@ export class DeploymentReview {
     } else if (previous || !this.step.createOnly) {
       throw new Error('The previously managed resource is missing. Inspect it before retrying; this review will not silently recreate it.');
     }
-    // A failed first Apply may already own guest files or a VM without a saved
-    // manifest. An explicitly reviewed retry must recover that bound resource,
-    // not require its physical absence. Unknown submissions retain their flags.
-    return { result, createOnly: this.step.attempt && !this.state.operation ? this.step.attempt.createOnly : !result && this.step.createOnly && !failedReviewOperation(this.state.operation) };
+    // Partial work is recoverable only through the provider's ownership guard.
+    // A failed attempt never authorizes turning a first create into an upsert.
+    // Unknown submissions retain their exact original flags.
+    return { result, createOnly: this.step.attempt && !this.state.operation ? this.step.attempt.createOnly : !result && this.step.createOnly };
   }
   async review(): Promise<void> {
     this.invalidate();
@@ -429,7 +433,8 @@ export class DeploymentReview {
     const preview = this.state.preview;
     if (!this.options.canApply()) throw new Error('The running controller authority or your role does not permit Apply. Observation and downloads remain available.');
     if (!preview || !this.state.verified || this.planBaseline === null) throw new Error('Refresh the preview and confirm this review before submitting.');
-    if (!consent.dedicated || !consent.trustedKey || (this.state.saved.steps.some((step) => step.resource.kind === 'TunnelRoute') && !consent.publicExposure)
+    const needsTrustedKey = this.profile === 'jellyfin' || this.step.resource.apiVersion === APP_API;
+    if (!consent.dedicated || (needsTrustedKey && !consent.trustedKey) || (this.state.saved.steps.some((step) => step.resource.kind === 'TunnelRoute') && !consent.publicExposure)
       || (preview.requiredGates ?? []).some((gate) => !consent.gates[gate])) throw new Error('Confirm the dedicated guest, verified SSH host key, public exposure and every required gate again before Apply.');
     const reviewedBaseline = this.planBaseline;
     const reviewedCreateOnly = this.plannedCreateOnly;
@@ -454,6 +459,7 @@ export class DeploymentReview {
     if (old && !known && (flags.createOnly !== old.createOnly || flags.allowDestructive !== old.allowDestructive || flags.iKnowThisBreaksTheCluster !== old.iKnowThisBreaksTheCluster)) {
       throw new Error('This uncertain request can only be retransmitted with its original exact intent and freshly confirmed permissions. Inspect the saved request; no new request ID can be used.');
     }
+    await this.checkBinding();
     const attempt: Attempt = old && !known ? old : { requestId: this.api.requestId(), ...flags };
     if (!requestKey(attempt.requestId)) throw new Error('A secure Apply request identity could not be created. No Apply was submitted.');
     if (!this.options.canApply()) throw new Error('The controller authority or your role changed during review. No new Apply was submitted.');

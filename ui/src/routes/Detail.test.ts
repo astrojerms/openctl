@@ -173,7 +173,7 @@ describe('saved-only detail inspection', () => {
       component = mount(Detail, { target, props });
       await settle();
       button('Reconcile').click();
-      expect(location.hash).toBe('#/k/proxmox.openctl.io/v1/VirtualMachine/saved-vm/edit');
+      expect(location.hash).toBe('#/k/proxmox.openctl.io/v1/VirtualMachine/saved-vm/reconcile');
       expect(apply).not.toHaveBeenCalled();
     } finally {
       location.hash = previousHash;

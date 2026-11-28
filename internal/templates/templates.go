@@ -221,5 +221,7 @@ func Default() *Registry {
 	return NewRegistry(
 		UbuntuServerVM(),
 		SmallK3sCluster(),
+		DockerHostVM(),
+		ComposeApplication(),
 	)
 }

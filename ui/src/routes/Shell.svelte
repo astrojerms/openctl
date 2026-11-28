@@ -25,6 +25,7 @@
   import Settings from './Settings.svelte';
   import Discovery from './Discovery.svelte';
   import JellyfinWizard from './JellyfinWizard.svelte';
+  import ComposeWizard from './ComposeWizard.svelte';
 
   export let me: WhoAmIResponse;
 
@@ -132,6 +133,7 @@
     ></button>
   {/if}
   <aside class:open={sidebarOpen}>
+    <a class="sidebar-link" class:active={$route.name === 'compose'} href={routeHref({ name: 'compose' })}>Deploy application</a>
     <a
       class="sidebar-link"
       class:active={$route.name === 'discover'}
@@ -184,6 +186,8 @@
       <Discovery />
     {:else if $route.name === 'jellyfin'}
       <JellyfinWizard />
+    {:else if $route.name === 'compose'}
+      <ComposeWizard />
     {:else if $route.name === 'settings'}
       <Settings />
     {:else if $route.name === 'list'}
@@ -213,6 +217,7 @@
         apiVersion={$route.apiVersion}
         kind={$route.kind}
         resourceName={$route.resourceName}
+        reconcile={$route.reconcile ?? false}
       />
     {/if}
   </main>

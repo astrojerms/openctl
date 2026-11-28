@@ -36,6 +36,7 @@
       handles the details.
     </p>
   </header>
+  <p><a href={routeHref({ name: 'compose' })}>Deploy application</a> — guided Docker welcome app, with a new Ubuntu guest or an existing managed Docker guest. Review each resource separately.</p>
 
   {#if loading}
     <p class="muted">Loading…</p>

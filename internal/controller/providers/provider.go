@@ -70,6 +70,13 @@ type DriftProjector interface {
 	DriftSpecs(kind string, desired, observed map[string]any) (map[string]any, map[string]any)
 }
 
+// ApplyCachePolicy lets a provider reject verifying-trace cache hits when Get
+// cannot verify every effect of Apply. A drift projection alone is not proof
+// that write-only application configuration still matches the declaration.
+type ApplyCachePolicy interface {
+	CanCacheApply() bool
+}
+
 // DriftSpecs projects desired-versus-live comparison inputs. Manifest editing
 // and dry-run desired-versus-desired diffs must retain the original specs.
 func DriftSpecs(p Provider, kind string, desired, observed map[string]any) (map[string]any, map[string]any) {

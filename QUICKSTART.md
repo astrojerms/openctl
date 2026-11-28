@@ -6,8 +6,8 @@ design rationale, see [DESIGN.md](DESIGN.md).
 
 ## Prerequisites
 
-- Go 1.25+ on the build host.
-- `openssl`, `nmap` (optional, used in troubleshooting recipes below).
+- Go 1.25+, Node.js 22.12+ and npm on the build host.
+- A local systemd user service on Linux, or LaunchAgent on macOS.
 - A Proxmox VE host with a cloud-init enabled template (e.g.
   `tpl-jammy-server-cloudimg-amd64`) and an API token.
 - An SSH key on the build host (`~/.ssh/id_ed25519` or similar) whose public
@@ -16,19 +16,28 @@ design rationale, see [DESIGN.md](DESIGN.md).
 ## Install
 
 ```sh
-make install
+make build-cli build-controller
+mkdir -p ~/.local/bin
+install -m 0755 bin/openctl ~/.local/bin/openctl
+export PATH="$HOME/.local/bin:$PATH"
+./bin/openctl-controller install --local
+openctl ping
 ```
 
-This builds and installs:
+This builds the CLI and controller with its console, then installs the
+controller as a per-user service. No Kubernetes cluster, exec plugins or K3s
+agent binaries are required for native Proxmox and application workflows.
+Keep the CLI and controller from the same build.
 
-- `openctl` → `$GOBIN` or `/usr/local/bin/`
-- `openctl-controller` → `$GOBIN` or `/usr/local/bin/` (Phase 1+ of the
-  controller rollout — see [CONTROLLER.md](CONTROLLER.md))
-- `openctl-proxmox`, `openctl-k3s` → `~/.openctl/plugins/`
-- `openctl-k3s-agent-linux-{amd64,arm64,armv7}` → `~/.openctl/plugins/k3s-agents/`
+Kubernetes agents are opt-in:
 
-The agent binaries live in a subdirectory so their `openctl-*` filenames
-don't get picked up by plugin discovery.
+```sh
+make build-plugin-k3s-agent-linux
+./bin/openctl-controller install --local --with-k3s-agents
+```
+
+Omitting that option does not remove existing installed agents. The broader
+`make install` target still builds/installs optional legacy plugins and agents.
 
 ## Running the controller
 
@@ -41,7 +50,7 @@ Phase 6.
 ### Install as a local service (macOS or Linux)
 
 ```sh
-make build build-plugin-k3s-agent-linux
+make build-cli build-controller
 ./bin/openctl-controller install --local
 ```
 
@@ -53,6 +62,10 @@ remote Linux host, build the matching controller and use:
 make build-controller-linux
 ./bin/openctl-controller install --target ssh://user@controller --ssh-key ~/.ssh/controller
 ```
+
+SSH targets require a preverified server key in `~/.ssh/known_hosts`, or an
+explicit `--ssh-known-hosts PATH`. Unknown/changed keys fail before remote
+commands or uploads; do not use network keyscan as trust establishment.
 
 The SSH user needs passwordless sudo. Provider credentials, guest keys and
 verified host keys must be installed on the **controller host**. Copy its
@@ -93,6 +106,64 @@ Before relying on the controller, practice
 Stop the daemon first; protect the archive like a private key. Restore into new
 paths and review external dependencies before restarting automation.
 
+## Configure
+
+Edit the installed `~/.openctl/config.yaml`; merge this provider block without
+replacing the controller's generated connection, TLS or authentication settings:
+
+```yaml
+defaults:
+  output: table
+  timeout: 300
+
+providers:
+  proxmox:
+    default-context: homelab
+    contexts:
+      homelab:
+        endpoint: https://pve.example.com:8006
+        node: pve1
+        credentials: homelab-creds
+        # Optional private CA, installed on the controller/plugin host:
+        # caFile: /etc/openctl/proxmox-ca.pem
+        # Required only for first-boot cloud-init/bootstrap:
+        snippetSSH:
+          user: root
+          identityFile: ~/.ssh/proxmox-bootstrap
+          hosts:
+            pve1: pve.example.com
+    credentials:
+      homelab-creds:
+        tokenId: root@pam!openctl
+        tokenSecretFile: ~/.openctl/secrets/proxmox.token
+```
+
+Put the API token in the `tokenSecretFile` path (mode `0600`).
+
+New VM bootstraps upload cloud-init snippets over **verified node SSH**, because
+the Proxmox API cannot upload snippets. Enable **Snippets** on the intended
+Proxmox `local` storage without disabling its existing content types. Install
+the configured SSH identity on the controller host and verify the hypervisor's
+host key independently before adding it to that host's `~/.ssh/known_hosts`.
+Never use `StrictHostKeyChecking=no` or trust an unverified `ssh-keyscan` result.
+Existing Docker guests do not require this bootstrap transport.
+
+Proxmox HTTPS certificates and hostnames are verified by default. Obtain private
+CA bundles through a trusted out-of-band channel; `caFile` appends that PEM
+bundle to system roots. The endpoint name/IP must match the certificate. Native
+clients no longer silently skip verification: upgrading self-signed labs must
+configure trust before connecting. Explicit per-context `insecureSkipVerify:
+true` disables certificate/hostname checks for HTTPS only, exposes API tokens to
+impersonation, and cannot be combined with `caFile`. HTTP and API redirects are
+rejected. Restart the controller after saving credential or trust changes.
+
+Use **Discover infrastructure → Test connection** or
+`openctl ctl discover --test --provider-context homelab` before adoption.
+Failures distinguish CA trust, certificate names/validity, rejected credentials,
+missing read permissions and reachability. The CLI exits nonzero, retaining a
+safe failure code and next step in table/JSON/YAML output; inspect these rather
+than disabling verification or granting write access.
+
 ## Connect And Adopt Before Rebuilding
 
 After configuring Proxmox, restart the controller and open **Discover
@@ -131,16 +202,17 @@ provider fails or reports them missing. Use `ctl get KIND NAME --api-version API
 --saved -o yaml` for unresolved desired intent; secret/reference markers remain
 intact. Stored intent is not live health or permission to mutate/recreate.
 
-For a standalone application, open **Deploy Jellyfin**: select/provision a
-dedicated Ubuntu 24.04 NVIDIA VM, supply NAS and secret references, review each
-resource, and inspect independent health. Prepared reviews survive reload in the
-same tab; explicitly resume to observe accepted work, then refresh previews and
-confirmations before any new attempt. Its GPU driver reboot is explicit; there
-is no automatic VM recreation. Use `openctl ctl preview -f resource.yaml` before
-CLI Apply; previews distinguish metadata edits from spec edits and live drift.
+For an ordinary Docker application, open **Deploy application**. Its new-guest
+path installs the supported Docker/Compose toolchain on first boot; existing
+guests are never silently upgraded. No GPU or manually staged bootstrap is
+required. See the first-application walkthrough below.
 
-New VM provisioning exposes CPU cores, RAM in MiB and OS disk in GiB, defaulting
-to 4 / 4096 / 32. Chosen sizes survive review, reload and manifest downloads.
+**Deploy Jellyfin** remains the separate dedicated Ubuntu 24.04 NVIDIA/NAS
+journey. It preserves prepared reviews and explicitly controls the GPU-driver
+reboot; ordinary applications do not need those media-server prerequisites.
+
+The **Jellyfin** new-VM path exposes CPU cores, RAM in MiB and OS disk in GiB,
+defaulting to 4 / 4096 / 32. Chosen sizes survive review, reload and manifest downloads.
 Verify workload/host capacity and the template's existing disk size yourself;
 preview does not reserve capacity. Existing guests are not resized.
 
@@ -215,7 +287,12 @@ Apply and Delete print request IDs before submission;
 `openctl ctl op get --request-id ID` recovers a lost acknowledgement without
 submitting again. Console Apply and Delete attempts survive reload in the same
 tab as identity metadata, not saved credentials or consent. Explicit recovery
-observes the original operation; **Reconcile** opens the editor for fresh review.
+observes the original operation; **Reconcile** opens explicit editor review.
+Unlike ordinary Edit, that mode permits reapplying unchanged stored intent:
+an interrupted rollout may have changed remote state that a no-op preview cannot
+fully observe. Reconciliation still requires a fresh preview, current authority,
+all destructive gates and a new request after a terminal failure; it never
+silently replays the old request.
 Runtime buttons first open a review of the exact target, provider-described
 effect and parameters; no request is sent until explicit Run. Cancel does
 nothing. Runtime actions are not durable Apply requests; inspect uncertain
@@ -224,48 +301,55 @@ For CLI application logs and typed runtime actions, see
 [controller commands](README.md#common-commands). See also
 [managed Jellyfin](README.md#managed-jellyfin-on-proxmox).
 
-## Configure
+## Deploy your first application
 
-Create `~/.openctl/config.yaml`:
+1. Install and connect to the controller above. On a dedicated Linux controller,
+   enable user-service persistence across logout with
+   `sudo loginctl enable-linger "$USER"`. Keep the controller's API listeners
+   loopback-only; use SSH forwarding rather than exposing them publicly.
+2. Configure and **Test connection** for the intended Proxmox context. Prepare
+   a clean **Ubuntu 24.04 amd64 cloud-init template**, snippets-enabled storage
+   and verified bootstrap SSH as described above. The template disk cannot
+   be shrunk by cloning.
+3. Open **Deploy application**, explicitly select the context, node and template
+   VMID, and choose capacity. Ordinary guest defaults are **2 vCPU / 2048 MiB /
+   16 GiB**; the minimum disk is 8 GiB. Supply a guest public key. Enter the
+   matching private-key path and a **new per-guest known_hosts path** on the
+   controller host before preparing the review. Never put key contents in the browser.
+4. Prepare the review. Inspect the rendered `docker-host-vm` declaration and
+   explicitly authorize the VM step. First boot installs Docker CE and
+   checksum-verified **Compose 5.8.1**, without a GPU, NAS, manual Compose upgrade
+   or acceptance-only script. Inspect cloud-init errors rather than treating
+   a running VM as proof that installation finished.
+5. Once the guest is running with a unique agent-observed IPv4, run this command
+   **on the controller host**, using a new destination file:
 
-```yaml
-defaults:
-  output: table
-  timeout: 300
+   ```sh
+   openctl ctl action run VirtualMachine YOUR_VM ssh-host-keys \
+     --api-version proxmox.openctl.io/v1 \
+     --download "$HOME/.ssh/YOUR_VM.known_hosts"
+   ```
 
-providers:
-  proxmox:
-    default-context: homelab
-    contexts:
-      homelab:
-        endpoint: https://pve.example.com:8006
-        node: pve1
-        credentials: homelab-creds
-        # Optional private CA, installed on the controller/plugin host:
-        # caFile: /etc/openctl/proxmox-ca.pem
-    credentials:
-      homelab-creds:
-        tokenId: root@pam!openctl
-        tokenSecretFile: ~/.openctl/secrets/proxmox.token
-```
+   This reads the actual guest Ed25519 host key through the verified Proxmox
+   guest-agent channel, bound to the recorded VM identity and fresh address.
+   It never auto-enrolls trust or weakens SSH checks. Inspect failures; do not
+   substitute a key scan. The private download is mode `0600` and never overwrites.
+6. Select **Preview next resource**. Keep the same controller-host key and
+   known_hosts paths, inspect the rendered `compose-application` step, explicitly
+   confirm trust and authorize Apply. Bootstrap, strict SSH and address checks
+   gate admission. Saved managed Docker guests may skip the
+   VM step; they are never automatically upgraded or resized.
+7. Inspect application readiness; use **Refresh health** if the first container
+   health interval is still settling. **Application readiness checks passed**
+   confirms independent container and HTTP checks. The welcome service binds
+   only to the **guest's loopback**, not the controller's or your laptop's.
+   Use the displayed strict SSH forwarding command to access it.
 
-Put the API token in the `tokenSecretFile` path (mode `0600`).
-
-Proxmox HTTPS certificates and hostnames are verified by default. Obtain private
-CA bundles through a trusted out-of-band channel; `caFile` appends that PEM
-bundle to system roots. The endpoint name/IP must match the certificate. Native
-clients no longer silently skip verification: upgrading self-signed labs must
-configure trust before connecting. Explicit per-context `insecureSkipVerify:
-true` disables certificate/hostname checks for HTTPS only, exposes API tokens to
-impersonation, and cannot be combined with `caFile`. HTTP and API redirects are
-rejected. Restart the controller after saving credential or trust changes.
-
-Use **Discover infrastructure → Test connection** or
-`openctl ctl discover --test --provider-context homelab` before adoption.
-Failures distinguish CA trust, certificate names/validity, rejected credentials,
-missing read permissions and reachability. The CLI exits nonzero, retaining a
-safe failure code and next step in table/JSON/YAML output; inspect these rather
-than disabling verification or granting write access.
+The two templates also appear in **Templates**, and the reviewed declarations
+can be downloaded as YAML or a ZIP. Downloads are not Apply authorization or
+recovery tokens. Reloading requires explicit recovery of the original request;
+it never silently retries. Failure does not delete or roll back the guest.
+Delete the application before deleting its guest when cleaning up.
 
 ## Write a cluster manifest
 

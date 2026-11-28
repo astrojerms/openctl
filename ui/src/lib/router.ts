@@ -26,11 +26,12 @@ export type Route =
   | { name: 'providers' }
   | { name: 'discover' }
   | { name: 'jellyfin' }
+  | { name: 'compose' }
   | { name: 'settings' }
   | { name: 'list'; apiVersion: string; kind: string }
   | { name: 'create'; apiVersion: string; kind: string }
   | { name: 'detail'; apiVersion: string; kind: string; resourceName: string }
-  | { name: 'edit'; apiVersion: string; kind: string; resourceName: string };
+  | { name: 'edit'; apiVersion: string; kind: string; resourceName: string; reconcile?: boolean };
 
 function parse(hash: string): Route {
   const path = hash.replace(/^#/, '').replace(/^\//, '');
@@ -42,6 +43,7 @@ function parse(hash: string): Route {
   if (parts[0] === 'providers' && parts.length === 1) return { name: 'providers' };
   if (parts[0] === 'discover' && parts.length === 1) return { name: 'discover' };
   if (parts[0] === 'apps' && parts[1] === 'jellyfin' && parts.length === 2) return { name: 'jellyfin' };
+  if (parts[0] === 'apps' && parts[1] === 'compose' && parts.length === 2) return { name: 'compose' };
   if (parts[0] === 'settings' && parts.length === 1) return { name: 'settings' };
   // ['k', '<encoded-apiVersion-half-1>', '<encoded-apiVersion-half-2>', '<kind>', '<name>?', 'edit'?]
   if (parts[0] === 'k' && parts.length >= 4) {
@@ -56,6 +58,9 @@ function parse(hash: string): Route {
     if (parts.length === 6 && parts[5] === 'edit') {
       return { name: 'edit', apiVersion, kind, resourceName: parts[4] };
     }
+    if (parts.length === 6 && parts[5] === 'reconcile') {
+      return { name: 'edit', apiVersion, kind, resourceName: parts[4], reconcile: true };
+    }
   }
   return { name: 'home' };
 }
@@ -67,6 +72,7 @@ export function routeHref(route: Route): string {
   if (route.name === 'providers') return '#/providers';
   if (route.name === 'discover') return '#/discover';
   if (route.name === 'jellyfin') return '#/apps/jellyfin';
+  if (route.name === 'compose') return '#/apps/compose';
   if (route.name === 'settings') return '#/settings';
   const [g, v] = route.apiVersion.split('/');
   const base = `#/k/${encodeURIComponent(g)}/${encodeURIComponent(v)}/${encodeURIComponent(route.kind)}`;
@@ -75,7 +81,7 @@ export function routeHref(route: Route): string {
   const detail = `${base}/${encodeURIComponent(route.resourceName)}`;
   if (route.name === 'detail') return detail;
   // edit
-  return `${detail}/edit`;
+  return `${detail}/${route.reconcile ? 'reconcile' : 'edit'}`;
 }
 
 export const route: Writable<Route> = writable(parse(location.hash));

@@ -231,3 +231,71 @@ throwaway installer/download tools, retained private evidence archives, and
 took a fresh post-cleanup offline backup before resuming the installed
 controller. Earlier acceptance snapshots remain historical, not permission to
 recreate or replay their now-deleted fixtures.
+
+## First-operator and interruption acceptance
+
+**2026-11-28.** Kept the same one-guest approval: one vCPU, 1024 MiB RAM,
+8 GiB disk, DHCP, no GPU and no public endpoint. Existing workloads were not
+available for destructive testing.
+
+- The real **Deploy application** console rendered the shipped `docker-host-vm`
+  and `compose-application` templates, explicitly reviewed each resource, created
+  the guest and deployed a digest-pinned welcome app. No acceptance-only guest
+  bootstrap or manual Compose upgrade was used. Cloud-init finished with no
+  bootstrap errors; its existing deprecated string-user warning remained visible.
+  Docker CE and the exact Compose 5.8.1 publisher checksum were verified in the guest.
+- The native `ssh-host-keys` action downloaded the actual guest Ed25519 key
+  through verified Proxmox HTTPS/QGA, not a network keyscan. Real QGA output
+  omitted its optional false truncation flag; accepting that valid wire contract
+  fixed the hardware-found failure without weakening key, output or identity
+  validation. Strict SSH worked with the exclusive mode-0600 download.
+- To respect the one-VM limit, clean-install proof was a separate segment on the
+  same guest: only the CLI/controller binaries were staged, with no K3s agent
+  payloads or prior controller database. Native local installation started
+  successfully with both API listeners loopback-only. Documented provider config,
+  the verified Proxmox CA and the actual console connection test succeeded.
+- Native export/release/adoption exclusively handed the same physical guest to
+  that independent controller while the original controller was stopped.
+  It independently downloaded verified guest trust and deployed the welcome app
+  through the real existing-guest console path. Actual HTTP returned the selected
+  greeting on guest loopback only. This is two linked proof segments, not a claim
+  that a second guest was created by the guest-hosted controller.
+- The downloaded console ZIP contained both VM/application YAML declarations
+  and retained the raw VM reference. Application success required independent
+  container and HTTP readiness, not merely a successful operation.
+- A standard bounded Compose `post_start` hook proved a rollout was running
+  before killing only the disposable controller's main process. Automatic service
+  restart recovered that exact request and operation as `interrupted`, preserved
+  its raw VM reference, and created no replacement request. The container had
+  actually changed, so interruption did not imply rollback or absence of effects.
+- The drill found two real recovery failures: unchanged intent disabled console
+  Reconcile, and an application cache hit mistook placement/readiness for proof
+  of private Compose contents. Explicit reconciliation now permits that reviewed
+  reapply without a meaningless edit. Native apps opt out of the verifying-trace
+  cache because their Get cannot prove those write-only inputs. A new console
+  request actually restored the original HTTP greeting; the interrupted request
+  retained its identity, and the raw VM reference stayed intact.
+- Reviewed native console Stop made both application and HTTP checks `not_ready`
+  while the VM check stayed `ready`. Reviewed Start restored independent
+  readiness and the original greeting without another Apply.
+- The final test environment uses jsdom for Svelte's real option-selection
+  semantics and actual Node Blob APIs for download tests. The full 626-test UI
+  run passed; after the recovery fix, all 111 affected UI tests passed again.
+  Svelte check reported no errors/warnings. Production UI/controller builds and
+  affected race-enabled Go tests passed, including the full operations/apps
+  packages and a partial-rollout regression. The existing Vite large-chunk
+  warning remains.
+- Native cleanup removed the app, exclusively handed the guest back and deleted
+  its VM/disks. Only its unchanged, now-unreferenced bootstrap snippet was
+  removed. Physical checks found the sandbox absent and both protected guests
+  running; saved inventory returned to its original two declarations. Stopped
+  fresh-controller and post-cleanup original-controller backups were retained
+  privately, the original service resumed successfully, and task-only keys,
+  tokens, inputs, downloads, browser tabs and SSH forwarding were removed.
+
+**Approval-gated release limit:** fresh NVIDIA/Jellyfin provisioning and onboarding
+remain unverified. The available NVIDIA device was assigned to the running
+Jellyfin workload; the operator explicitly selected **preserve live**. No GPU was
+released or reassigned. Another node's Intel iGPU is not a substitute for NVIDIA
+acceptance. This run does not certify host-power-loss, NAS interruption, public
+exposure or Kubernetes lifecycle recovery.

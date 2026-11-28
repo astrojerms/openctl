@@ -8,7 +8,7 @@ import { discovery, inventoryApi, operations, ping, resources, schemas, session,
 import type * as ControllerAPI from '../lib/api';
 import { auth } from '../lib/auth';
 import { recordAuthority, resetAuthority } from '../lib/authority';
-import { REVIEW_KEY } from '../lib/deploymentReview';
+import { REVIEW_KEYS } from '../lib/deployment';
 
 // DeploymentReview captures these functions at module initialization.
 vi.mock('../lib/api', async (importOriginal) => {
@@ -26,7 +26,7 @@ let host: HTMLDivElement;
 const saved = (name: string) => ({ apiVersion: 'proxmox.openctl.io/v1', kind: 'VirtualMachine', metadata: { name } });
 beforeEach(() => {
   host = document.createElement('div'); document.body.append(host);
-  window.sessionStorage.removeItem(REVIEW_KEY);
+  window.sessionStorage.removeItem(REVIEW_KEYS.jellyfin);
   auth.set({ kind: 'signed-in', me: { userId: 'operator', sessionId: 'session', principalId: 'operator', role: 'admin' } });
   recordAuthority('mirror');
   vi.spyOn(inventoryApi, 'list').mockResolvedValue({ resources: [saved('offline-gpu')] });
@@ -44,7 +44,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   if (component) await unmount(component); component = undefined;
-  host.remove(); window.sessionStorage.removeItem(REVIEW_KEY);
+  host.remove(); window.sessionStorage.removeItem(REVIEW_KEYS.jellyfin);
   resetAuthority(); auth.set({ kind: 'unknown' }); vi.restoreAllMocks(); vi.unstubAllGlobals();
 });
 async function settle() { for (let i = 0; i < 7; i++) { await Promise.resolve(); await tick(); } }
@@ -71,7 +71,7 @@ describe('saved metadata guest selection', () => {
     expect(resources.list).not.toHaveBeenCalled();
     expect(resources.get).not.toHaveBeenCalled();
     expect(resources.apply).not.toHaveBeenCalled();
-    expect(window.sessionStorage.getItem(REVIEW_KEY)).toBeNull();
+    expect(window.sessionStorage.getItem(REVIEW_KEYS.jellyfin)).toBeNull();
   });
 
   it('does not wait for active-context discovery before showing saved VM choices', async () => {
@@ -200,7 +200,7 @@ describe('visible blocked deployment diagnostics', () => {
     expect(button('Apply reviewed step').disabled).toBe(true);
     expect(host.querySelectorAll('input[type="checkbox"]')).toHaveLength(0);
     expect(resources.apply).not.toHaveBeenCalled();
-    expect(JSON.parse(window.sessionStorage.getItem(REVIEW_KEY)!).steps[0].attempt).toBeUndefined();
+    expect(JSON.parse(window.sessionStorage.getItem(REVIEW_KEYS.jellyfin)!).steps[0].attempt).toBeUndefined();
   });
 
   it('shows schema failures before provider preview without making them saved recovery evidence', async () => {
@@ -209,7 +209,7 @@ describe('visible blocked deployment diagnostics', () => {
     expect(host.querySelector('[aria-label="Preview validation errors"]')?.textContent).toContain('spec.template');
     expect(resources.dryRunApply).not.toHaveBeenCalled();
     expect(button('Apply reviewed step').disabled).toBe(true);
-    expect(window.sessionStorage.getItem(REVIEW_KEY)).not.toContain('template VMID is invalid');
+    expect(window.sessionStorage.getItem(REVIEW_KEYS.jellyfin)).not.toContain('template VMID is invalid');
     expect(resources.apply).not.toHaveBeenCalled();
   });
 
@@ -225,8 +225,8 @@ describe('visible blocked deployment diagnostics', () => {
     await prepareVMReview();
     expect(host.querySelector('[aria-label="Preview validation errors"]')).not.toBeNull();
     expect(host.querySelector('[aria-label="Preview validation errors"] a')).not.toBeNull();
-    expect(window.sessionStorage.getItem(REVIEW_KEY)).not.toContain('dependency-vm');
-    expect(window.sessionStorage.getItem(REVIEW_KEY)).not.toContain('Guest read unavailable');
+    expect(window.sessionStorage.getItem(REVIEW_KEYS.jellyfin)).not.toContain('dependency-vm');
+    expect(window.sessionStorage.getItem(REVIEW_KEYS.jellyfin)).not.toContain('Guest read unavailable');
     button('Refresh preview').click(); await waitForReview();
     expect(host.querySelector('[aria-label="Preview validation errors"]')).toBeNull();
     expect(button('Apply reviewed step').disabled).toBe(true);
@@ -250,7 +250,7 @@ describe('visible blocked deployment diagnostics', () => {
     expect(host.querySelector('[aria-label="Preview validation errors"] a')?.getAttribute('href')).toBe('#/k/proxmox.openctl.io/v1/VirtualMachine/dependency-vm');
     expect(button('Apply reviewed step').disabled).toBe(true);
     expect(resources.apply).not.toHaveBeenCalled();
-    expect(JSON.parse(window.sessionStorage.getItem(REVIEW_KEY)!).steps[0].attempt).toBeUndefined();
+    expect(JSON.parse(window.sessionStorage.getItem(REVIEW_KEYS.jellyfin)!).steps[0].attempt).toBeUndefined();
   });
 
   it('keeps whole-resource and legacy field-only blockers safe and visible without inventing partial targets', async () => {
@@ -276,13 +276,13 @@ describe('visible blocked deployment diagnostics', () => {
     expect(button('Apply reviewed step').disabled).toBe(true);
     const reads = vi.mocked(resources.get).mock.calls.length;
     const previews = vi.mocked(resources.dryRunApply).mock.calls.length;
-    const saved = window.sessionStorage.getItem(REVIEW_KEY);
+    const saved = window.sessionStorage.getItem(REVIEW_KEYS.jellyfin);
     button('Apply reviewed step').click();
     await settle();
     expect(resources.apply).not.toHaveBeenCalled();
     expect(resources.get).toHaveBeenCalledTimes(reads);
     expect(resources.dryRunApply).toHaveBeenCalledTimes(previews);
-    expect(window.sessionStorage.getItem(REVIEW_KEY)).toBe(saved);
+    expect(window.sessionStorage.getItem(REVIEW_KEYS.jellyfin)).toBe(saved);
     expect(saved).not.toContain('whole-guest');
     expect(saved).not.toContain(hostile);
   });
@@ -293,7 +293,7 @@ describe('recovered application readiness evidence', () => {
     const resource: ControllerAPI.Resource = {
       apiVersion: 'apps.openctl.io/v1', kind: 'Jellyfin', metadata: { name: 'jellyfin' }, spec: {},
     };
-    window.sessionStorage.setItem(REVIEW_KEY, JSON.stringify({
+    window.sessionStorage.setItem(REVIEW_KEYS.jellyfin, JSON.stringify({
       version: 1, binding: { controllerId: 'controller', userId: 'operator' }, cursor: 0,
       steps: [{ title: 'Install and configure Jellyfin', resource, createOnly: true,
         attempt: { requestId: 'saved-request', operationId: 'saved-operation', createOnly: true, allowDestructive: false, iKnowThisBreaksTheCluster: false } }],
@@ -336,7 +336,7 @@ describe('recovered application readiness evidence', () => {
 describe('blocking deployment prerequisites', () => {
   const app: ControllerAPI.Resource = { apiVersion: 'apps.openctl.io/v1', kind: 'Jellyfin', metadata: { name: 'media' }, spec: {} };
   function saveAtPublication() {
-    window.sessionStorage.setItem(REVIEW_KEY, JSON.stringify({
+    window.sessionStorage.setItem(REVIEW_KEYS.jellyfin, JSON.stringify({
       version: 1, binding: { controllerId: 'controller', userId: 'operator' }, cursor: 1,
       steps: [
         { title: 'Install Jellyfin', resource: app, createOnly: true, attempt: { requestId: 'accepted-app', operationId: 'app-op', createOnly: true, allowDestructive: false, iKnowThisBreaksTheCluster: false } },
@@ -370,8 +370,8 @@ describe('blocking deployment prerequisites', () => {
     expect(blocker.querySelector('a')?.getAttribute('href')).toBe('#/k/apps.openctl.io/v1/Jellyfin/media');
     expect(button('Apply reviewed step').disabled).toBe(true);
     expect(resources.apply).not.toHaveBeenCalled();
-    expect(window.sessionStorage.getItem(REVIEW_KEY)).not.toContain('Operator-controlled reboot');
-    expect(window.sessionStorage.getItem(REVIEW_KEY)).not.toContain('<img');
+    expect(window.sessionStorage.getItem(REVIEW_KEYS.jellyfin)).not.toContain('Operator-controlled reboot');
+    expect(window.sessionStorage.getItem(REVIEW_KEYS.jellyfin)).not.toContain('<img');
 
     healthy = true;
     button('Recheck prerequisites').click(); await settle();
@@ -381,7 +381,7 @@ describe('blocking deployment prerequisites', () => {
     expect((control('I confirm this dedicated guest') as HTMLInputElement).checked).toBe(false);
     expect((control('I verified this guest') as HTMLInputElement).checked).toBe(false);
     expect((control('I freshly authorize') as HTMLInputElement).checked).toBe(false);
-    expect(JSON.parse(window.sessionStorage.getItem(REVIEW_KEY)!).steps[1].attempt).toBeUndefined();
+    expect(JSON.parse(window.sessionStorage.getItem(REVIEW_KEYS.jellyfin)!).steps[1].attempt).toBeUndefined();
     expect(resources.apply).not.toHaveBeenCalled();
 
     await unmount(component!); component = undefined;
@@ -424,7 +424,7 @@ describe('staged manifest downloads', () => {
   it('downloads CLI-sized manifests from a blocked preview without submitting or changing recovery state', async () => {
     vi.mocked(resources.dryRunApply).mockResolvedValueOnce({ fieldErrors: [{ path: 'spec.template', message: 'Repair template selection' }] });
     await prepareVMReview();
-    const before = window.sessionStorage.getItem(REVIEW_KEY);
+    const before = window.sessionStorage.getItem(REVIEW_KEYS.jellyfin);
     const previews = vi.mocked(resources.dryRunApply).mock.calls.length;
     const reads = vi.mocked(resources.get).mock.calls.length;
     const files = captureDownloads();
@@ -439,7 +439,7 @@ describe('staged manifest downloads', () => {
     expect(vm.metadata.name).toBe('gpu');
     expect(files[0].blob.type).toBe('application/zip');
     expect(files[1].blob.type).toBe('application/yaml');
-    expect(window.sessionStorage.getItem(REVIEW_KEY)).toBe(before);
+    expect(window.sessionStorage.getItem(REVIEW_KEYS.jellyfin)).toBe(before);
     expect(vi.mocked(resources.dryRunApply).mock.calls.length).toBe(previews);
     expect(vi.mocked(resources.get).mock.calls.length).toBe(reads);
     expect(resources.apply).not.toHaveBeenCalled();
@@ -448,11 +448,11 @@ describe('staged manifest downloads', () => {
 
   it('exports saved declarations before recovery and the selected later stage after a blocked resume without leaking accepted identities', async () => {
     await prepareVMReview();
-    const saved = JSON.parse(window.sessionStorage.getItem(REVIEW_KEY)!);
+    const saved = JSON.parse(window.sessionStorage.getItem(REVIEW_KEYS.jellyfin)!);
     saved.cursor = 1;
     saved.steps[0].attempt = { requestId: 'PRIVATE-ACCEPTED-REQUEST', operationId: 'PRIVATE-OPERATION', createOnly: true, allowDestructive: false, iKnowThisBreaksTheCluster: false };
     const before = JSON.stringify(saved);
-    window.sessionStorage.setItem(REVIEW_KEY, before);
+    window.sessionStorage.setItem(REVIEW_KEYS.jellyfin, before);
     await unmount(component!); component = undefined;
     await open();
     const previews = vi.mocked(resources.dryRunApply).mock.calls.length;
@@ -461,7 +461,7 @@ describe('staged manifest downloads', () => {
     const archive = unzipSync(new Uint8Array(await files[0].blob.arrayBuffer()));
     expect(parse(strFromU8(archive['02-jellyfin.yaml'])).metadata.name).toBe('jellyfin');
     expect(Object.values(archive).map((bytes) => strFromU8(bytes)).join('')).not.toContain('PRIVATE-');
-    expect(window.sessionStorage.getItem(REVIEW_KEY)).toBe(before);
+    expect(window.sessionStorage.getItem(REVIEW_KEYS.jellyfin)).toBe(before);
     expect(operations.get).not.toHaveBeenCalled();
     expect(vi.mocked(resources.dryRunApply).mock.calls.length).toBe(previews);
     button('Resume saved review').click(); await settle();
@@ -481,7 +481,7 @@ describe('dedicated VM sizing', () => {
     await prepareVMReview({ 'VM CPU cores': '6', 'VM memory (MiB)': '12288', 'VM OS disk (GiB)': '80' });
     const selected = { cpu: { cores: 6, sockets: 1, type: 'host' }, memory: { size: 12288 }, disks: [{ name: 'scsi0', storage: 'local-lvm', size: '80G', ssd: true, discard: true, iothread: true }] };
     expect(parse(host.querySelector('pre')!.textContent!).spec).toMatchObject(selected);
-    expect(JSON.parse(window.sessionStorage.getItem(REVIEW_KEY)!).steps[0].resource.spec).toMatchObject(selected);
+    expect(JSON.parse(window.sessionStorage.getItem(REVIEW_KEYS.jellyfin)!).steps[0].resource.spec).toMatchObject(selected);
     vi.mocked(resources.apply).mockImplementationOnce(async (request) => {
       const resource = request.resource as ControllerAPI.Resource;
       vi.mocked(operations.get).mockResolvedValue({
@@ -509,7 +509,7 @@ describe('dedicated VM sizing', () => {
     await fillVMForm({ [field]: value });
     host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await settle();
     expect(host.querySelector('[role="alert"]')?.textContent).toContain(diagnostic);
-    expect(window.sessionStorage.getItem(REVIEW_KEY)).toBeNull();
+    expect(window.sessionStorage.getItem(REVIEW_KEYS.jellyfin)).toBeNull();
     expect(schemas.validate).not.toHaveBeenCalled();
     expect(resources.dryRunApply).not.toHaveBeenCalled();
     expect(resources.apply).not.toHaveBeenCalled();
@@ -528,7 +528,7 @@ describe('referenced VM address blockers', () => {
     state: 'unavailable', code: 'guest_ip_ambiguous', message: 'Inspect networking; choose the intended application host.',
   } };
   function savedApplication() {
-    window.sessionStorage.setItem(REVIEW_KEY, JSON.stringify({
+    window.sessionStorage.setItem(REVIEW_KEYS.jellyfin, JSON.stringify({
       version: 1, binding: { controllerId: 'controller', userId: 'operator' }, cursor: 0,
       steps: [{ title: 'Install and configure Jellyfin', resource: app, createOnly: true }],
     }));
@@ -557,8 +557,8 @@ describe('referenced VM address blockers', () => {
     expect(button('Apply reviewed step').disabled).toBe(true);
     expect(resources.dryRunApply).not.toHaveBeenCalled();
     expect(resources.apply).not.toHaveBeenCalled();
-    expect(JSON.parse(window.sessionStorage.getItem(REVIEW_KEY)!).steps[0].attempt).toBeUndefined();
-    expect(window.sessionStorage.getItem(REVIEW_KEY)).not.toContain('Inspect networking');
+    expect(JSON.parse(window.sessionStorage.getItem(REVIEW_KEYS.jellyfin)!).steps[0].attempt).toBeUndefined();
+    expect(window.sessionStorage.getItem(REVIEW_KEYS.jellyfin)).not.toContain('Inspect networking');
   });
 
   it('rechecks repaired evidence with fresh consent, and blocks again if the guest loses its address before Apply', async () => {
@@ -577,7 +577,7 @@ describe('referenced VM address blockers', () => {
     expect(host.querySelector('[aria-label="Blocking deployment resource"]')?.textContent).toContain('guest_ip_ambiguous');
     expect(button('Apply reviewed step').disabled).toBe(true);
     expect(resources.apply).not.toHaveBeenCalled();
-    expect(JSON.parse(window.sessionStorage.getItem(REVIEW_KEY)!).steps[0].attempt).toBeUndefined();
+    expect(JSON.parse(window.sessionStorage.getItem(REVIEW_KEYS.jellyfin)!).steps[0].attempt).toBeUndefined();
   });
 
   it('clears an old blocker while rechecking and never substitutes cached readiness', async () => {

@@ -1,5 +1,5 @@
 import { strToU8, zipSync } from 'fflate';
-import type { DeploymentStep } from './jellyfin';
+import type { DeploymentStep } from './deployment';
 import { withoutRequestConsent } from './retry';
 import { resourceToYAML } from './yaml';
 
@@ -20,5 +20,5 @@ export function deploymentArchive(steps: readonly DeploymentStep[]): Uint8Array<
     files[file.filename] = strToU8(file.yaml);
   }
   // Reviews are small; store entries without spending time compressing them.
-  return zipSync(files, { level: 0 });
+  return zipSync(files, { level: 0, mtime: new Date(1980, 0, 1) });
 }
