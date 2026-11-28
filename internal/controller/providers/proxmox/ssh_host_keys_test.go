@@ -79,7 +79,7 @@ func sshActionServer(t *testing.T, fixture *sshHostActionFixture) *httptest.Serv
 			}
 			ips := []map[string]any{}
 			if addresses != "none" {
-				for _, address := range strings.Split(addresses, ",") {
+				for address := range strings.SplitSeq(addresses, ",") {
 					ips = append(ips, map[string]any{"ip-address-type": "ipv4", "ip-address": address})
 				}
 			}
