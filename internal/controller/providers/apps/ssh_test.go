@@ -2,7 +2,9 @@ package apps
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
@@ -50,6 +52,88 @@ func TestSSHRequiresVerifiedKnownHostsBeforeDial(t *testing.T) {
 	var before *preCommandError
 	if !errors.As(err, &before) {
 		t.Fatalf("local setup failure lost no-command evidence: %v", err)
+	}
+}
+func TestSSHNegotiatesAVerifiedKeyOnMultiKeyHosts(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		ecdsa  bool
+		hashed bool
+	}{
+		{name: "ed25519"},
+		{name: "ecdsa", ecdsa: true},
+		{name: "hashed ed25519", hashed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target, edSigner := sshTestIdentity(t)
+			key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ecSigner, err := ssh.NewSignerFromKey(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			target.Port = listener.Addr().(*net.TCPAddr).Port
+			host := knownhosts.Normalize(listener.Addr().String())
+			if tc.hashed {
+				host = knownhosts.HashHostname(host)
+			}
+			pinned := edSigner.PublicKey()
+			if tc.ecdsa {
+				pinned = ecSigner.PublicKey()
+			}
+			if err := os.WriteFile(target.KnownHostsFile, []byte(knownhosts.Line([]string{host}, pinned)+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				conn, err := listener.Accept()
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+				config := &ssh.ServerConfig{NoClientAuth: true}
+				config.AddHostKey(ecSigner)
+				config.AddHostKey(edSigner)
+				server, channels, requests, err := ssh.NewServerConn(conn, config)
+				if err != nil {
+					return
+				}
+				defer server.Close()
+				go ssh.DiscardRequests(requests)
+				for incoming := range channels {
+					channel, requests, err := incoming.Accept()
+					if err != nil {
+						return
+					}
+					defer channel.Close()
+					for request := range requests {
+						if request.Type != "exec" {
+							_ = request.Reply(false, nil)
+							continue
+						}
+						_ = request.Reply(true, nil)
+						_, _ = channel.Write([]byte("verified remote output"))
+						_, _ = channel.SendRequest("exit-status", false, []byte{0, 0, 0, 0})
+						return
+					}
+				}
+			}()
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			out, err := (sshRunner{}).Run(ctx, target, "printf acceptance", nil)
+			if err != nil || out != "verified remote output" {
+				t.Fatalf("verified host could not execute its command: output=%q error=%v", out, err)
+			}
+			<-done
+		})
 	}
 }
 

@@ -41,7 +41,7 @@ Phase 6.
 ### Install as a local service (macOS or Linux)
 
 ```sh
-make build
+make build build-plugin-k3s-agent-linux
 ./bin/openctl-controller install --local
 ```
 

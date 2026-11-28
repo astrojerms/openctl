@@ -62,6 +62,39 @@ func TestResolveInstallPathsUnsupported(t *testing.T) {
 	}
 }
 
+func TestInstallLocalRejectsInvalidConfigBeforeReplacingBinary(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	paths, err := resolveInstallPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{paths.BinaryDir, paths.CLIConfigDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const previousBinary = "previous controller installation"
+	if err := os.WriteFile(paths.BinaryPath, []byte(previousBinary), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.CLIConfigFile, []byte("manifests:\n  gitops:\n    enabled: false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runInstallLocal(); err == nil {
+		t.Fatal("installation accepted incompatible manifest authority configuration")
+	}
+	got, err := os.ReadFile(paths.BinaryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != previousBinary {
+		t.Fatal("invalid configuration replaced the existing controller binary")
+	}
+	if _, err := os.Stat(paths.UnitPath); !os.IsNotExist(err) {
+		t.Fatalf("invalid configuration created a service unit: %v", err)
+	}
+}
+
 func TestRenderPlistContainsKeyFields(t *testing.T) {
 	p := &installPaths{
 		HomeDir:    "/Users/test",

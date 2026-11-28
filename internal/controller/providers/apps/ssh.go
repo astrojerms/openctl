@@ -9,12 +9,13 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/skeema/knownhosts"
 	"golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 type commandRunner interface {
@@ -67,11 +68,16 @@ func (sshRunner) Run(ctx context.Context, t Target, command string, input []byte
 	if err != nil {
 		return "", fmt.Errorf("apps: cannot resolve known_hosts path")
 	}
-	verify, err := knownhosts.New(hostsPath)
+	hostKeys, err := knownhosts.NewDB(hostsPath)
 	if err != nil {
 		return "", fmt.Errorf("apps: cannot load knownHostsFile; install a verified SSH host key before applying")
 	}
 	address := net.JoinHostPort(t.Host, strconv.Itoa(t.Port))
+	algorithms := hostKeys.HostKeyAlgorithms(address)
+	supported := ssh.SupportedAlgorithms().HostKeys
+	algorithms = slices.DeleteFunc(algorithms, func(algorithm string) bool {
+		return !slices.Contains(supported, algorithm)
+	})
 	conn, err := (&net.Dialer{Timeout: 20 * time.Second}).DialContext(ctx, "tcp", address)
 	if err != nil {
 		return "", fmt.Errorf("apps: SSH target connection failed: %w", err)
@@ -80,7 +86,10 @@ func (sshRunner) Run(ctx context.Context, t Target, command string, input []byte
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
 	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
-	cc, chans, reqs, err := ssh.NewClientConn(conn, address, &ssh.ClientConfig{User: t.User, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: verify})
+	cc, chans, reqs, err := ssh.NewClientConn(conn, address, &ssh.ClientConfig{
+		User: t.User, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		HostKeyCallback: hostKeys.HostKeyCallback(), HostKeyAlgorithms: algorithms,
+	})
 	if err != nil {
 		return "", fmt.Errorf("apps: SSH handshake failed; verify host key, user and key authorization: %w", err)
 	}

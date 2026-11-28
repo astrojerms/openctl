@@ -17,6 +17,7 @@
   let commitYaml = '';
   let loading = false;
   let error = '';
+  let gitEnabled: boolean | null = null;
   let historyController: AbortController | null = null;
   let commitController: AbortController | null = null;
 
@@ -31,9 +32,14 @@
     selectedSha = '';
     commitYaml = '';
     error = '';
+    gitEnabled = null;
     loading = true;
     try {
       if (!av || !k || !n || requestSignal.aborted) return;
+      const status = await repo.status({ signal: requestSignal });
+      if (historyController !== current || requestSignal.aborted) return;
+      gitEnabled = status.enabled ?? false;
+      if (!gitEnabled) return;
       const resp = await repo.history({ apiVersion: av, kind: k, name: n }, { signal: requestSignal });
       if (historyController !== current || requestSignal.aborted) return;
       commits = resp.commits ?? [];
@@ -94,9 +100,11 @@
 </script>
 
 <article class="card">
-  <h3>History</h3>
+  <h3>Git revision history</h3>
   {#if loading}
     <p class="muted small">Loading history…</p>
+  {:else if gitEnabled === false}
+    <p class="muted small" role="note">Git revision history is not enabled for this controller. Saved desired intent and operation history remain available.</p>
   {:else if error && commits.length === 0}
     <p class="error small" role="alert">{error}</p>
   {:else if commits.length === 0}

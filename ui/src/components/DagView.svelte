@@ -178,8 +178,6 @@
     }
   }
 
-  const INTERESTING_OP_STATUSES = new Set(['pending', 'running', 'failed', 'interrupted', 'canceled']);
-
   function resourceKey(apiVersion: string | undefined, k: string | undefined, name: string | undefined): string {
     if (!apiVersion || !k || !name) return '';
     return `${apiVersion}/${k}/${name}`;
@@ -195,27 +193,39 @@
   }
 
   function opTime(op: OperationRow): number {
-    const raw = op.completedAt || op.startedAt || op.submittedAt || '';
+    // Submission orders intent; a late completion of older work must not
+    // supersede a newer request. Other timestamps cover incomplete rows.
+    const raw = op.submittedAt || op.startedAt || op.completedAt || '';
     const t = Date.parse(raw);
     return Number.isFinite(t) ? t : 0;
+  }
+
+  function isActive(op: OperationRow): boolean {
+    return op.status === 'pending' || op.status === 'running';
+  }
+
+  function supersedes(op: OperationRow, current: OperationRow): boolean {
+    // In-flight work remains visible even alongside terminal history.
+    if (isActive(op) !== isActive(current)) return isActive(op);
+    const timeDifference = opTime(op) - opTime(current);
+    // Equal timestamps have no temporal ordering; identity makes the choice
+    // stable across watch delivery and child traversal order.
+    return timeDifference > 0 || (timeDifference === 0 && op.id > current.id);
   }
 
   function indexOpsByResource(list: OperationRow[]): Record<string, OperationRow> {
     const next: Record<string, OperationRow> = {};
     for (const op of flattenOps(list)) {
-      if (!INTERESTING_OP_STATUSES.has(op.status)) continue;
+      // Include successes before selecting: filtering them out resurrects
+      // historical failures after successful recovery.
       const key = resourceKey(op.apiVersion, op.kind, op.resourceName);
       if (!key) continue;
       const current = next[key];
-      if (!current || opTime(op) >= opTime(current)) {
+      if (!current || supersedes(op, current)) {
         next[key] = op;
       }
     }
     return next;
-  }
-
-  function opFor(node: GraphNode): OperationRow | null {
-    return opsByResource[resourceKey(node.apiVersion, node.kind, node.name)] ?? null;
   }
 
   function opTone(op: OperationRow | null): string {
@@ -246,6 +256,7 @@
         <span class="key"><span class="swatch ref"></span>ref</span>
       </div>
     </div>
+    <p class="muted small">Badges show active or latest recorded operations, not resource health.</p>
     {#if error}
       <p class="muted small err">Graph unavailable: {error}</p>
     {/if}
@@ -274,7 +285,7 @@
         {/each}
 
         {#each placed as p}
-          {@const op = opFor(p.node)}
+          {@const op = opsByResource[resourceKey(p.node.apiVersion, p.node.kind, p.node.name)] ?? null}
           <g
             class="node node-click {toneClass(p.node)}"
             class:root={p.node.root}
@@ -290,15 +301,15 @@
             <circle class="pill" cx={BOX_W - 14} cy="15" r="5" />
             {#if op}
               <g class="op op-{opTone(op)}" transform="translate(10,40)">
-                <rect width="78" height="14" rx="7" />
-                <text x="39" y="10" text-anchor="middle">{op.status}</text>
+                <rect width="112" height="14" rx="7" />
+                <text x="56" y="10" text-anchor="middle">op {op.status}</text>
               </g>
             {:else if !p.node.managed}
               <text class="ro" x="10" y="50">read-only</text>
             {/if}
             <title>
               {p.node.kind}/{p.node.name} · {p.node.managed ? p.node.status : 'observed (unmanaged)'}
-              {op ? ` · op ${op.status} ${op.id.slice(0, 12)}` : ' · click for operations'}
+              {op ? ` · operation ${op.status} ${op.id.slice(0, 12)} (not resource health)` : ' · click for operations'}
             </title>
           </g>
         {/each}

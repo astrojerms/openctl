@@ -101,6 +101,9 @@ func TestResolvedSecretsNeverPersistOrEnterCommandsOrErrors(t *testing.T) {
 		if strings.Contains(string(input), secret) {
 			sawInput = true
 		}
+		if strings.Contains(command, "docker compose version --short") {
+			return "5.8.1", nil
+		}
 		if strings.Contains(command, "--no-env-resolution") {
 			return `{"services":{"web":{"image":"test"}}}`, nil
 		}
@@ -261,6 +264,9 @@ func TestPreviewAcceptsSecretMarkersWithoutResolvingThem(t *testing.T) {
 	r := composeResource()
 	r.Spec["compose"] = map[string]any{"$secret": map[string]any{"file": "compose"}}
 	r.Spec["environment"] = map[string]any{"$secret": map[string]any{"file": "env"}}
+	p.runner = fakeRunner(func(context.Context, Target, string, []byte) (string, error) {
+		return "5.8.1", nil
+	})
 	if _, err := p.DryRun(context.Background(), r); err != nil {
 		t.Fatal(err)
 	}

@@ -41,7 +41,18 @@ func TestComposeDockerHelper(t *testing.T) {
 		}
 		args = args[2:]
 	}
-	if len(args) == 0 || directory == "" {
+	if len(args) == 0 {
+		fail()
+	}
+	if args[0] == "version" {
+		version := os.Getenv("OPENCTL_COMPOSE_VERSION")
+		if version == "" {
+			version = "5.8.1"
+		}
+		_, _ = fmt.Fprintln(os.Stdout, version)
+		os.Exit(0)
+	}
+	if directory == "" {
 		fail()
 	}
 	trace, err := os.OpenFile(os.Getenv("OPENCTL_COMPOSE_TRACE"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)

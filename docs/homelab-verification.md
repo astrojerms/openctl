@@ -6,6 +6,10 @@ timing, QEMU guest-agent quirks, template edges, real network behavior — only 
 run against metal validates. `hack/homelab-verify.sh` is a reusable, safe
 harness for exactly that.
 
+The [bounded console/application acceptance checkpoint](#bounded-consoleapplication-acceptance)
+below records additional native-provider evidence; it is not a run of the
+broader stopped-VM/k3s harness.
+
 ## What it checks
 
 | Stage | Proves |
@@ -143,3 +147,87 @@ correct digest imported and cloned successfully, a second VM reused the verified
 template without another download, and a changed digest could not use that
 cache. Both sandbox VMs, their template, and the downloaded image were removed;
 the existing development VM remained running.
+
+## Bounded console/application acceptance
+
+**2026-11-27.** Exercised a real Proxmox 9.1.1 lab with an explicitly authorized
+disposable guest: one vCPU, 1024 MiB RAM, 8 GiB disk, DHCP, no GPU passthrough
+and no public endpoint. Existing development and Jellyfin guests were retained.
+
+- Verified both configured Proxmox endpoints with their CA and certificate
+  identity. Corrected a hostname/SAN mismatch through verified local name
+  resolution, not disabled TLS verification.
+- Created the sandbox, exported/released its tracking, and adopted the exact
+  discovered instance through the actual console. Resized memory in place with
+  stable physical identity. Deleted/recreated the sandbox and proved replay of
+  the old successful Delete request did not delete the replacement.
+- Verified cloud-init completion and guest-agent networking independently of
+  Apply success. The known deprecated string-user warning remained visible;
+  bootstrap errors were empty.
+- Pinned the guest's SSH host key through the already trusted hypervisor/guest
+  agent. A real multi-key OpenSSH server exposed the client's key-negotiation
+  mismatch; the fix selects only algorithms supported by verified known-host
+  entries and retains strict verification, including hashed/nondefault-port
+  tests.
+- Installed publisher-checksummed Compose 5.8.1 in only the disposable guest.
+  The previously installed 2.40 plugin now fails Preview with an explicit
+  supported-version diagnostic. Then deleted/recreated the guest from the
+  pinned cloud-init declaration: first boot downloaded/checksummed the plugin
+  itself, completed with no bootstrap errors, and the native app rollout served
+  healthy v2 HTTP without any manual plugin upload. Changing cloud-init on an
+  already-running guest is not a bootstrap rerun.
+- Deployed an actual digest-pinned Compose HTTP app through native Apply,
+  including recovery of a failed first rollout's owned partial state with a
+  new create-only request. Neither adoption nor deletion of ownership metadata
+  was needed. Raw-intent no-op Preview followed by Apply refreshed the same
+  environment secret reference: actual guest-local HTTP changed from v1 to v2.
+- Native Stop produced non-ready application/HTTP checks and nonzero health
+  exit; Start restored healthy containers and exact v2 content. With an
+  explicitly declared `restart: unless-stopped`, native guest Reboot changed the
+  boot ID while preserving VM identity and disk. The app recovered healthy v2
+  HTTP without another Apply.
+- Created a fresh offline controller backup and restored it into a new private
+  HOME. Every SQLite table's records matched before boot, including four saved
+  declarations, one opaque app locator, one immutable provider binding and
+  eleven durable request bindings. The referenced environment file was present
+  and byte-identical.
+- Booted that current-state restore authenticated and loopback-only, with the
+  original controller stopped, no queued/running operations, mirror authority
+  and the restored copy's reconciler explicitly disabled. Fresh Proxmox Get,
+  app SSH/container/HTTP health and original request-ID lookup succeeded.
+  Desired markers, provider state/bindings, request ledger and controller
+  identity remained unchanged. Stopped the copy before resuming the original.
+- On the existing GPU-backed Jellyfin instance, a distinct regular client
+  requested the final two seconds of an existing HEVC video with stream copy
+  disabled. HTTP 200 returned 365472 MPEG-TS bytes and reached natural EOF in
+  5.04 seconds. Correlated FFmpeg output showed `h264_nvenc`; decoding that exact
+  response produced a 640x360 H.264 frame. Task authentication sessions were
+  logged out, and direct container process inspection found no remaining
+  FFmpeg process. No configuration/library/media mutation was requested.
+- Installed the checked fixes and inspected the actual console: the healthy
+  reference-backed app no longer showed false target-host drift, and its latest
+  successful request superseded earlier failures in topology. Operation badges
+  are explicitly historical operation status, not provider health. Both native
+  CLI and the reviewed console action produced a real zero-byte quiet-log
+  download; the CLI file was exclusive and mode 0600.
+
+**Limits:** this is a same-host recovery drill, not proof of an unattended
+fresh-machine disaster recovery. SSH identities/known-host trust, name
+resolution, external application paths, provider access and guest/NAS data must
+be restored separately and reviewed. The earlier legacy snapshot predates
+immutable identity and durable request tables; its byte-exact offline restore
+must not be described as preserving records that never existed.
+
+Fresh end-to-end GPU guest provisioning/onboarding, host-power-loss recovery,
+public DNS/TLS exposure and the k3s harness were not exercised under this bounded
+approval. Existing GPU playback is stronger than a health banner, but is not a
+fresh Jellyfin deployment certificate.
+
+Both sandbox incarnations used for the final app/recovery checks were removed
+through native app-then-VM Delete. Final physical checks found the sandbox VM
+absent and the existing development/Jellyfin VMs still running; saved inventory
+returned to its original two declarations. Removed the live fixture secret and
+throwaway installer/download tools, retained private evidence archives, and
+took a fresh post-cleanup offline backup before resuming the installed
+controller. Earlier acceptance snapshots remain historical, not permission to
+recreate or replay their now-deleted fixtures.

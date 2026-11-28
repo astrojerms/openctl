@@ -529,7 +529,26 @@ func (d *Dispatcher) execute(ctx context.Context, op *Operation) {
 		if op.CreateOnly {
 			observed, getErr := p.Get(applyCtx, op.Kind, op.ResourceName)
 			var nf *providers.NotFoundError
-			if getErr == nil || !errors.As(getErr, &nf) {
+			resume := false
+			if recovery, ok := p.(providers.CreateRecoverer); ok && getErr == nil && observed != nil && d.manifests != nil {
+				var baseline bool
+				baselineErr := d.store.db.QueryRowContext(applyCtx,
+					`SELECT EXISTS(SELECT 1 FROM applied_manifests WHERE api_version = ? AND kind = ? AND name = ?)`,
+					op.APIVersion, op.Kind, op.ResourceName,
+				).Scan(&baseline)
+				if baselineErr != nil {
+					_ = d.store.Complete(completeCtx, op.ID, StatusFailed, "create-only: cannot verify desired baseline absence", "")
+					return
+				}
+				if !baseline {
+					resume, err = recovery.CanResumeCreate(applyCtx, op.Kind, op.ResourceName)
+					if err != nil {
+						_ = d.store.Complete(completeCtx, op.ID, StatusFailed, "create-only: cannot verify retained creation ownership", "")
+						return
+					}
+				}
+			}
+			if !resume && (getErr == nil || !errors.As(getErr, &nf)) {
 				message := fmt.Sprintf("create-only %s %q: cannot establish resource absence", op.Kind, op.ResourceName)
 				if getErr != nil {
 					message += ": " + getErr.Error()

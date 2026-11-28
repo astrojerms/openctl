@@ -54,8 +54,13 @@ func (systemdManager) reload(_ *installPaths) error {
 	if out, err := exec.Command("systemctl", "--user", "daemon-reload").CombinedOutput(); err != nil {
 		return fmt.Errorf("systemctl --user daemon-reload: %w (output: %s)", err, bytes.TrimSpace(out))
 	}
-	if out, err := exec.Command("systemctl", "--user", "enable", "--now", systemdUnit).CombinedOutput(); err != nil {
-		return fmt.Errorf("systemctl --user enable --now %s: %w (output: %s)", systemdUnit, err, bytes.TrimSpace(out))
+	if out, err := exec.Command("systemctl", "--user", "enable", systemdUnit).CombinedOutput(); err != nil {
+		return fmt.Errorf("systemctl --user enable %s: %w (output: %s)", systemdUnit, err, bytes.TrimSpace(out))
+	}
+	// Enabling an already-running unit does not load its newly installed binary.
+	// Restart also starts an inactive unit, without starting a fresh install twice.
+	if out, err := exec.Command("systemctl", "--user", "restart", systemdUnit).CombinedOutput(); err != nil {
+		return fmt.Errorf("systemctl --user restart %s: %w (output: %s)", systemdUnit, err, bytes.TrimSpace(out))
 	}
 	return nil
 }

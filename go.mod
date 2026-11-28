@@ -12,6 +12,7 @@ require (
 	github.com/hashicorp/go-hclog v1.6.3
 	github.com/hashicorp/go-plugin v1.7.0
 	github.com/hashicorp/terraform-plugin-go v0.31.0
+	github.com/skeema/knownhosts v1.3.2
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.50.0
 	golang.org/x/oauth2 v0.36.0

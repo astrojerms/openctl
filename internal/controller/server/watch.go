@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"slices"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -60,10 +61,13 @@ func (h *resourceHandler) Watch(req *apiv1.WatchRequest, stream apiv1.ResourceSe
 	ticker := time.NewTicker(defaultWatchPollInterval)
 	defer ticker.Stop()
 
-	// snapshot: name -> hash. Detecting MODIFIED via the existing
-	// manifests.Hash lets us compare on every poll without re-encoding
-	// full specs.
-	snapshot := map[string]string{}
+	// Compare the observed input hash and resolved drift separately: a
+	// reference target may change without this resource's spec changing.
+	type snapshotEntry struct {
+		hash  string
+		drift []*apiv1.DriftEntry
+	}
+	snapshot := map[string]snapshotEntry{}
 	first := true
 	consecutiveErrs := 0
 
@@ -102,18 +106,21 @@ func (h *resourceHandler) Watch(req *apiv1.WatchRequest, stream apiv1.ResourceSe
 		}
 		consecutiveErrs = 0
 
-		seen := map[string]string{}
+		seen := map[string]snapshotEntry{}
 		for _, m := range matches {
 			r, err := resourceToProto(m)
 			if err != nil {
 				continue
 			}
-			// Drift surfaces as observed state changing; attach so MODIFIED
-			// fires on drift transitions.
-			_ = h.attachDrift(ctx, r, m)
+			if err := h.attachDrift(ctx, r, m); err != nil {
+				if errors.Is(ctx.Err(), context.Canceled) {
+					return nil
+				}
+				return status.Errorf(codes.FailedPrecondition, "compute drift: %v", err)
+			}
 			attachRelationships(h.registry, r)
-			h := manifests.Hash(m)
-			seen[m.Metadata.Name] = h
+			current := snapshotEntry{hash: manifests.Hash(m), drift: r.Drift}
+			seen[m.Metadata.Name] = current
 
 			prev, was := snapshot[m.Metadata.Name]
 			switch {
@@ -121,7 +128,9 @@ func (h *resourceHandler) Watch(req *apiv1.WatchRequest, stream apiv1.ResourceSe
 				if err := emit(apiv1.WatchEvent_ADDED, r); err != nil {
 					return err
 				}
-			case prev != h:
+			case prev.hash != current.hash || !slices.EqualFunc(prev.drift, current.drift, func(a, b *apiv1.DriftEntry) bool {
+				return a.Path == b.Path && a.Desired == b.Desired && a.Observed == b.Observed
+			}):
 				if err := emit(apiv1.WatchEvent_MODIFIED, r); err != nil {
 					return err
 				}

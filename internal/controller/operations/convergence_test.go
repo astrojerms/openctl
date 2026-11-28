@@ -305,6 +305,35 @@ func TestCreateOnlySurvivesPersistenceAndFailsClosedOnLiveState(t *testing.T) {
 	}
 }
 
+type recoverableCreateProvider struct{ *fakeProvider }
+
+func (*recoverableCreateProvider) CanResumeCreate(context.Context, string, string) (bool, error) {
+	return true, nil
+}
+
+func TestCreateRecoveryCannotOverwriteBaselineSavedWhileQueued(t *testing.T) {
+	raw := childManifest("fake.openctl.io/v1", "FakeKind", "x")
+	raw.Spec = map[string]any{"cores": 2}
+	p := &recoverableCreateProvider{&fakeProvider{
+		name: "fake", kinds: []string{"FakeKind"}, getOut: raw,
+	}}
+	store, d := newDispatcherWithManifests(t, p)
+	op := submitIntent(t, store, raw, true)
+	baseline := *raw
+	baseline.Spec = map[string]any{"cores": 8}
+	if err := d.manifests.Save(context.Background(), &baseline); err != nil {
+		t.Fatal(err)
+	}
+	runPendingOp(t, d, store, op.ID, StatusFailed)
+	saved, err := d.manifests.(*manifests.Store).Load(context.Background(), raw.APIVersion, raw.Kind, raw.Metadata.Name)
+	if err != nil || saved == nil || saved.Spec["cores"] != float64(8) {
+		t.Fatalf("queued create changed the completed baseline: %+v, %v", saved, err)
+	}
+	if p.applies.Load() != 0 {
+		t.Fatal("queued create overwrote a completed deployment")
+	}
+}
+
 func TestSecretApplyDoesNotPersistProviderEcho(t *testing.T) {
 	t.Setenv("OPENCTL_TEST_PASSWORD", "must-not-land-in-operation-storage")
 	p := &fakeProvider{name: "fake", kinds: []string{"FakeKind"}}

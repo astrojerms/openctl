@@ -23,6 +23,30 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
+**2026-11-27 — bounded real-hardware acceptance**
+
+- [x] Actual console discovery/adoption, physical-identity-preserving resize,
+  replacement-safe Delete replay, reproducible pinned first-boot toolchain,
+  native Compose rollout/secret refresh, stop/start and guest reboot recovery.
+  Native cleanup retained existing workloads and a fresh private backup.
+- [x] Current-state offline backup restored and booted alone, with preserved
+  controller identity, opaque application state, immutable binding and request
+  ledger; fresh provider/application reads succeeded before returning to the
+  original controller.
+- [x] Existing Jellyfin HEVC playback actually transcoded through NVENC, reached
+  bounded natural EOF and produced a decodable HTTP response.
+- [x] Hardware-found fixes: installer configuration preflight and actual systemd
+  restart; verified multi-key SSH negotiation; explicit supported Compose
+  prerequisite; owned partial-create recovery at admission and execution;
+  optional Git-history presentation; valid empty log downloads; reference-aware
+  drift/watch updates; latest-operation topology state and reactive transitions.
+- Verification: focused race-enabled Go tests, 89 affected frontend tests,
+  warning-free Svelte check, production UI build, dependent module graphs and
+  actual console/CLI surfaces. Detailed evidence and unexercised gates:
+  [homelab verification](docs/homelab-verification.md#bounded-consoleapplication-acceptance).
+  This is not a fresh GPU deployment, host-power-loss or public-exposure
+  acceptance certificate.
+
 **2026-11-27 — homelab control-plane delivery**
 
 - [x] Console first-create previews, exact reviewed submissions, metadata and

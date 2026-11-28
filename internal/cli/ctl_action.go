@@ -139,7 +139,7 @@ func newCtlActionRunCommand() *cobra.Command {
 				if err := invoke(); err != nil {
 					return err
 				}
-				if response.GetDownloadContent() == "" {
+				if response.GetDownloadContent() == "" && response.GetDownloadFilename() == "" {
 					return fmt.Errorf("no download content was returned")
 				}
 				_, err := io.WriteString(out, response.GetDownloadContent())
@@ -172,7 +172,7 @@ func newCtlActionRunCommand() *cobra.Command {
 			case "":
 				err = invoke()
 				if err == nil {
-					if response.GetDownloadContent() != "" {
+					if response.GetDownloadContent() != "" || response.GetDownloadFilename() != "" {
 						err = fmt.Errorf("returned content was not saved; select --download before invoking an action that returns content")
 					} else {
 						err = render()

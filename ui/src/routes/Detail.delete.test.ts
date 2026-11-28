@@ -45,6 +45,7 @@ beforeEach(() => {
   vi.spyOn(inventoryApi, 'get').mockRejectedValue(new ApiError(404, 'no saved declaration'));
   vi.spyOn(resources, 'listActions').mockResolvedValue({ actionSpecs: [] });
   vi.spyOn(resources, 'childrenGraph').mockResolvedValue({ nodes: [], edges: [] });
+  vi.spyOn(repo, 'status').mockResolvedValue({ enabled: true });
   vi.spyOn(repo, 'history').mockResolvedValue({ commits: [] });
   vi.spyOn(resources, 'delete').mockRejectedValue(new Error('Unexpected Delete in this isolated test'));
   vi.spyOn(operations, 'byRequest').mockRejectedValue(new Error('Unexpected recovery in this isolated test'));
