@@ -207,6 +207,9 @@ func (p *Provider) OwnerOf(kind, name string) (ownerKind, ownerName string, owne
 // CheckedOwnerOf propagates failed ownership probes instead of treating an
 // unavailable plugin as permission to delete its children.
 func (p *Provider) CheckedOwnerOf(ctx context.Context, kind, name string) (string, string, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return "", "", false, err
+	}
 	if !p.caps[pluginproto.CapabilityOwnership] {
 		return "", "", false, nil
 	}
@@ -215,6 +218,9 @@ func (p *Provider) CheckedOwnerOf(ctx context.Context, kind, name string) (strin
 	res, err := p.client.OwnerOf(ctx, pluginproto.RefParams{Kind: kind, Name: name})
 	if err != nil {
 		return "", "", false, fmt.Errorf("check %s ownership: %w", p.name, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", "", false, err
 	}
 	return res.OwnerKind, res.OwnerName, res.Owned, nil
 }

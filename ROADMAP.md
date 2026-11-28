@@ -41,6 +41,8 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
   reference. Fixed unchanged-intent console reconciliation and unsafe native-app
   cache hits; a freshly reviewed request actually repaired partial remote effects.
   Reviewed Stop/Start independently proved unavailable/restored app health.
+  CI also exposed a canceled external-plugin ownership lookup; it now fails
+  closed before and after the RPC instead of authorizing deletion from a fast reply.
 - [x] Native app/VM cleanup, guarded bootstrap-artifact cleanup, retained private
   offline backups and unchanged running development/Jellyfin workloads.
 - [ ] Fresh NVIDIA/Jellyfin provisioning/onboarding remains a release gate:

@@ -43,7 +43,7 @@ func sshActionServer(t *testing.T, fixture *sshHostActionFixture) *httptest.Serv
 	return httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		path := r.URL.Path
-		if r.Method != http.MethodGet && !(r.Method == http.MethodPost && path == "/api2/json/nodes/pve1/qemu/101/agent/exec") {
+		if r.Method != http.MethodGet && (r.Method != http.MethodPost || path != "/api2/json/nodes/pve1/qemu/101/agent/exec") {
 			t.Errorf("host-key action attempted mutation: %s %s", r.Method, path)
 			http.Error(w, "POISON", http.StatusForbidden)
 			return

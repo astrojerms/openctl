@@ -285,6 +285,9 @@ available for destructive testing.
   affected race-enabled Go tests passed, including the full operations/apps
   packages and a partial-rollout regression. The existing Vite large-chunk
   warning remains.
+  CI additionally caught an external-plugin ownership cancellation race; the
+  existing deletion-authorization regression passes with pre/post-RPC
+  cancellation checks under the race detector.
 - Native cleanup removed the app, exclusively handed the guest back and deleted
   its VM/disks. Only its unchanged, now-unreferenced bootstrap snippet was
   removed. Physical checks found the sandbox absent and both protected guests

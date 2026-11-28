@@ -112,7 +112,7 @@ func (c *Client) GetVMSSHHostKey(ctx context.Context, node string, vmid int) (ss
 			return nil, guestSSHFailure(ctx, "invalid Ed25519 SSH host public key")
 		}
 		if ctx.Err() != nil {
-			return nil, guestSSHFailure(ctx, "inspection was cancelled")
+			return nil, guestSSHFailure(ctx, "inspection was canceled")
 		}
 		return key, nil
 	}
