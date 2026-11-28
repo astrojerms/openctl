@@ -306,7 +306,7 @@
   // Navigating here grants no destructive consent and submits no operation.
   function reviewReconcile() {
     if (!inspection.canAct() || !data?.applied || !$canEditDesired) return;
-    navigate({ name: 'edit', apiVersion, kind, resourceName });
+    navigate({ name: 'edit', apiVersion, kind, resourceName, reconcile: true });
   }
 
   // Every runtime action needs transient consent tied to this observation.

@@ -23,6 +23,37 @@ Status legend: `[x]` done, `[~]` in progress, `[ ]` not started,
 
 ## In flight
 
+**2026-11-28 — first-operator application delivery and interruption recovery**
+
+- [x] Shipped `docker-host-vm` and `compose-application`: supported clean Ubuntu
+  bootstrap, pinned/checksummed Compose 5.8.1 and a guest-loopback welcome app.
+  Native controller installation no longer requires optional K3s agent payloads.
+- [x] Guided ordinary-application console with new/saved guest paths, separate
+  reviewed resources, strict controller-host SSH, isolated durable recovery and
+  portable YAML/ZIP declarations. Verified guest-key downloads use immutable VM
+  identity, verified Proxmox HTTPS and fresh QGA evidence; controller installation
+  also requires verified remote SSH.
+- [x] Real new-guest/template deployment and an independent clean binary-only
+  controller installation, exclusive same-guest handoff and actual console app
+  deployment within the approved one-VM budget. No private bootstrap or manual
+  Compose upgrade was required.
+- [x] Real in-flight controller crash preserved the interrupted request and raw
+  reference. Fixed unchanged-intent console reconciliation and unsafe native-app
+  cache hits; a freshly reviewed request actually repaired partial remote effects.
+  Reviewed Stop/Start independently proved unavailable/restored app health.
+  CI also exposed a canceled external-plugin ownership lookup; it now fails
+  closed before and after the RPC instead of authorizing deletion from a fast reply.
+- [x] Native app/VM cleanup, guarded bootstrap-artifact cleanup, retained private
+  offline backups and unchanged running development/Jellyfin workloads.
+- [ ] Fresh NVIDIA/Jellyfin provisioning/onboarding remains a release gate:
+  the available NVIDIA device serves live Jellyfin and the operator selected
+  **preserve live**. Requires unused capacity or separate reassignment approval.
+- Verification: focused race-enabled Go checks, full operations/apps packages,
+  full UI run plus 111 post-fix affected tests, clean Svelte check, production
+  build and actual console/CLI/hardware surfaces. Exact scope and remaining
+  limits: [acceptance evidence](docs/homelab-verification.md#first-operator-and-interruption-acceptance).
+  Operator path: [first application](QUICKSTART.md#deploy-your-first-application).
+
 **2026-11-27 — bounded real-hardware acceptance**
 
 - [x] Actual console discovery/adoption, physical-identity-preserving resize,

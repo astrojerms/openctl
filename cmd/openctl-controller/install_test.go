@@ -80,7 +80,7 @@ func TestInstallLocalRejectsInvalidConfigBeforeReplacingBinary(t *testing.T) {
 	if err := os.WriteFile(paths.CLIConfigFile, []byte("manifests:\n  gitops:\n    enabled: false\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := runInstallLocal(); err == nil {
+	if err := runInstallLocal(filepath.Join(t.TempDir(), "unused-source"), false); err == nil {
 		t.Fatal("installation accepted incompatible manifest authority configuration")
 	}
 	got, err := os.ReadFile(paths.BinaryPath)
@@ -254,7 +254,11 @@ func TestCopyK3sAgentBinaries(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := copyK3sAgentBinaries(srcDir, dstDir); err != nil {
+	sources, err := k3sAgentSources(srcDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := copyK3sAgentBinaries(sources, dstDir); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range names {
@@ -276,13 +280,32 @@ func TestCopyK3sAgentBinaries(t *testing.T) {
 	}
 }
 
-func TestCopyK3sAgentBinariesReportsMissingBuild(t *testing.T) {
-	err := copyK3sAgentBinaries(t.TempDir(), t.TempDir())
-	if err == nil {
-		t.Fatal("expected missing binary error")
+func TestInstallLocalPreservesBinaryWhenRequestedAgentsAreUnavailable(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	paths, err := resolveInstallPaths()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "make build-plugin-k3s-agent-linux") {
-		t.Fatalf("error should explain how to build agents, got %v", err)
+	if err := os.MkdirAll(paths.BinaryDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const previous = "existing controller"
+	if err := os.WriteFile(paths.BinaryPath, []byte(previous), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(t.TempDir(), "openctl-controller")
+	if err := os.WriteFile(source, []byte("new controller"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := runInstallLocal(source, true); err == nil {
+		t.Fatal("explicitly requested missing agents were accepted")
+	}
+	got, err := os.ReadFile(paths.BinaryPath)
+	if err != nil || string(got) != previous {
+		t.Fatalf("missing optional payload replaced the installed controller: %q, %v", got, err)
+	}
+	if _, err := os.Stat(paths.UnitPath); !os.IsNotExist(err) {
+		t.Fatalf("missing optional payload changed the service: %v", err)
 	}
 }
 

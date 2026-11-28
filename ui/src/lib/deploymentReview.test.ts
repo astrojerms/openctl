@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError, ping, session, UnauthorizedError, type ApplyRequest, type GetResourceResponse, type Operation, type Resource } from './api';
-import { APP_API, VM_API, jellyfinDeployment, type DeploymentStep, type JellyfinInputs } from './jellyfin';
-import { createSavedReview, DeploymentReview, discardSavedReview, loadReviewBinding, MAX_REVIEW_BYTES, readSavedReview, REVIEW_KEY, reviewError, type ReviewAPI, type ReviewConsent } from './deploymentReview';
+import { jellyfinDeployment, type JellyfinInputs } from './jellyfin';
+import { APP_API, VM_API, REVIEW_KEYS, type DeploymentProfile, type DeploymentStep } from './deployment';
+import { createSavedReview, DeploymentReview, discardSavedReview, loadReviewBinding, MAX_REVIEW_BYTES, readSavedReview, reviewError, type ReviewAPI, type ReviewConsent } from './deploymentReview';
 
 const binding = { controllerId: 'controller-a', userId: 'operator-a' };
 const resource: Resource = {
@@ -37,7 +38,7 @@ function memoryStorage() {
     removeItem: vi.fn((key: string) => { data.delete(key); }),
   };
 }
-function harness(steps: DeploymentStep[] = [step]) {
+function harness(steps: DeploymentStep[] = [step], profile: DeploymentProfile = 'jellyfin') {
   const storage = memoryStorage();
   const ops = new Map<string, Operation>();
   const live = new Map<string, GetResourceResponse>();
@@ -76,8 +77,8 @@ function harness(steps: DeploymentStep[] = [step]) {
     watch: vi.fn<ReviewAPI['watch']>(async () => {}),
     requestId: vi.fn(() => `request-${++sequence}`),
   } satisfies ReviewAPI;
-  const engine = new DeploymentReview(storage, createSavedReview(binding, steps), { canApply: () => true, api });
-  const restore = () => new DeploymentReview(storage, readSavedReview(storage, binding)!, { canApply: () => true, api });
+  const engine = new DeploymentReview(profile, storage, createSavedReview(profile, binding, steps), { canApply: () => true, api });
+  const restore = () => new DeploymentReview(profile, storage, readSavedReview(profile, storage, binding)!, { canApply: () => true, api });
   const accept = (key = 'request-1', status = 'succeeded', intent = resource) => {
     const op = ops.get(key)!;
     ops.set(key, { ...op, status });
@@ -93,9 +94,9 @@ describe('tab-local prepared review', () => {
     const h = harness();
     h.engine.save();
     await h.engine.review();
-    const saved = readSavedReview(h.storage, binding)!;
+    const saved = readSavedReview('jellyfin', h.storage, binding)!;
     expect(saved.steps[0].resource).toEqual(resource);
-    expect(Object.keys(saved)).toEqual(['version', 'binding', 'cursor', 'steps']);
+    expect(Object.keys(saved)).toEqual(['version', 'profile', 'binding', 'cursor', 'steps']);
     expect(Object.keys(saved.steps[0])).toEqual(['title', 'resource', 'createOnly']);
     const restored = h.restore();
     expect(restored.state.preview).toBeNull();
@@ -109,42 +110,42 @@ describe('tab-local prepared review', () => {
     { controllerId: binding.controllerId, userId: 'other' },
   ])('rejects a different controller or signed-in user: %j', (other) => {
     const h = harness(); h.engine.save();
-    expect(() => readSavedReview(h.storage, other)).toThrow(/different controller or signed-in user/);
+    expect(() => readSavedReview('jellyfin', h.storage, other)).toThrow(/different controller or signed-in user/);
     expect(h.api.apply).not.toHaveBeenCalled();
   });
 
   it.each(['not-json', 'null', '{}', JSON.stringify({ version: 0, binding, cursor: 0, steps: [step] }), ' '.repeat(MAX_REVIEW_BYTES + 1)])(
     'fails closed for invalid/versioned/oversized saved data', (raw) => {
-      const h = harness(); h.storage.setItem(REVIEW_KEY, raw);
-      expect(() => readSavedReview(h.storage, binding)).toThrow();
+      const h = harness(); h.storage.setItem(REVIEW_KEYS.jellyfin, raw);
+      expect(() => readSavedReview('jellyfin', h.storage, binding)).toThrow();
       expect(h.api.apply).not.toHaveBeenCalled();
     },
   );
 
   it('rejects cached success or inherited consent fields instead of treating them as evidence', () => {
     const h = harness();
-    h.storage.setItem(REVIEW_KEY, JSON.stringify({ ...createSavedReview(binding, [step]), ready: true, publicConsent: true }));
-    expect(() => readSavedReview(h.storage, binding)).toThrow(/malformed/);
+    h.storage.setItem(REVIEW_KEYS.jellyfin, JSON.stringify({ ...createSavedReview('jellyfin', binding, [step]), ready: true, publicConsent: true }));
+    expect(() => readSavedReview('jellyfin', h.storage, binding)).toThrow(/malformed/);
   });
 
   it('removes inherited request-consent annotations without losing desired metadata or secret markers', () => {
     const declared = { ...resource, metadata: { ...resource.metadata, annotations: { note: 'keep', 'openctl.io/allow-destructive': 'true' } } };
-    const saved = createSavedReview(binding, [{ ...step, resource: declared }]);
+    const saved = createSavedReview('jellyfin', binding, [{ ...step, resource: declared }]);
     expect(saved.steps[0].resource.metadata.annotations).toEqual({ note: 'keep' });
     expect(saved.steps[0].resource.spec).toEqual(resource.spec);
     expect(declared.metadata.annotations['openctl.io/allow-destructive']).toBe('true');
   });
 
   it('refuses expanded credentials and private-key bytes in browser recovery records', () => {
-    expect(() => createSavedReview(binding, [{ ...step, resource: { ...resource, spec: { password: 'plaintext' } } }])).toThrow(/secret references/);
-    expect(() => createSavedReview(binding, [{ ...step, resource: { ...resource, spec: { target: '-----BEGIN OPENSSH PRIVATE KEY-----' } } }])).toThrow(/credential material/);
+    expect(() => createSavedReview('jellyfin', binding, [{ ...step, resource: { ...resource, spec: { password: 'plaintext' } } }])).toThrow(/secret references/);
+    expect(() => createSavedReview('jellyfin', binding, [{ ...step, resource: { ...resource, spec: { target: '-----BEGIN OPENSSH PRIVATE KEY-----' } } }])).toThrow(/credential material/);
   });
 
   it('discards only browser state without canceling operations or touching resources', async () => {
     const h = harness(); h.engine.save(); await h.engine.review(); await h.engine.submit(consent);
     const operationCount = h.ops.size;
-    discardSavedReview(h.storage);
-    expect(readSavedReview(h.storage, binding)).toBeNull();
+    discardSavedReview('jellyfin', h.storage);
+    expect(readSavedReview('jellyfin', h.storage, binding)).toBeNull();
     expect(h.ops.size).toBe(operationCount);
     expect(h.api.apply).toHaveBeenCalledTimes(1);
   });
@@ -157,7 +158,7 @@ describe('durable Apply acknowledgement recovery', () => {
     h.api.apply.mockImplementation(async (request) => { await apply(request); throw new TypeError('connection reset'); });
     await h.engine.submit(consent);
     expect(h.engine.state.operation?.id).toBe('op-request-1');
-    expect(readSavedReview(h.storage, binding)!.steps[0].attempt?.operationId).toBe('op-request-1');
+    expect(readSavedReview('jellyfin', h.storage, binding)!.steps[0].attempt?.operationId).toBe('op-request-1');
     const resumed = h.restore(); await resumed.resume();
     expect(resumed.state.operation?.status).toBe('running');
     expect(resumed.state.preview).toBeNull();
@@ -170,7 +171,7 @@ describe('durable Apply acknowledgement recovery', () => {
     const apply = h.api.apply.getMockImplementation()!;
     h.api.apply.mockRejectedValueOnce(new TypeError('lost request'));
     await expect(h.engine.submit(consent)).rejects.toThrow(/outcome is unknown/);
-    const original = readSavedReview(h.storage, binding)!.steps[0].attempt!.requestId;
+    const original = readSavedReview('jellyfin', h.storage, binding)!.steps[0].attempt!.requestId;
     const resumed = h.restore(); await resumed.resume();
     expect(h.api.apply).toHaveBeenCalledTimes(1);
     await expect(resumed.submit(consent)).rejects.toThrow(/Refresh the preview/);
@@ -186,12 +187,12 @@ describe('durable Apply acknowledgement recovery', () => {
     const h = harness(); h.engine.save(); await h.engine.review();
     const apply = h.api.apply.getMockImplementation()!;
     h.api.apply.mockImplementation(async (request) => {
-      expect(readSavedReview(h.storage, binding)!.steps[0].attempt?.requestId).toBe(request.requestId);
+      expect(readSavedReview('jellyfin', h.storage, binding)!.steps[0].attempt?.requestId).toBe(request.requestId);
       return apply(request);
     });
     await h.engine.submit(consent);
     h.api.watch.mockImplementation(async () => {
-      expect(readSavedReview(h.storage, binding)!.steps[0].attempt?.operationId).toBe('op-request-1');
+      expect(readSavedReview('jellyfin', h.storage, binding)!.steps[0].attempt?.operationId).toBe('op-request-1');
     });
     await expect(h.engine.observe()).rejects.toThrow(/monitoring disconnected/);
     expect(h.api.apply).toHaveBeenCalledTimes(1);
@@ -207,7 +208,7 @@ describe('durable Apply acknowledgement recovery', () => {
       return accepted;
     });
     await expect(h.engine.submit(consent)).rejects.toThrow(/Cannot save/);
-    expect(readSavedReview(h.storage, binding)!.steps[0].attempt?.requestId).toBe('request-1');
+    expect(readSavedReview('jellyfin', h.storage, binding)!.steps[0].attempt?.requestId).toBe('request-1');
     h.storage.setItem.mockImplementation(write);
     const resumed = h.restore(); await resumed.resume();
     expect(resumed.state.operation?.id).toBe('op-request-1');
@@ -354,14 +355,10 @@ describe('explicit terminal-failure retry', () => {
   it('recovers a claimed guest after failed initial Apply without requiring physical absence', async () => {
     const h = harness(); h.engine.save(); await h.engine.review(); await h.engine.submit(consent);
     h.ops.set('request-1', { ...h.ops.get('request-1')!, status: 'failed' });
-    const apply = h.api.apply.getMockImplementation()!;
-    h.api.apply.mockImplementation(async (request) => {
-      if (request.createOnly) throw new ApiError(409, 'the original failed Apply already claimed this guest');
-      return apply(request);
-    });
     await h.engine.review(); await h.engine.submit(consent);
     expect(h.engine.state.operation?.requestId).toBe('request-2');
     expect(h.engine.state.operation?.status).toBe('running');
+    expect(h.api.apply.mock.calls[1][0].createOnly).toBe(true);
   });
 
   it('permits a reviewed partial-resource retry only for the same managed declaration, not a changed or owned baseline', async () => {
@@ -377,7 +374,7 @@ describe('explicit terminal-failure retry', () => {
 
   it('allows observing accepted work while mutation authority is unavailable', async () => {
     const h = harness(); h.engine.save(); await h.engine.review(); await h.engine.submit(consent); h.accept();
-    const observationOnly = new DeploymentReview(h.storage, readSavedReview(h.storage, binding)!, { canApply: () => false, api: h.api });
+    const observationOnly = new DeploymentReview('jellyfin', h.storage, readSavedReview('jellyfin', h.storage, binding)!, { canApply: () => false, api: h.api });
     await observationOnly.resume();
     expect(observationOnly.state.operation?.status).toBe('succeeded');
     await expect(observationOnly.submit(consent)).rejects.toThrow(/does not permit Apply/);
@@ -454,7 +451,7 @@ describe('full guided sequence recovery', () => {
     h.live.set(app.metadata.name, { applied: app, resource: { ...app, status } });
     await expect(h.engine.next()).rejects.toThrow(/readiness evidence/);
     expect(h.engine.state.saved.cursor).toBe(0);
-    expect(readSavedReview(h.storage, binding)?.cursor).toBe(0);
+    expect(readSavedReview('jellyfin', h.storage, binding)?.cursor).toBe(0);
     expect(h.api.apply).toHaveBeenCalledTimes(1);
     h.live.set(app.metadata.name, { applied: app, resource: { ...app, status: {
       ready: true, checks: { gpu: { state: 'ready' }, publicEndpoint: { state: 'not_configured' } },
@@ -473,7 +470,7 @@ describe('full guided sequence recovery', () => {
     expect(h.engine.state.blocker?.code).toBe('readiness_unproven');
     expect(h.engine.state.preview).toBeNull();
     expect(h.engine.state.verified).toBe(false);
-    expect(readSavedReview(h.storage, binding)?.steps[2].attempt).toBeUndefined();
+    expect(readSavedReview('jellyfin', h.storage, binding)?.steps[2].attempt).toBeUndefined();
     expect(h.api.apply).toHaveBeenCalledTimes(2);
     expect(h.api.requestId).toHaveBeenCalledTimes(2);
   });
@@ -495,7 +492,7 @@ describe('full guided sequence recovery', () => {
       checks: [{ name: 'gpu', state: 'not_ready', message: 'Driver unavailable' }, { name: 'publicEndpoint', state: 'not_configured', message: '' }],
     });
     expect(JSON.stringify(resumed.state.blocker)).not.toContain('PRIVATE-');
-    expect(JSON.stringify(readSavedReview(h.storage, binding))).not.toContain('Driver unavailable');
+    expect(JSON.stringify(readSavedReview('jellyfin', h.storage, binding))).not.toContain('Driver unavailable');
     expect(h.restore().state.blocker).toBeNull();
     expect(resumed.state.preview).toBeNull();
     expect(h.api.apply).toHaveBeenCalledTimes(2);
@@ -608,13 +605,13 @@ it('does not overwrite a newer browser review when a disposed request receives a
   const pending = h.engine.submit(consent);
   const accepted = await entered.promise;
   h.engine.dispose();
-  discardSavedReview(h.storage);
-  const newer = createSavedReview(binding, [{ ...step, resource: { ...resource, metadata: { ...resource.metadata, name: 'other-media' } } }]);
-  const replacement = new DeploymentReview(h.storage, newer, { canApply: () => true, api: h.api });
+  discardSavedReview('jellyfin', h.storage);
+  const newer = createSavedReview('jellyfin', binding, [{ ...step, resource: { ...resource, metadata: { ...resource.metadata, name: 'other-media' } } }]);
+  const replacement = new DeploymentReview('jellyfin', h.storage, newer, { canApply: () => true, api: h.api });
   replacement.save();
   acknowledgement.resolve(accepted);
   await expect(pending).rejects.toThrow();
-  expect(readSavedReview(h.storage, binding)!.steps[0].resource.metadata.name).toBe('other-media');
+  expect(readSavedReview('jellyfin', h.storage, binding)!.steps[0].resource.metadata.name).toBe('other-media');
   expect(h.ops.get('request-1')?.id).toBe('op-request-1');
   expect(h.api.apply).toHaveBeenCalledTimes(1);
 });
@@ -638,7 +635,7 @@ describe('blocked preview diagnostics', () => {
     expect(h.api.preview).not.toHaveBeenCalled();
     expect(h.api.apply).not.toHaveBeenCalled();
     expect(h.api.requestId).not.toHaveBeenCalled();
-    expect(h.storage.getItem(REVIEW_KEY)).not.toContain('private transient diagnostic');
+    expect(h.storage.getItem(REVIEW_KEYS.jellyfin)).not.toContain('private transient diagnostic');
     expect(h.restore().state.preview).toBeNull();
   });
 
@@ -656,7 +653,7 @@ describe('blocked preview diagnostics', () => {
     await expect(h.engine.submit(consent)).rejects.toBeInstanceOf(Error);
     expect(h.api.apply).not.toHaveBeenCalled();
     expect(h.api.requestId).not.toHaveBeenCalled();
-    expect(readSavedReview(h.storage, binding)!.steps[0].attempt).toBeUndefined();
+    expect(readSavedReview('jellyfin', h.storage, binding)!.steps[0].attempt).toBeUndefined();
   });
 
   it.each([
@@ -670,7 +667,7 @@ describe('blocked preview diagnostics', () => {
     expect(h.engine.state.verified).toBe(false);
     expect(h.api.apply).not.toHaveBeenCalled();
     expect(h.api.requestId).not.toHaveBeenCalled();
-    expect(readSavedReview(h.storage, binding)!.steps[0].attempt).toBeUndefined();
+    expect(readSavedReview('jellyfin', h.storage, binding)!.steps[0].attempt).toBeUndefined();
   });
 
   it('replaces transient failure diagnostics only after a fresh valid review', async () => {
@@ -688,11 +685,11 @@ describe('blocked preview diagnostics', () => {
     const h = harness(); h.engine.save(); await h.engine.review();
     h.api.apply.mockRejectedValueOnce(new TypeError('acknowledgement lost'));
     await expect(h.engine.submit(consent)).rejects.toBeInstanceOf(Error);
-    const original = readSavedReview(h.storage, binding)!.steps[0].attempt;
+    const original = readSavedReview('jellyfin', h.storage, binding)!.steps[0].attempt;
     h.api.preview.mockResolvedValueOnce({ operation: 'create', fieldErrors: [{ path: 'spec.target.host', message: 'guest unavailable' }] });
     await expect(h.engine.review()).rejects.toBeInstanceOf(Error);
     expect(h.engine.state.preview?.fieldErrors?.[0].path).toBe('spec.target.host');
-    expect(readSavedReview(h.storage, binding)!.steps[0].attempt).toEqual(original);
+    expect(readSavedReview('jellyfin', h.storage, binding)!.steps[0].attempt).toEqual(original);
     expect(h.api.apply).toHaveBeenCalledTimes(1);
     expect(h.api.requestId).toHaveBeenCalledTimes(1);
   });
@@ -720,7 +717,7 @@ describe('referenced guest address preflight', () => {
     expect(h.api.apply).not.toHaveBeenCalled();
     expect(h.api.requestId).not.toHaveBeenCalled();
     expect(h.restore().state.blocker).toBeNull();
-    expect(JSON.stringify(readSavedReview(h.storage, binding))).not.toContain('Choose the intended');
+    expect(JSON.stringify(readSavedReview('jellyfin', h.storage, binding))).not.toContain('Choose the intended');
   });
 
   it('rechecks the selected guest before admission and clears old preview authority on failure', async () => {
@@ -731,7 +728,7 @@ describe('referenced guest address preflight', () => {
     expect(h.engine.state.preview).toBeNull();
     expect(h.api.apply).not.toHaveBeenCalled();
     expect(h.api.requestId).not.toHaveBeenCalled();
-    expect(readSavedReview(h.storage, binding)?.steps[0].attempt).toBeUndefined();
+    expect(readSavedReview('jellyfin', h.storage, binding)?.steps[0].attempt).toBeUndefined();
     h.live.set('gpu', { applied: guest, resource: { ...guest, status: guestStatus } });
     await h.engine.review();
     expect(h.engine.state.blocker).toBeNull();
@@ -749,11 +746,11 @@ describe('referenced guest address preflight', () => {
     h.api.getResource.mockClear();
     await expect(h.engine.review()).rejects.toThrow(/guest address evidence/);
     expect(h.api.getResource.mock.calls.filter(([, kind]) => kind === 'VirtualMachine')).toHaveLength(1);
-    const accepted = readSavedReview(h.storage, binding)!.steps[0].attempt;
+    const accepted = readSavedReview('jellyfin', h.storage, binding)!.steps[0].attempt;
     h.live.set('gpu', { applied: guest, resource: { ...guest, status: guestStatus } });
     await h.engine.review();
     expect(h.api.apply).toHaveBeenCalledTimes(1);
-    expect(readSavedReview(h.storage, binding)!.steps[0].attempt).toEqual(accepted);
+    expect(readSavedReview('jellyfin', h.storage, binding)!.steps[0].attempt).toEqual(accepted);
     await h.engine.submit(consent);
     expect(h.api.apply).toHaveBeenCalledTimes(2);
     expect(h.api.apply.mock.calls[1][0].resource.kind).toBe('Jellyfin');
@@ -784,5 +781,89 @@ describe('referenced guest address preflight', () => {
     await h.engine.review();
     expect(h.engine.state.preview?.operation).toBe('create');
     expect(h.api.getResource.mock.calls.some(([, kind]) => kind === 'VirtualMachine')).toBe(false);
+  });
+});
+
+describe('isolated Compose review profile', () => {
+  const compose: DeploymentStep = { ...step, resource: { ...resource, kind: 'ComposeApplication', metadata: { name: 'welcome' } } };
+  it('keeps the two fixed profiles in distinct session slots and rejects cross-profile records and sequences', () => {
+    const storage = memoryStorage();
+    const jellyfin = createSavedReview('jellyfin', binding, [step]);
+    const docker = createSavedReview('compose', binding, [compose]);
+    new DeploymentReview('jellyfin', storage, jellyfin, { canApply: () => true }).save();
+    new DeploymentReview('compose', storage, docker, { canApply: () => true }).save();
+    expect(readSavedReview('jellyfin', storage, binding)?.steps[0].resource.kind).toBe('Jellyfin');
+    expect(readSavedReview('compose', storage, binding)?.steps[0].resource.kind).toBe('ComposeApplication');
+    expect(() => new DeploymentReview('compose', storage, jellyfin, { canApply: () => true })).toThrow(/profile/);
+    storage.setItem(REVIEW_KEYS.compose, JSON.stringify(jellyfin));
+    expect(() => readSavedReview('compose', storage, binding)).toThrow(/profile/);
+    expect(() => createSavedReview('compose', binding, [compose, { ...compose, createOnly: false }])).toThrow(/sequence/);
+    expect(() => createSavedReview('jellyfin', binding, [compose])).toThrow(/sequence/);
+    discardSavedReview('compose', storage);
+    expect(readSavedReview('jellyfin', storage, binding)).toEqual(jellyfin);
+  });
+
+  it('validates legacy Jellyfin records only inside their original fixed profile, without inherited consent', () => {
+    const storage = memoryStorage();
+    const legacy = { ...createSavedReview('jellyfin', binding, [step]) } as Record<string, unknown>;
+    delete legacy.profile;
+    storage.setItem(REVIEW_KEYS.jellyfin, JSON.stringify(legacy));
+    expect(readSavedReview('jellyfin', storage, binding)?.profile).toBe('jellyfin');
+    storage.setItem(REVIEW_KEYS.compose, JSON.stringify(legacy));
+    expect(() => readSavedReview('compose', storage, binding)).toThrow(/profile/);
+  });
+
+  it('reviews VM then app independently, never requiring trust before the new guest exists or replaying accepted VM work', async () => {
+    const steps = [{ title: 'Docker guest', resource: guest, createOnly: true }, compose];
+    const h = harness(steps, 'compose'); h.engine.save();
+    await h.engine.review(); await h.engine.submit({ ...consent, trustedKey: false });
+    h.accept('request-1', 'succeeded', guest);
+    const resumed = h.restore(); await resumed.resume(); await resumed.next();
+    expect(resumed.state.saved.cursor).toBe(1);
+    expect(h.api.apply).toHaveBeenCalledTimes(1);
+    await expect(resumed.submit({ ...consent, trustedKey: false })).rejects.toThrow(/verified SSH host key/);
+    await resumed.submit(consent);
+    h.accept('request-2', 'succeeded', compose.resource);
+    const restored = h.restore(); await restored.resume();
+    expect(restored.state.observed?.status?.ready).toBe(true);
+    expect(h.api.apply).toHaveBeenCalledTimes(2);
+    expect(h.api.apply.mock.calls.map(([request]) => request.resource.kind)).toEqual(['VirtualMachine', 'ComposeApplication']);
+    expect(readSavedReview('compose', h.storage, binding)?.steps[1].resource.spec).toEqual(compose.resource.spec);
+  });
+
+  it('blocks unknown guest address before review and rechecks the selected address before app admission', async () => {
+    const h = harness([compose], 'compose'); h.engine.save();
+    h.live.set('gpu', { applied: guest, resource: { ...guest, status: { state: 'running', ip: '192.0.2.8' } } });
+    await expect(h.engine.review()).rejects.toThrow(/guest address evidence/);
+    expect(h.engine.state.blocker?.code).toBe('address_unavailable');
+    expect(h.api.preview).not.toHaveBeenCalled();
+    h.live.set('gpu', { applied: guest, resource: { ...guest, status: guestStatus } });
+    await h.engine.review();
+    h.live.set('gpu', { applied: guest, resource: { ...guest, status: { ...guestStatus, state: 'stopped' } } });
+    await expect(h.engine.submit(consent)).rejects.toThrow(/guest address evidence/);
+    expect(h.api.apply).not.toHaveBeenCalled();
+    expect(readSavedReview('compose', h.storage, binding)?.steps[0].attempt).toBeUndefined();
+  });
+
+  it('does not turn accepted operation success into cached application readiness on reload', async () => {
+    const h = harness([compose], 'compose'); h.engine.save();
+    await h.engine.review(); await h.engine.submit(consent); h.accept('request-1', 'succeeded', compose.resource);
+    h.live.set('welcome', { applied: compose.resource, resource: { ...compose.resource, status: { ready: true, checks: { docker: { state: 'unknown' } } } } });
+    const resumed = h.restore(); await resumed.resume();
+    await expect(resumed.next()).rejects.toThrow(/readiness evidence/);
+    expect(h.api.apply).toHaveBeenCalledTimes(1);
+    expect(resumed.state.preview).toBeNull();
+  });
+
+  it('cancels admission when the canonical actor changes during the final preview', async () => {
+    const h = harness([compose], 'compose'); h.engine.save(); await h.engine.review();
+    h.api.preview.mockImplementationOnce(async () => {
+      h.api.binding.mockResolvedValue({ ...binding, userId: 'other-operator' });
+      return { operation: 'create', requiredGates: [] };
+    });
+    await expect(h.engine.submit(consent)).rejects.toThrow(/controller or signed-in user changed/);
+    expect(h.api.apply).not.toHaveBeenCalled();
+    expect(h.api.requestId).not.toHaveBeenCalled();
+    expect(readSavedReview('compose', h.storage, binding)?.steps[0].attempt).toBeUndefined();
   });
 });

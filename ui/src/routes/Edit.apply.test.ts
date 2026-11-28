@@ -16,7 +16,7 @@ import * as router from '../lib/router';
 vi.mock('../components/MonacoEditor.svelte', () => ({ default: EditSurface }));
 vi.mock('../components/MonacoDiffEditor.svelte', () => ({ default: EditSurface }));
 
-interface EditorRoute { apiVersion: string; kind: string; resourceName: string }
+interface EditorRoute { apiVersion: string; kind: string; resourceName: string; reconcile?: boolean }
 const createRoute: EditorRoute = { apiVersion: 'test.openctl.io/v1', kind: 'Machine', resourceName: '' };
 const existingRoute: EditorRoute = { ...createRoute, resourceName: 'existing-machine' };
 const createScope: ApplyAttemptScope = { source: 'create', apiVersion: createRoute.apiVersion, kind: createRoute.kind };
@@ -119,6 +119,32 @@ function recovered(requestId: string, resource: Resource = desired, status = 'fa
 }
 
 describe('recoverable editor Apply', () => {
+  it('reapplies unchanged raw intent only through explicit reconciliation and retains durable recovery guards', async () => {
+    const applied: Resource = { ...baseline, spec: { host: { $ref: { apiVersion: 'test.openctl.io/v1', kind: 'Host', name: 'guest', field: 'status.ip' } }, password: { $secret: { provider: 'file', key: 'password' } } } };
+    vi.mocked(resources.get).mockResolvedValue({ applied, resource: { ...applied, spec: { host: '192.0.2.8', password: 'resolved-value-must-not-submit' } } });
+    vi.mocked(resources.dryRunApply).mockResolvedValue({ operation: 'no-op', requiredGates: [] });
+    await open(existingRoute);
+    expect(button('Apply').disabled).toBe(true);
+    expect(resources.apply).not.toHaveBeenCalled();
+    await unmount(component!); component = undefined;
+    await open({ ...existingRoute, reconcile: true });
+    expect(resources.apply).not.toHaveBeenCalled();
+    expect(button('Reconcile').disabled).toBe(false);
+    button('Reconcile').click();
+    await settle();
+    expect(resources.apply).toHaveBeenCalledTimes(1);
+    const request = vi.mocked(resources.apply).mock.calls[0][0];
+    expect(request.resource).toEqual(applied);
+    expect(request.createOnly).not.toBe(true);
+    expect(request.allowDestructive).toBe(false);
+    expect(request.iKnowThisBreaksTheCluster).toBe(false);
+    expect(request.requestId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(button('Reconcile').disabled).toBe(true);
+    button('Reconcile').click();
+    await settle();
+    expect(resources.apply).toHaveBeenCalledTimes(1);
+  });
+
   it('sends exactly the reviewed desired resource and explicit flags after persisting metadata only', async () => {
     vi.mocked(resources.dryRunApply).mockResolvedValue({ operation: 'create', requiredGates: ['allow_destructive', 'i_know_this_breaks_the_cluster'] });
     vi.mocked(resources.apply).mockImplementation(async (request) => {

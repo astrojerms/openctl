@@ -53,12 +53,13 @@ describe('routeHref', () => {
   it('routes discovery and Jellyfin deployment', () => {
     expect(routeHref({ name: 'discover' })).toBe('#/discover');
     expect(routeHref({ name: 'jellyfin' })).toBe('#/apps/jellyfin');
+    expect(routeHref({ name: 'compose' })).toBe('#/apps/compose');
   });
 
-  it('parses discovery and Jellyfin hashes back to their route names', () => {
+  it('round-trips workflow navigation and explicit resource reconciliation', () => {
     const previous = location.hash;
     try {
-      for (const target of [{ name: 'discover' }, { name: 'jellyfin' }] as const) {
+      for (const target of [{ name: 'discover' }, { name: 'jellyfin' }, { name: 'compose' }, { name: 'edit', apiVersion: 'apps.openctl.io/v1', kind: 'ComposeApplication', resourceName: 'app one', reconcile: true }] as const) {
         location.hash = routeHref(target);
         window.dispatchEvent(new Event('hashchange'));
         expect(get(route)).toEqual(target);

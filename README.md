@@ -83,8 +83,8 @@ cd openctl
 # One-time on macOS if an app firewall keys rules by code signature.
 make codesign-setup
 
-# Build CLI, controller, UI, plugins, and Linux k3s agent payloads.
-make build build-plugin-k3s-agent-linux
+# Build only the native CLI, controller and embedded console.
+make build-cli build-controller
 
 # Install locally: LaunchAgent on macOS, user systemd service on Linux.
 ./bin/openctl-controller install --local
@@ -106,11 +106,11 @@ The local install writes:
 ~/.openctl/controller/                         controller state, token, TLS
 
 # Linux
-~/.local/share/openctl/bin/                    installed controller + agents
+~/.local/share/openctl/bin/                    controller + optional agents
 ~/.config/systemd/user/openctl-controller.service
 
 # macOS
-~/Library/Application Support/openctl/bin/     installed controller + agents
+~/Library/Application Support/openctl/bin/     controller + optional agents
 ~/Library/LaunchAgents/io.openctl.controller.plist
 ~/Library/Logs/openctl/controller.out.log
 ~/Library/Logs/openctl/controller.err.log
@@ -131,7 +131,7 @@ cat ~/.openctl/controller/token
 To rebuild and reinstall after local changes:
 
 ```bash
-make build build-plugin-k3s-agent-linux
+make build-cli build-controller
 ./bin/openctl-controller install --local
 ./bin/openctl ping
 ```
@@ -143,6 +143,11 @@ back up its stopped configuration/state. To retain SQLite authority, replace a
 legacy `manifests.gitops: {enabled: false}` block with `manifests.mode: mirror`;
 do not enable GitOps merely to bypass an upgrade error.
 
+Kubernetes is optional. To install its Linux agent payloads, first run
+`make build-plugin-k3s-agent-linux`, then install with
+`./bin/openctl-controller install --local --with-k3s-agents`. Omitting the flag
+leaves any already-installed agents untouched.
+
 To uninstall the local service:
 
 ```bash
@@ -151,6 +156,27 @@ To uninstall the local service:
 # Also remove controller DB, TLS material, and token:
 ./bin/openctl-controller uninstall --purge
 ```
+
+## Deploy Your First Application
+
+Open **Deploy application** for an ordinary Ubuntu Docker guest and a
+guest-loopback welcome app. The shipped `docker-host-vm` template installs
+Docker CE and checksum-verified Compose 5.8.1 on a clean Ubuntu 24.04 amd64
+template; `compose-application` then deploys the app. Kubernetes, a GPU, NAS and
+manual Compose upgrades are not prerequisites.
+
+Each resource has its own preview, explicit Apply and durable recovery. New
+cloud-init bootstraps require snippets-enabled Proxmox storage and verified node
+SSH; an API token cannot upload snippets. Existing Docker guests are never
+silently resized or upgraded. Obtain the guest's actual SSH host key through the
+native **Download verified SSH host keys** action, bound to the tracked VM
+identity and verified Proxmox connection, then explicitly use the private
+known_hosts download on the controller host.
+
+Follow the [first-application walkthrough](QUICKSTART.md#deploy-your-first-application)
+for installation, provider trust, template selection, bootstrap inspection and
+strict loopback forwarding. Downloadable YAML/ZIP declarations remain portable
+without becoming permission to Apply or automatic retries.
 
 ## Run The Controller In The Foreground
 
@@ -1109,13 +1135,18 @@ Acknowledgement is not Apply success and never silently updates the baseline or
 navigates away. **Review new Apply** rechecks a terminal outcome and starts fresh
 preview/consent; unknown, active or pruned requests cannot authorize another key.
 
-**Reconcile** opens the resource editor to review stored intent versus live drift;
-it does not immediately Apply. Failed first-creation retries without a managed
-baseline remain create-only, so newly discovered same-name resources are not
-silently overwritten.
+**Reconcile** opens explicit editor review; it does not immediately Apply.
+Unlike ordinary Edit, this mode permits reapplying unchanged stored intent after
+partial or unobservable remote effects. Native applications always execute an
+explicit Apply: placement/health observations cannot verify private Compose or
+environment contents and therefore cannot justify a cached success. Current
+authority, ownership checks, fresh preview and destructive gates still apply.
+Failed first-creation retries without a managed baseline remain create-only, so
+newly discovered same-name resources are not silently overwritten.
 
-The Jellyfin wizard saves its prepared steps and accepted request/operation IDs
-in this tab's session storage, bound to the controller and signed-in principal.
+The application and Jellyfin wizards save their prepared steps and accepted
+request/operation IDs in separate per-workflow session-storage profiles, bound
+to the controller and signed-in principal.
 After reload, explicitly **Resume saved review** or discard/download it. Resume
 observes accepted work without resubmission; a lost acknowledgement is recovered
 by request ID. New attempts require a fresh preview and unchecked confirmations.

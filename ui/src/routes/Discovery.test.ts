@@ -222,8 +222,6 @@ describe('fingerprint-bound adoption review', () => {
 
 describe('private migration bundle lifecycle', () => {
   it('keeps the bundle unchanged and local until explicit destination adoption', async () => {
-    // happy-dom does not implement option :checked, which Svelte's select
-    // binding needs. Destination selection is exercised in the real browser.
     vi.mocked(discovery.contexts).mockResolvedValueOnce({ contexts: [{ name: 'working', defaultContext: true }] });
     vi.mocked(ownership.adoptBundle).mockResolvedValueOnce({ resource: discoveredVM().resource });
     await adminDiscovery(); const bundle = migrationBundle();

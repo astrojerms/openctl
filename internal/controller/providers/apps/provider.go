@@ -29,12 +29,17 @@ func New(store StateStore, names NameLister, controllerID string) *Provider {
 func (*Provider) Name() string    { return "apps" }
 func (*Provider) Kinds() []string { return []string{"ComposeApplication", "Jellyfin"} }
 
+// Get observes placement and readiness, not the private Compose/env contents.
+// Explicit reconciliation must execute even when that observable subset matches.
+func (*Provider) CanCacheApply() bool { return false }
+
 var _ providers.Provider = (*Provider)(nil)
 var _ providers.DryRunner = (*Provider)(nil)
 var _ providers.Actioner = (*Provider)(nil)
 var _ providers.ActionDescriber = (*Provider)(nil)
 var _ providers.DriftProjector = (*Provider)(nil)
 var _ providers.CreateRecoverer = (*Provider)(nil)
+var _ providers.ApplyCachePolicy = (*Provider)(nil)
 
 func (p *Provider) lock(kind, name string) func() {
 	value, _ := p.locks.LoadOrStore(kind+"/"+name, &sync.Mutex{})

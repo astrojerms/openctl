@@ -131,6 +131,8 @@ func runInstall(args []string) error {
 	local := fs.Bool("local", false, "install on this machine")
 	target := fs.String("target", "", "remote target, e.g. ssh://user@host[:port]")
 	sshKey := fs.String("ssh-key", "", "SSH private key for --target ssh:// (default: ~/.ssh/id_ed25519 or id_rsa)")
+	knownHosts := fs.String("ssh-known-hosts", "~/.ssh/known_hosts", "verified SSH known_hosts file for remote targets")
+	withAgents := fs.Bool("with-k3s-agents", false, "install optional prebuilt Kubernetes agent binaries with --local")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Println(installUsage)
@@ -144,12 +146,19 @@ func runInstall(args []string) error {
 		if *local {
 			return fmt.Errorf("--local and --target are mutually exclusive")
 		}
-		if strings.HasPrefix(*target, "proxmox://") {
-			return runInstallProxmox(*target, *sshKey)
+		if *withAgents {
+			return fmt.Errorf("--with-k3s-agents is supported only with --local")
 		}
-		return runInstallRemote(*target, *sshKey)
+		if strings.HasPrefix(*target, "proxmox://") {
+			return runInstallProxmox(*target, *sshKey, *knownHosts)
+		}
+		return runInstallRemote(*target, *sshKey, *knownHosts)
 	case *local:
-		return runInstallLocal()
+		src, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("resolve current binary: %w", err)
+		}
+		return runInstallLocal(src, *withAgents)
 	default:
 		return fmt.Errorf("one of --local, --target ssh://user@host, or --target proxmox://context is required")
 	}
@@ -159,7 +168,7 @@ func runInstall(args []string) error {
 // service definition (launchd plist on macOS, systemd user unit on Linux),
 // starts it, waits for the controller to come up, and ensures the CLI config
 // has a controller section.
-func runInstallLocal() error {
+func runInstallLocal(src string, withAgents bool) error {
 	mgr, err := serviceManagerFor(runtime.GOOS)
 	if err != nil {
 		return err
@@ -173,12 +182,15 @@ func runInstallLocal() error {
 		return fmt.Errorf("validate controller config before installation: %w", err)
 	}
 
-	src, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("resolve current binary: %w", err)
-	}
 	if src, err = filepath.EvalSymlinks(src); err != nil {
 		return fmt.Errorf("resolve symlinks for current binary: %w", err)
+	}
+	var agentSources [3]string
+	if withAgents {
+		agentSources, err = k3sAgentSources(filepath.Dir(src))
+		if err != nil {
+			return fmt.Errorf("validate optional k3s agent payload: %w", err)
+		}
 	}
 
 	for _, dir := range []string{paths.BinaryDir, paths.AgentDir, paths.UnitDir, paths.LogDir, paths.StateDir, paths.CLIConfigDir} {
@@ -193,8 +205,10 @@ func runInstallLocal() error {
 	if err := copyFile(src, paths.BinaryPath, 0o755); err != nil {
 		return fmt.Errorf("copy binary: %w", err)
 	}
-	if err := copyK3sAgentBinaries(filepath.Dir(src), paths.AgentDir); err != nil {
-		return fmt.Errorf("copy k3s agent binaries: %w", err)
+	if withAgents {
+		if err := copyK3sAgentBinaries(agentSources, paths.AgentDir); err != nil {
+			return fmt.Errorf("copy k3s agent binaries: %w", err)
+		}
 	}
 
 	unit, err := mgr.render(paths)
@@ -222,7 +236,9 @@ func runInstallLocal() error {
 
 	fmt.Printf("openctl-controller installed and running (%s).\n", mgr.name())
 	fmt.Printf("  binary:   %s\n", paths.BinaryPath)
-	fmt.Printf("  agents:   %s\n", paths.AgentDir)
+	if withAgents {
+		fmt.Printf("  agents:   %s\n", paths.AgentDir)
+	}
 	fmt.Printf("  unit:     %s\n", paths.UnitPath)
 	if paths.LogOut != "" {
 		fmt.Printf("  logs:     %s\n", paths.LogOut)
@@ -328,20 +344,27 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	return os.Rename(tmp, dst)
 }
 
-func copyK3sAgentBinaries(srcDir, dstDir string) error {
-	names := []string{
-		"openctl-k3s-agent-linux-amd64",
-		"openctl-k3s-agent-linux-arm64",
-		"openctl-k3s-agent-linux-armv7",
+func k3sAgentSources(srcDir string) ([3]string, error) {
+	sources := [3]string{
+		filepath.Join(srcDir, "openctl-k3s-agent-linux-amd64"),
+		filepath.Join(srcDir, "openctl-k3s-agent-linux-arm64"),
+		filepath.Join(srcDir, "openctl-k3s-agent-linux-armv7"),
 	}
-	for _, name := range names {
-		src := filepath.Join(srcDir, name)
-		if _, err := os.Stat(src); err != nil {
-			if os.IsNotExist(err) {
-				return fmt.Errorf("%s not found next to controller binary; run `make build-plugin-k3s-agent-linux` before install", name)
-			}
-			return err
+	for _, src := range sources {
+		info, err := os.Stat(src)
+		if err != nil {
+			return sources, fmt.Errorf("%s unavailable; run `make build-plugin-k3s-agent-linux` before installing with --with-k3s-agents: %w", filepath.Base(src), err)
 		}
+		if !info.Mode().IsRegular() {
+			return sources, fmt.Errorf("%s must be a regular agent binary", src)
+		}
+	}
+	return sources, nil
+}
+
+func copyK3sAgentBinaries(sources [3]string, dstDir string) error {
+	for _, src := range sources {
+		name := filepath.Base(src)
 		if err := copyFile(src, filepath.Join(dstDir, name), 0o755); err != nil {
 			return fmt.Errorf("%s: %w", name, err)
 		}
@@ -404,9 +427,12 @@ const installUsage = `usage: openctl-controller install (--local | --target ssh:
 machine:
   macOS  — a LaunchAgent (~/Library/LaunchAgents/io.openctl.controller.plist)
   Linux  — a systemd user unit (~/.config/systemd/user/openctl-controller.service)
-It copies this binary + the k3s agent binaries into a per-user tree, starts
-the service (start-now + restart-on-death), verifies the controller responds
-on 127.0.0.1:9444, and writes a stub ~/.openctl/config.yaml if none exists.
+It copies this binary into a per-user tree, starts the service, verifies the
+controller responds on 127.0.0.1:9444, and writes a stub ~/.openctl/config.yaml
+if none exists. Native Proxmox/application workflows need no Kubernetes agents.
+Add --with-k3s-agents to install the three prebuilt Linux agent payloads; build
+them with 'make build-plugin-k3s-agent-linux' first. Existing installed agents
+are left untouched when this option is omitted.
 Logs: macOS → ~/Library/Logs/openctl/controller.{out,err}.log;
       Linux → journalctl --user -u openctl-controller.service.
 
@@ -414,6 +440,9 @@ Logs: macOS → ~/Library/Logs/openctl/controller.{out,err}.log;
 remote host as a system systemd service. Requires 'make build-controller-linux'
 first (produces bin/openctl-controller-linux-<arch>). Flags:
   --ssh-key PATH   SSH private key (default: ~/.ssh/id_ed25519, then id_rsa)
+  --ssh-known-hosts PATH   verified SSH host keys (default: ~/.ssh/known_hosts)
+Remote installation requires a preverified host key; unknown or changed hosts
+are rejected before uploading binaries or running remote commands.
 The remote user needs passwordless sudo. The service listens on the host's
 network (protected by the controller's token auth + TLS); copy the remote
 token (/var/lib/openctl/controller/token) and CA to point your CLI at it.

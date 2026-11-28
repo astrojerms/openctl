@@ -7,10 +7,13 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/skeema/knownhosts"
 )
 
 // Client is an SSH client for remote command execution
@@ -18,7 +21,7 @@ type Client struct {
 	host       string
 	port       int
 	user       string
-	privateKey string
+	privateKey []byte
 	sshClient  *ssh.Client
 }
 
@@ -42,13 +45,37 @@ func NewClient(host string, port int, user string, privateKeyPath string) (*Clie
 		host:       host,
 		port:       port,
 		user:       user,
-		privateKey: string(keyData),
+		privateKey: keyData,
 	}, nil
 }
 
-// Connect establishes an SSH connection
+// Connect establishes a legacy unverified SSH connection.
+// Controller installation uses ConnectVerified instead.
 func (c *Client) Connect() error {
-	signer, err := ssh.ParsePrivateKey([]byte(c.privateKey))
+	return c.connect(ssh.InsecureIgnoreHostKey(), nil)
+}
+
+// ConnectVerified requires a pinned host key and negotiates only verified,
+// currently supported algorithms. It never enrolls or replaces host trust.
+func (c *Client) ConnectVerified(knownHostsFile string) error {
+	db, err := knownhosts.NewDB(knownHostsFile)
+	if err != nil {
+		return fmt.Errorf("load verified SSH host keys: %w", err)
+	}
+	addr := net.JoinHostPort(c.host, fmt.Sprint(c.port))
+	algorithms := db.HostKeyAlgorithms(addr)
+	supported := ssh.SupportedAlgorithms().HostKeys
+	algorithms = slices.DeleteFunc(algorithms, func(algorithm string) bool {
+		return !slices.Contains(supported, algorithm)
+	})
+	if len(algorithms) == 0 {
+		return fmt.Errorf("no supported verified SSH host key for %s; install a key obtained through a trusted channel", addr)
+	}
+	return c.connect(db.HostKeyCallback(), algorithms)
+}
+
+func (c *Client) connect(callback ssh.HostKeyCallback, algorithms []string) error {
+	signer, err := ssh.ParsePrivateKey(c.privateKey)
 	if err != nil {
 		return fmt.Errorf("failed to parse private key: %w", err)
 	}
@@ -58,11 +85,12 @@ func (c *Client) Connect() error {
 		Auth: []ssh.AuthMethod{
 			ssh.PublicKeys(signer),
 		},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		Timeout:         30 * time.Second,
+		HostKeyCallback:   callback,
+		HostKeyAlgorithms: algorithms,
+		Timeout:           30 * time.Second,
 	}
 
-	addr := fmt.Sprintf("%s:%d", c.host, c.port)
+	addr := net.JoinHostPort(c.host, fmt.Sprint(c.port))
 	client, err := ssh.Dial("tcp", addr, config)
 	if err != nil {
 		return fmt.Errorf("failed to dial %s: %w", addr, err)

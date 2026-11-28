@@ -4,12 +4,13 @@
   import { auth, canMutate } from '../lib/auth';
   import { canEditDesired, desiredMutationHint } from '../lib/authority';
   import { discovery, inventoryApi, UnauthorizedError, type DiscoveryContext, type DryRunApplyResponse, type Operation, type Resource, type SavedResourceMetadata } from '../lib/api';
-  import { createSavedReview, DeploymentReview, discardSavedReview, failedReviewOperation, loadReviewBinding, readSavedReview, REVIEW_KEY, reviewError, type ReviewBinding, type ReviewState, type SavedReview } from '../lib/deploymentReview';
-  import { jellyfinDeployment, APP_API, VM_API, type DeploymentStep, type JellyfinInputs } from '../lib/jellyfin';
+  import { createSavedReview, DeploymentReview, discardSavedReview, failedReviewOperation, loadReviewBinding, readSavedReview, reviewError, type ReviewBinding, type ReviewState, type SavedReview } from '../lib/deploymentReview';
+  import { jellyfinDeployment, type JellyfinInputs } from '../lib/jellyfin';
+  import { APP_API, VM_API, REVIEW_KEYS, type DeploymentStep } from '../lib/deployment';
   import { routeHref } from '../lib/router';
   import { applicationCheckBadge, applicationChecks, applicationReadiness } from '../lib/detailState';
   import { deploymentArchive, deploymentManifest } from '../lib/deploymentExport';
-  import FieldDiagnostic from '../components/FieldDiagnostic.svelte';
+  import DeploymentPreview from '../components/DeploymentPreview.svelte';
 
   let input: JellyfinInputs = {
     name: 'jellyfin', vmName: '', createVM: false, context: '', node: '', templateVMID: 0,
@@ -105,9 +106,9 @@
   async function refreshRecovery() {
     loadingRecovery = true; recoveryError = ''; savedError = ''; binding = null; savedCandidate = null;
     try {
-      savedPresent = window.sessionStorage.getItem(REVIEW_KEY) !== null;
+      savedPresent = window.sessionStorage.getItem(REVIEW_KEYS.jellyfin) !== null;
       binding = await loadReviewBinding();
-      if (!destroyed) savedCandidate = readSavedReview(window.sessionStorage, binding);
+      if (!destroyed) savedCandidate = readSavedReview('jellyfin', window.sessionStorage, binding);
     } catch (err) {
       if (savedPresent && binding) savedError = reviewError(err);
       else recoveryError = reviewError(err);
@@ -123,7 +124,7 @@
   }
   function activate(saved: SavedReview) {
     engine?.dispose();
-    engine = new DeploymentReview(window.sessionStorage, saved, { canApply: () => $canEditDesired, changed });
+    engine = new DeploymentReview('jellyfin', window.sessionStorage, saved, { canApply: () => $canEditDesired, changed });
     changed(engine.state);
   }
   async function run(action: () => Promise<void>) {
@@ -140,8 +141,6 @@
   $: consentSatisfied = dedicated && trustedKey && (!publicReview || publicConsent);
   $: previewReviewed = verified && !!preview?.operation && !(preview.validationErrors?.length) && !(preview.fieldErrors?.length);
   $: validPreview = previewReviewed && gatesSatisfied && consentSatisfied;
-  $: previewErrors = (preview?.validationErrors ?? []).filter((problem) =>
-    !(preview?.fieldErrors ?? []).some((field) => problem === field.message || problem === `${field.path}: ${field.message}`));
   $: monitorOnly = !!operation && ['pending', 'running'].includes(operation.status);
   $: uncertain = !!state?.saved.steps[index]?.attempt && !operation;
   $: applicationReady = current?.resource.apiVersion !== APP_API || applicationReadiness(observed?.status) === 'ready';
@@ -176,8 +175,8 @@
       index = 0; preview = null; operation = null; observed = null; verified = false;
       // Keep declarations downloadable even when capability/storage preflight fails.
       binding = await loadReviewBinding();
-      if (window.sessionStorage.getItem(REVIEW_KEY) !== null) throw new Error('A saved review already exists in this tab. Resume or discard it before preparing another deployment.');
-      activate(createSavedReview(binding, steps));
+      if (window.sessionStorage.getItem(REVIEW_KEYS.jellyfin) !== null) throw new Error('A saved review already exists in this tab. Resume or discard it before preparing another deployment.');
+      activate(createSavedReview('jellyfin', binding, steps));
       engine!.save();
       savedPresent = true;
       await engine!.review();
@@ -187,7 +186,7 @@
     dedicated = false; trustedKey = false; publicConsent = false; checkedGates = {};
     await run(async () => {
       const currentBinding = await loadReviewBinding();
-      const saved = readSavedReview(window.sessionStorage, currentBinding);
+      const saved = readSavedReview('jellyfin', window.sessionStorage, currentBinding);
       if (!saved) throw new Error('The saved review is no longer present.');
       binding = currentBinding;
       activate(saved);
@@ -211,7 +210,7 @@
       } finally {
         dedicated = false; trustedKey = false; publicConsent = false; checkedGates = {};
       }
-      if (engine.state.operation && ['pending', 'running'].includes(engine.state.operation.status)) await engine.observe();
+      if (engine.state.operation) await engine.observe();
     });
   }
   async function observe() { await run(async () => { if (engine) await engine.observe(); }); }
@@ -223,7 +222,7 @@
   function discard() {
     error = '';
     try {
-      discardSavedReview(window.sessionStorage);
+      discardSavedReview('jellyfin', window.sessionStorage);
       engine?.dispose(); engine = null; state = null; savedCandidate = null;
       savedPresent = false; savedError = ''; steps = []; index = 0;
       preview = null; operation = null; observed = null; verified = false;
@@ -361,26 +360,12 @@
           <p class="hint">Inspection only. Accepted work and request identities are unchanged. Repair the resource, then recheck for a fresh preview and renewed consent.</p>
         </aside>
       {/if}
-      {#if preview}
-        <p><strong>{previewReviewed ? preview.operation : 'Preview blocked'}</strong> — {preview.summary}</p>
-        {#if preview.fieldErrors?.length || previewErrors.length}
-          <ul class="error" aria-label="Preview validation errors">
-            {#each preview.fieldErrors ?? [] as field}<li><FieldDiagnostic {field} /></li>{/each}
-            {#each previewErrors as problem}<li>{problem}</li>{/each}
-          </ul>
-        {/if}
-        {#if preview.diff?.length}<ul>{#each preview.diff as change}<li><code>{change.path}</code>: stored {change.desired} → submitted {change.observed}</li>{/each}</ul>{/if}
-        {#if preview.metadataDiff?.length}
-          <h4>Desired metadata changes</h4>
-          <ul>{#each preview.metadataDiff as change}<li><code>{change.path}</code>: stored {change.desired} → submitted {change.observed}</li>{/each}</ul>
-        {/if}
-        {#if previewReviewed}
-          {#each preview.requiredGates ?? [] as gate}<label class="check"><input type="checkbox" bind:checked={checkedGates[gate]} disabled={busy} /> Explicitly allow {gate}</label>{/each}
+      <DeploymentPreview {preview} reviewed={previewReviewed}>
+          {#each preview?.requiredGates ?? [] as gate}<label class="check"><input type="checkbox" bind:checked={checkedGates[gate]} disabled={busy} /> Explicitly allow {gate}</label>{/each}
           <label class="check"><input type="checkbox" bind:checked={dedicated} disabled={busy} /> I confirm this dedicated guest and authorize the reviewed guest configuration.</label>
           <label class="check"><input type="checkbox" bind:checked={trustedKey} disabled={busy} /> I verified this guest’s SSH host key in the controller’s known_hosts.</label>
           {#if publicReview}<label class="check"><input type="checkbox" bind:checked={publicConsent} disabled={busy} /> I freshly authorize the declared public hostname and access policy.</label>{/if}
-        {/if}
-      {/if}
+      </DeploymentPreview>
       {#if operation}<p>Operation <code>{operation.id}</code>: <strong>{operation.status}</strong>. Leaving this page does not cancel it.</p>{/if}
       {#if operation?.error}<p class="error" role="alert">{operation.error}</p>{/if}
       {#if checks.length}

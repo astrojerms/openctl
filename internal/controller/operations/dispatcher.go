@@ -301,6 +301,9 @@ func (d *Dispatcher) tryCacheHitInline(ctx context.Context, p providers.Provider
 	if d.manifests == nil {
 		return nil, false
 	}
+	if policy, ok := p.(providers.ApplyCachePolicy); ok && !policy.CanCacheApply() {
+		return nil, false
+	}
 	// Composite (Planner) resources can't use the verifying-trace cache: their
 	// convergence depends on children that drift independently of the manifest
 	// hash. An out-of-band child deletion leaves input+refs hashes unchanged, so

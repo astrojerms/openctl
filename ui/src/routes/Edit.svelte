@@ -27,6 +27,7 @@
   // mode requires a non-empty name. The Shell route dispatch and the
   // routeHref builder keep these two cases distinct.
   export let resourceName = '';
+  export let reconcile = false;
 
   $: isCreate = resourceName === '';
 
@@ -151,6 +152,7 @@
     apiVersion: string;
     kind: string;
     name: string;
+    reconcile: boolean;
     auth: AuthState;
     controller: AbortController;
   }
@@ -160,20 +162,20 @@
   let schemaLoading = false;
   let schemaReady = false;
   let reviewRefreshing = false;
-  $: void load(apiVersion, kind, resourceName, $retryRevision, $auth);
+  $: void load(apiVersion, kind, resourceName, reconcile, $retryRevision, $auth);
 
   function isCurrent(load: EditorLoad | null): load is EditorLoad {
     return !!load && activeLoad === load && !load.controller.signal.aborted
       && load.apiVersion === apiVersion && load.kind === kind && load.name === resourceName
-      && load.auth === get(auth);
+      && load.reconcile === reconcile && load.auth === get(auth);
   }
 
-  async function load(av: string, k: string, n: string, _retryRevision: number, session: AuthState) {
+  async function load(av: string, k: string, n: string, reconcileIntent: boolean, _retryRevision: number, session: AuthState) {
     activeLoad?.controller.abort();
     previewController?.abort();
     attempt.close();
     const current: EditorLoad = {
-      apiVersion: av, kind: k, name: n,
+      apiVersion: av, kind: k, name: n, reconcile: reconcileIntent,
       auth: session, controller: new AbortController(),
     };
     activeLoad = current;
@@ -477,7 +479,7 @@
       || ownerRefs.length || resource.metadata.ownerRefs?.length
       || resource.apiVersion !== apiVersion || resource.kind !== kind || !resource.metadata.name
       || (resourceName !== '' && resource.metadata.name !== resourceName)
-      || (plan.operation !== 'create' && plan.operation !== 'update')) return false;
+      || !hasApplyIntent) return false;
     if (createOnly && (existingNames.has(resource.metadata.name) || plan.operation !== 'create')) return false;
     return (plan.requiredGates ?? []).every((gate) =>
       (gate === 'allow_destructive' || gate === 'i_know_this_breaks_the_cluster') && checkedGates[gate]);
@@ -557,6 +559,7 @@
   $: gatesSatisfied = (plan?.requiredGates ?? []).every((g) =>
     (g === 'allow_destructive' || g === 'i_know_this_breaks_the_cluster') && checkedGates[g]);
   $: hasChange = !!plan && (plan.operation === 'create' || plan.operation === 'update');
+  $: hasApplyIntent = hasChange || (reconcile && !isCreate && plan?.operation === 'no-op');
   $: ownedByAnother = ownerRefs.length > 0;
   // Composite-child kinds (K3sNode, AgentInstall) get an info banner in create
   // mode nudging toward the owning composite.
@@ -595,7 +598,7 @@
     validateErrors.length > 0 ||
     (plan?.fieldErrors?.length ?? 0) > 0 ||
     !plan ||
-    !hasChange ||
+    !hasApplyIntent ||
     !gatesSatisfied ||
     nameCollision;
 
@@ -715,7 +718,7 @@
     if (nameCollision) {
       return `A ${kind} named "${currentName}" already exists — pick a different name or Edit the existing one.`;
     }
-    if (!hasChange) {
+    if (!hasApplyIntent) {
       return isCreate ? 'Add a metadata.name and spec fields' : 'No changes to apply';
     }
     if (!gatesSatisfied) return 'Check the destructive-change confirmations above';
@@ -733,7 +736,7 @@
           <a href={routeHref({ name: 'detail', apiVersion, kind, resourceName })}>{resourceName}</a>
         {/if}
       </p>
-      <h2>{isCreate ? `New ${kind}` : `Edit ${resourceName}`}</h2>
+      <h2>{isCreate ? `New ${kind}` : `${reconcile ? 'Reconcile' : 'Edit'} ${resourceName}`}</h2>
     </div>
     <div class="actions">
       {#if !isCreate}
@@ -752,7 +755,7 @@
         on:click={doApply}
         title={!$canEditDesired ? $desiredMutationHint : (applyBlocked && plan ? applyBlockReason() : '')}
       >
-        {applying ? 'Submitting…' : isCreate ? 'Create' : 'Apply'}
+        {applying ? 'Submitting…' : isCreate ? 'Create' : reconcile ? 'Reconcile' : 'Apply'}
       </button>
     </div>
   </header>
@@ -903,7 +906,7 @@
         </header>
 
         {#if !hasChange}
-          <p class="muted">No changes to stored intent or live infrastructure.</p>
+          <p class="muted">{reconcile ? 'Stored intent is unchanged. Reconcile explicitly reapplies this reviewed declaration; earlier remote effects may be partial or unobservable.' : 'No changes detected in stored intent or provider-reported state.'}</p>
         {/if}
 
         {#if (plan.diff?.length ?? 0) > 0}

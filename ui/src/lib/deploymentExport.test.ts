@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { strFromU8, unzipSync } from 'fflate';
 import { parseAllDocuments } from 'yaml';
 import { deploymentArchive, deploymentManifest } from './deploymentExport';
 import { jellyfinDeployment } from './jellyfin';
-import type { DeploymentStep, JellyfinInputs } from './jellyfin';
+import type { JellyfinInputs } from './jellyfin';
+import type { DeploymentStep } from './deployment';
 
 const input: JellyfinInputs = {
   name: 'media', vmName: 'gpu', createVM: true, context: 'lab', node: 'pve1', templateVMID: 9000,
@@ -72,4 +73,15 @@ describe('staged deployment export', () => {
     const files = unzipSync(deploymentArchive([step]));
     expect(Object.keys(files)).toEqual(['01-jellyfin.yaml']);
   });
+});
+
+it('reproduces staged ZIP bytes regardless of export time', () => {
+  vi.useFakeTimers();
+  try {
+    const steps = jellyfinDeployment(input);
+    vi.setSystemTime(new Date('2000-01-01T00:00:00Z'));
+    const first = deploymentArchive(steps);
+    vi.setSystemTime(new Date('2030-12-01T12:00:00Z'));
+    expect(deploymentArchive(steps)).toEqual(first);
+  } finally { vi.useRealTimers(); }
 });

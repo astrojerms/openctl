@@ -199,7 +199,7 @@ func deployController(r sshRunner, binary, unit []byte) error {
 }
 
 // runInstallRemote deploys the cross-built Linux controller to a remote host.
-func runInstallRemote(target, sshKeyFlag string) error {
+func runInstallRemote(target, sshKeyFlag, knownHostsFlag string) error {
 	t, err := parseSSHTarget(target)
 	if err != nil {
 		return err
@@ -208,15 +208,18 @@ func runInstallRemote(target, sshKeyFlag string) error {
 	if err != nil {
 		return err
 	}
+	knownHosts, err := expandHomePath(knownHostsFlag)
+	if err != nil {
+		return err
+	}
 
 	fmt.Printf("Connecting to %s@%s:%d ...\n", t.User, t.Host, t.Port)
-	fmt.Fprintln(os.Stderr, "note: SSH host-key verification is not performed for this install")
 
 	client, err := ssh.NewClient(t.Host, t.Port, t.User, key)
 	if err != nil {
 		return fmt.Errorf("ssh client: %w", err)
 	}
-	if err := client.Connect(); err != nil {
+	if err := client.ConnectVerified(knownHosts); err != nil {
 		return fmt.Errorf("ssh connect to %s: %w", t.Host, err)
 	}
 	defer func() { _ = client.Close() }()

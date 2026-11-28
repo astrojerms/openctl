@@ -269,7 +269,7 @@ func buildProxmoxBootstrapVM(opts proxmoxBootstrapOptions) *protocol.Resource {
 	}
 }
 
-func runInstallProxmox(rawTarget, sshKeyFlag string) error {
+func runInstallProxmox(rawTarget, sshKeyFlag, knownHostsFlag string) error {
 	target, err := parseProxmoxTarget(rawTarget)
 	if err != nil {
 		return err
@@ -338,7 +338,7 @@ func runInstallProxmox(rawTarget, sshKeyFlag string) error {
 		return fmt.Errorf("wait for controller VM SSH: %w", err)
 	}
 	fmt.Printf("Controller VM is reachable as %s; installing Linux controller over SSH ...\n", host)
-	return runInstallRemote(sshInstallTarget(opts.SSHUser, host), sshKeyFlag)
+	return runInstallRemote(sshInstallTarget(opts.SSHUser, host), sshKeyFlag, knownHostsFlag)
 }
 
 type proxmoxVMGetter interface {

@@ -1,7 +1,5 @@
 import type { Resource } from './api';
-
-export const VM_API = 'proxmox.openctl.io/v1';
-export const APP_API = 'apps.openctl.io/v1';
+import { APP_API, VM_API, type DeploymentStep } from './deployment';
 
 export interface JellyfinInputs {
   name: string;
@@ -39,11 +37,6 @@ export interface JellyfinInputs {
   zoneId: string;
 }
 
-export interface DeploymentStep {
-  title: string;
-  resource: Resource;
-  createOnly: boolean;
-}
 
 function ref(apiVersion: string, kind: string, name: string, field: string) {
   return { $ref: { apiVersion, kind, name, field } };
